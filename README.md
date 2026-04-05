@@ -1,6 +1,27 @@
 # go-stock
 
-基于 Go、Wails、Vue 3 和 Naive UI 的股票分析工具，支持桌面模式和本地 Web 模式。项目聚焦于股票自选、市场行情、研究中心、AI 分析报告、AI 推荐收益跟踪、邮件报告与运行时任务管理。
+![go-stock social preview](./docs/assets/social-preview.png)
+
+基于 Go、Wails、Vue 3 和 Naive UI 的本地优先股票分析工具，支持桌面模式和本地 Web 模式，聚焦于自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告。
+
+[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [公开检查清单](./PUBLIC_RELEASE_CHECKLIST.md) | [仓库展示信息](./PUBLIC_REPO_METADATA.md)
+
+> 来源说明：当前仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 改编整理而来，不是原作者官方仓库；当前公开版只保留适合继续协作与二次开发的内容。
+
+## 项目定位
+
+- 本地优先：核心数据、运行时目录与大部分分析链路在本地完成，不依赖必须在线的中心化控制台
+- 双模式运行：同时支持 Wails 桌面壳与本地 Web 模式
+- AI 工作台：覆盖市场资讯总结、个股分析、推荐记录与收益率跟踪
+- 工程化可维护：应用层 API、前端路由与重型逻辑已完成分层收敛，更适合继续迭代
+
+## 第一眼能力
+
+- 自选股与分组管理，支持个股详情、K 线与分时相关视图
+- 市场行情、全球指数、行业排名与资讯总结
+- AI 分析报告历史、推荐记录与推荐收益率追踪
+- 邮件报告、运行时任务、SQLite 本地存储
+- OpenAI 兼容接口、DeepSeek、Ollama、LM Studio、火山方舟等模型接入
 
 当前仓库是一个持续迭代中的业务仓库，README 以“如何运行、如何构建、当前实际包含什么能力”为主，不再复用外部宣传型说明。
 
@@ -8,6 +29,8 @@
 
 - 当前仓库与公开项目 `ArvinLovegood/go-stock` 存在演化关系，公开前建议再次核对来源说明、版权归属和许可证兼容性。
 - 当前 `1.2.4` 公开快照已主动移除个人赞赏码、联系方式、构建产物、运行数据库和本地私有接入说明，避免把不适合公开仓库的内容继续带到云端。
+- 当前公开版不再保留二维码打赏、赞助码校验和赞助分流下载入口，只保留公开仓库版本说明与来源说明。
+- 如果你需要追溯原始公开项目，请直接访问上面的原作者仓库链接；当前仓库维护的是公开整理版的后续改动。
 - 如果你准备把当前仓库从私有切换为公开，建议先阅读 [PUBLIC_RELEASE_CHECKLIST.md](./PUBLIC_RELEASE_CHECKLIST.md) 并逐项确认。
 
 ## 1.2.4 近期重点
@@ -232,6 +255,7 @@ GO_STOCK_WEB_ADDR=127.0.0.1:34116 ./scripts/restart.sh start
 - 公共源不是长历史分钟线方案。历史跨度较大时，请直接使用私人分钟线来源。
 - 设置页不会展示具体付费服务商品牌名，只保留通用配置入口。
 - 旧的环境变量仍然兼容，但当前更推荐把它们当作“迁移导入默认值”，保存后以设置页配置为准。
+- 历史兼容前缀仍为 `GO_STOCK_DIEMENG_*`，这只是兼容旧部署的命名，不代表当前仓库默认绑定任何特定私有服务。
 
 兼容环境变量示例：
 
@@ -254,6 +278,7 @@ GO_STOCK_WEB_ADDR=127.0.0.1:34116 ./scripts/restart.sh start
 
 - 当前内部仍兼容既有私人分钟线来源环境变量前缀 `GO_STOCK_DIEMENG_*`
 - 这些环境变量在桌面应用里更适合作为首次导入来源；保存设置后，运行时优先使用设置页中的私人分钟线配置
+- `GO_STOCK_DIEMENG_BASE_URL` 应填写你自己的私人分钟线服务地址；如果只填写站点根路径且服务接口位于 `/api`，程序会自动补齐 `/api`
 - `GO_STOCK_DIEMENG_PROXY_MODE=disable`
   - 强制该私人来源直连
 - `GO_STOCK_DIEMENG_PROXY_MODE=inherit`

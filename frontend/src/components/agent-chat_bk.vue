@@ -56,7 +56,7 @@ const isShowToBottom = ref(false);
 
 const icon = ref('');
 import {darkTheme, NAvatar, NImage} from "naive-ui";
-import {ChatWithAgent, GetConfig, GetSponsorInfo, GetVersionInfo} from "../services/app-api";
+import {ChatWithAgent, GetConfig, GetVersionInfo} from "../services/app-api";
 import {EventsOff, EventsOn} from '../../wailsjs/runtime'
 import 'tdesign-vue-next/es/style/index.css';
 const sessionId = ref(`agent-bk-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`);

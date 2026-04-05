@@ -49,7 +49,6 @@ type Settings struct {
 	EnableFund               bool   `json:"enableFund"`
 	EnablePushNews           bool   `json:"enablePushNews"`
 	EnableOnlyPushRedNews    bool   `json:"enableOnlyPushRedNews"`
-	SponsorCode              string `json:"sponsorCode"`
 	HttpProxy                string `json:"httpProxy"`
 	HttpProxyEnabled         bool   `json:"httpProxyEnabled"`
 	ForceNoProxyForFetch     bool   `json:"forceNoProxyForFetch" gorm:"default:true"`
@@ -218,7 +217,6 @@ func UpdateConfig(s *SettingConfig) string {
 		"enable_fund":                      s.EnableFund,
 		"enable_push_news":                 s.EnablePushNews,
 		"enable_only_push_red_news":        s.EnableOnlyPushRedNews,
-		"sponsor_code":                     s.SponsorCode,
 		"http_proxy":                       s.HttpProxy,
 		"http_proxy_enabled":               s.HttpProxyEnabled,
 		"force_no_proxy_for_fetch":         s.ForceNoProxyForFetch,

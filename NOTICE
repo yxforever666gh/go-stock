@@ -1,0 +1,8 @@
+go-stock public snapshot
+
+This repository is a public, cleaned-up derivative snapshot based on the openly published project:
+https://github.com/ArvinLovegood/go-stock
+
+The current public repository focuses on maintainable source code, release notes, and documentation suitable for collaboration and secondary development.
+
+Personal donation QR codes, sponsor-code entry points, private integration notes, local workspace files, and oversized generated artifacts have been removed from the public snapshot.

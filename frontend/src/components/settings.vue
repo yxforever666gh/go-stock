@@ -62,7 +62,6 @@ const formValue = ref({
     level: '1min',
   },
   enableFund: false,
-  sponsorCode: "",
   httpProxy:"",
   httpProxyEnabled:false,
   forceNoProxyForFetch: true,
@@ -171,7 +170,6 @@ onMounted(() => {
       level: res.privateMinuteLevel || '1min',
     }
     formValue.value.enableFund = res.enableFund
-    formValue.value.sponsorCode = res.sponsorCode
     formValue.value.httpProxy=res.httpProxy;
     formValue.value.httpProxyEnabled=res.httpProxyEnabled;
     formValue.value.forceNoProxyForFetch = res.forceNoProxyForFetch !== false;
@@ -241,7 +239,6 @@ function buildConfigPayload() {
     enableFund: formValue.value.enableFund,
     enablePushNews: false,
     enableOnlyPushRedNews: false,
-    sponsorCode: formValue.value.sponsorCode,
     httpProxy:formValue.value.httpProxy,
     httpProxyEnabled:formValue.value.httpProxyEnabled,
     forceNoProxyForFetch: formValue.value.forceNoProxyForFetch,
@@ -571,7 +568,6 @@ function importConfig() {
       formValue.value.enableFund = config.enableFund
       formValue.value.marketSummaryCronEnabled = config.marketSummaryCronEnabled !== false
       formValue.value.marketSummaryCronTimes = config.marketSummaryCronTimes || '09:30,11:30,18:00'
-      formValue.value.sponsorCode = config.sponsorCode
       formValue.value.httpProxy=config.httpProxy
       formValue.value.httpProxyEnabled=config.httpProxyEnabled
       formValue.value.enableAgent = config.enableAgent

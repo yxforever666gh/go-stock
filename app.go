@@ -26,8 +26,6 @@ type App struct {
 	cronEntrys         map[string]cron.EntryID
 	cronEntrysMu       sync.RWMutex
 	AiTools            []data.Tool
-	SponsorInfo        map[string]any
-	VipLevel           int64
 	services           service.AppServices
 	agentSessions      map[string]*AgentSession
 	agentSessionsMu    sync.RWMutex

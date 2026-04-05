@@ -10,11 +10,11 @@
 
 ### 中文版
 
-基于 Go、Wails、Vue 3 的本地股票分析工具，支持桌面模式与 Web 模式，包含自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告能力。
+基于 Go、Wails、Vue 3 的本地股票分析工具，支持桌面模式与 Web 模式，包含自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告能力；当前公开版基于 `ArvinLovegood/go-stock` 改编整理。
 
 ### English
 
-Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists, market insights, AI reports, recommendation tracking and email reporting.
+Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists, market insights, AI reports, recommendation tracking and email reporting; this public snapshot is adapted from `ArvinLovegood/go-stock`.
 
 ## About 区域建议
 
@@ -22,6 +22,18 @@ Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists,
 
 - 暂时留空
 - 如果后续你准备了公开主页、演示页或文档站，再补上
+
+### About 文案建议
+
+- 建议直接写明：当前仓库基于 `ArvinLovegood/go-stock` 改编整理，不是原作者官方仓库。
+- About 第一屏不要再放打赏、赞助、私有服务入口或任何个人联系方式。
+
+### Social Preview
+
+- 建议上传仓库内已准备好的社交预览图：
+  - `docs/assets/social-preview.png`
+- 这张图也已经用于 README 第一屏，风格与当前公开版文案保持一致
+- 社交图建议保留“PUBLIC 1.2.4”以及“Derived from ArvinLovegood/go-stock”这类信息，避免对外误认为原项目官方仓库
 
 ### Topics
 
@@ -58,4 +70,3 @@ Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists,
 - `Issues`、`Security`、`Contributing` 链接是否可正常访问
 - `Releases` 页面是否只展示 `1.2.4`
 - `README` 中的绝对路径跳转和截图引用是否正常
-

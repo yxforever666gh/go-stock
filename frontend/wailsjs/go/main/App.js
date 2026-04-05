@@ -34,10 +34,6 @@ export function ChatWithAgent(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ChatWithAgent'](arg1, arg2, arg3, arg4);
 }
 
-export function CheckSponsorCode(arg1) {
-  return window['go']['main']['App']['CheckSponsorCode'](arg1);
-}
-
 export function CheckStockBaseInfo(arg1) {
   return window['go']['main']['App']['CheckStockBaseInfo'](arg1);
 }
@@ -168,10 +164,6 @@ export function GetMoneyRankSina(arg1) {
 
 export function GetPromptTemplates(arg1, arg2) {
   return window['go']['main']['App']['GetPromptTemplates'](arg1, arg2);
-}
-
-export function GetSponsorInfo() {
-  return window['go']['main']['App']['GetSponsorInfo']();
 }
 
 export function GetStockCommonKLine(arg1, arg2, arg3) {

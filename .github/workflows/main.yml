@@ -3,13 +3,14 @@ name: Wails build
 on:
   push:
     branches:
-      - '**'
+      - 'main'
     tags:
       - '*.*.*'
-      - '*-release'
-      - '*-dev'
-      - '*-pre'
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 env:
   NODE_OPTIONS: "--max-old-space-size=4096"
@@ -86,7 +87,7 @@ jobs:
           submodules: recursive
 
       - name: Build wails x go-stock
-        uses: ArvinLovegood/wails-build-action@v3.6
+        uses: ArvinLovegood/wails-build-action@e5e3ee52381416e7472183e1bbde0a9198698bcd
         id: build
         with:
           build-name: ${{ matrix.build.name }}

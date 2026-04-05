@@ -1,19 +1,15 @@
 <script setup>
 import 'md-editor-v3/lib/preview.css';
 import { h, onBeforeUnmount, onMounted, ref } from 'vue';
-import { CheckUpdate, GetVersionInfo, GetSponsorInfo, OpenURL } from '../services/app-api';
+import { CheckUpdate, GetVersionInfo, OpenURL } from '../services/app-api';
 import { Environment, EventsOff, EventsOn } from '../../wailsjs/runtime';
 import { NAvatar, NButton, useNotification } from 'naive-ui';
-import { format } from 'date-fns';
 
 const updateLog = ref('');
 const versionInfo = ref('');
 const icon = ref('');
 const officialStatement = ref('');
 const notify = useNotification();
-const vipLevel = ref('');
-const vipEndTime = ref('');
-const expired = ref(false);
 const selfUpdateEnabled = ref(true);
 const manualUpdateHint = ref('');
 
@@ -26,17 +22,6 @@ onMounted(() => {
     officialStatement.value = res.officialStatement || '';
     selfUpdateEnabled.value = res.selfUpdateEnabled !== false;
     manualUpdateHint.value = res.manualUpdateHint || '';
-
-    GetSponsorInfo().then((res) => {
-      vipLevel.value = res.vipLevel;
-      vipEndTime.value = res.vipEndTime;
-      if (res.vipLevel) {
-        if (res.vipEndTime < format(new Date(), 'yyyy-MM-dd HH:mm:ss')) {
-          notify.warning({ content: 'VIP已到期' });
-          expired.value = true;
-        }
-      }
-    });
   });
 });
 
@@ -122,17 +107,10 @@ const handleUpdateAction = () => {
       <n-space vertical>
         <n-image width="100" :src="icon" />
         <h1>
-          <n-badge v-if="!vipLevel" :value="versionInfo || 'dev'" :offset="[80, 10]" type="success">
+          <n-badge :value="versionInfo || 'dev'" :offset="[80, 10]" type="success">
             <n-gradient-text type="info" :size="50">go-stock</n-gradient-text>
           </n-badge>
-          <n-badge v-else :value="versionInfo || 'dev'" :offset="[70, 10]" type="success">
-            <n-gradient-text :type="expired ? 'error' : 'warning'" :size="50">go-stock</n-gradient-text>
-            <n-tag :bordered="false" size="small" type="warning">VIP{{ vipLevel }}</n-tag>
-          </n-badge>
         </h1>
-        <n-gradient-text v-if="vipLevel" :type="expired ? 'error' : 'warning'">
-          vip到期时间：{{ vipEndTime }}
-        </n-gradient-text>
         <n-button size="tiny" type="info" tertiary @click="handleUpdateAction">
           {{ selfUpdateEnabled ? '检查更新' : '手动更新' }}
         </n-button>
@@ -140,14 +118,12 @@ const handleUpdateAction = () => {
           {{ manualUpdateHint }}
         </p>
         <div style="justify-self: center; text-align: left;">
-          <p>go-stock 是基于 Go、Wails、Vue 3 和 Naive UI 构建的股票分析工具，支持桌面模式和本地 Web 模式。</p>
-          <p>当前公开版已移除个人赞赏码、联系方式、私有接入说明和本地工作区配置，只保留适合公开仓库的核心功能与版本信息。</p>
+          <p>go-stock 是一个本地优先的股票分析工作台，基于 Go、Wails、Vue 3 和 Naive UI 构建，支持桌面模式与本地 Web 模式。</p>
+          <p>当前公开版聚焦真正可维护的核心能力：自选股、市场资讯、AI 分析报告、推荐收益跟踪、邮件报告与运行时任务管理。</p>
+          <p>来源说明：当前仓库基于 <a href="https://github.com/ArvinLovegood/go-stock" target="_blank">ArvinLovegood/go-stock</a> 改编整理而来，不是原作者官方仓库；当前维护的是公开清理版与后续改动。</p>
+          <p>公开仓库已经移除个人赞赏码、联系方式、赞助码入口、私有接入说明和本地工作区配置，只保留适合协作与二次开发的公开内容。</p>
           <p>
-            当前仓库：
-            <a href="https://github.com/yxforever666gh/go-stock" target="_blank">yxforever666gh/go-stock</a>
-            <n-divider vertical />
-            原始公开项目：
-            <a href="https://github.com/ArvinLovegood/go-stock" target="_blank">ArvinLovegood/go-stock</a>
+            当前仓库：<a href="https://github.com/yxforever666gh/go-stock" target="_blank">yxforever666gh/go-stock</a>
           </p>
           <p>
             <a href="https://github.com/yxforever666gh/go-stock" target="_blank">GitHub</a><n-divider vertical />
@@ -165,12 +141,12 @@ const handleUpdateAction = () => {
       <div style="justify-self: center; text-align: left;">
         <p>支持股票自选、市场行情、研究中心、AI 分析报告、推荐收益跟踪、邮件报告和运行时任务管理。</p>
         <p>支持 OpenAI 兼容接口、DeepSeek、Ollama、LM Studio、火山方舟等模型接入。</p>
-        <p>支持桌面模式与 <code>--web</code> 模式，共用核心业务逻辑。</p>
+        <p>支持桌面模式与 <code>--web</code> 模式，共用核心业务逻辑，并可通过公开仓库继续二次开发。</p>
       </div>
       <n-divider title-placement="center">公开说明</n-divider>
       <div style="justify-self: center; text-align: left;">
-        <p>当前 `1.2.4` 公开快照已经清理构建产物、运行数据库、支付二维码和本地私有说明，适合作为对外公开仓库的基线版本。</p>
-        <p>如果你准备继续二次开发，建议优先阅读 README、CHANGELOG 和仓库中的公开发布检查清单。</p>
+        <p>当前 `1.2.4` 公开快照已经清理构建产物、运行数据库、支付二维码、赞助码入口、超大测试库和本地私有说明，适合作为对外公开仓库的基线版本。</p>
+        <p>如果你准备继续二次开发，建议优先阅读 README、CHANGELOG、Release Notes 和仓库中的公开发布检查清单。</p>
       </div>
       <n-divider title-placement="center">鸣谢</n-divider>
       <div style="justify-self: center; text-align: left;">

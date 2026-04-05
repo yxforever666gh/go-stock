@@ -397,7 +397,6 @@ export namespace data {
 	    enableFund: boolean;
 	    enablePushNews: boolean;
 	    enableOnlyPushRedNews: boolean;
-	    sponsorCode: string;
 	    httpProxy: string;
 	    httpProxyEnabled: boolean;
 	    forceNoProxyForFetch: boolean;
@@ -460,7 +459,6 @@ export namespace data {
 	        this.enableFund = source["enableFund"];
 	        this.enablePushNews = source["enablePushNews"];
 	        this.enableOnlyPushRedNews = source["enableOnlyPushRedNews"];
-	        this.sponsorCode = source["sponsorCode"];
 	        this.httpProxy = source["httpProxy"];
 	        this.httpProxyEnabled = source["httpProxyEnabled"];
 	        this.forceNoProxyForFetch = source["forceNoProxyForFetch"];

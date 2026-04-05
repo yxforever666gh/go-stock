@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go-stock/backend/db"
@@ -13,8 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/duke-git/lancet/v2/convertor"
-	"github.com/duke-git/lancet/v2/cryptor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/go-resty/resty/v2"
 	"github.com/inconshreveable/go-update"
@@ -29,12 +26,6 @@ func (a *App) CheckUpdate(flag int) {
 		return
 	}
 
-	sponsorCode := strings.TrimSpace(a.GetConfig().SponsorCode)
-	if err := a.loadSponsorInfo(sponsorCode); err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return
-	}
-
 	releaseVersion, err := a.fetchLatestReleaseVersion()
 	if err != nil {
 		logger.SugaredLogger.Errorf("get github release version error:%s", err.Error())
@@ -44,14 +35,6 @@ func (a *App) CheckUpdate(flag int) {
 		return
 	}
 	logger.SugaredLogger.Infof("releaseVersion:%+v", releaseVersion.TagName)
-
-	if _, vipLevel, ok := a.resolveVIPDownloadURL(sponsorCode, "", releaseVersion); ok {
-		level, _ := convertor.ToInt(vipLevel)
-		a.VipLevel = level
-		if level >= 2 {
-			go a.syncNews()
-		}
-	}
 
 	if releaseVersion.TagName == Version {
 		if flag == 1 {
@@ -66,10 +49,7 @@ func (a *App) CheckUpdate(flag int) {
 		return
 	}
 
-	downloadURL, _, ok := a.resolveVIPDownloadURL(sponsorCode, defaultReleaseDownloadURL(releaseVersion.TagName), releaseVersion)
-	if !ok {
-		return
-	}
+	downloadURL := defaultReleaseDownloadURL(releaseVersion.TagName)
 	commitMessage := strings.TrimSpace(releaseVersion.Commit.Message)
 	a.emitReleaseNews("发现新版本："+releaseVersion.TagName, commitMessage)
 
@@ -86,33 +66,6 @@ func (a *App) CheckUpdate(flag int) {
 	}
 
 	a.emitReleaseNews("新版本："+releaseVersion.TagName, "版本更新完成,下次重启软件生效.")
-}
-
-func (a *App) loadSponsorInfo(sponsorCode string) error {
-	sponsorCode = strings.TrimSpace(sponsorCode)
-	if sponsorCode == "" {
-		a.SponsorInfo = nil
-		return nil
-	}
-	encrypted, err := hex.DecodeString(sponsorCode)
-	if err != nil {
-		return err
-	}
-	key, err := hex.DecodeString(BuildKey)
-	if err != nil {
-		return err
-	}
-	decrypt := cryptor.AesEcbDecrypt(encrypted, key)
-	if len(decrypt) == 0 {
-		a.SponsorInfo = nil
-		return nil
-	}
-	info := make(map[string]any)
-	if err = json.Unmarshal(decrypt, &info); err != nil {
-		return err
-	}
-	a.SponsorInfo = info
-	return nil
 }
 
 func (a *App) fetchLatestReleaseVersion() (*models.GitHubReleaseVersion, error) {
@@ -174,85 +127,6 @@ func downloadReleaseBinary(downloadURL string) ([]byte, error) {
 		return nil, err
 	}
 	return resp.Body(), nil
-}
-
-func (a *App) resolveVIPDownloadURL(sponsorCode string, downloadURL string, releaseVersion *models.GitHubReleaseVersion) (string, string, bool) {
-	isVIP := false
-	vipLevel := "0"
-	sponsorCode = strings.TrimSpace(sponsorCode)
-	if sponsorCode == "" {
-		return downloadURL, vipLevel, true
-	}
-	if err := a.loadSponsorInfo(sponsorCode); err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return downloadURL, "0", true
-	}
-	if a.SponsorInfo == nil {
-		return downloadURL, "0", true
-	}
-
-	vipLevel = sponsorInfoString(a.SponsorInfo, "vipLevel")
-	vipStartTime, err := sponsorInfoTime(a.SponsorInfo, "vipStartTime")
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return downloadURL, vipLevel, true
-	}
-	vipEndTime, err := sponsorInfoTime(a.SponsorInfo, "vipEndTime")
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return downloadURL, vipLevel, true
-	}
-	vipAuthTime, err := sponsorInfoTime(a.SponsorInfo, "vipAuthTime")
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return downloadURL, vipLevel, true
-	}
-
-	now := time.Now()
-	if now.After(vipAuthTime) && now.After(vipStartTime) && now.Before(vipEndTime) {
-		isVIP = true
-	}
-
-	if releaseVersion == nil {
-		return downloadURL, vipLevel, isVIP
-	}
-
-	if IsWindows() {
-		return resolvePlatformVIPDownloadURL(isVIP, a.SponsorInfo, "winDownUrl", downloadURL, releaseDownloadURL(releaseVersion.TagName, "go-stock-windows-amd64.exe"), releaseDownloadURL(releaseVersion.TagName, "go-stock-windows-amd64.exe")), vipLevel, isVIP
-	}
-	if IsMacOS() {
-		return resolvePlatformVIPDownloadURL(isVIP, a.SponsorInfo, "macDownUrl", downloadURL, releaseDownloadURL(releaseVersion.TagName, "go-stock-darwin-universal"), releaseDownloadURL(releaseVersion.TagName, "go-stock-darwin-universal")), vipLevel, isVIP
-	}
-
-	return downloadURL, vipLevel, isVIP
-}
-
-func resolvePlatformVIPDownloadURL(isVIP bool, sponsorInfo map[string]any, field string, fallbackURL string, vipFallbackURL string, normalURL string) string {
-	if isVIP {
-		if customURL := sponsorInfoString(sponsorInfo, field); customURL != "" {
-			return customURL
-		}
-		return vipFallbackURL
-	}
-	if strings.TrimSpace(fallbackURL) != "" {
-		return fallbackURL
-	}
-	return normalURL
-}
-
-func sponsorInfoString(sponsorInfo map[string]any, key string) string {
-	if sponsorInfo == nil {
-		return ""
-	}
-	if raw, ok := sponsorInfo[key]; ok && raw != nil {
-		return strings.TrimSpace(fmt.Sprint(raw))
-	}
-	return ""
-}
-
-func sponsorInfoTime(sponsorInfo map[string]any, key string) (time.Time, error) {
-	value := sponsorInfoString(sponsorInfo, key)
-	return time.ParseInLocation("2006-01-02 15:04:05", value, time.Local)
 }
 
 func (a *App) emitReleaseNews(timeLabel, content string) {

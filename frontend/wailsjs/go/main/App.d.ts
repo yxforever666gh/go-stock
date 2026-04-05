@@ -20,8 +20,6 @@ export function BatchDeleteAIResponseResult(arg1:Array<number>):Promise<string>;
 
 export function ChatWithAgent(arg1:string,arg2:number,arg3:any,arg4:string):Promise<void>;
 
-export function CheckSponsorCode(arg1:string):Promise<Record<string, any>>;
-
 export function CheckStockBaseInfo(arg1:context.Context):Promise<void>;
 
 export function CheckUpdate(arg1:number):Promise<void>;
@@ -87,8 +85,6 @@ export function GetIndustryRank(arg1:string,arg2:number):Promise<Array<any>>;
 export function GetMoneyRankSina(arg1:string):Promise<Array<Record<string, any>>>;
 
 export function GetPromptTemplates(arg1:string,arg2:string):Promise<any>;
-
-export function GetSponsorInfo():Promise<Record<string, any>>;
 
 export function GetStockCommonKLine(arg1:string,arg2:string,arg3:number):Promise<any>;
 

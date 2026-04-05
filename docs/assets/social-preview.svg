@@ -1,0 +1,76 @@
+<svg width="1280" height="640" viewBox="0 0 1280 640" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="64" x2="1160" y2="576" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF6E8"/>
+      <stop offset="0.45" stop-color="#F8EAD7"/>
+      <stop offset="1" stop-color="#F4F7F2"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="780" y1="116" x2="1134" y2="472" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0F766E"/>
+      <stop offset="1" stop-color="#123B4A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#F97316"/>
+      <stop offset="1" stop-color="#FDBA74"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" rx="36" fill="url(#bg)"/>
+  <rect x="40" y="40" width="1200" height="560" rx="28" fill="#FFFDF9" fill-opacity="0.66" stroke="#E7D7C3"/>
+
+  <path d="M92 522C172 466 216 514 288 456C349 407 405 312 482 319C545 325 581 418 648 418C722 418 747 264 823 264C895 264 918 386 982 386C1048 386 1074 298 1148 278" stroke="#0F766E" stroke-width="8" stroke-linecap="round"/>
+  <path d="M92 554C160 530 222 544 288 518C354 492 392 434 456 434C518 434 561 478 618 478C680 478 721 438 782 438C843 438 880 498 944 498C1010 498 1067 430 1148 420" stroke="#F97316" stroke-width="5" stroke-linecap="round" stroke-dasharray="2 16"/>
+
+  <g opacity="0.12">
+    <path d="M108 114H1178" stroke="#0F172A" stroke-width="2"/>
+    <path d="M108 188H1178" stroke="#0F172A" stroke-width="2"/>
+    <path d="M108 262H1178" stroke="#0F172A" stroke-width="2"/>
+    <path d="M108 336H1178" stroke="#0F172A" stroke-width="2"/>
+    <path d="M108 410H1178" stroke="#0F172A" stroke-width="2"/>
+    <path d="M108 484H1178" stroke="#0F172A" stroke-width="2"/>
+    <path d="M188 98V554" stroke="#0F172A" stroke-width="2"/>
+    <path d="M332 98V554" stroke="#0F172A" stroke-width="2"/>
+    <path d="M476 98V554" stroke="#0F172A" stroke-width="2"/>
+    <path d="M620 98V554" stroke="#0F172A" stroke-width="2"/>
+    <path d="M764 98V554" stroke="#0F172A" stroke-width="2"/>
+    <path d="M908 98V554" stroke="#0F172A" stroke-width="2"/>
+    <path d="M1052 98V554" stroke="#0F172A" stroke-width="2"/>
+  </g>
+
+  <rect x="782" y="116" width="352" height="356" rx="28" fill="url(#panel)"/>
+  <rect x="816" y="156" width="126" height="18" rx="9" fill="#D1FAE5" fill-opacity="0.9"/>
+  <rect x="816" y="194" width="212" height="14" rx="7" fill="#ECFDF5" fill-opacity="0.58"/>
+  <rect x="816" y="220" width="178" height="14" rx="7" fill="#ECFDF5" fill-opacity="0.58"/>
+  <rect x="816" y="276" width="62" height="128" rx="16" fill="#FDBA74"/>
+  <rect x="894" y="242" width="62" height="162" rx="16" fill="#F97316"/>
+  <rect x="972" y="304" width="62" height="100" rx="16" fill="#FB7185"/>
+  <rect x="1050" y="208" width="50" height="196" rx="16" fill="#A7F3D0"/>
+  <path d="M816 430C863 392 894 362 938 362C975 362 990 384 1024 384C1062 384 1080 344 1112 314" stroke="#F8FAFC" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="938" cy="362" r="10" fill="#F8FAFC"/>
+  <circle cx="1024" cy="384" r="10" fill="#F8FAFC"/>
+  <circle cx="1112" cy="314" r="10" fill="#F8FAFC"/>
+
+  <circle cx="154" cy="156" r="44" fill="#0F766E"/>
+  <path d="M137 158L151 172L176 145" stroke="#FFFDF9" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="104" y="238" fill="#0F172A" font-family="DejaVu Sans, sans-serif" font-size="86" font-weight="700">go-stock</text>
+  <text x="108" y="292" fill="#0F766E" font-family="DejaVu Sans, sans-serif" font-size="26" font-weight="700">LOCAL-FIRST AI STOCK ANALYSIS WORKBENCH</text>
+
+  <text x="108" y="360" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="30" font-weight="600">Desktop + Web</text>
+  <text x="302" y="360" fill="#64748B" font-family="DejaVu Sans, sans-serif" font-size="28">Wails / Vue 3 / Go / SQLite</text>
+
+  <text x="108" y="418" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Watchlists</text>
+  <text x="288" y="418" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Market Insights</text>
+  <text x="528" y="418" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">AI Reports</text>
+
+  <text x="108" y="466" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Recommendation Tracking</text>
+  <text x="454" y="466" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Email Reporting</text>
+
+  <rect x="108" y="516" width="184" height="44" rx="22" fill="#0F766E"/>
+  <text x="137" y="546" fill="#F8FAFC" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="700">PUBLIC 1.2.4</text>
+
+  <rect x="308" y="516" width="220" height="44" rx="22" fill="#FFEDD5"/>
+  <text x="336" y="546" fill="#C2410C" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="700">OPEN SOURCE SNAPSHOT</text>
+
+  <text x="108" y="592" fill="#475569" font-family="DejaVu Sans, sans-serif" font-size="22" font-weight="600">Derived from ArvinLovegood/go-stock</text>
+</svg>

@@ -634,7 +634,6 @@ type OldSettings struct {
 	BrowserPoolSize   int     `json:"browserPoolSize"`
 	EnableFund        bool    `json:"enableFund"`
 	EnablePushNews    bool    `json:"enablePushNews"`
-	SponsorCode       string  `json:"sponsorCode"`
 }
 
 func (receiver OldSettings) TableName() string {

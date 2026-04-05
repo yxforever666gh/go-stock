@@ -159,21 +159,21 @@ func TestLoadOverridesAndFallbacks(t *testing.T) {
 
 func TestLoadNormalizesDiemengBaseURLVariants(t *testing.T) {
 	resetRuntimeOverrideForTest(t)
-	t.Setenv("GO_STOCK_DIEMENG_BASE_URL", "https://mg.diemeng.chat/")
+	t.Setenv("GO_STOCK_DIEMENG_BASE_URL", "https://example.com/")
 	cfg := Load()
-	if cfg.Diemeng.BaseURL != "https://mg.diemeng.chat/api" {
-		t.Fatalf("expected mg root to normalize to /api, got: %s", cfg.Diemeng.BaseURL)
+	if cfg.Diemeng.BaseURL != "https://example.com/api" {
+		t.Fatalf("expected root url to normalize to /api, got: %s", cfg.Diemeng.BaseURL)
 	}
 
-	t.Setenv("GO_STOCK_DIEMENG_BASE_URL", "https://data.diemeng.chat/api/")
+	t.Setenv("GO_STOCK_DIEMENG_BASE_URL", "https://example.com/api/")
 	cfg = Load()
-	if cfg.Diemeng.BaseURL != "https://mg.diemeng.chat/api" {
-		t.Fatalf("expected legacy data host to normalize to mg host, got: %s", cfg.Diemeng.BaseURL)
+	if cfg.Diemeng.BaseURL != "https://example.com/api" {
+		t.Fatalf("expected api path to keep normalized form, got: %s", cfg.Diemeng.BaseURL)
 	}
 
-	t.Setenv("GO_STOCK_DIEMENG_BASE_URL", "https://mg.diemeng.chat/custom-path/")
+	t.Setenv("GO_STOCK_DIEMENG_BASE_URL", "https://example.com/custom-path/")
 	cfg = Load()
-	if cfg.Diemeng.BaseURL != "https://mg.diemeng.chat/custom-path" {
+	if cfg.Diemeng.BaseURL != "https://example.com/custom-path" {
 		t.Fatalf("expected custom path to be preserved, got: %s", cfg.Diemeng.BaseURL)
 	}
 }

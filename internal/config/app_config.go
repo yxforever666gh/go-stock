@@ -28,7 +28,7 @@ const (
 	DefaultAkshareRetryWaitMS    = 2000
 	DefaultSinaMinIntervalMS     = 650
 	DefaultTencentMinIntervalMS  = 650
-	DefaultDiemengBaseURL        = "https://mg.diemeng.chat/api"
+	DefaultDiemengBaseURL        = ""
 	DefaultDiemengTimeoutSec     = 60
 	DefaultDiemengMinIntervalMS  = 1200
 	DefaultDiemengLevel          = "1min"
@@ -281,20 +281,8 @@ func normalizeDiemengBaseURL(value string) string {
 	}
 
 	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	switch host {
-	case "data.diemeng.chat":
-		if port := strings.TrimSpace(parsed.Port()); port != "" {
-			parsed.Host = "mg.diemeng.chat:" + port
-		} else {
-			parsed.Host = "mg.diemeng.chat"
-		}
-		host = "mg.diemeng.chat"
-	case "mg.diemeng.chat":
-		// keep host as-is
-	}
-
 	path := trimTrailingSlash(parsed.Path)
-	if host == "mg.diemeng.chat" && (path == "" || path == "/") {
+	if host != "" && (path == "" || path == "/") {
 		parsed.Path = "/api"
 	} else {
 		parsed.Path = path
