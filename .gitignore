@@ -1,0 +1,62 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+/go-stock
+build/bin/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Logs
+logs/
+*.log
+*.nohup.pid
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.bak
+*.cache
+tmp/
+runtime/db/*.bak-*
+data.test
+
+# Local workspace
+.claude/settings.local.json
+.claude/worktrees/
+.codex
+.codex/
+
+# Local private integration notes
+docs/integrations/*.local.md
+docs/integrations/diemeng-api.md
+
+# Public release cleanup
+build/screenshot/
+build/wx.jpg
+backend/data/data/stock.db
+dist/bin/
+exports/db-history/*.csv
+testdata/db/*.db

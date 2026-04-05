@@ -1,0 +1,105 @@
+name: Wails build
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '*.*.*'
+      - '*-release'
+      - '*-dev'
+      - '*-pre'
+  pull_request:
+
+env:
+  NODE_OPTIONS: "--max-old-space-size=4096"
+  OFFICIAL_STATEMENT: ${{ vars.OFFICIAL_STATEMENT }}
+  BUILD_KEY: ${{ vars.BUILD_KEY }}
+
+jobs:
+  go-test:
+    name: Go Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Run go test
+        run: go test ./...
+
+  frontend-check:
+    name: Frontend Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Run frontend lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Run frontend build
+        working-directory: frontend
+        run: npm run build
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      fail-fast: false
+      matrix:
+        build:
+          - name: 'go-stock-windows-amd64.exe'
+            platform: 'windows/amd64'
+            os: 'windows-latest'
+          - name: 'go-stock-darwin-universal'
+            platform: 'darwin/universal'
+            os: 'macos-latest'
+          - name: 'go-stock-darwin-intel'
+            platform: 'darwin'
+            os: 'macos-latest'
+          - name: 'go-stock-darwin-arm64'
+            platform: 'darwin/arm64'
+            os: 'macos-latest'
+
+    runs-on: ${{ matrix.build.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build wails x go-stock
+        uses: ArvinLovegood/wails-build-action@v3.6
+        id: build
+        with:
+          build-name: ${{ matrix.build.name }}
+          build-platform: ${{ matrix.build.platform }}
+          package: false
+          go-version: '1.25'
+          build-statement: ${{ env.OFFICIAL_STATEMENT }}
+          build-key: ${{ env.BUILD_KEY }}
+          node-version: '20.x'
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.build.name }}
+          path: build/bin/**
+          if-no-files-found: error

@@ -1,0 +1,56 @@
+{
+  "name": "go-stock",
+  "version": "1.0.0",
+  "description": "",
+  "main": "",
+  "scripts": {
+    "dev": "vite",
+    "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
+    "lint": "eslint \"src/**/*.{js,ts,vue}\"",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@tdesign-vue-next/chat": "^0.4.5",
+    "@types/file-saver": "^2.0.7",
+    "@vavt/cm-extension": "^1.8.0",
+    "@vavt/v3-extension": "^3.0.0",
+    "date-fns": "^4.1.0",
+    "echarts": "^5.6.0",
+    "file-saver": "^2.0.5",
+    "html2canvas": "^1.4.1",
+    "lodash": "^4.17.21",
+    "md-editor-v3": "^5.2.3",
+    "tdesign-icons-vue-next": "^0.3.7",
+    "vue": "^3.5.17",
+    "vue-router": "^4.5.0",
+    "vue3-danmaku": "^1.6.1"
+  },
+  "devDependencies": {
+    "@tdesign-vue-next/auto-import-resolver": "^0.1.1",
+    "@typescript-eslint/parser": "^8.46.1",
+    "@vicons/antd": "^0.13.0",
+    "@vicons/carbon": "^0.13.0",
+    "@vicons/fa": "^0.13.0",
+    "@vicons/fluent": "^0.13.0",
+    "@vicons/ionicons4": "^0.13.0",
+    "@vicons/ionicons5": "^0.13.0",
+    "@vicons/material": "^0.13.0",
+    "@vicons/tabler": "^0.13.0",
+    "@vitejs/plugin-vue": "^6.0.2",
+    "eslint": "^9.39.3",
+    "html-docx-js-typescript": "^0.1.5",
+    "less": "^4.4.0",
+    "naive-ui": "^2.43.2",
+    "typescript": "^5.9.3",
+    "unplugin-auto-import": "^20.0.0",
+    "unplugin-vue-components": "^29.0.0",
+    "vfonts": "^0.0.3",
+    "vite": "7.2.4",
+    "vue-eslint-parser": "^10.4.0"
+  },
+  "keywords": [
+    "AI赋能股票分析",
+    "go-stock"
+  ],
+  "author": "spark"
+}
