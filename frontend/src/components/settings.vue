@@ -6,7 +6,7 @@ import {
   GetConfig,
   GetEmailSendLogList,
   GetPromptTemplates,
-  SendLatestAIAnalysisReportNow,
+  RunMarketSummaryHumanizeCompatFixNow,
   SendYieldEmailCSVNow,
   SendYieldEmailTestMessage,
   UpdateConfig
@@ -29,8 +29,6 @@ const formValue = ref({
     smtpPort: 465,
     smtpUsername: '',
     smtpPassword: '',
-    cronEnabled: false,
-    cronTimes: ''
   },
   updateBasicInfoOnStart: false,
   refreshInterval: 1,
@@ -67,17 +65,22 @@ const formValue = ref({
   forceNoProxyForFetch: true,
   enableAgent: false,
   qgqpBId: '',
+  marketSummaryEmailEnabled: false,
   marketSummaryCronEnabled: true,
-  marketSummaryCronTimes: '09:30,11:30,18:00',
+  marketSummaryCronTimes: '09:40,11:30,14:30',
 })
 const yieldEmailTestSending = ref(false)
 const yieldEmailCsvSending = ref(false)
-const yieldEmailAiReportSending = ref(false)
+const marketSummaryCompatFixing = ref(false)
 const emailSendLogsLoading = ref(false)
 const emailSendLogs = ref([])
 const emailSendLogPage = ref(1)
 const emailSendLogTotalPages = ref(1)
 const emailSendLogTotal = ref(0)
+const settingsLoaded = ref(false)
+const autoSaveState = ref('idle')
+const autoSaveError = ref('')
+const autoSaveLastSavedAt = ref('')
 const minuteProviderModeOptions = [
   {label: '公共源优先', value: 'public'},
   {label: '私人分钟线来源', value: 'private'},
@@ -99,10 +102,13 @@ const privateMinuteLevelOptions = [
   {label: '30 分钟', value: '30min'},
   {label: '60 分钟', value: '60min'},
 ]
+let activeSavePromise = null
+let queuedAutoSave = false
 
 // 添加一个新的AI配置到列表
 function addAiConfig() {
   formValue.value.openAI.aiConfigs.push(new data.AIConfig({
+    sort: formValue.value.openAI.aiConfigs.length + 1,
     name: '',
     baseUrl: 'https://api.deepseek.com',
     apiKey: '',
@@ -113,13 +119,44 @@ function addAiConfig() {
     httpProxy:"",
     httpProxyEnabled:false,
   }));
+  queueAutoSave()
 }
 
 // 从列表中移除一个AI配置
 function removeAiConfig(index) {
-  const originalCount = formValue.value.openAI.aiConfigs.length;
   // 使用filter创建新数组确保响应式更新
   formValue.value.openAI.aiConfigs = formValue.value.openAI.aiConfigs.filter((_, i) => i !== index);
+  queueAutoSave()
+}
+
+function moveAiConfig(index, direction) {
+  const targetIndex = index + direction
+  if (targetIndex < 0 || targetIndex >= formValue.value.openAI.aiConfigs.length) {
+    return
+  }
+  const next = [...formValue.value.openAI.aiConfigs]
+  ;[next[index], next[targetIndex]] = [next[targetIndex], next[index]]
+  formValue.value.openAI.aiConfigs = next
+  queueAutoSave()
+}
+
+function formatSaveTime(date = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function markAutoSaveSaved() {
+  autoSaveState.value = 'saved'
+  autoSaveError.value = ''
+  autoSaveLastSavedAt.value = formatSaveTime()
+}
+
+function handleImmediateFieldChange() {
+  queueAutoSave()
+}
+
+function handleTextFieldBlur() {
+  queueAutoSave()
 }
 
 
@@ -136,8 +173,6 @@ onMounted(() => {
       smtpPort: res.yieldEmailSmtpPort || 465,
       smtpUsername: res.yieldEmailSmtpUsername || '',
       smtpPassword: res.yieldEmailSmtpPassword || '',
-      cronEnabled: res.yieldEmailCronEnabled === true,
-      cronTimes: res.yieldEmailCronTimes || ''
     }
     formValue.value.updateBasicInfoOnStart = res.updateBasicInfoOnStart
     formValue.value.refreshInterval = res.refreshInterval
@@ -175,9 +210,10 @@ onMounted(() => {
     formValue.value.forceNoProxyForFetch = res.forceNoProxyForFetch !== false;
     formValue.value.enableAgent = res.enableAgent;
     formValue.value.qgqpBId = res.qgqpBId;
+    formValue.value.marketSummaryEmailEnabled = res.marketSummaryEmailEnabled === true;
     formValue.value.marketSummaryCronEnabled = res.marketSummaryCronEnabled !== false;
-    formValue.value.marketSummaryCronTimes = res.marketSummaryCronTimes || '09:30,11:30,18:00';
-
+    formValue.value.marketSummaryCronTimes = res.marketSummaryCronTimes || '09:40,11:30,14:30';
+    settingsLoaded.value = true
   })
 
   GetPromptTemplates("", "").then(res => {
@@ -188,10 +224,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   message.destroyAll()
 })
-
-function saveConfig() {
-  persistConfig({showSuccess: true})
-}
 
 function buildConfigPayload() {
   return new data.SettingConfig({
@@ -205,8 +237,8 @@ function buildConfigPayload() {
     yieldEmailSmtpPort: formValue.value.yieldEmail.smtpPort,
     yieldEmailSmtpUsername: formValue.value.yieldEmail.smtpUsername,
     yieldEmailSmtpPassword: formValue.value.yieldEmail.smtpPassword,
-    yieldEmailCronEnabled: formValue.value.yieldEmail.cronEnabled,
-    yieldEmailCronTimes: formValue.value.yieldEmail.cronTimes,
+    yieldEmailCronEnabled: false,
+    yieldEmailCronTimes: '',
     localPushEnable: false,
     updateBasicInfoOnStart: formValue.value.updateBasicInfoOnStart,
     refreshInterval: formValue.value.refreshInterval,
@@ -244,6 +276,7 @@ function buildConfigPayload() {
     forceNoProxyForFetch: formValue.value.forceNoProxyForFetch,
     enableAgent: formValue.value.enableAgent,
     qgqpBId: formValue.value.qgqpBId,
+    marketSummaryEmailEnabled: formValue.value.marketSummaryEmailEnabled,
     marketSummaryCronEnabled: formValue.value.marketSummaryCronEnabled,
     marketSummaryCronTimes: formValue.value.marketSummaryCronTimes
   })
@@ -257,104 +290,144 @@ function parseYieldEmailRecipients(input) {
       .filter(Boolean)
 }
 
-function parseYieldEmailCronTimes(input) {
-  return String(input || "")
-      .replace(/[，；;]/g, ",")
-      .replace(/\s+/g, "")
-      .split(",")
-      .map(item => item.trim())
-      .filter(Boolean)
-}
-
 function isValidEmailText(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim())
 }
 
-function isValidTimeText(hhmm) {
-  return /^([01]\d|2[0-3]):([0-5]\d)$/.test(String(hhmm || "").trim())
-}
-
-function validateYieldEmailConfig() {
+function getYieldEmailConfigError() {
   if (!formValue.value.yieldEmail.enable) {
-    return true
+    return ""
   }
 
   const recipients = parseYieldEmailRecipients(formValue.value.yieldEmail.to)
   if (recipients.length === 0) {
-    message.error("请至少填写一个收件邮箱")
-    return false
+    return "请至少填写一个收件邮箱"
   }
   const invalidRecipients = recipients.filter(item => !isValidEmailText(item))
   if (invalidRecipients.length > 0) {
-    message.error(`收件邮箱格式错误：${invalidRecipients.join(", ")}`)
-    return false
+    return `收件邮箱格式错误：${invalidRecipients.join(", ")}`
   }
-
-  if (formValue.value.yieldEmail.cronEnabled) {
-    const times = parseYieldEmailCronTimes(formValue.value.yieldEmail.cronTimes)
-    if (times.length === 0) {
-      message.error("请至少填写一个定时发送时间，例如 09:30,15:05")
-      return false
-    }
-    const invalidTimes = times.filter(item => !isValidTimeText(item))
-    if (invalidTimes.length > 0) {
-      message.error(`定时发送时间格式错误：${invalidTimes.join(", ")}（正确格式：HH:mm）`)
-      return false
-    }
-  }
-  return true
+  return ""
 }
 
-function validateMinuteSourceConfig() {
+function getMinuteSourceConfigError() {
   if (formValue.value.minuteProviderMode === 'public') {
     if (!formValue.value.akshareEnabled && !formValue.value.sinaMinuteEnabled && !formValue.value.tencentMinuteEnabled) {
-      message.error("公共分钟线模式下，至少保留一个公共数据源")
-      return false
+      return "公共分钟线模式下，至少保留一个公共数据源"
     }
-    return true
+    return ""
   }
 
   if (!formValue.value.privateMinute.enabled) {
-    message.error("私人分钟线模式下，请先启用私人分钟线来源")
-    return false
+    return "私人分钟线模式下，请先启用私人分钟线来源"
   }
   if (!String(formValue.value.privateMinute.baseUrl || "").trim()) {
-    message.error("请填写私人分钟线来源的调用 URL")
-    return false
+    return "请填写私人分钟线来源的调用 URL"
   }
   if (!String(formValue.value.privateMinute.apiKey || "").trim()) {
-    message.error("请填写私人分钟线来源的 API Key")
-    return false
+    return "请填写私人分钟线来源的 API Key"
   }
-  return true
+  return ""
 }
 
-async function persistConfig(options = {}) {
+async function runPersist(options = {}) {
   const showSuccess = options.showSuccess === true
-  if (!validateYieldEmailConfig()) {
+  const notifyError = options.notifyError === true
+  const recordAutoSaveError = options.recordAutoSaveError === true
+  if (recordAutoSaveError) {
+    autoSaveError.value = ''
+  }
+
+  const yieldEmailError = getYieldEmailConfigError()
+  if (yieldEmailError) {
+    if (notifyError) {
+      message.error(yieldEmailError)
+    }
+    if (recordAutoSaveError) {
+      autoSaveError.value = yieldEmailError
+      autoSaveState.value = 'error'
+    }
     return false
   }
-  if (!validateMinuteSourceConfig()) {
+
+  const minuteSourceError = getMinuteSourceConfigError()
+  if (minuteSourceError) {
+    if (notifyError) {
+      message.error(minuteSourceError)
+    }
+    if (recordAutoSaveError) {
+      autoSaveError.value = minuteSourceError
+      autoSaveState.value = 'error'
+    }
     return false
   }
 
   const config = buildConfigPayload()
-  const update = async () => {
-    const res = await UpdateConfig(config)
-    if (String(res || '').includes('失败')) {
+  const res = await UpdateConfig(config)
+  if (String(res || '').includes('失败')) {
+    if (notifyError) {
       message.error(res)
-      return false
     }
-    if (showSuccess) {
-      message.success(res)
+    if (recordAutoSaveError) {
+      autoSaveError.value = res
+      autoSaveState.value = 'error'
     }
-    EventsEmit("updateSettings", config);
-    return true
+    return false
   }
-
-  return update()
+  if (showSuccess) {
+    message.success(res)
+  }
+  EventsEmit("updateSettings", config);
+  if (recordAutoSaveError) {
+    markAutoSaveSaved()
+  }
+  return true
 }
 
+function queueAutoSave() {
+  if (!settingsLoaded.value) {
+    return Promise.resolve(false)
+  }
+  queuedAutoSave = true
+  if (activeSavePromise) {
+    return activeSavePromise
+  }
+  activeSavePromise = (async () => {
+    let saved = true
+    while (queuedAutoSave) {
+      queuedAutoSave = false
+      autoSaveState.value = 'saving'
+      saved = await runPersist({
+        notifyError: false,
+        recordAutoSaveError: true
+      })
+      if (!saved) {
+        break
+      }
+    }
+    return saved
+  })().finally(() => {
+    activeSavePromise = null
+  })
+  return activeSavePromise
+}
+
+async function saveCurrentConfig(options = {}) {
+  if (activeSavePromise) {
+    await activeSavePromise
+  }
+  autoSaveState.value = 'saving'
+  const saved = await runPersist({
+    showSuccess: options.showSuccess === true,
+    notifyError: options.notifyError === true,
+    recordAutoSaveError: true
+  })
+  if (!saved && !autoSaveError.value) {
+    autoSaveState.value = 'error'
+    autoSaveError.value = '自动保存失败'
+  }
+  return saved
+}
 
 async function sendYieldEmailTest() {
   if (yieldEmailTestSending.value) {
@@ -362,7 +435,7 @@ async function sendYieldEmailTest() {
   }
   yieldEmailTestSending.value = true
   try {
-    const saved = await persistConfig()
+    const saved = await saveCurrentConfig({notifyError: true})
     if (!saved) {
       return
     }
@@ -385,7 +458,7 @@ async function sendYieldEmailCSVNowAction() {
   }
   yieldEmailCsvSending.value = true
   try {
-    const saved = await persistConfig()
+    const saved = await saveCurrentConfig({notifyError: true})
     if (!saved) {
       return
     }
@@ -402,26 +475,20 @@ async function sendYieldEmailCSVNowAction() {
   }
 }
 
-async function sendLatestAIAnalysisReportNowAction() {
-  if (yieldEmailAiReportSending.value) {
+async function runMarketSummaryCompatFixAction() {
+  if (marketSummaryCompatFixing.value) {
     return
   }
-  yieldEmailAiReportSending.value = true
+  marketSummaryCompatFixing.value = true
   try {
-    const saved = await persistConfig()
-    if (!saved) {
-      return
-    }
-    const res = await SendLatestAIAnalysisReportNow()
+    const res = await RunMarketSummaryHumanizeCompatFixNow()
     if (String(res || '').includes('失败')) {
       message.error(res)
-      await refreshEmailSendLogs(1)
       return
     }
     message.success(res)
-    await refreshEmailSendLogs(1)
   } finally {
-    yieldEmailAiReportSending.value = false
+    marketSummaryCompatFixing.value = false
   }
 }
 
@@ -447,6 +514,10 @@ function formatSendType(value) {
       return "手动 AI 报告"
     case "cron_ai":
       return "定时 AI 报告"
+    case "manual_summary":
+      return "手动 AI 总结"
+    case "cron_summary":
+      return "定时 AI 总结"
     default:
       return value || "-"
   }
@@ -510,7 +581,15 @@ function nextEmailSendLogPage() {
 }
 
 function exportConfig() {
-  ExportConfig().then(res => {
+  saveCurrentConfig({notifyError: true}).then(saved => {
+    if (!saved) {
+      return null
+    }
+    return ExportConfig()
+  }).then(res => {
+    if (!res) {
+      return
+    }
     message.info(res)
   })
 }
@@ -534,8 +613,6 @@ function importConfig() {
         smtpPort: config.yieldEmailSmtpPort || 465,
         smtpUsername: config.yieldEmailSmtpUsername || '',
         smtpPassword: config.yieldEmailSmtpPassword || '',
-        cronEnabled: config.yieldEmailCronEnabled === true,
-        cronTimes: config.yieldEmailCronTimes || ''
       }
       formValue.value.updateBasicInfoOnStart = config.updateBasicInfoOnStart
       formValue.value.refreshInterval = config.refreshInterval
@@ -566,12 +643,14 @@ function importConfig() {
         level: config.privateMinuteLevel || '1min',
       }
       formValue.value.enableFund = config.enableFund
+      formValue.value.marketSummaryEmailEnabled = config.marketSummaryEmailEnabled === true
       formValue.value.marketSummaryCronEnabled = config.marketSummaryCronEnabled !== false
-      formValue.value.marketSummaryCronTimes = config.marketSummaryCronTimes || '09:30,11:30,18:00'
+      formValue.value.marketSummaryCronTimes = config.marketSummaryCronTimes || '09:40,11:30,14:30'
       formValue.value.httpProxy=config.httpProxy
       formValue.value.httpProxyEnabled=config.httpProxyEnabled
       formValue.value.enableAgent = config.enableAgent
       formValue.value.qgqpBId = config.qgqpBId
+      queueAutoSave()
     };
     reader.readAsText(file);
   };
@@ -643,27 +722,27 @@ function deletePrompt(ID) {
         <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => '基础设置')" size="small">
           <n-grid :cols="24" :x-gap="24" style="text-align: left">
             <n-form-item-gi :span="10" label="Tushare Token：" path="tushareToken">
-              <n-input type="text" placeholder="Tushare api token" v-model:value="formValue.tushareToken" clearable/>
+              <n-input type="text" placeholder="Tushare api token" v-model:value="formValue.tushareToken" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" label="启动时更新基础信息：" path="updateBasicInfoOnStart">
-              <n-switch v-model:value="formValue.updateBasicInfoOnStart"/>
+              <n-switch v-model:value="formValue.updateBasicInfoOnStart" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" label="数据刷新间隔：" path="refreshInterval">
-              <n-input-number v-model:value="formValue.refreshInterval" placeholder="请输入数据刷新间隔(秒)">
+              <n-input-number v-model:value="formValue.refreshInterval" placeholder="请输入数据刷新间隔(秒)" @update:value="handleImmediateFieldChange">
                 <template #suffix>秒</template>
               </n-input-number>
             </n-form-item-gi>
             <n-form-item-gi :span="6" label="暗黑主题：" path="darkTheme">
-              <n-switch v-model:value="formValue.darkTheme"/>
+              <n-switch v-model:value="formValue.darkTheme" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="10" label="浏览器安装路径：" path="browserPath">
-              <n-input type="text" placeholder="浏览器安装路径" v-model:value="formValue.browserPath" clearable/>
+              <n-input type="text" placeholder="浏览器安装路径" v-model:value="formValue.browserPath" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="3" label="AI智能体：" path="enableAgent">
-              <n-switch v-model:value="formValue.enableAgent"/>
+              <n-switch v-model:value="formValue.enableAgent" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="11" label="东财唯一标识：" path="qgqpBId">
-              <n-input type="text" placeholder="东财唯一标识" v-model:value="formValue.qgqpBId" clearable/>
+              <n-input type="text" placeholder="东财唯一标识" v-model:value="formValue.qgqpBId" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
           </n-grid>
         </n-card>
@@ -677,7 +756,7 @@ function deletePrompt(ID) {
             </n-form-item-gi>
 
             <n-form-item-gi :span="8" label="分钟线模式：" path="minuteProviderMode">
-              <n-radio-group v-model:value="formValue.minuteProviderMode">
+              <n-radio-group v-model:value="formValue.minuteProviderMode" @update:value="handleImmediateFieldChange">
                 <n-space>
                   <n-radio-button
                       v-for="item in minuteProviderModeOptions"
@@ -694,17 +773,18 @@ function deletePrompt(ID) {
                   v-model:value="formValue.akshareMinuteSourceMode"
                   :options="akshareMinuteSourceOptions"
                   :disabled="!formValue.akshareEnabled"
+                  @update:value="handleImmediateFieldChange"
               />
             </n-form-item-gi>
 
             <n-form-item-gi :span="4" label="AKShare：" path="akshareEnabled">
-              <n-switch v-model:value="formValue.akshareEnabled"/>
+              <n-switch v-model:value="formValue.akshareEnabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" label="新浪分钟线：" path="sinaMinuteEnabled">
-              <n-switch v-model:value="formValue.sinaMinuteEnabled"/>
+              <n-switch v-model:value="formValue.sinaMinuteEnabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" label="腾讯分钟线：" path="tencentMinuteEnabled">
-              <n-switch v-model:value="formValue.tencentMinuteEnabled"/>
+              <n-switch v-model:value="formValue.tencentMinuteEnabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="24">
               <n-alert type="warning" :show-icon="false">
@@ -713,7 +793,7 @@ function deletePrompt(ID) {
             </n-form-item-gi>
 
             <n-form-item-gi :span="4" label="启用私人来源：" path="privateMinute.enabled">
-              <n-switch v-model:value="formValue.privateMinute.enabled"/>
+              <n-switch v-model:value="formValue.privateMinute.enabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="10" label="调用 URL：" path="privateMinute.baseUrl">
               <n-input
@@ -721,6 +801,7 @@ function deletePrompt(ID) {
                   placeholder="例如 https://example.com/api"
                   v-model:value="formValue.privateMinute.baseUrl"
                   clearable
+                  @blur="handleTextFieldBlur"
               />
             </n-form-item-gi>
             <n-form-item-gi :span="10" label="API Key：" path="privateMinute.apiKey">
@@ -730,19 +811,20 @@ function deletePrompt(ID) {
                   v-model:value="formValue.privateMinute.apiKey"
                   show-password-on="click"
                   clearable
+                  @blur="handleTextFieldBlur"
               />
             </n-form-item-gi>
             <n-form-item-gi :span="6" label="超时(秒)：" path="privateMinute.timeoutSec">
-              <n-input-number :min="1" v-model:value="formValue.privateMinute.timeoutSec"/>
+              <n-input-number :min="1" v-model:value="formValue.privateMinute.timeoutSec" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="6" label="最小间隔(ms)：" path="privateMinute.minIntervalMs">
-              <n-input-number :min="0" v-model:value="formValue.privateMinute.minIntervalMs"/>
+              <n-input-number :min="0" v-model:value="formValue.privateMinute.minIntervalMs" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="6" label="代理模式：" path="privateMinute.proxyMode">
-              <n-select v-model:value="formValue.privateMinute.proxyMode" :options="privateMinuteProxyModeOptions"/>
+              <n-select v-model:value="formValue.privateMinute.proxyMode" :options="privateMinuteProxyModeOptions" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="6" label="分钟级别：" path="privateMinute.level">
-              <n-select v-model:value="formValue.privateMinute.level" :options="privateMinuteLevelOptions"/>
+              <n-select v-model:value="formValue.privateMinute.level" :options="privateMinuteLevelOptions" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
           </n-grid>
         </n-card>
@@ -750,51 +832,45 @@ function deletePrompt(ID) {
         <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => '通知设置')" size="small">
           <n-grid :cols="24" :x-gap="24" style="text-align: left">
             <n-form-item-gi :span="4" label="邮箱推送收益率：" path="yieldEmail.enable">
-              <n-switch v-model:value="formValue.yieldEmail.enable"/>
+              <n-switch v-model:value="formValue.yieldEmail.enable" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
 
             <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">
               <n-alert type="info" :show-icon="false">
-                支持多个收件邮箱。现在可以单独立刻发送收益率 CSV，也可以单独立刻发送最新一篇 AI 分析报告；定时任务会在交易日按配置时间发送最新一篇 AI 分析报告。多个邮箱与多个时间都请用英文逗号分隔。
+                支持多个收件邮箱。邮件不会再单独按时间定时发送；现在改为市场资讯 AI 总结在“定时执行完成后”立即发邮件。手动点击“再次总结”不会自动发，如需手动发，请到 AI 总结弹窗里点“发送邮件”。
               </n-alert>
             </n-form-item-gi>
             <n-form-item-gi :span="12" v-if="formValue.yieldEmail.enable" label="收件邮箱：" path="yieldEmail.to">
-              <n-input placeholder="多个收件邮箱用英文逗号分隔" v-model:value="formValue.yieldEmail.to" clearable/>
+              <n-input placeholder="多个收件邮箱用英文逗号分隔" v-model:value="formValue.yieldEmail.to" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="12" v-if="formValue.yieldEmail.enable" label="发件邮箱：" path="yieldEmail.from">
-              <n-input placeholder="用于 SMTP 登录的发件邮箱" v-model:value="formValue.yieldEmail.from" clearable/>
+              <n-input placeholder="用于 SMTP 登录的发件邮箱" v-model:value="formValue.yieldEmail.from" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="8" v-if="formValue.yieldEmail.enable" label="SMTP 主机：" path="yieldEmail.smtpHost">
-              <n-input placeholder="可留空，按发件邮箱自动推断" v-model:value="formValue.yieldEmail.smtpHost" clearable/>
+              <n-input placeholder="可留空，按发件邮箱自动推断" v-model:value="formValue.yieldEmail.smtpHost" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" v-if="formValue.yieldEmail.enable" label="SMTP 端口：" path="yieldEmail.smtpPort">
-              <n-input-number v-model:value="formValue.yieldEmail.smtpPort" :min="1" :max="65535"/>
+              <n-input-number v-model:value="formValue.yieldEmail.smtpPort" :min="1" :max="65535" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="6" v-if="formValue.yieldEmail.enable" label="SMTP 用户名：" path="yieldEmail.smtpUsername">
-              <n-input placeholder="可留空，默认使用发件邮箱" v-model:value="formValue.yieldEmail.smtpUsername" clearable/>
+              <n-input placeholder="可留空，默认使用发件邮箱" v-model:value="formValue.yieldEmail.smtpUsername" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="6" v-if="formValue.yieldEmail.enable" label="SMTP 授权码：" path="yieldEmail.smtpPassword">
-              <n-input type="password" placeholder="邮箱 SMTP 授权码/密码" v-model:value="formValue.yieldEmail.smtpPassword" show-password-on="click" clearable/>
+              <n-input type="password" placeholder="邮箱 SMTP 授权码/密码" v-model:value="formValue.yieldEmail.smtpPassword" show-password-on="click" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="4" v-if="formValue.yieldEmail.enable" label="交易日定时发送：" path="yieldEmail.cronEnabled">
-              <n-switch v-model:value="formValue.yieldEmail.cronEnabled"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="20" v-if="formValue.yieldEmail.enable && formValue.yieldEmail.cronEnabled" label="发送时间：" path="yieldEmail.cronTimes">
-              <n-input
-                  placeholder="多个时间用英文逗号分隔，例如 09:30,15:05"
-                  v-model:value="formValue.yieldEmail.cronTimes"
-                  clearable
-              />
+            <n-form-item-gi :span="8" v-if="formValue.yieldEmail.enable" label="定时AI总结后自动发邮件：" path="marketSummaryEmailEnabled">
+              <n-switch v-model:value="formValue.marketSummaryEmailEnabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">
               <n-space vertical>
                 <n-space>
                   <n-button type="primary" :loading="yieldEmailTestSending" @click="sendYieldEmailTest">发送“你好”测试邮件</n-button>
                   <n-button type="success" :loading="yieldEmailCsvSending" @click="sendYieldEmailCSVNowAction">立刻发送收益率 CSV</n-button>
-                  <n-button type="warning" :loading="yieldEmailAiReportSending" @click="sendLatestAIAnalysisReportNowAction">立刻发送 AI 分析报告</n-button>
+                  <n-button tertiary :loading="marketSummaryCompatFixing" @click="runMarketSummaryCompatFixAction">修复历史 AI 总结备注</n-button>
                   <n-button tertiary @click="refreshEmailSendLogs" :loading="emailSendLogsLoading">刷新发送日志</n-button>
                 </n-space>
-                <n-text depth="3">收益率 CSV 会单独发送整张收益率表；AI 分析报告发送的是数据库里最新一篇 AI 分析报告；定时发送仅在交易日触发。</n-text>
+                <n-text depth="3">收益率 CSV 会单独发送整张收益率表。若开启上面的开关，只有“市场资讯 AI 总结定时任务”完成后才会自动发邮件；手动总结不会自动发。</n-text>
+                <n-text depth="3">“修复历史 AI 总结备注”会一次性把旧报告和旧推荐备注里的 `activationRuleJson` 转成人话，不影响机器侧 strict 规则。</n-text>
               </n-space>
             </n-form-item-gi>
             <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">
@@ -839,26 +915,26 @@ function deletePrompt(ID) {
         <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => 'AI设置')" size="small">
           <n-grid :cols="24" :x-gap="24" style="text-align: left;">
             <n-form-item-gi :span="24" label="AI诊股：" path="openAI.enable">
-              <n-switch v-model:value="formValue.openAI.enable"/>
+              <n-switch v-model:value="formValue.openAI.enable" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
 
             <n-form-item-gi :span="6" v-if="formValue.openAI.enable" label="Crawler Timeout(秒)"
                             title="资讯采集超时时间(秒)" path="openAI.crawlTimeOut">
-              <n-input-number min="30" step="1" v-model:value="formValue.openAI.crawlTimeOut"/>
+              <n-input-number min="30" step="1" v-model:value="formValue.openAI.crawlTimeOut" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" v-if="formValue.openAI.enable" title="天数越多消耗tokens越多"
                             label="日K线数据(天)" path="openAI.kDays">
-              <n-input-number min="30" step="1" max="60" v-model:value="formValue.openAI.kDays"/>
+              <n-input-number min="30" step="1" max="60" v-model:value="formValue.openAI.kDays" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="2" label="爬虫http代理" path="httpProxyEnabled">
-              <n-switch v-model:value="formValue.httpProxyEnabled" :disabled="formValue.forceNoProxyForFetch"/>
+              <n-switch v-model:value="formValue.httpProxyEnabled" :disabled="formValue.forceNoProxyForFetch" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="4" label="抓取强制直连" path="forceNoProxyForFetch">
-              <n-switch v-model:value="formValue.forceNoProxyForFetch"/>
+              <n-switch v-model:value="formValue.forceNoProxyForFetch" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="8" v-if="formValue.httpProxyEnabled && !formValue.forceNoProxyForFetch" title="http代理地址"
                             label="http代理地址" path="httpProxy">
-              <n-input type="text" placeholder="爬虫http代理地址" v-model:value="formValue.httpProxy" clearable/>
+              <n-input type="text" placeholder="爬虫http代理地址" v-model:value="formValue.httpProxy" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-gi :span="24" v-if="formValue.forceNoProxyForFetch">
               <n-tag type="success" :bordered="false">已强制关闭所有信息抓取代理，网页抓取与接口抓取都会直连</n-tag>
@@ -870,13 +946,13 @@ function deletePrompt(ID) {
             </n-gi>
             <n-form-item-gi :span="12" v-if="formValue.openAI.enable" label="模型系统 Prompt" path="openAI.prompt">
               <n-input v-model:value="formValue.openAI.prompt" type="textarea" :show-count="true"
-                       placeholder="请输入系统prompt" :autosize="{ minRows: 4, maxRows: 8 }"/>
+                       placeholder="请输入系统prompt" :autosize="{ minRows: 4, maxRows: 8 }" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="12" v-if="formValue.openAI.enable" label="模型用户 Prompt"
                             path="openAI.questionTemplate">
               <n-input v-model:value="formValue.openAI.questionTemplate" type="textarea" :show-count="true"
                        placeholder="请输入用户prompt:例如{{stockName}}[{{stockCode}}]分析和总结"
-                       :autosize="{ minRows: 4, maxRows: 8 }"/>
+                       :autosize="{ minRows: 4, maxRows: 8 }" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
 
             <n-gi :span="24" v-if="formValue.openAI.enable">
@@ -889,7 +965,11 @@ function deletePrompt(ID) {
                   <template #header>
                     <n-flex justify="space-between" align="center">
                       <n-text depth="3">AI 配置 #{{ index + 1 }}</n-text>
-                      <n-button type="error" size="tiny" ghost @click="removeAiConfig(index)">删除</n-button>
+                      <n-space>
+                        <n-button size="tiny" ghost @click="moveAiConfig(index, -1)" :disabled="index === 0">上移</n-button>
+                        <n-button size="tiny" ghost @click="moveAiConfig(index, 1)" :disabled="index === formValue.openAI.aiConfigs.length - 1">下移</n-button>
+                        <n-button type="error" size="tiny" ghost @click="removeAiConfig(index)">删除</n-button>
+                      </n-space>
                     </n-flex>
                   </template>
                   <n-grid :cols="24" :x-gap="24">
@@ -897,32 +977,32 @@ function deletePrompt(ID) {
                       <n-input type="text" placeholder="配置ID" v-model:value="aiConfig.ID" clearable/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" label="配置名称" :path="`openAI.aiConfigs[${index}].name`">
-                      <n-input type="text" placeholder="配置名称" v-model:value="aiConfig.name" clearable/>
+                      <n-input type="text" placeholder="配置名称" v-model:value="aiConfig.name" clearable @blur="handleTextFieldBlur"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" label="接口地址" :path="`openAI.aiConfigs[${index}].baseUrl`">
-                      <n-input type="text" placeholder="AI接口地址" v-model:value="aiConfig.baseUrl" clearable/>
+                      <n-input type="text" placeholder="AI接口地址" v-model:value="aiConfig.baseUrl" clearable @blur="handleTextFieldBlur"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" label="令牌(apiKey)" :path="`openAI.aiConfigs[${index}].apiKey`">
                       <n-input type="password" placeholder="apiKey" v-model:value="aiConfig.apiKey" clearable
-                               show-password-on="click"/>
+                               show-password-on="click" @blur="handleTextFieldBlur"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="8" label="模型名称" :path="`openAI.aiConfigs[${index}].modelName`">
-                      <n-input type="text" placeholder="AI模型名称" v-model:value="aiConfig.modelName" clearable/>
+                      <n-input type="text" placeholder="AI模型名称" v-model:value="aiConfig.modelName" clearable @blur="handleTextFieldBlur"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="5" label="Temperature" :path="`openAI.aiConfigs[${index}].temperature`">
-                      <n-input-number placeholder="temperature" v-model:value="aiConfig.temperature" :step="0.1"/>
+                      <n-input-number placeholder="temperature" v-model:value="aiConfig.temperature" :step="0.1" @update:value="handleImmediateFieldChange"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="5" label="MaxTokens" :path="`openAI.aiConfigs[${index}].maxTokens`">
-                      <n-input-number placeholder="maxTokens" v-model:value="aiConfig.maxTokens"/>
+                      <n-input-number placeholder="maxTokens" v-model:value="aiConfig.maxTokens" @update:value="handleImmediateFieldChange"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="5" label="Timeout(秒)" :path="`openAI.aiConfigs[${index}].timeOut`">
-                      <n-input-number min="60" step="1" placeholder="超时(秒)" v-model:value="aiConfig.timeOut"/>
+                      <n-input-number min="60" step="1" placeholder="超时(秒)" v-model:value="aiConfig.timeOut" @update:value="handleImmediateFieldChange"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" label="http代理" :path="`openAI.aiConfigs[${index}].httpProxyEnabled`">
-                      <n-switch v-model:value="aiConfig.httpProxyEnabled"/>
+                      <n-switch v-model:value="aiConfig.httpProxyEnabled" @update:value="handleImmediateFieldChange"/>
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" v-if="aiConfig.httpProxyEnabled" title="http代理地址" :path="`openAI.aiConfigs[${index}].httpProxy`">
-                      <n-input type="text" placeholder="http代理地址" v-model:value="aiConfig.httpProxy" clearable/>
+                      <n-input type="text" placeholder="http代理地址" v-model:value="aiConfig.httpProxy" clearable @blur="handleTextFieldBlur"/>
                     </n-form-item-gi>
                   </n-grid>
                 </n-card>
@@ -938,10 +1018,14 @@ function deletePrompt(ID) {
               <n-space vertical>
                 <n-space justify="center">
                   <n-button type="warning" @click="managePrompts">管理提示词模板</n-button>
-                  <n-button type="primary" strong @click="saveConfig">保存设置</n-button>
                   <n-button type="info" @click="exportConfig">导出配置</n-button>
                   <n-button type="error" @click="importConfig">导入配置</n-button>
                 </n-space>
+                <n-flex justify="center">
+                  <n-text depth="3" v-if="autoSaveState === 'saving'">正在自动保存...</n-text>
+                  <n-text depth="3" type="success" v-else-if="autoSaveState === 'saved'">已自动保存 {{ autoSaveLastSavedAt }}</n-text>
+                  <n-text depth="3" type="error" v-else-if="autoSaveState === 'error'">自动保存失败：{{ autoSaveError }}</n-text>
+                </n-flex>
 
                 <n-flex justify="start" style="margin-top: 10px" v-if="promptTemplates.length > 0">
                   <n-tag :bordered="false" type="warning">提示词模板:</n-tag>

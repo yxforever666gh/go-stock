@@ -136,13 +136,14 @@ type Commit struct {
 
 type AIResponseResult struct {
 	gorm.Model
-	ChatId    string                `json:"chatId"`
-	ModelName string                `json:"modelName"`
-	StockCode string                `json:"stockCode"`
-	StockName string                `json:"stockName"`
-	Question  string                `json:"question"`
-	Content   string                `json:"content"`
-	IsDel     soft_delete.DeletedAt `gorm:"softDelete:flag"`
+	ChatId       string                `json:"chatId"`
+	ProviderName string                `json:"providerName" gorm:"size:128"`
+	ModelName    string                `json:"modelName"`
+	StockCode    string                `json:"stockCode"`
+	StockName    string                `json:"stockName"`
+	Question     string                `json:"question"`
+	Content      string                `json:"content"`
+	IsDel        soft_delete.DeletedAt `gorm:"softDelete:flag"`
 }
 
 func (receiver AIResponseResult) TableName() string {
@@ -999,50 +1000,101 @@ type StockConceptInfo struct {
 
 type AiRecommendStocks struct {
 	gorm.Model
-	DataTime                    *time.Time `json:"dataTime" gorm:"index;autoCreateTime"`
-	ModelName                   string     `json:"modelName" md:"模型名称"`
-	StockCode                   string     `json:"stockCode" md:"股票代码"`
-	StockName                   string     `json:"stockName" md:"股票名称"`
-	BkCode                      string     `json:"bkCode" md:"行业/板块代码"`
-	BkName                      string     `json:"bkName" md:"行业/板块名称"`
-	StockPrice                  string     `json:"stockPrice" md:"推荐时股票价格"`
-	StockCurrentPrice           string     `json:"stockCurrentPrice" md:"当前价格"`
-	StockCurrentPriceTime       string     `json:"stockCurrentPriceTime" md:"当前价格时间"`
-	StockClosePrice             string     `json:"stockClosePrice" md:"推荐时股票收盘价格"`
-	StockPrePrice               string     `json:"stockPrePrice" md:"前一交易日股票价格"`
-	RecommendReason             string     `json:"recommendReason" md:"推荐理由/驱动因素/逻辑"`
-	RecommendBuyPrice           string     `json:"recommendBuyPrice" md:"ai建议买入价范围"`
-	RecommendBuyPriceMin        float64    `json:"recommendBuyPriceMin" md:"ai建议最低买入价"`
-	RecommendBuyPriceMax        float64    `json:"recommendBuyPriceMax" md:"ai建议最高买入价"`
-	RecommendStopProfitPrice    string     `json:"recommendStopProfitPrice" md:"ai建议止盈价范围"`
-	RecommendStopProfitPriceMin float64    `json:"recommendStopProfitPriceMin" md:"ai建议最低止盈价"`
-	RecommendStopProfitPriceMax float64    `json:"recommendStopProfitPriceMax" md:"ai建议最高止盈价"`
-	RecommendStopLossPrice      string     `json:"recommendStopLossPrice" md:"ai建议止损价"`
-	RecommendCategory           string     `json:"recommendCategory" md:"推荐分类"`
-	ExecutionState              string     `json:"executionState" md:"执行状态"`
-	BuySignal                   string     `json:"buySignal" md:"买入信号"`
-	BuySignalDetail             string     `json:"buySignalDetail" md:"买入信号补充条件"`
-	SellSignal                  string     `json:"sellSignal" md:"卖出信号"`
-	SellSignalDetail            string     `json:"sellSignalDetail" md:"卖出信号补充条件"`
-	InvalidSignal               string     `json:"invalidSignal" md:"失效信号"`
-	CoreCatalyst                string     `json:"coreCatalyst" md:"核心催化"`
-	KeyEvidence                 string     `json:"keyEvidence" md:"关键证据"`
-	EvidenceSources             string     `json:"evidenceSources" md:"证据引用JSON"`
-	InvalidCondition            string     `json:"invalidCondition" md:"失效条件"`
-	ObservePrice                string     `json:"observePrice" md:"观察价"`
-	FocusPrice                  string     `json:"focusPrice" md:"关注位"`
-	ExpectedCycle               string     `json:"expectedCycle" md:"预期周期"`
-	EventStrength               int        `json:"eventStrength" md:"事件强度"`
-	CapitalConfirmation         int        `json:"capitalConfirmation" md:"资金确认度"`
-	FundamentalFit              int        `json:"fundamentalFit" md:"基本面匹配度"`
-	TechnicalFit                int        `json:"technicalFit" md:"技术面匹配度"`
-	RecommendStatus             string     `json:"recommendStatus" md:"推荐状态"`
-	SummaryVersion              string     `json:"summaryVersion" md:"总结版本"`
-	RiskRemarks                 string     `json:"riskRemarks" md:"风险提示"`
-	Remarks                     string     `json:"remarks" md:"备注"`
+	DataTime                    *time.Time                       `json:"dataTime" gorm:"index;autoCreateTime"`
+	ModelName                   string                           `json:"modelName" md:"模型名称"`
+	StockCode                   string                           `json:"stockCode" md:"股票代码"`
+	StockName                   string                           `json:"stockName" md:"股票名称"`
+	BkCode                      string                           `json:"bkCode" md:"行业/板块代码"`
+	BkName                      string                           `json:"bkName" md:"行业/板块名称"`
+	StockPrice                  string                           `json:"stockPrice" md:"推荐时股票价格"`
+	StockCurrentPrice           string                           `json:"stockCurrentPrice" md:"当前价格"`
+	StockCurrentPriceTime       string                           `json:"stockCurrentPriceTime" md:"当前价格时间"`
+	StockClosePrice             string                           `json:"stockClosePrice" md:"推荐时股票收盘价格"`
+	StockPrePrice               string                           `json:"stockPrePrice" md:"前一交易日股票价格"`
+	RecommendReason             string                           `json:"recommendReason" md:"推荐理由/驱动因素/逻辑"`
+	RecommendBuyPrice           string                           `json:"recommendBuyPrice" md:"ai建议买入价范围"`
+	RecommendBuyPriceMin        float64                          `json:"recommendBuyPriceMin" md:"ai建议最低买入价"`
+	RecommendBuyPriceMax        float64                          `json:"recommendBuyPriceMax" md:"ai建议最高买入价"`
+	RecommendStopProfitPrice    string                           `json:"recommendStopProfitPrice" md:"ai建议止盈价范围"`
+	RecommendStopProfitPriceMin float64                          `json:"recommendStopProfitPriceMin" md:"ai建议最低止盈价"`
+	RecommendStopProfitPriceMax float64                          `json:"recommendStopProfitPriceMax" md:"ai建议最高止盈价"`
+	RecommendStopLossPrice      string                           `json:"recommendStopLossPrice" md:"ai建议止损价"`
+	RecommendCategory           string                           `json:"recommendCategory" md:"推荐分类"`
+	ExecutionState              string                           `json:"executionState" md:"执行状态"`
+	BuySignal                   string                           `json:"buySignal" md:"买入信号"`
+	BuySignalDetail             string                           `json:"buySignalDetail" md:"买入信号补充条件"`
+	SellSignal                  string                           `json:"sellSignal" md:"卖出信号"`
+	SellSignalDetail            string                           `json:"sellSignalDetail" md:"卖出信号补充条件"`
+	InvalidSignal               string                           `json:"invalidSignal" md:"失效信号"`
+	CoreCatalyst                string                           `json:"coreCatalyst" md:"核心催化"`
+	KeyEvidence                 string                           `json:"keyEvidence" md:"关键证据"`
+	EvidenceSources             string                           `json:"evidenceSources" md:"证据引用JSON"`
+	InvalidCondition            string                           `json:"invalidCondition" md:"失效条件"`
+	ObservePrice                string                           `json:"observePrice" md:"观察价"`
+	FocusPrice                  string                           `json:"focusPrice" md:"关注位"`
+	ExpectedCycle               string                           `json:"expectedCycle" md:"预期周期"`
+	EventStrength               int                              `json:"eventStrength" md:"事件强度"`
+	CapitalConfirmation         int                              `json:"capitalConfirmation" md:"资金确认度"`
+	FundamentalFit              int                              `json:"fundamentalFit" md:"基本面匹配度"`
+	TechnicalFit                int                              `json:"technicalFit" md:"技术面匹配度"`
+	ActivationRuleJSON          string                           `json:"activationRuleJson" md:"结构化激活规则JSON"`
+	ActivationRuleVersion       string                           `json:"activationRuleVersion" md:"结构化激活规则版本"`
+	ActivationRuleSource        string                           `json:"activationRuleSource" md:"结构化激活规则来源"`
+	ActivationStatus            string                           `json:"activationStatus" gorm:"index" md:"激活状态"`
+	ActivationInvalidReason     string                           `json:"activationInvalidReason" md:"激活规则无效原因"`
+	RecommendStatus             string                           `json:"recommendStatus" md:"推荐状态"`
+	SummaryVersion              string                           `json:"summaryVersion" md:"总结版本"`
+	RiskRemarks                 string                           `json:"riskRemarks" md:"风险提示"`
+	Remarks                     string                           `json:"remarks" md:"备注"`
+	LatestOpeningReview         *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty" gorm:"-"`
 }
 
 func (receiver AiRecommendStocks) TableName() string { return "ai_recommend_stocks" }
+
+type AiRecommendOpeningReview struct {
+	ID                  uint      `json:"id" gorm:"primarykey"`
+	CreatedAt           time.Time `json:"createdAt"`
+	UpdatedAt           time.Time `json:"updatedAt"`
+	RecommendID         uint      `json:"recommendId" gorm:"uniqueIndex:idx_ai_rec_opening_review_key"`
+	StockCode           string    `json:"stockCode" gorm:"size:32;index"`
+	StockName           string    `json:"stockName"`
+	TradeDate           string    `json:"tradeDate" gorm:"size:10;index;uniqueIndex:idx_ai_rec_opening_review_key"`
+	ReviewScope         string    `json:"reviewScope" gorm:"size:16;index;uniqueIndex:idx_ai_rec_opening_review_key"`
+	ReviewPhase         string    `json:"reviewPhase" gorm:"size:16;index;uniqueIndex:idx_ai_rec_opening_review_key"`
+	OpeningPrice        float64   `json:"openingPrice"`
+	AuctionPrice        float64   `json:"auctionPrice"`
+	MinutePrice         float64   `json:"minutePrice"`
+	MinuteVolume        float64   `json:"minuteVolume"`
+	MinuteAmount        float64   `json:"minuteAmount"`
+	GapType             string    `json:"gapType" gorm:"size:32"`
+	Action              string    `json:"action" gorm:"size:32;index"`
+	Reason              string    `json:"reason" gorm:"type:text"`
+	SuggestedStopLoss   float64   `json:"suggestedStopLoss"`
+	SuggestedTakeProfit float64   `json:"suggestedTakeProfit"`
+	ModelName           string    `json:"modelName" gorm:"size:128"`
+	RawSummary          string    `json:"rawSummary" gorm:"type:text"`
+}
+
+func (AiRecommendOpeningReview) TableName() string { return "ai_recommend_opening_review" }
+
+type AiRecommendOpeningReviewSummary struct {
+	RecommendID         uint    `json:"recommendId"`
+	TradeDate           string  `json:"tradeDate"`
+	ReviewScope         string  `json:"reviewScope"`
+	ReviewPhase         string  `json:"reviewPhase"`
+	OpeningPrice        float64 `json:"openingPrice"`
+	AuctionPrice        float64 `json:"auctionPrice"`
+	MinutePrice         float64 `json:"minutePrice"`
+	MinuteVolume        float64 `json:"minuteVolume"`
+	MinuteAmount        float64 `json:"minuteAmount"`
+	GapType             string  `json:"gapType"`
+	Action              string  `json:"action"`
+	Reason              string  `json:"reason"`
+	SuggestedStopLoss   float64 `json:"suggestedStopLoss"`
+	SuggestedTakeProfit float64 `json:"suggestedTakeProfit"`
+	ModelName           string  `json:"modelName"`
+	RawSummary          string  `json:"rawSummary"`
+}
 
 type AiRecommendStocksQuery struct {
 	Page      int    `form:"page" json:"page"`           // 页码
@@ -1072,47 +1124,50 @@ type AiRecommendStocksPageData struct {
 }
 
 type AiRecommendStocksYieldItem struct {
-	RecommendID               uint     `json:"recommendId"`
-	RowKey                    string   `json:"rowKey"`
-	CalcMode                  string   `json:"calcMode,omitempty"`
-	StrictReady               bool     `json:"strictReady"`
-	StrictPendingReason       string   `json:"strictPendingReason,omitempty"`
-	StockCode                 string   `json:"stockCode"`
-	StockName                 string   `json:"stockName"`
-	ModelNames                string   `json:"modelNames,omitempty"`
-	BacktestEligibility       string   `json:"backtestEligibility"`
-	BacktestEligibilityReason string   `json:"backtestEligibilityReason,omitempty"`
-	BkName                    string   `json:"bkName"`
-	RecommendCategory         string   `json:"recommendCategory,omitempty"`
-	RecommendCategoryLabel    string   `json:"recommendCategoryLabel,omitempty"`
-	ExecutionState            string   `json:"executionState"`
-	ExecutionStateLabel       string   `json:"executionStateLabel"`
-	BuySignal                 string   `json:"buySignal"`
-	BuySignalDetail           string   `json:"buySignalDetail"`
-	SellSignal                string   `json:"sellSignal"`
-	SellSignalDetail          string   `json:"sellSignalDetail"`
-	InvalidSignal             string   `json:"invalidSignal"`
-	RecommendCount            int      `json:"recommendCount"`
-	RecommendTime             string   `json:"recommendTime"`
-	SignalTime                string   `json:"signalTime"`
-	ActivationStatus          string   `json:"activationStatus"`
-	ActivationTime            string   `json:"activationTime"`
-	ActivationPrice           float64  `json:"activationPrice"`
-	RecommendBuyPrice         string   `json:"recommendBuyPrice,omitempty"`
-	BuyTime                   string   `json:"buyTime"`
-	BuyAmount                 float64  `json:"buyAmount"`
-	StopProfitAmount          *float64 `json:"stopProfitAmount,omitempty"`
-	StopLossAmount            *float64 `json:"stopLossAmount,omitempty"`
-	SellTime                  string   `json:"sellTime"`
-	SellAmount                *float64 `json:"sellAmount,omitempty"`
-	SellAmountText            string   `json:"sellAmountText"`
-	PositionStatus            string   `json:"positionStatus"`
-	CurrentPrice              float64  `json:"currentPrice"`
-	CurrentPriceTime          string   `json:"currentPriceTime"`
-	YieldRate                 float64  `json:"yieldRate"`
-	YieldRateText             string   `json:"yieldRateText"`
-	DataStatus                string   `json:"dataStatus"`
-	DataStatusReason          string   `json:"dataStatusReason,omitempty"`
+	RecommendID               uint                             `json:"recommendId"`
+	RowKey                    string                           `json:"rowKey"`
+	CalcMode                  string                           `json:"calcMode,omitempty"`
+	StrictReady               bool                             `json:"strictReady"`
+	StrictPendingReason       string                           `json:"strictPendingReason,omitempty"`
+	StockCode                 string                           `json:"stockCode"`
+	StockName                 string                           `json:"stockName"`
+	ModelNames                string                           `json:"modelNames,omitempty"`
+	BacktestEligibility       string                           `json:"backtestEligibility"`
+	BacktestEligibilityReason string                           `json:"backtestEligibilityReason,omitempty"`
+	BkName                    string                           `json:"bkName"`
+	RecommendCategory         string                           `json:"recommendCategory,omitempty"`
+	RecommendCategoryLabel    string                           `json:"recommendCategoryLabel,omitempty"`
+	ExecutionState            string                           `json:"executionState"`
+	ExecutionStateLabel       string                           `json:"executionStateLabel"`
+	BuySignal                 string                           `json:"buySignal"`
+	BuySignalDetail           string                           `json:"buySignalDetail"`
+	SellSignal                string                           `json:"sellSignal"`
+	SellSignalDetail          string                           `json:"sellSignalDetail"`
+	InvalidSignal             string                           `json:"invalidSignal"`
+	ActivationRule            string                           `json:"activationRule,omitempty"`
+	ActivationInvalidReason   string                           `json:"activationInvalidReason,omitempty"`
+	RecommendCount            int                              `json:"recommendCount"`
+	RecommendTime             string                           `json:"recommendTime"`
+	SignalTime                string                           `json:"signalTime"`
+	ActivationStatus          string                           `json:"activationStatus"`
+	ActivationTime            string                           `json:"activationTime"`
+	ActivationPrice           float64                          `json:"activationPrice"`
+	RecommendBuyPrice         string                           `json:"recommendBuyPrice,omitempty"`
+	BuyTime                   string                           `json:"buyTime"`
+	BuyAmount                 float64                          `json:"buyAmount"`
+	StopProfitAmount          *float64                         `json:"stopProfitAmount,omitempty"`
+	StopLossAmount            *float64                         `json:"stopLossAmount,omitempty"`
+	SellTime                  string                           `json:"sellTime"`
+	SellAmount                *float64                         `json:"sellAmount,omitempty"`
+	SellAmountText            string                           `json:"sellAmountText"`
+	PositionStatus            string                           `json:"positionStatus"`
+	CurrentPrice              float64                          `json:"currentPrice"`
+	CurrentPriceTime          string                           `json:"currentPriceTime"`
+	YieldRate                 float64                          `json:"yieldRate"`
+	YieldRateText             string                           `json:"yieldRateText"`
+	DataStatus                string                           `json:"dataStatus"`
+	DataStatusReason          string                           `json:"dataStatusReason,omitempty"`
+	LatestOpeningReview       *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty"`
 }
 
 type AiRecommendYieldMinuteBarDTO struct {
@@ -1134,25 +1189,26 @@ type AiRecommendYieldChartMarker struct {
 }
 
 type AiRecommendYieldMinuteChartData struct {
-	RecommendID      uint                           `json:"recommendId"`
-	StockCode        string                         `json:"stockCode"`
-	StockName        string                         `json:"stockName"`
-	SignalTime       string                         `json:"signalTime"`
-	BuyTime          string                         `json:"buyTime"`
-	SellTime         string                         `json:"sellTime"`
-	CurrentPrice     float64                        `json:"currentPrice"`
-	CurrentPriceTime string                         `json:"currentPriceTime"`
-	ActivationStatus string                         `json:"activationStatus"`
-	PositionStatus   string                         `json:"positionStatus"`
-	DataStatus       string                         `json:"dataStatus"`
-	DataStatusReason string                         `json:"dataStatusReason,omitempty"`
-	RangeStart       string                         `json:"rangeStart"`
-	RangeEnd         string                         `json:"rangeEnd"`
-	RangeLabel       string                         `json:"rangeLabel"`
-	ChartStatus      string                         `json:"chartStatus"`
-	Message          string                         `json:"message,omitempty"`
-	Bars             []AiRecommendYieldMinuteBarDTO `json:"bars"`
-	Markers          []AiRecommendYieldChartMarker  `json:"markers"`
+	RecommendID         uint                             `json:"recommendId"`
+	StockCode           string                           `json:"stockCode"`
+	StockName           string                           `json:"stockName"`
+	SignalTime          string                           `json:"signalTime"`
+	BuyTime             string                           `json:"buyTime"`
+	SellTime            string                           `json:"sellTime"`
+	CurrentPrice        float64                          `json:"currentPrice"`
+	CurrentPriceTime    string                           `json:"currentPriceTime"`
+	ActivationStatus    string                           `json:"activationStatus"`
+	PositionStatus      string                           `json:"positionStatus"`
+	DataStatus          string                           `json:"dataStatus"`
+	DataStatusReason    string                           `json:"dataStatusReason,omitempty"`
+	RangeStart          string                           `json:"rangeStart"`
+	RangeEnd            string                           `json:"rangeEnd"`
+	RangeLabel          string                           `json:"rangeLabel"`
+	ChartStatus         string                           `json:"chartStatus"`
+	Message             string                           `json:"message,omitempty"`
+	Bars                []AiRecommendYieldMinuteBarDTO   `json:"bars"`
+	Markers             []AiRecommendYieldChartMarker    `json:"markers"`
+	LatestOpeningReview *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty"`
 }
 
 type AiRecommendStocksYieldPageData struct {
@@ -1241,6 +1297,9 @@ type AiRecommendYieldOverride struct {
 	RecommendStopLossPrice      string     `json:"recommendStopLossPrice"`
 	BuySignal                   string     `json:"buySignal"`
 	BuySignalDetail             string     `json:"buySignalDetail"`
+	ActivationRuleJSON          string     `json:"activationRuleJson"`
+	ActivationRuleVersion       string     `json:"activationRuleVersion"`
+	ActivationRuleSource        string     `json:"activationRuleSource"`
 	InvalidSignal               string     `json:"invalidSignal"`
 	InvalidCondition            string     `json:"invalidCondition"`
 	DataStatusReason            string     `json:"dataStatusReason"`

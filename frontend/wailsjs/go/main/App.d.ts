@@ -150,6 +150,10 @@ export function SendDingDingMessageByType(arg1:string,arg2:string,arg3:number):P
 
 export function SendLatestAIAnalysisReportNow():Promise<string>;
 
+export function SendMarketSummaryEmailNow(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
+
+export function RunMarketSummaryHumanizeCompatFixNow():Promise<string>;
+
 export function SendYieldEmailCSVNow():Promise<string>;
 
 export function SendYieldEmailTestMessage():Promise<string>;

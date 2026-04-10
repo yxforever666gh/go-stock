@@ -90,6 +90,7 @@ func AutoMigrate() {
 	db.Dao.AutoMigrate(&models.WordAnalyze{})
 	db.Dao.AutoMigrate(&models.SentimentResultAnalyze{})
 	db.Dao.AutoMigrate(&models.AiRecommendStocks{})
+	db.Dao.AutoMigrate(&models.AiRecommendOpeningReview{})
 	db.Dao.AutoMigrate(&models.AiRecommendYieldState{})
 	db.Dao.AutoMigrate(&models.AiRecommendYieldOverride{})
 	db.Dao.AutoMigrate(&models.AiRecommendYieldRecordState{})

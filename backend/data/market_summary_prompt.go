@@ -38,18 +38,27 @@ const marketSummaryOutputInstruction = `
   1. 不再输出“立刻买入”类标签，所有可执行推荐统一写成“等待激活”计划；
   2. 无论盘中还是非交易时段，都必须把触发条件写成未来可验证的激活条件，不能把“当前强势/可以直接买/不追”当成结论；
   3. 若当前时间下无法形成未来3-5个交易日内可验证的交易计划，就不要推荐任何股票。
-- 若证据不足、逻辑冲突、价格位置不支持交易计划，就直接不要把该股票写入推荐股票池。
+- 若证据不足、证据冲突、价格位置不支持交易计划，就直接不要把该股票写入推荐股票池。
 - “买入依据”必须使用固定硬格式，一行内写成：
-  价格触发：...；量能触发：...；逻辑触发：...
+  价格触发：...；量能触发：...
+- 市场资讯来源默认生成“双路径激活”：
+  1. 回踩激活路径：价格先回到主买入区，再做量价确认；
+  2. 突破激活路径：若股价未回踩而是继续走强，允许给出靠近当前锚点的突破激活价；
+  3. 两条路径都必须是未来3-5个交易日内可验证的机器条件，不能写成自然语言废话。
+- 除了 Markdown 表格，你在调用 CreateAiRecommendStocks 或 BatchCreateAiRecommendStocks 时，必须同步传入 activationRuleJson，作为收益率 strict 模式唯一可信的激活依据。
+- activationRuleJson 禁止使用自然语言模糊词，必须改成机器字段，例如：
+  {"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.42,"thresholdMax":9.56,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}
+- 若同时给出回踩激活与突破激活，activationRuleJson 必须输出双路径 JSON，例如：
+  {"version":"v2","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.42,"thresholdMax":9.56,"volumeRatio":1.15,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5},{"name":"breakout","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.60,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}]}
 - “失效条件”必须使用固定硬格式，一行内写成：
-  时间失效：...；价格失效：...；逻辑失效：...
+  时间失效：...；价格失效：...
 - “买入依据”中的量化条件必须写明：
   1. 触发价位或触发区间；
   2. 观察周期，如 1分钟 / 5分钟 / 15分钟；
   3. 比较基准，如近5个5分钟均量、上一交易日同一时刻成交额、量比阈值；
   4. 明确阈值，如 ≥1.2倍、量比≥1.5、连续2根5分钟K线站稳；
   5. 不能使用“放量”“缩量”“强势”“承接”“高开过大”“不追”这类未量化表述直接充当条件。
-- “止盈区间”“止损位”“失效条件”必须彼此匹配，不能出现价格止损和逻辑失效互相冲突的情况。
+- “止盈区间”“止损位”“失效条件”必须彼此匹配，不能出现价格止损和失效条件互相冲突的情况。
 - 所有需要等待触发的计划，触发有效期必须限制在未来3-5个交易日内；超过窗口仍未触发，就视为失效，不应再纳入收益率跟踪。
 - 若提到放量/缩量/量比/量能，必须同时写清：
   1. 在什么价位、均线、前高/前低附近观察；
@@ -61,6 +70,7 @@ const marketSummaryOutputInstruction = `
 - 若证据核验层给出了 auctionPrice 或 priceAnchorSource=call_auction，价格锚点、买入区间、止盈区间、止损位必须优先围绕集合竞价价格锚点生成，并结合委比、量比、买卖盘结构判断强弱，不能把竞价结果当成已开盘走势硬推。
 - 若证据核验层给出了 minutePrice / minuteAmount / minuteVolume，且当前锚点不是集合竞价，价格锚点、买入区间、止盈区间、止损位必须优先围绕该实时分钟线价格生成，并结合最新一分钟成交额/成交量判断活跃度。
 - stockPrice 字段应优先填写当前价格锚点；集合竞价时优先 auctionPrice，其次 minutePrice，当两者都缺失时才允许回退到 CurrentPrice。
+- 价格锚点、买入区间、突破激活价、止盈区间、止损位必须与当前锚点保持同一价格数量级；若任一关键价位相对当前锚点偏离超过20%，视为无效输出，必须重写。
 - 至少要有 2 类不同证据，且至少 1 条来自高信任源（优先：一级披露 / 财报财务 / 互动易）；证据不足时不得进入推荐股票池。
 - 如存在公告与媒体解读冲突，必须输出争议结论，并从推荐股票池中剔除，不得强行给出交易计划。
 - “跳过复审”中的“原记录ID”必须直接引用输入里的 recommendId，不得编造。
@@ -69,7 +79,7 @@ const marketSummaryOutputInstruction = `
 - 若某只已跳过股票复审后恢复为可交易计划，必须重新写完整的买入区间、止盈区间、止损位、买入依据、失效条件；这些字段将用于覆盖收益率页面对应行。
 - 若输入里没有“前三个交易日已跳过股票复审候选池”，“# 跳过复审”章节也不能省略，可在表格中写“暂无需要复审的已跳过股票”。
 - 不要输出旧版兼容字段，也不要用标签语义替代清晰交易计划。
-- 调用 CreateAiRecommendStocks 或 BatchCreateAiRecommendStocks 前，必须确保记录字段完整，优先传 evidenceSources JSON 字符串，不能只保存空泛观点。`
+- 调用 CreateAiRecommendStocks 或 BatchCreateAiRecommendStocks 前，必须确保记录字段完整，优先传 evidenceSources JSON 字符串和 activationRuleJson，不能只保存空泛观点。`
 
 const marketSummaryInstructionMarker = "【市场资讯AI总结输出规范】"
 

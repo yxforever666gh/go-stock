@@ -33,11 +33,15 @@ type marketSummaryRouteLog struct {
 	Version              string                   `json:"version"`
 	StartedAt            string                   `json:"startedAt"`
 	FinishedAt           string                   `json:"finishedAt,omitempty"`
+	RunSlot              string                   `json:"runSlot,omitempty"`
+	WindowStart          string                   `json:"windowStart,omitempty"`
+	WindowEnd            string                   `json:"windowEnd,omitempty"`
 	Budget               marketSummaryRouteBudget `json:"budget"`
 	TotalCalls           int                      `json:"totalCalls"`
 	PerCategoryCalls     map[string]int           `json:"perCategoryCalls"`
 	DiscoveryCandidateCt int                      `json:"discoveryCandidateCount"`
 	VerifiedCandidateCt  int                      `json:"verifiedCandidateCount"`
+	ExcludedCandidateCt  int                      `json:"excludedCandidateCount,omitempty"`
 	DroppedCandidates    []string                 `json:"droppedCandidates,omitempty"`
 	Notes                []string                 `json:"notes,omitempty"`
 }
@@ -53,6 +57,9 @@ type marketSummaryDiscoveryInput struct {
 	Question       string                                `json:"question"`
 	CurrentTime    string                                `json:"currentTime"`
 	MarketStage    string                                `json:"marketStage,omitempty"`
+	RunSlot        string                                `json:"runSlot,omitempty"`
+	WindowStart    string                                `json:"windowStart,omitempty"`
+	WindowEnd      string                                `json:"windowEnd,omitempty"`
 	Budget         marketSummaryRouteBudget              `json:"budget"`
 	MarketNews     []marketSummaryDiscoverySnippet       `json:"marketNews,omitempty"`
 	EventCalendar  []marketSummaryDiscoverySnippet       `json:"eventCalendar,omitempty"`
@@ -203,10 +210,10 @@ func defaultMarketSummaryRouteBudget() marketSummaryRouteBudget {
 		TotalCallLimit:         20,
 		DiscoveryFetchLimit:    5,
 		DiscoveryModelLimit:    1,
-		CandidateLimit:         6,
+		CandidateLimit:         8,
 		PerStockFetchLimit:     4,
 		GenerateModelLimit:     1,
-		VerificationStockLimit: 2,
+		VerificationStockLimit: 6,
 	}
 }
 
@@ -308,7 +315,7 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 		logState := newMarketSummaryRouteLog()
 		budget := logState.Budget
 		emitSummaryToolStatus(ch, "phase3.discovery.fetch", "running", nil, 0)
-		discoveryInput, longTigerRaw, err := buildMarketSummaryDiscoveryInput(displayQuestion, budget, logState)
+		discoveryInput, longTigerRaw, window, err := buildMarketSummaryDiscoveryInput(displayQuestion, budget, logState)
 		if err != nil {
 			logState.addNote("discovery input failed: %v", err)
 			emitSummaryToolStatus(ch, "phase3.discovery.fetch", "error", err, 0)
@@ -338,6 +345,14 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 
 		emitSummaryToolStatus(ch, "phase3.evidence.verify", "running", nil, 0)
 		verifiedCandidates := verifyMarketSummaryCandidates(discoveryInput, discoveryResult, longTigerRaw, budget, logState)
+		excludedTodayStocks, excludedTodayIndex, excludedErr := loadSameDayMarketSummaryExcludedStocks(time.Now())
+		if excludedErr != nil {
+			logState.addNote("load same-day excluded stocks failed: %v", excludedErr)
+		} else {
+			logState.ExcludedCandidateCt = len(excludedTodayStocks)
+			logState.addNote("same-day excluded stocks=%d", len(excludedTodayStocks))
+		}
+		verifiedCandidates = selectMarketSummaryFinalCandidates(verifiedCandidates, excludedTodayIndex, window, logState, marketSummaryFinalCandidateLimit)
 		logState.VerifiedCandidateCt = len(verifiedCandidates)
 		emitSummaryToolStatus(ch, "phase3.evidence.verify", "success", nil, 0)
 
@@ -350,7 +365,7 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 		if sysPrompt == "" {
 			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
 		}
-		messages := buildPhase3FinalMessages(sysPrompt, displayQuestion, discoveryInput, discoveryResult, verifiedCandidates, discoveryInput.SkippedReviews, logState)
+		messages := buildPhase3FinalMessages(sysPrompt, displayQuestion, discoveryInput, discoveryResult, verifiedCandidates, excludedTodayStocks, discoveryInput.SkippedReviews, logState)
 		logState.addCall("generate_model")
 		emitSummaryToolStatus(ch, "phase3.generate", "running", nil, 0)
 		AskAi(o, nil, messages, ch, displayQuestion, think)
@@ -364,14 +379,21 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 	return ch
 }
 
-func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRouteBudget, logState *marketSummaryRouteLog) (marketSummaryDiscoveryInput, []models.LongTigerRankData, error) {
+func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRouteBudget, logState *marketSummaryRouteLog) (marketSummaryDiscoveryInput, []models.LongTigerRankData, marketSummaryTimeWindow, error) {
 	now := time.Now()
+	window := resolveMarketSummaryTimeWindowAt(now)
 	input := marketSummaryDiscoveryInput{
 		Question:    question,
 		CurrentTime: now.Format(time.DateTime),
 		MarketStage: describeCNMarketTiming(now),
+		RunSlot:     string(window.Slot),
+		WindowStart: window.Start.Format(time.DateTime),
+		WindowEnd:   window.End.Format(time.DateTime),
 		Budget:      budget,
 	}
+	logState.RunSlot = string(window.Slot)
+	logState.WindowStart = input.WindowStart
+	logState.WindowEnd = input.WindowEnd
 
 	logState.addCall("market_news")
 	logState.addCall("calendar")
@@ -427,6 +449,13 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 			if item == nil {
 				continue
 			}
+			if item.DataTime != nil && !item.DataTime.IsZero() {
+				if !marketSummaryTimeInWindow(item.DataTime.In(cnLocation()), window) {
+					continue
+				}
+			} else if !shouldIncludeMarketSummaryTimeText(item.Time, window, false) {
+				continue
+			}
 			title := strings.TrimSpace(item.Title)
 			summary := strings.TrimSpace(item.Content)
 			if title == "" {
@@ -448,6 +477,9 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 		}
 		b, _ := json.Marshal(day)
 		date := gjson.GetBytes(b, "calendar_day").String()
+		if !shouldIncludeMarketSummaryTimeText(date, window, true) {
+			continue
+		}
 		items := gjson.GetBytes(b, "items")
 		items.ForEach(func(_, value gjson.Result) bool {
 			title := strings.TrimSpace(gjson.Get(value.String(), "title").String())
@@ -499,6 +531,9 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 		if len(input.LongTigerBrief) >= 10 {
 			break
 		}
+		if !shouldIncludeMarketSummaryTimeText(item.TRADEDATE, window, true) {
+			continue
+		}
 		input.LongTigerBrief = append(input.LongTigerBrief, marketSummaryDiscoverySnippet{
 			Title:   fmt.Sprintf("%s(%s)", item.SECURITYNAMEABBR, normalizeRecommendStockCode(item.SECUCODE)),
 			Summary: truncateText(strings.TrimSpace(strings.Join([]string{joinKeyValue("净额", formatFloatCompact(item.BILLBOARDNETAMT)), joinKeyValue("换手", formatFloatCompact(item.TURNOVERRATE)), item.EXPLANATION}, "；")), 140),
@@ -507,7 +542,8 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 		})
 	}
 
-	return input, longTigerRaw, nil
+	logState.addNote("window filtered discovery counts: news=%d calendar=%d longTiger=%d", len(input.MarketNews), len(input.EventCalendar), len(input.LongTigerBrief))
+	return input, longTigerRaw, window, nil
 }
 
 func buildMarketSummarySkippedReviewCandidates(records []models.AiRecommendStocks) []marketSummarySkippedReviewCandidate {
@@ -1527,7 +1563,7 @@ func minuteVolumeRatio(minuteData []MinuteData, window int) float64 {
 	return mathutil.RoundToFloat(minuteData[end].Volume/(total/float64(count)), 4)
 }
 
-func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput marketSummaryDiscoveryInput, discovery *marketSummaryDiscoveryResult, verified []marketSummaryVerifiedCandidate, skippedReviews []marketSummarySkippedReviewCandidate, logState *marketSummaryRouteLog) []map[string]any {
+func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput marketSummaryDiscoveryInput, discovery *marketSummaryDiscoveryResult, verified []marketSummaryVerifiedCandidate, excludedToday []marketSummaryExcludedStock, skippedReviews []marketSummarySkippedReviewCandidate, logState *marketSummaryRouteLog) []map[string]any {
 	now := time.Now()
 	currentTiming := fmt.Sprintf("当前本地时间是:%s；市场时段判定:%s", now.Format("2006-01-02 15:04:05"), describeCNMarketTiming(now))
 	messages := []map[string]any{
@@ -1540,40 +1576,48 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 		{"role": "assistant", "content": mustJSON(discovery)},
 		{"role": "user", "content": "以下是证据核验层输出(JSON)"},
 		{"role": "assistant", "content": mustJSON(verified)},
+		{"role": "user", "content": "以下是当日已推荐股票排除池(JSON)"},
+		{"role": "assistant", "content": mustJSON(excludedToday)},
 		{"role": "user", "content": "以下是前三个交易日已跳过股票复审候选池(JSON)"},
 		{"role": "assistant", "content": mustJSON(skippedReviews)},
 	}
 	instruction := strings.TrimSpace(`请基于上面的“事件发现层”和“证据核验层”结果，完成最终推荐生成层。
 要求：
 1. 只能基于已经进入证据核验层的候选股票生成结论，严禁新增候选股票；
-2. 严禁再假设额外工具结果；
-3. 对每只候选股执行“正向证据 + 反向证据”平衡判断；
-4. 证据不足(<2类)或不存在高信任证据时，直接不要把该股票写进推荐股票池；
-5. 若存在冲突证据，必须明确写出争议，并把该股票从推荐股票池中剔除；
-6. 输出必须兼容研究中心：保持 Markdown，必须包含固定 7 个一级标题，并在“推荐股票池”和“跳过复审”中使用标准结构化表格；
-7. “关键证据”栏必须显式保留证据标签，如：[市场资讯] [一级披露] [互动易] [财报/财务] [行业研报] [技术/资金/形态] [资金结构]；
-8. 若没有足够可交易标的，允许在表格中写“暂无高质量候选标的”，不得编造；
-9. 若证据核验层存在 auctionPrice 或 priceAnchorSource=call_auction，价格锚点、买入区间、止盈区间、止损位必须优先围绕集合竞价价格锚点给出，并结合委比、量比、买卖盘结构判断强弱，不能把竞价结果当成已开盘趋势硬推；
-10. 若证据核验层存在 minutePrice，且 priceAnchorSource 不是 call_auction，价格锚点、买入区间、止盈区间、止损位必须优先围绕 minutePrice 给出，不能脱离实时价主观编造；
-11. 若证据核验层存在 minuteAmount / minuteVolume / technicalMetrics / technicalSnapshot，买入依据必须显式利用这些结构化信息，不得只写“量价配合”“技术面改善”；
-12. 若 minutePrice 缺失但 CurrentPrice 存在，可退化使用 CurrentPrice 作为价格锚点；
-13. stockPrice 字段应填写当前价格锚点；集合竞价时优先 auctionPrice，其次 minutePrice，再次 CurrentPrice；
-14. 若实时价与原有事件逻辑、技术逻辑明显冲突，应从推荐股票池中剔除，不得硬推；
-15. 推荐股票池只允许输出交易计划，不允许输出观察/淘汰/低吸/右侧等分类标签；
-16. “买入依据”必须至少同时交代：价格位置、量能或强弱确认、催化仍成立；
-17. “止盈区间”“止损位”“失效条件”必须彼此匹配，不能自相矛盾；
-18. 若提到放量/缩量/量比/量能，必须同时写清锚点价位、比较基准、观察周期；
-19. 不再输出“立刻买入”类标签，所有可交易计划统一写成“等待激活”；无论盘中还是非交易时段，都必须给出未来3-5个交易日内可验证的激活条件；
-20. “买入依据”必须严格写成：价格触发：...；量能触发：...；逻辑触发：...；
-21. “失效条件”必须严格写成：时间失效：...；价格失效：...；逻辑失效：...；
-22. 若提到放量/缩量/量比/量能/强弱，必须同时写清触发价位、观察周期、比较基准、阈值，不允许只写“放量”“缩量”“强势”“承接”“不追”“高开过大”这类抽象词；
-23. 所有需要等待条件触发的计划，都必须把触发有效期限定在未来3-5个交易日内；超过该窗口仍未触发，就视为失效；
-24. 对“前三个交易日已跳过股票复审候选池”里的股票，必须单独输出到“# 跳过复审”章节；不得把这些股票混入“推荐股票池”；
-25. “# 跳过复审”的表格必须包含“原记录ID”，并严格复用输入 JSON 中的 recommendId；
-26. 若复审结论为“继续跳过”，可不重写完整交易计划，但必须在“跳过/复审说明”里写清继续跳过原因；
-27. 若复审结论为“等待激活 / 重新纳入 / 改判可交易”，必须重写买入区间、止盈区间、止损位、买入依据、失效条件，这些字段会覆盖收益率页面对应股票行；
-28. 若没有可复审对象，也必须保留“# 跳过复审”标题，并在表格中明确写“暂无需要复审的已跳过股票”；
-29. 不要输出旧版兼容字段，也不要回到标签式分层表达。`) + "\n\n" + BuildMarketSummaryExecutionQuestion(question)
+2. 同日已出现在“当日已推荐股票排除池(JSON)”里的股票，禁止再次写入“推荐股票池”，也不要在正文里重复展示；
+3. 本次推荐只允许使用当前时间窗口内的新催化、新证据、新量价确认，不允许用前一时段已推荐股票反复充数；
+4. 若排除同日已推荐股票后，没有新的高质量候选标的，必须在“推荐股票池”明确写“暂无新增高质量候选标的”，不能复用旧票凑数；
+5. 严禁再假设额外工具结果；
+6. 对每只候选股执行“正向证据 + 反向证据”平衡判断；
+7. 证据不足(<2类)或不存在高信任证据时，直接不要把该股票写进推荐股票池；
+8. 若存在冲突证据，必须明确写出争议，并把该股票从推荐股票池中剔除；
+9. 输出必须兼容研究中心：保持 Markdown，必须包含固定 7 个一级标题，并在“推荐股票池”和“跳过复审”中使用标准结构化表格；
+10. “关键证据”栏必须显式保留证据标签，如：[市场资讯] [一级披露] [互动易] [财报/财务] [行业研报] [技术/资金/形态] [资金结构]；
+11. 若没有足够可交易标的，只允许在表格中写“暂无新增高质量候选标的”，不得编造；
+12. 若证据核验层存在 auctionPrice 或 priceAnchorSource=call_auction，价格锚点、买入区间、止盈区间、止损位必须优先围绕集合竞价价格锚点给出，并结合委比、量比、买卖盘结构判断强弱，不能把竞价结果当成已开盘趋势硬推；
+13. 若证据核验层存在 minutePrice，且 priceAnchorSource 不是 call_auction，价格锚点、买入区间、止盈区间、止损位必须优先围绕 minutePrice 给出，不能脱离实时价主观编造；
+14. 若证据核验层存在 minuteAmount / minuteVolume / technicalMetrics / technicalSnapshot，买入依据必须显式利用这些结构化信息，不得只写“量价配合”“技术面改善”；
+15. 若 minutePrice 缺失但 CurrentPrice 存在，可退化使用 CurrentPrice 作为价格锚点；
+16. stockPrice 字段应填写当前价格锚点；集合竞价时优先 auctionPrice，其次 minutePrice，再次 CurrentPrice；
+17. 若实时价与现有证据、价格结构明显冲突，应从推荐股票池中剔除，不得硬推；
+18. 推荐股票池只允许输出交易计划，不允许输出观察/淘汰/低吸/右侧等分类标签；
+19. “买入依据”必须至少同时交代：价格位置、量能或强弱确认；
+20. “止盈区间”“止损位”“失效条件”必须彼此匹配，不能自相矛盾；
+21. 若提到放量/缩量/量比/量能，必须同时写清锚点价位、比较基准、观察周期；
+22. 市场资讯来源默认使用“双路径激活”思路：回踩激活路径 + 突破激活路径；若未回踩但继续走强，允许给出贴近当前锚点的突破激活价，不得只保留单一路径的过度保守方案；
+23. 不再输出“立刻买入”类标签，所有可交易计划统一写成“等待激活”；无论盘中还是非交易时段，都必须给出未来3-5个交易日内可验证的激活条件；
+24. “买入依据”必须严格写成：价格触发：...；量能触发：...；
+25. “失效条件”必须严格写成：时间失效：...；价格失效：...；
+26. 若提到放量/缩量/量比/量能/强弱，必须同时写清触发价位、观察周期、比较基准、阈值，不允许只写“放量”“缩量”“强势”“承接”“不追”“高开过大”这类抽象词；
+27. 所有需要等待条件触发的计划，都必须把触发有效期限定在未来3-5个交易日内；超过该窗口仍未触发，就视为失效；
+28. 价格锚点、主买入区、突破激活价、止盈区间、止损位必须与当前 minutePrice / auctionPrice / CurrentPrice 保持同一价格数量级；若相对当前锚点偏离超过20%，视为无效方案，必须重写；
+29. 对“前三个交易日已跳过股票复审候选池”里的股票，必须单独输出到“# 跳过复审”章节；不得把这些股票混入“推荐股票池”；
+30. “# 跳过复审”的表格必须包含“原记录ID”，并严格复用输入 JSON 中的 recommendId；
+31. 若复审结论为“继续跳过”，可不重写完整交易计划，但必须在“跳过/复审说明”里写清继续跳过原因；
+32. 若复审结论为“等待激活 / 重新纳入 / 改判可交易”，必须重写买入区间、止盈区间、止损位、买入依据、失效条件，这些字段会覆盖收益率页面对应股票行；
+33. 若没有可复审对象，也必须保留“# 跳过复审”标题，并在表格中明确写“暂无需要复审的已跳过股票”；
+34. “# 交易计划说明”中必须明确写出本次筛选窗口，格式示例：本次筛选窗口：2026-04-09 09:30:00 至 2026-04-09 11:32:00；
+35. 不要输出旧版兼容字段，也不要回到标签式分层表达。`) + "\n\n" + BuildMarketSummaryExecutionQuestion(question)
 	messages = append(messages, map[string]any{"role": "user", "content": instruction})
 	logState.addNote("verified candidates payload size=%d", len(verified))
 	return messages

@@ -33,6 +33,7 @@ type Settings struct {
 	YieldEmailSMTPPassword   string `json:"yieldEmailSmtpPassword"`
 	YieldEmailCronEnabled    bool   `json:"yieldEmailCronEnabled"`
 	YieldEmailCronTimes      string `json:"yieldEmailCronTimes"`
+	MarketSummaryEmailEnable bool   `json:"marketSummaryEmailEnabled"`
 	UpdateBasicInfoOnStart   bool   `json:"updateBasicInfoOnStart"`
 	RefreshInterval          int64  `json:"refreshInterval"`
 	OpenAiEnable             bool   `json:"openAiEnable"`
@@ -55,7 +56,7 @@ type Settings struct {
 	EnableAgent              bool   `json:"enableAgent"`
 	QgqpBId                  string `json:"qgqpBId" gorm:"column:qgqp_b_id"`
 	MarketSummaryCronEnabled bool   `json:"marketSummaryCronEnabled" gorm:"default:true"`
-	MarketSummaryCronTimes   string `json:"marketSummaryCronTimes" gorm:"default:'09:30,11:30,18:00'"`
+	MarketSummaryCronTimes   string `json:"marketSummaryCronTimes" gorm:"default:'09:40,11:30,14:30'"`
 	MinuteProviderMode       string `json:"minuteProviderMode" gorm:"default:'public'"`
 	MinuteLongHistoryHint    bool   `json:"minuteLongHistoryHintEnabled" gorm:"column:minute_long_history_hint_enabled;default:true"`
 	PrivateMinuteEnabled     bool   `json:"privateMinuteEnabled"`
@@ -80,6 +81,7 @@ type AIConfig struct {
 	ID               uint `gorm:"primarykey"`
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	Sort             int     `json:"sort" gorm:"index"`
 	Name             string  `json:"name"`
 	BaseUrl          string  `json:"baseUrl"`
 	ApiKey           string  `json:"apiKey" `
@@ -105,6 +107,8 @@ type SettingsApi struct {
 }
 
 var strictYieldEmailCronTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
+
+const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
 
 func NewSettingsApi() *SettingsApi {
 	return &SettingsApi{
@@ -138,6 +142,8 @@ func UpdateConfig(s *SettingConfig) string {
 	s.YieldEmailSMTPHost = strings.TrimSpace(s.YieldEmailSMTPHost)
 	s.YieldEmailSMTPUsername = strings.TrimSpace(s.YieldEmailSMTPUsername)
 	s.YieldEmailSMTPPassword = strings.TrimSpace(s.YieldEmailSMTPPassword)
+	s.YieldEmailCronEnabled = false
+	s.YieldEmailCronTimes = ""
 	s.MinuteProviderMode = normalizeMinuteProviderMode(s.MinuteProviderMode)
 	s.PrivateMinuteBaseURL = strings.TrimSpace(s.PrivateMinuteBaseURL)
 	s.PrivateMinuteAPIKey = strings.TrimSpace(s.PrivateMinuteAPIKey)
@@ -153,6 +159,14 @@ func UpdateConfig(s *SettingConfig) string {
 		return "保存失败: 请至少填写一个定时发送时间，例如 09:30,15:05"
 	}
 	s.YieldEmailCronTimes = strings.Join(normalizedCronTimes, ",")
+	normalizedSummaryCronTimes, err := NormalizeMarketSummaryCronTimes(s.MarketSummaryCronTimes)
+	if err != nil {
+		return "保存失败: " + err.Error()
+	}
+	if s.MarketSummaryCronEnabled && len(normalizedSummaryCronTimes) == 0 {
+		return "保存失败: 请至少填写一个市场资讯定时总结时间，例如 09:40,11:30,14:30"
+	}
+	s.MarketSummaryCronTimes = strings.Join(normalizedSummaryCronTimes, ",")
 	if s.MinuteProviderMode == "private" {
 		if !s.PrivateMinuteEnabled {
 			return "保存失败: 私人分钟线模式需要先启用私人分钟线来源"
@@ -201,6 +215,7 @@ func UpdateConfig(s *SettingConfig) string {
 		"yield_email_smtp_password":        s.YieldEmailSMTPPassword,
 		"yield_email_cron_enabled":         s.YieldEmailCronEnabled,
 		"yield_email_cron_times":           s.YieldEmailCronTimes,
+		"market_summary_email_enable":      s.MarketSummaryEmailEnable,
 		"update_basic_info_on_start":       s.UpdateBasicInfoOnStart,
 		"refresh_interval":                 s.RefreshInterval,
 		"open_ai_enable":                   s.OpenAiEnable,
@@ -345,11 +360,13 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 		if e != nil {
 			return
 		}
+		item.Sort = index + 1
 		if !idMap[item.ID] {
 			addAiConfigs = append(addAiConfigs, item)
 		} else {
 			notDeleteIds = append(notDeleteIds, item.ID)
 			e = db.Dao.Model(&AIConfig{}).Where("id=?", item.ID).Updates(map[string]interface{}{
+				"sort":               item.Sort,
 				"name":               item.Name,
 				"base_url":           item.BaseUrl,
 				"api_key":            item.ApiKey,
@@ -374,6 +391,11 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 		if err != nil {
 			return err
 		}
+	} else {
+		err = db.Dao.Exec("DELETE FROM ai_config").Error
+		if err != nil {
+			return err
+		}
 	}
 	logger.SugaredLogger.Infof("更新aiConfigs +%d", len(addAiConfigs))
 	//批量新增的配置
@@ -394,11 +416,17 @@ func GetSettingConfig() *SettingConfig {
 	}
 	_ = db.Dao.Model(&Settings{}).First(settings).Error
 	if settings.OpenAiEnable {
-		err := db.Dao.Model(&AIConfig{}).Find(&aiConfigs).Error
+		err := db.Dao.Model(&AIConfig{}).
+			Order("CASE WHEN sort <= 0 THEN id ELSE sort END ASC").
+			Order("id ASC").
+			Find(&aiConfigs).Error
 		if err != nil {
 			logger.SugaredLogger.Error("查询AI配置失败:", err)
 		} else if len(aiConfigs) > 0 {
 			lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
+				if item.Sort <= 0 {
+					item.Sort = index + 1
+				}
 				if item.TimeOut <= 0 {
 					item.TimeOut = 60 * 5
 				}
@@ -414,6 +442,9 @@ func GetSettingConfig() *SettingConfig {
 	applySettingDefaults(settings)
 	if normalizedCronTimes, err := NormalizeYieldEmailCronTimes(settings.YieldEmailCronTimes); err == nil {
 		settings.YieldEmailCronTimes = strings.Join(normalizedCronTimes, ",")
+	}
+	if normalizedSummaryCronTimes, err := NormalizeMarketSummaryCronTimes(settings.MarketSummaryCronTimes); err == nil {
+		settings.MarketSummaryCronTimes = strings.Join(normalizedSummaryCronTimes, ",")
 	}
 	if normalizedRecipients, err := NormalizeYieldEmailRecipients(settings.YieldEmailTo); err == nil {
 		settings.YieldEmailTo = normalizedRecipients
@@ -447,7 +478,7 @@ func applySettingDefaults(settings *Settings) {
 		settings.ForceNoProxyForFetch = true
 	}
 	if strings.TrimSpace(settings.MarketSummaryCronTimes) == "" {
-		settings.MarketSummaryCronTimes = "09:30,11:30,18:00"
+		settings.MarketSummaryCronTimes = defaultMarketSummaryCronTimes
 		settings.MarketSummaryCronEnabled = true
 	}
 	if settings.MinuteProviderMode == "" {
@@ -484,6 +515,36 @@ func applySettingDefaults(settings *Settings) {
 		settings.SinaMinuteEnabled = true
 		settings.TencentMinuteEnabled = true
 	}
+}
+
+func NormalizeMarketSummaryCronTimes(input string) ([]string, error) {
+	replacer := strings.NewReplacer("，", ",", "；", ",", ";", ",", "\n", ",", "\t", ",")
+	raw := replacer.Replace(strings.TrimSpace(input))
+	if raw == "" {
+		raw = defaultMarketSummaryCronTimes
+	}
+
+	seen := make(map[string]struct{})
+	times := make([]string, 0)
+	for _, item := range strings.Split(raw, ",") {
+		text := strings.TrimSpace(item)
+		if text == "" {
+			continue
+		}
+		if !strictYieldEmailCronTimeRegexp.MatchString(text) {
+			return nil, fmt.Errorf("市场资讯定时总结时间格式无效：%s", text)
+		}
+		if _, exists := seen[text]; exists {
+			continue
+		}
+		seen[text] = struct{}{}
+		times = append(times, text)
+	}
+	sort.Strings(times)
+	if len(times) == 0 {
+		return []string{}, nil
+	}
+	return times, nil
 }
 
 func applyPrivateMinuteSettingsFromEnv(settings *Settings) {
@@ -617,13 +678,8 @@ func applyRuntimeOverrideFromSettings(settings *Settings) {
 	appconfig.SetRuntimeOverride(override)
 }
 
-// SelectPrimaryAIConfig returns the preferred AI config.
-// If at least two configs exist, it returns the second one (config2).
-// Otherwise it falls back to the first config when available.
+// SelectPrimaryAIConfig returns the first AI config in current saved order.
 func SelectPrimaryAIConfig(aiConfigs []*AIConfig) *AIConfig {
-	if len(aiConfigs) >= 2 {
-		return aiConfigs[1]
-	}
 	if len(aiConfigs) >= 1 {
 		return aiConfigs[0]
 	}
@@ -643,8 +699,8 @@ func SelectPrimaryAIConfigID(setting *SettingConfig) int {
 }
 
 // ResolveAIFallbackOrder returns the ordered AI config IDs used for failover.
-// It preserves the current "second config preferred" behavior by default, then
-// appends the remaining configs in list order without duplicates.
+// When a specific config is requested, it is tried first and the remaining
+// configs are appended in current saved order without duplicates.
 func ResolveAIFallbackOrder(setting *SettingConfig, requestedAIConfigID int) []int {
 	if setting == nil || len(setting.AiConfigs) == 0 {
 		if requestedAIConfigID > 0 {

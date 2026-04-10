@@ -8,8 +8,8 @@ import (
 )
 
 func TestNormalizeSummaryCronTimes(t *testing.T) {
-	times := normalizeSummaryCronTimes(" 18:00,09:30，11:30,09:30,foo ")
-	expected := []string{"09:30", "11:30", "18:00"}
+	times := normalizeSummaryCronTimes(" 14:30,09:40，11:30,09:40,foo ")
+	expected := []string{"09:40", "11:30", "14:30"}
 	if len(times) != len(expected) {
 		t.Fatalf("unexpected count: got=%v want=%v", times, expected)
 	}
@@ -85,7 +85,7 @@ func TestResolveAIFallbackOrder(t *testing.T) {
 	}
 
 	order := data.ResolveAIFallbackOrder(cfg, 0)
-	expected := []int{3, 1, 4}
+	expected := []int{1, 3, 4}
 	if len(order) != len(expected) {
 		t.Fatalf("unexpected fallback order length: got=%v want=%v", order, expected)
 	}
@@ -96,7 +96,7 @@ func TestResolveAIFallbackOrder(t *testing.T) {
 	}
 
 	order = data.ResolveAIFallbackOrder(cfg, 4)
-	expected = []int{4, 3, 1}
+	expected = []int{4, 1, 3}
 	if len(order) != len(expected) {
 		t.Fatalf("unexpected requested fallback order length: got=%v want=%v", order, expected)
 	}
@@ -104,5 +104,18 @@ func TestResolveAIFallbackOrder(t *testing.T) {
 		if order[i] != expected[i] {
 			t.Fatalf("unexpected requested fallback order: got=%v want=%v", order, expected)
 		}
+	}
+}
+
+func TestSelectPrimaryAIConfigID(t *testing.T) {
+	cfg := &data.SettingConfig{
+		AiConfigs: []*data.AIConfig{
+			{ID: 7, Name: "primary"},
+			{ID: 8, Name: "secondary"},
+		},
+	}
+
+	if got := data.SelectPrimaryAIConfigID(cfg); got != 7 {
+		t.Fatalf("unexpected primary ai config id: got=%d want=%d", got, 7)
 	}
 }

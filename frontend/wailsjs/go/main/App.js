@@ -294,6 +294,14 @@ export function SendLatestAIAnalysisReportNow() {
   return window['go']['main']['App']['SendLatestAIAnalysisReportNow']();
 }
 
+export function SendMarketSummaryEmailNow(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SendMarketSummaryEmailNow'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function RunMarketSummaryHumanizeCompatFixNow() {
+  return window['go']['main']['App']['RunMarketSummaryHumanizeCompatFixNow']();
+}
+
 export function SendYieldEmailCSVNow() {
   return window['go']['main']['App']['SendYieldEmailCSVNow']();
 }

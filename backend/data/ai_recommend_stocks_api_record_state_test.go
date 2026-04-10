@@ -237,7 +237,7 @@ func TestMapRecommendRecordToYieldItemWithRecordState_SkipOverridesActivatedStat
 	if loc == nil {
 		loc = time.Local
 	}
-	recordTime := time.Date(2026, 3, 7, 19, 56, 13, 0, loc)
+	recordTime := time.Date(2026, 4, 6, 9, 30, 0, 0, loc)
 	activationTime := time.Date(2026, 3, 9, 10, 18, 0, 0, loc)
 
 	rec := models.AiRecommendStocks{
@@ -294,7 +294,7 @@ func TestMapRecommendRecordToYieldItem_SkipByRecommendStatusWithoutState(t *test
 	if loc == nil {
 		loc = time.Local
 	}
-	recordTime := time.Date(2026, 3, 12, 10, 15, 0, 0, loc)
+	recordTime := time.Date(2026, 4, 6, 10, 15, 0, 0, loc)
 
 	rec := models.AiRecommendStocks{
 		StockCode:         "002230.SZ",
@@ -329,7 +329,7 @@ func TestMapRecommendRecordToYieldItem_SkipOverridesLegacyActivatedState(t *test
 	if loc == nil {
 		loc = time.Local
 	}
-	recordTime := time.Date(2026, 3, 7, 19, 56, 13, 0, loc)
+	recordTime := time.Date(2026, 4, 6, 9, 30, 0, 0, loc)
 	activationTime := time.Date(2026, 3, 9, 10, 18, 0, 0, loc)
 
 	rec := models.AiRecommendStocks{

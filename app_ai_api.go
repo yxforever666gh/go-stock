@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"go-stock/backend/data"
 	"go-stock/backend/logger"
@@ -109,6 +110,61 @@ func (a *App) SendLatestAIAnalysisReportNow() string {
 	})
 }
 
+func (a *App) SendMarketSummaryEmailNow(summaryText, question, modelName, summaryTime, errorMessage string) string {
+	return a.withYieldEmailTaskLock("manual_market_summary_email", func() string {
+		report := buildMarketSummaryEmailReport(summaryText, question, modelName, summaryTime)
+		failureReason := strings.TrimSpace(errorMessage)
+		if report == nil && failureReason == "" {
+			return "发送失败: 当前没有可发送的 AI 总结内容"
+		}
+		if err := a.services.AI.SendMarketSummaryEmail("manual_summary", report, failureReason); err != nil {
+			return "发送失败: " + err.Error()
+		}
+		if failureReason != "" {
+			return "AI总结报错邮件已发送"
+		}
+		return "AI总结邮件已发送"
+	})
+}
+
+func (a *App) RunMarketSummaryHumanizeCompatFixNow() string {
+	result, err := data.RunMarketSummaryHumanizeCompatFix()
+	if err != nil {
+		return "修复失败: " + err.Error()
+	}
+	return fmt.Sprintf(
+		"修复完成：AI分析报告更新 %d/%d 条，推荐备注更新 %d/%d 条",
+		result.ReportsUpdated,
+		result.ReportsScanned,
+		result.RemarksUpdated,
+		result.RemarksScanned,
+	)
+}
+
+func buildMarketSummaryEmailReport(summaryText, question, modelName, summaryTime string) *models.AIResponseResult {
+	content := data.HumanizeMarketSummaryReport(summaryText)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+	reportTime := time.Now()
+	for _, layout := range []string{time.DateTime, time.RFC3339, "2006-01-02T15:04"} {
+		if parsed, err := time.ParseInLocation(layout, strings.TrimSpace(summaryTime), time.Local); err == nil {
+			reportTime = parsed
+			break
+		}
+	}
+	report := &models.AIResponseResult{
+		ModelName: strings.TrimSpace(modelName),
+		StockCode: "市场资讯",
+		StockName: "市场资讯",
+		Question:  strings.TrimSpace(question),
+		Content:   content,
+	}
+	report.CreatedAt = reportTime
+	return report
+}
+
 func (a *App) ShareAnalysis(stockCode, stockName string) string {
 	res := a.services.AI.GetAIResponseResult(a.ctx, stockCode)
 	if res == nil || len(res.Content) <= 100 {
@@ -177,13 +233,17 @@ func (a *App) DelPrompt(id uint) string {
 }
 
 func (a *App) GetVersionInfo() *models.VersionInfo {
+	content := VersionCommit
+	if strings.TrimSpace(content) == "" {
+		content = "1.2.5：市场资讯 AI 推荐改为结构化激活规则驱动，收益率 strict 模式不再解析模糊自然语言。"
+	}
 	return &models.VersionInfo{
 		Version:           Version,
 		Icon:              GetImageBase(icon),
 		Alipay:            GetImageBase(alipay),
 		Wxpay:             GetImageBase(wxpay),
 		Wxgzh:             GetImageBase(wxgzh),
-		Content:           VersionCommit,
+		Content:           content,
 		OfficialStatement: OFFICIAL_STATEMENT,
 		SelfUpdateEnabled: appconfig.Load().Update.SelfUpdateEnabled,
 		ManualUpdateHint:  manualUpdateHint(),

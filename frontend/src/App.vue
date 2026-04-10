@@ -1,4 +1,5 @@
 <script setup>
+import 'md-editor-v3/lib/style.css'
 import {
   BrowserOpenURL,
   EventsEmit,

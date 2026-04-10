@@ -10,6 +10,7 @@ import {
   GlobalStockIndexes,
   ReFleshTelegraphList,
   SaveAsMarkdown,
+  SendMarketSummaryEmailNow,
   ShareAnalysis,
   SummaryStockNews,
   GetAiConfigs,
@@ -72,6 +73,9 @@ const sysPromptId = ref(null)
 const loading = ref(false)
 const summaryRunning = ref(false)
 const summaryStatusText = ref("")
+const summaryErrorMessage = ref("")
+const summaryHadError = ref(false)
+const summaryEmailSending = ref(false)
 const aiConfigs = ref([])
 const sysPromptOptions = ref([])
 const userPromptOptions = ref([])
@@ -152,6 +156,8 @@ function resetSummaryOutput() {
   aiSummaryTime.value = ""
   modelName.value = ""
   chatId.value = ""
+  summaryErrorMessage.value = ""
+  summaryHadError.value = false
 }
 
 function formatSummaryLatency(latencyMs) {
@@ -365,6 +371,8 @@ async function submitMarketSummary(questionText) {
   loading.value = true
   summaryRunning.value = true
   summaryStatusText.value = "正在准备市场资讯..."
+  summaryErrorMessage.value = ""
+  summaryHadError.value = false
   setDraftQuestion(normalizedQuestion, false)
   setLastSummaryQuestion(normalizedQuestion)
   try {
@@ -476,6 +484,10 @@ EventsOn("summaryStockNews", async (msg) => {
   if (msg === "DONE") {
     summaryRunning.value = false
     loading.value = false
+    if (summaryHadError.value && !String(aiSummary.value || "").trim()) {
+      summaryStatusText.value = "AI分析失败"
+      return
+    }
     summaryStatusText.value = "AI分析完成"
     message.info("AI分析完成！")
     message.destroyAll()
@@ -484,7 +496,9 @@ EventsOn("summaryStockNews", async (msg) => {
     if (code === 0) {
       summaryRunning.value = false
       loading.value = false
+      summaryHadError.value = true
       summaryStatusText.value = "AI分析失败"
+      summaryErrorMessage.value = msg?.content || "AI总结执行失败"
       if (msg?.content) {
         message.error(msg.content)
       }
@@ -552,6 +566,35 @@ async function copyToClipboard() {
     message.success('分析结果已复制到剪切板');
   } catch (err) {
     message.error('复制失败: ' + err);
+  }
+}
+
+async function sendMarketSummaryEmailAction() {
+  if (summaryEmailSending.value) {
+    return
+  }
+  const summaryText = String(aiSummary.value || "").trim()
+  const failureReason = String(summaryErrorMessage.value || "").trim()
+  if (!summaryText && !failureReason) {
+    message.warning("当前没有可发送的 AI 总结内容")
+    return
+  }
+  summaryEmailSending.value = true
+  try {
+    const res = await SendMarketSummaryEmailNow(
+        aiSummary.value || "",
+        lastSummaryQuestion.value || draftQuestion.value || "",
+        modelName.value || "",
+        aiSummaryTime.value || "",
+        failureReason
+    )
+    if (String(res || "").includes("失败")) {
+      message.error(res)
+      return
+    }
+    message.success(res)
+  } finally {
+    summaryEmailSending.value = false
   }
 }
 
@@ -1038,6 +1081,7 @@ function ReFlesh(source) {
             }"
         />
         <n-button size="tiny" type="warning" :loading="summaryRunning" :disabled="summaryRunning" @click="reAiSummary">再次总结</n-button>
+        <n-button size="tiny" type="primary" :loading="summaryEmailSending" :disabled="summaryRunning || summaryEmailSending" @click="sendMarketSummaryEmailAction">发送邮件</n-button>
         <n-button size="tiny" type="success" @click="copyToClipboard">复制到剪切板</n-button>
         <n-button size="tiny" type="primary" @click="saveAsMarkdown">保存为Markdown文件</n-button>
         <n-button size="tiny" type="error" @click="share">分享到项目社区</n-button>

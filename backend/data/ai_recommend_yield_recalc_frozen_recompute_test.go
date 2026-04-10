@@ -38,6 +38,7 @@ func TestBuildYieldRecordStateFromRecommend_RecomputesFrozenSellWithOpenGap(t *t
 		RecommendStopProfitPriceMax: 110.0,
 		RecommendStopLossPrice:      "96.00",
 		DataTime:                    &recordTime,
+		ActivationRuleJSON:          `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"manual_amount","operator":">=","thresholdValue":100,"thresholdMax":100,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 	}
 	rec.ID = 99
 	existing := &models.AiRecommendYieldRecordState{
@@ -58,6 +59,8 @@ func TestBuildYieldRecordStateFromRecommend_RecomputesFrozenSellWithOpenGap(t *t
 		High:      100.1,
 		Low:       99.9,
 		Close:     100.0,
+		Volume:    1000,
+		Amount:    100000,
 	}
 	sellBar := minuteBar{
 		TradeTime: sellTime,
@@ -65,6 +68,8 @@ func TestBuildYieldRecordStateFromRecommend_RecomputesFrozenSellWithOpenGap(t *t
 		High:      116.0,
 		Low:       114.0,
 		Close:     115.5,
+		Volume:    1200,
+		Amount:    138600,
 	}
 	if _, err := upsertMinuteBarsToCache("300001.SZ", []minuteBar{activationBar, sellBar}, "test"); err != nil {
 		t.Fatalf("seed minute cache failed: %v", err)

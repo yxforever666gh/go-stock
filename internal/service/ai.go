@@ -123,3 +123,7 @@ func (s AIService) SendLatestAIAnalysisReportEmail() (*models.AIResponseResult, 
 func (s AIService) SendLatestAIAnalysisReportEmailForCron() (*models.AIResponseResult, error) {
 	return data.SendLatestAIAnalysisReportEmailForCron()
 }
+
+func (s AIService) SendMarketSummaryEmail(sendType string, report *models.AIResponseResult, failureReason string) error {
+	return data.SendMarketSummaryEmail(sendType, report, failureReason)
+}

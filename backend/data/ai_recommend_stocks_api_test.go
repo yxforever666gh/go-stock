@@ -2,7 +2,9 @@ package data
 
 import (
 	"encoding/json"
+	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -225,6 +227,7 @@ func TestNormalizeAiRecommendStockForSaveStructuredFields(t *testing.T) {
 		CapitalConfirmation:      82,
 		FundamentalFit:           76,
 		TechnicalFit:             90,
+		ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":165,"thresholdMax":169,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 		RiskRemarks:              "高位波动较大，需防板块退潮",
 	}
 	if err := normalizeAiRecommendStockForSave(item); err != nil {
@@ -238,6 +241,9 @@ func TestNormalizeAiRecommendStockForSaveStructuredFields(t *testing.T) {
 	}
 	if item.EvidenceSources == "" {
 		t.Fatal("expected evidence sources json to be generated")
+	}
+	if item.ActivationRuleVersion != activationRuleVersionV1 {
+		t.Fatalf("expected activation rule version set, got %s", item.ActivationRuleVersion)
 	}
 }
 
@@ -384,6 +390,35 @@ func TestValidateSignalDrivenRecommendRejectsAmbiguousTriggerPhrases(t *testing.
 	}
 }
 
+func TestNormalizeAiRecommendStockForSaveIgnoresAmbiguousRemarksWhenPlanIsStructured(t *testing.T) {
+	item := &models.AiRecommendStocks{
+		StockCode:                "300308.SZ",
+		StockName:                "中际旭创",
+		BkName:                   "AI算力/光模块",
+		RecommendReason:          "核心催化：AI算力大会临近；关键证据：[市场资讯] AI算力产业大会将于4月9日至11日召开；[财报/财务] 高速光模块景气延续；价格锚点：170；买入区间：168-172；止盈区间：180-188；止损位：163；买入依据：价格触发：未来3个交易日内股价回到168-172元区间后，连续2根15分钟K线收于170元上方；量能触发：对应15分钟成交额≥近5个15分钟均额的1.3倍，且量比≥1.5；逻辑触发：光模块景气逻辑未被证伪；失效条件：时间失效：未来3个交易日内未触发；价格失效：有效跌破163元；逻辑失效：行业景气显著走弱",
+		RecommendBuyPrice:        "168-172",
+		RecommendStopProfitPrice: "180-188",
+		RecommendStopLossPrice:   "163",
+		ExecutionState:           recommendExecutionConditional,
+		BuySignal:                "价格触发：未来3个交易日内股价回到168-172元区间后，连续2根15分钟K线收于170元上方；量能触发：对应15分钟成交额≥近5个15分钟均额的1.3倍，且量比≥1.5；逻辑触发：光模块景气逻辑未被证伪",
+		SellSignal:               "触及180-188止盈区间卖出",
+		InvalidSignal:            "时间失效：未来3个交易日内未触发；价格失效：有效跌破163元；逻辑失效：行业景气显著走弱",
+		ExpectedCycle:            "3-5个交易日",
+		EventStrength:            85,
+		CapitalConfirmation:      70,
+		FundamentalFit:           82,
+		TechnicalFit:             74,
+		RiskRemarks:              "海外算力资本开支波动可能带来高位回撤风险",
+		Remarks:                  "等待激活；若先直接上冲至止盈区间附近而未满足买点，不追价执行",
+	}
+	if err := normalizeAiRecommendStockForSave(item); err != nil {
+		t.Fatalf("normalizeAiRecommendStockForSave returned error: %v", err)
+	}
+	if strings.Contains(item.BuySignalDetail, "不追") {
+		t.Fatalf("expected ambiguous remark to be filtered from buy signal detail, got %q", item.BuySignalDetail)
+	}
+}
+
 func TestShouldTrackRecommendInYield(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -436,6 +471,7 @@ func TestShouldTrackRecommendInYield(t *testing.T) {
 				BuySignal:                "价格触发：股价进入10.00-10.50主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.1倍；逻辑触发：核心催化未证伪且板块未转弱",
 				SellSignal:               "触及 11.50 止盈",
 				InvalidSignal:            "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破9.80；逻辑失效：核心催化被证伪或板块联动明显转弱",
+				ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":10,"thresholdMax":10.5,"volumeRatio":1.1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 				RecommendBuyPrice:        "10-10.5",
 				RecommendStopProfitPrice: "11-12",
 				RecommendStopLossPrice:   "9.6",
@@ -581,7 +617,91 @@ func TestResolveRecommendYieldSkipInfo(t *testing.T) {
 			wantStatus:     "skipped",
 			wantPosition:   "已放弃",
 			wantDataStatus: "已跳过",
-			wantReasonHas:  "买入依据仍含观察/保守口径",
+			wantReasonHas:  "证据不足",
+		},
+		{
+			name: "before-cutoff-insufficient-evidence-without-observation-kept",
+			input: models.AiRecommendStocks{
+				RecommendCategory:        "observe",
+				RecommendStatus:          "insufficient_evidence",
+				RecommendBuyPrice:        "25.50-26.00放量站稳再看主买入区",
+				RecommendStopProfitPrice: "27.50-28.20",
+				RecommendStopLossPrice:   "24.30",
+				BuySignal:                "价格触发：未来3-5个交易日内股价进入25.5-26.0放量站稳再看主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍",
+				InvalidCondition:         "大会前后板块不联动；股价跌破24.30元前收附近且放量走弱；龙虎榜次日承接明显不足",
+				DataTime: func() *time.Time {
+					t := time.Date(2026, 3, 8, 4, 21, 29, 0, cnLocation())
+					return &t
+				}(),
+			},
+			wantDisplay: true,
+			wantTrack:   true,
+			wantSkip:    false,
+		},
+		{
+			name: "before-cutoff-observation-word-still-skipped",
+			input: models.AiRecommendStocks{
+				RecommendCategory:        "observe",
+				RecommendStatus:          "insufficient_evidence",
+				RecommendBuyPrice:        "59.50-60.00",
+				RecommendStopProfitPrice: "63.00-65.00",
+				RecommendStopLossPrice:   "57.20",
+				BuySignal:                "价格触发：未来3-5个交易日内股价进入仅观察59.50-60.00能否重新站稳；未站稳前不建议主动追买主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍",
+				InvalidCondition:         "无法重新站回59.50-60.00区间且继续放量走弱；或跌破57.20后无承接；或板块整体转弱",
+				DataTime: func() *time.Time {
+					t := time.Date(2026, 3, 24, 11, 30, 0, 0, cnLocation())
+					return &t
+				}(),
+			},
+			wantDisplay:    true,
+			wantTrack:      false,
+			wantSkip:       true,
+			wantStatus:     "skipped",
+			wantPosition:   "已放弃",
+			wantDataStatus: "已跳过",
+			wantReasonHas:  "买入依据含“观察”",
+		},
+		{
+			name: "before-cutoff-avoid-still-skipped",
+			input: models.AiRecommendStocks{
+				RecommendCategory: "observe",
+				RecommendStatus:   "avoid",
+				InvalidCondition:  "跌破支撑位",
+				DataTime: func() *time.Time {
+					t := time.Date(2026, 3, 20, 11, 30, 0, 0, cnLocation())
+					return &t
+				}(),
+			},
+			wantDisplay:    true,
+			wantTrack:      false,
+			wantSkip:       true,
+			wantStatus:     "skipped",
+			wantPosition:   "已放弃",
+			wantDataStatus: "已跳过",
+			wantReasonHas:  "回避",
+		},
+		{
+			name: "cutoff-day-still-uses-current-insufficient-evidence-skip",
+			input: models.AiRecommendStocks{
+				RecommendCategory:        "observe",
+				RecommendStatus:          "insufficient_evidence",
+				RecommendBuyPrice:        "25.50-26.00放量站稳再看主买入区",
+				RecommendStopProfitPrice: "27.50-28.20",
+				RecommendStopLossPrice:   "24.30",
+				BuySignal:                "价格触发：未来3-5个交易日内股价进入25.5-26.0放量站稳再看主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍",
+				InvalidCondition:         "大会前后板块不联动；股价跌破24.30元前收附近且放量走弱；龙虎榜次日承接明显不足",
+				DataTime: func() *time.Time {
+					t := time.Date(2026, 4, 6, 0, 0, 0, 0, cnLocation())
+					return &t
+				}(),
+			},
+			wantDisplay:    true,
+			wantTrack:      false,
+			wantSkip:       true,
+			wantStatus:     "skipped",
+			wantPosition:   "已放弃",
+			wantDataStatus: "已跳过",
+			wantReasonHas:  "证据不足",
 		},
 		{
 			name: "observation-word-but-explicit-plan-kept",
@@ -596,6 +716,7 @@ func TestResolveRecommendYieldSkipInfo(t *testing.T) {
 				BuySignalDetail:          "若未来5个交易日内重新进入9.42-9.56主买入区并满足上面的量能要求，则触发买入",
 				SellSignal:               "触及10.00-10.30止盈区间卖出",
 				InvalidSignal:            "时间失效：未来5个交易日内未触发买点；价格失效：任一5分钟收盘价跌破8.98；逻辑失效：主线催化被证伪",
+				ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"prev_day_same_slot_amount","operator":">=","thresholdValue":9.42,"thresholdMax":9.56,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 			},
 			wantDisplay: true,
 			wantTrack:   true,
@@ -658,7 +779,23 @@ func TestResolveRecommendBacktestEligibility(t *testing.T) {
 				RecommendStopLossPrice:   "9.6",
 			},
 			want:       recommendBacktestIneligible,
-			wantReason: "等待激活语义",
+			wantReason: "缺少结构化激活规则",
+		},
+		{
+			name: "phase3-before-cutoff-falls-back-to-legacy-direct-activation",
+			input: models.AiRecommendStocks{
+				RecommendCategory:        recommendExecutionConditional,
+				RecommendStatus:          "valid",
+				SummaryVersion:           marketSummaryPhase3Version,
+				RecommendBuyPrice:        "10-10.5",
+				RecommendStopProfitPrice: "11-12",
+				RecommendStopLossPrice:   "9.6",
+				DataTime: func() *time.Time {
+					t := time.Date(2026, 4, 5, 10, 0, 0, 0, cnLocation())
+					return &t
+				}(),
+			},
+			want: recommendBacktestEligible,
 		},
 		{
 			name: "phase3-v2-activated-buy-still-legacy-compatible",
@@ -687,12 +824,13 @@ func TestResolveRecommendBacktestEligibility(t *testing.T) {
 		{
 			name: "structured-activated-buy-eligible",
 			input: models.AiRecommendStocks{
-				RecommendCategory: recommendExecutionConditional,
-				RecommendStatus:   "valid",
-				ExecutionState:    recommendExecutionConditional,
-				BuySignal:         "价格触发：股价进入10.00-10.50主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.1倍；逻辑触发：核心催化未证伪且板块未转弱",
-				SellSignal:        "触及 11.50 止盈",
-				InvalidSignal:     "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破9.80；逻辑失效：核心催化被证伪或板块联动明显转弱",
+				RecommendCategory:  recommendExecutionConditional,
+				RecommendStatus:    "valid",
+				ExecutionState:     recommendExecutionConditional,
+				BuySignal:          "价格触发：股价进入10.00-10.50主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.1倍；逻辑触发：核心催化未证伪且板块未转弱",
+				SellSignal:         "触及 11.50 止盈",
+				InvalidSignal:      "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破9.80；逻辑失效：核心催化被证伪或板块联动明显转弱",
+				ActivationRuleJSON: `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":10,"thresholdMax":10.5,"volumeRatio":1.1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 			},
 			want: recommendBacktestEligible,
 		},
@@ -741,7 +879,7 @@ func TestResolveRecommendBacktestEligibility(t *testing.T) {
 				InvalidSignal:            "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破58.2；逻辑失效：核心催化被证伪或板块联动明显转弱",
 			},
 			want:       recommendBacktestSkipped,
-			wantReason: "买入依据仍含观察/保守口径",
+			wantReason: "证据不足",
 		},
 	}
 
@@ -815,4 +953,144 @@ func TestNormalizeAiRecommendStockForSaveMarksControversialOnConflict(t *testing
 	if item.RecommendStatus != "controversial" {
 		t.Fatalf("expected controversial status, got %s", item.RecommendStatus)
 	}
+}
+
+func TestCreateAiRecommendStocksRejectsSameDayDuplicateStock(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "ai-recommend-daily-duplicate.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	service := NewAiRecommendStocksService()
+	loc := cnLocation()
+	firstTime := time.Date(2026, 4, 8, 9, 35, 0, 0, loc)
+	secondTime := time.Date(2026, 4, 8, 14, 12, 0, 0, loc)
+	nextDayTime := time.Date(2026, 4, 9, 9, 40, 0, 0, loc)
+
+	first := buildValidAiRecommendForCreate(firstTime, "300308.SZ", "中际旭创")
+	if err := service.CreateAiRecommendStocks(first); err != nil {
+		t.Fatalf("expected first create success, got %v", err)
+	}
+
+	duplicate := buildValidAiRecommendForCreate(secondTime, "300308.SZ", "中际旭创")
+	err := service.CreateAiRecommendStocks(duplicate)
+	if err == nil {
+		t.Fatalf("expected same-day duplicate to be rejected")
+	}
+	if !strings.Contains(err.Error(), "同一天不能同时买入同一只股票") {
+		t.Fatalf("unexpected duplicate error: %v", err)
+	}
+
+	nextDay := buildValidAiRecommendForCreate(nextDayTime, "300308.SZ", "中际旭创")
+	if err := service.CreateAiRecommendStocks(nextDay); err != nil {
+		t.Fatalf("expected next-day create success, got %v", err)
+	}
+
+	var count int64
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).Count(&count).Error; err != nil {
+		t.Fatalf("count failed: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 saved records, got %d", count)
+	}
+}
+
+func TestBatchCreateAiRecommendStocksRejectsSameDayDuplicateStockInBatch(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "ai-recommend-batch-duplicate.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	service := NewAiRecommendStocksService()
+	loc := cnLocation()
+	day := time.Date(2026, 4, 8, 10, 5, 0, 0, loc)
+	later := time.Date(2026, 4, 8, 14, 55, 0, 0, loc)
+
+	err := service.BatchCreateAiRecommendStocks([]*models.AiRecommendStocks{
+		buildValidAiRecommendForCreate(day, "002371.SZ", "北方华创"),
+		buildValidAiRecommendForCreate(later, "002371.SZ", "北方华创"),
+	})
+	if err == nil {
+		t.Fatalf("expected same-day duplicate in batch to be rejected")
+	}
+	if !strings.Contains(err.Error(), "同一天不能同时买入同一只股票") {
+		t.Fatalf("unexpected batch duplicate error: %v", err)
+	}
+
+	var count int64
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).Count(&count).Error; err != nil {
+		t.Fatalf("count failed: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("expected batch rejection to keep db empty, got %d", count)
+	}
+}
+
+func TestCollapseRecommendRecordsSameDayByCode_KeepsLatestPerDay(t *testing.T) {
+	loc := cnLocation()
+	records := []models.AiRecommendStocks{
+		{
+			ModelName: "GPT-5",
+			StockCode: "001309.SZ",
+			StockName: "德明利",
+			DataTime:  timePtr(time.Date(2026, 3, 6, 7, 58, 54, 0, loc)),
+		},
+		{
+			ModelName: "GPT-5",
+			StockCode: "001309.SZ",
+			StockName: "德明利",
+			DataTime:  timePtr(time.Date(2026, 3, 6, 7, 45, 53, 0, loc)),
+		},
+		{
+			ModelName: "AI助手",
+			StockCode: "001309.SZ",
+			StockName: "德明利",
+			DataTime:  timePtr(time.Date(2026, 3, 6, 7, 38, 27, 0, loc)),
+		},
+		{
+			ModelName: "GPT-5",
+			StockCode: "001309.SZ",
+			StockName: "德明利",
+			DataTime:  timePtr(time.Date(2026, 3, 7, 8, 10, 0, 0, loc)),
+		},
+	}
+	records[0].ID = 101
+	records[1].ID = 98
+	records[2].ID = 95
+	records[3].ID = 110
+
+	collapsed := collapseRecommendRecordsSameDayByCode(records)
+	if len(collapsed) != 2 {
+		t.Fatalf("expected 2 collapsed records, got %d", len(collapsed))
+	}
+	if collapsed[0].ID != 101 {
+		t.Fatalf("expected same-day latest record id=101 kept, got %d", collapsed[0].ID)
+	}
+	if collapsed[1].ID != 110 {
+		t.Fatalf("expected next-day record kept, got %d", collapsed[1].ID)
+	}
+
+	counts := countRecommendOccurrencesByCode(records)
+	if counts["001309.SZ"] != 4 {
+		t.Fatalf("expected raw repeat count=4, got %d", counts["001309.SZ"])
+	}
+}
+
+func buildValidAiRecommendForCreate(dataTime time.Time, stockCode, stockName string) *models.AiRecommendStocks {
+	return &models.AiRecommendStocks{
+		DataTime:                 &dataTime,
+		ModelName:                "gpt-5.4",
+		StockCode:                stockCode,
+		StockName:                stockName,
+		BkName:                   "测试板块",
+		RecommendReason:          "核心逻辑：主线催化清晰，量价结构具备跟踪价值",
+		RecommendBuyPrice:        "10.00-10.50",
+		RecommendStopProfitPrice: "11.20-11.80",
+		RecommendStopLossPrice:   "9.60",
+		RiskRemarks:              "若板块退潮或跌破止损位，需要严格执行退出",
+	}
+}
+
+func timePtr(v time.Time) *time.Time {
+	return &v
 }

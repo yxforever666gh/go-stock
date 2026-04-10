@@ -1,10 +1,13 @@
 <script setup>
-import {computed, h, onBeforeMount, onMounted, reactive, ref} from 'vue'
+import {computed, h, onBeforeMount, onMounted, reactive, ref, watch} from 'vue'
 import {GetAIResponseResultList, GetConfig, SaveAsMarkdown, ShareAnalysis,DeleteAIResponseResult} from "../services/app-api";
 import {NAvatar, NButton, NEllipsis, NText, useMessage} from "naive-ui";
 import {MdEditor, MdPreview} from 'md-editor-v3';
+import { useSharedResearchDateRange } from "../composables/useSharedResearchDateRange";
 
 
+const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
+const rangeReadyRef = ref(false)
 
 onBeforeMount(()=> {
   GetConfig().then(result => {
@@ -13,22 +16,10 @@ onBeforeMount(()=> {
     }
   })
 })
-onMounted(() => {
-  query({
-    page: 1,
-    pageSize: paginationReactive.pageSize,
-    order: "desc",
-    keyword: paginationReactive.keyword,
-    startDate: formatDate(paginationReactive.range[0]),
-    endDate: formatDate(paginationReactive.range[1])
-  }).then((data) => {
-    console.log( data)
-    dataRef.value = data.data
-    paginationReactive.page = 1
-    paginationReactive.pageCount = data.pageCount
-    paginationReactive.itemCount = data.total
-    loadingRef.value = false
-  })
+onMounted(async () => {
+  await initSharedResearchDateRange()
+  rangeReadyRef.value = true
+  await refreshReports(1)
 })
 const message = useMessage()
 const mdPreviewRef = ref(null)
@@ -38,6 +29,7 @@ const editorDataRef = reactive({
   loading: false,
   darkTheme: false,
   chatId: "",
+  providerName: "",
   modelName: "",
   CreatedAt: "",
   stockName: "",
@@ -48,6 +40,14 @@ const editorDataRef = reactive({
 const dataRef = ref([])
 const loadingRef = ref(true)
 const tableScrollX = 1100
+function formatProviderModelLabel(providerName, modelName) {
+  const provider = String(providerName || "").trim()
+  const model = String(modelName || "").trim()
+  if (provider && model) {
+    return `${provider} / ${model}`
+  }
+  return provider || model || "--"
+}
 const columnsRef = ref([
   {
     title: '分析时间',
@@ -58,8 +58,11 @@ const columnsRef = ref([
     }
   },
   {
-    title: '模型名称',
-    key: 'modelName'
+    title: 'Provider / 模型',
+    key: 'modelName',
+    render(row) {
+      return formatProviderModelLabel(row.providerName, row.modelName)
+    }
   },
   {
     title: '分析对象',
@@ -110,10 +113,6 @@ const paginationReactive = reactive({
   itemCount: 0,
   keyword: "",
   startDate:"",
-  range: [
-    new Date(new Date().getTime() - 3 * 24 * 60 * 60 * 1000), // 前3天
-    new Date() // 当天
-  ],
   prefix({ itemCount }) {
     return `${itemCount} 条记录`
   }
@@ -135,11 +134,15 @@ const reportTitle = computed(() => {
   }
   return "AI分析报告"
 })
+const reportModelLabel = computed(() => {
+  return formatProviderModelLabel(editorDataRef.providerName, editorDataRef.modelName)
+})
 
 function showReport(row) {
 
   editorDataRef.show = true
   editorDataRef.chatId = row.chatId
+  editorDataRef.providerName = row.providerName
   editorDataRef.modelName = row.modelName
   editorDataRef.CreatedAt = row.CreatedAt.substring(0, 19).replace('T', ' ')
   editorDataRef.stockName = row.stockName
@@ -181,43 +184,50 @@ function query({
   })
 }
 
-function handlePageChange(currentPage) {
-  if (!loadingRef.value) {
-    loadingRef.value = true
-    query({
-      page: currentPage,
-      pageSize: paginationReactive.pageSize,
-      order: "desc",
-      keyword: paginationReactive.keyword,
-      startDate: formatDate(paginationReactive.range[0]),
-      endDate: formatDate(paginationReactive.range[1])
-    }).then((data) => {
-      dataRef.value = data.data
-      paginationReactive.page = currentPage
-      paginationReactive.pageCount = data.pageCount
-      paginationReactive.itemCount = data.total
-      loadingRef.value = false
-    })
+function currentRangeParams() {
+  const range = researchDateRangeModel.value || []
+  return {
+    startDate: formatDate(range[0]),
+    endDate: formatDate(range[1])
   }
 }
-function handleSearch() {
-  if (!loadingRef.value) {
-    loadingRef.value = true
-    query({
-      page: 1,
-      pageSize: paginationReactive.pageSize,
-      order: "desc",
-      keyword: paginationReactive.keyword,
-      startDate: formatDate(paginationReactive.range[0]),
-      endDate: formatDate(paginationReactive.range[1])
-    }).then((data) => {
-      dataRef.value = data.data
-      paginationReactive.page = 1
-      paginationReactive.pageCount = data.pageCount
-      paginationReactive.itemCount = data.total
-      loadingRef.value = false
-    })
+
+async function refreshReports(page) {
+  loadingRef.value = true
+  const { startDate, endDate } = currentRangeParams()
+  const data = await query({
+    page,
+    pageSize: paginationReactive.pageSize,
+    order: "desc",
+    keyword: paginationReactive.keyword,
+    startDate,
+    endDate
+  })
+  dataRef.value = data.data
+  paginationReactive.page = page
+  paginationReactive.pageCount = data.pageCount
+  paginationReactive.itemCount = data.total
+  loadingRef.value = false
+}
+
+watch(researchDateRangeKey, async (nextKey, prevKey) => {
+  if (!rangeReadyRef.value || !prevKey || nextKey === prevKey) {
+    return
   }
+  await refreshReports(1)
+})
+
+function handlePageChange(currentPage) {
+  if (loadingRef.value) {
+    return
+  }
+  refreshReports(currentPage)
+}
+function handleSearch() {
+  if (loadingRef.value) {
+    return
+  }
+  refreshReports(1)
 }
 function share(code, name) {
   ShareAnalysis(code, name).then(msg => {
@@ -282,7 +292,7 @@ function deleteAIResponseResult(id){
 
 <template>
   <div class="report-toolbar">
-    <n-date-picker v-model:value="paginationReactive.range" type="daterange" class="report-toolbar-date"/>
+    <n-date-picker v-model:value="researchDateRangeModel" type="daterange" class="report-toolbar-date"/>
     <n-input clearable placeholder="输入关键词搜索" v-model:value="paginationReactive.keyword" class="report-toolbar-keyword"/>
     <n-button type="primary" ghost @click="handleSearch" @input="handleSearch" class="report-toolbar-button">
       搜索
@@ -314,8 +324,8 @@ function deleteAIResponseResult(id){
         <div class="report-modal-heading">
           <div class="report-modal-title">{{ reportTitle }}</div>
           <div class="report-modal-meta">
-            <n-tag v-if="editorDataRef.modelName" type="warning" round :bordered="false">
-              {{ editorDataRef.modelName }}
+            <n-tag v-if="reportModelLabel !== '--'" type="warning" round :bordered="false">
+              {{ reportModelLabel }}
             </n-tag>
             <span v-if="editorDataRef.CreatedAt">{{ editorDataRef.CreatedAt }}</span>
             <span v-if="editorDataRef.question" class="report-modal-question" :title="editorDataRef.question">
@@ -441,6 +451,7 @@ function deleteAIResponseResult(id){
 .report-modal-body {
   flex: 1;
   display: flex;
+  min-width: 0;
   min-height: 0;
   padding: 0 24px;
   overflow: hidden;
@@ -448,6 +459,7 @@ function deleteAIResponseResult(id){
 
 .report-preview-wrap {
   flex: 1;
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   padding: 20px 0 24px;
@@ -488,13 +500,32 @@ function deleteAIResponseResult(id){
 }
 
 :deep(.report-preview) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
   text-align: left;
   background: transparent;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 :deep(.report-preview .md-editor-preview-wrapper) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
   padding: 0;
   background: transparent;
+  overflow: auto;
+  box-sizing: border-box;
+}
+
+:deep(.report-preview .md-editor-preview) {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 :deep(.report-preview table) {

@@ -50,7 +50,7 @@ func normalizeSummaryCronTimes(input string) []string {
 	}
 
 	if len(times) == 0 {
-		return []string{"09:30", "11:30", "18:00"}
+		return []string{"09:40", "11:30", "14:30"}
 	}
 	slices.Sort(times)
 	return times
@@ -210,7 +210,7 @@ func (a *App) runSummaryStockNewsTestOnce() {
 	_ = db.Dao.Create(taskRun).Error
 
 	marketSummaryQuestion := a.services.AI.NormalizeMarketSummaryQuestion(setting.QuestionTemplate)
-	a.SummaryStockNews(marketSummaryQuestion, aiConfigId, nil, true, false)
+	a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
 
 	var latest models.AIResponseResult
 	_ = db.Dao.Model(&models.AIResponseResult{}).
@@ -305,33 +305,20 @@ func (a *App) runScheduledSummaryStockNews() {
 	_ = db.Dao.Create(taskRun).Error
 
 	logger.SugaredLogger.Infof("开始执行市场资讯AI总结定时任务 aiConfigId=%d", aiConfigId)
-	start := time.Now()
 	marketSummaryQuestion := a.services.AI.NormalizeMarketSummaryQuestion(setting.QuestionTemplate)
-	a.SummaryStockNews(marketSummaryQuestion, aiConfigId, nil, true, false)
-
-	var latest models.AIResponseResult
-	_ = db.Dao.Model(&models.AIResponseResult{}).
-		Where("stock_name = ? AND question = ? AND created_at >= ?", "市场资讯", marketSummaryQuestion, start).
-		Order("id desc").
-		Limit(1).
-		Find(&latest).Error
+	res := a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
 
 	status := "failed"
-	errMsg := "未生成可保存的总结内容"
-	if latest.ID != 0 && strings.TrimSpace(latest.Content) != "" {
+	errMsg := summarizeSummaryRunError(res)
+	if strings.TrimSpace(res.text) != "" {
 		status = "success"
 		errMsg = ""
 	} else {
 		taskRun.Attempts = 2
 		_ = db.Dao.Model(&models.CronTaskRun{}).Where("id = ?", taskRun.ID).Updates(map[string]any{"attempts": taskRun.Attempts}).Error
-		a.SummaryStockNews(marketSummaryQuestion, aiConfigId, nil, true, true)
-		var latest2 models.AIResponseResult
-		_ = db.Dao.Model(&models.AIResponseResult{}).
-			Where("stock_name = ? AND question = ? AND created_at >= ?", "市场资讯", marketSummaryQuestion, start).
-			Order("id desc").
-			Limit(1).
-			Find(&latest2).Error
-		if latest2.ID != 0 && strings.TrimSpace(latest2.Content) != "" {
+		res = a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, true)
+		errMsg = summarizeSummaryRunError(res)
+		if strings.TrimSpace(res.text) != "" {
 			status = "success"
 			errMsg = ""
 		}

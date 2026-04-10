@@ -6,6 +6,7 @@ export namespace data {
 	    CreatedAt: any;
 	    // Go type: time
 	    UpdatedAt: any;
+	    sort: number;
 	    name: string;
 	    baseUrl: string;
 	    apiKey: string;
@@ -25,6 +26,7 @@ export namespace data {
 	        this.ID = source["ID"];
 	        this.CreatedAt = this.convertValues(source["CreatedAt"], null);
 	        this.UpdatedAt = this.convertValues(source["UpdatedAt"], null);
+	        this.sort = source["sort"];
 	        this.name = source["name"];
 	        this.baseUrl = source["baseUrl"];
 	        this.apiKey = source["apiKey"];
@@ -367,6 +369,7 @@ export namespace data {
 	    yieldEmailSmtpPassword: string;
 	    yieldEmailCronEnabled: boolean;
 	    yieldEmailCronTimes: string;
+	    marketSummaryEmailEnabled: boolean;
 	    updateBasicInfoOnStart: boolean;
 	    refreshInterval: number;
 	    openAiEnable: boolean;
@@ -429,6 +432,7 @@ export namespace data {
 	        this.yieldEmailSmtpPassword = source["yieldEmailSmtpPassword"];
 	        this.yieldEmailCronEnabled = source["yieldEmailCronEnabled"];
 	        this.yieldEmailCronTimes = source["yieldEmailCronTimes"];
+	        this.marketSummaryEmailEnabled = source["marketSummaryEmailEnabled"];
 	        this.updateBasicInfoOnStart = source["updateBasicInfoOnStart"];
 	        this.refreshInterval = source["refreshInterval"];
 	        this.openAiEnable = source["openAiEnable"];
@@ -717,6 +721,7 @@ export namespace models {
 	    // Go type: gorm
 	    DeletedAt: any;
 	    chatId: string;
+	    providerName: string;
 	    modelName: string;
 	    stockCode: string;
 	    stockName: string;
@@ -735,6 +740,7 @@ export namespace models {
 	        this.UpdatedAt = this.convertValues(source["UpdatedAt"], null);
 	        this.DeletedAt = this.convertValues(source["DeletedAt"], null);
 	        this.chatId = source["chatId"];
+	        this.providerName = source["providerName"];
 	        this.modelName = source["modelName"];
 	        this.stockCode = source["stockCode"];
 	        this.stockName = source["stockName"];
@@ -934,6 +940,48 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class AiRecommendOpeningReviewSummary {
+	    recommendId: number;
+	    tradeDate: string;
+	    reviewScope: string;
+	    reviewPhase: string;
+	    openingPrice: number;
+	    auctionPrice: number;
+	    minutePrice: number;
+	    minuteVolume: number;
+	    minuteAmount: number;
+	    gapType: string;
+	    action: string;
+	    reason: string;
+	    suggestedStopLoss: number;
+	    suggestedTakeProfit: number;
+	    modelName: string;
+	    rawSummary: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AiRecommendOpeningReviewSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.recommendId = source["recommendId"];
+	        this.tradeDate = source["tradeDate"];
+	        this.reviewScope = source["reviewScope"];
+	        this.reviewPhase = source["reviewPhase"];
+	        this.openingPrice = source["openingPrice"];
+	        this.auctionPrice = source["auctionPrice"];
+	        this.minutePrice = source["minutePrice"];
+	        this.minuteVolume = source["minuteVolume"];
+	        this.minuteAmount = source["minuteAmount"];
+	        this.gapType = source["gapType"];
+	        this.action = source["action"];
+	        this.reason = source["reason"];
+	        this.suggestedStopLoss = source["suggestedStopLoss"];
+	        this.suggestedTakeProfit = source["suggestedTakeProfit"];
+	        this.modelName = source["modelName"];
+	        this.rawSummary = source["rawSummary"];
+	    }
+	}
 	export class AiRecommendStocks {
 	    ID: number;
 	    // Go type: time
@@ -984,6 +1032,7 @@ export namespace models {
 	    summaryVersion: string;
 	    riskRemarks: string;
 	    remarks: string;
+	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
 	
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocks(source);
@@ -1036,6 +1085,7 @@ export namespace models {
 	        this.summaryVersion = source["summaryVersion"];
 	        this.riskRemarks = source["riskRemarks"];
 	        this.remarks = source["remarks"];
+	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1166,6 +1216,7 @@ export namespace models {
 	    yieldRateText: string;
 	    dataStatus: string;
 	    dataStatusReason?: string;
+	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
 	
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksYieldItem(source);
@@ -1214,6 +1265,7 @@ export namespace models {
 	        this.yieldRateText = source["yieldRateText"];
 	        this.dataStatus = source["dataStatus"];
 	        this.dataStatusReason = source["dataStatusReason"];
+	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
 	}
 	export class AiRecommendStocksYieldPageData {
@@ -1352,6 +1404,7 @@ export namespace models {
 	    message?: string;
 	    bars: AiRecommendYieldMinuteBarDTO[];
 	    markers: AiRecommendYieldChartMarker[];
+	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
 	
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendYieldMinuteChartData(source);
@@ -1378,6 +1431,7 @@ export namespace models {
 	        this.message = source["message"];
 	        this.bars = this.convertValues(source["bars"], AiRecommendYieldMinuteBarDTO);
 	        this.markers = this.convertValues(source["markers"], AiRecommendYieldChartMarker);
+	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

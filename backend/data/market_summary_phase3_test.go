@@ -39,7 +39,12 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 	messages := buildPhase3FinalMessages(
 		"system prompt",
 		"总结市场机会",
-		marketSummaryDiscoveryInput{Question: "总结市场机会"},
+		marketSummaryDiscoveryInput{
+			Question:    "总结市场机会",
+			RunSlot:     string(marketSummaryRunSlotMidday),
+			WindowStart: "2026-04-09 09:30:00",
+			WindowEnd:   "2026-04-09 11:32:00",
+		},
 		&marketSummaryDiscoveryResult{CandidateStocks: []marketSummaryRouteCandidate{{StockName: "中际旭创", StockCode: "300308.SZ"}}},
 		[]marketSummaryVerifiedCandidate{{
 			StockName:         "中际旭创",
@@ -49,6 +54,11 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 			AuctionPrice:      "137.80",
 			PriceAnchorSource: "minute_bar",
 			EvidenceSources:   []aiEvidenceReference{{Type: "一级披露", Summary: "订单公告", TrustLevel: "high"}},
+		}},
+		[]marketSummaryExcludedStock{{
+			StockCode:          "002371.SZ",
+			StockName:          "北方华创",
+			FirstRecommendTime: "2026-04-09 09:32:00",
 		}},
 		[]marketSummarySkippedReviewCandidate{{
 			RecommendID:       101,
@@ -63,7 +73,7 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 		t.Fatal("expected non-empty messages")
 	}
 	last := messages[len(messages)-1]["content"].(string)
-	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点"}) {
+	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "暂无新增高质量候选标的", "本次筛选窗口"}) {
 		t.Fatalf("unexpected final instruction: %s", last)
 	}
 }

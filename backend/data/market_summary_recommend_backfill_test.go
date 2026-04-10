@@ -11,7 +11,24 @@ import (
 	"go-stock/backend/db"
 )
 
+func setupMarketSummaryRecommendBackfillRealtimeEnv(t *testing.T, dbName string) {
+	t.Helper()
+	withStubbedMinuteProviders(t)
+	db.Init(filepath.Join(t.TempDir(), dbName))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+}
+
 func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
+	setupMarketSummaryRecommendBackfillRealtimeEnv(t, "market-summary-structured-table.db")
+	loc := cnLocation()
+	dataTime := time.Date(2026, 3, 7, 10, 0, 0, 0, loc)
+	seedMinuteBars(t, "300308.SZ", []minuteBar{
+		{TradeTime: dataTime.Add(-time.Minute), Open: 168.2, High: 168.6, Low: 168.1, Close: 168.4, Volume: 1200, Amount: 202080},
+		{TradeTime: dataTime, Open: 168.4, High: 168.8, Low: 168.3, Close: 168.5, Volume: 1500, Amount: 252750},
+	})
+
 	summary := `# 市场主线
 - AI 算力仍是主线
 
@@ -32,7 +49,7 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
-	items := parseMarketSummaryRecommendStocks(summary, "test-model", time.Date(2026, 3, 7, 10, 0, 0, 0, time.Local))
+	items := parseMarketSummaryRecommendStocks(summary, "test-model", dataTime)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -76,6 +93,9 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 	if item.RecommendBuyPrice != "168-169" {
 		t.Fatalf("unexpected recommend buy price: %s", item.RecommendBuyPrice)
 	}
+	if !strings.Contains(item.ActivationRuleJSON, "\"signalType\"") {
+		t.Fatalf("expected activation rule json, got %s", item.ActivationRuleJSON)
+	}
 	if item.ExpectedCycle != "1-2周" {
 		t.Fatalf("unexpected expected cycle: %s", item.ExpectedCycle)
 	}
@@ -94,12 +114,20 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 }
 
 func TestParseMarketSummaryRecommendStockDraftsAndToRecommendStock(t *testing.T) {
+	setupMarketSummaryRecommendBackfillRealtimeEnv(t, "market-summary-drafts-table.db")
+	loc := cnLocation()
+	dataTime := time.Date(2026, 3, 7, 10, 0, 0, 0, loc)
+	seedMinuteBars(t, "300308.SZ", []minuteBar{
+		{TradeTime: dataTime.Add(-time.Minute), Open: 168.1, High: 168.5, Low: 168.0, Close: 168.3, Volume: 1100, Amount: 185130},
+		{TradeTime: dataTime, Open: 168.3, High: 168.7, Low: 168.2, Close: 168.5, Volume: 1400, Amount: 235900},
+	})
+
 	summary := `# 推荐股票池
 | 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
-	drafts := parseMarketSummaryRecommendStockDrafts(summary, "test-model", time.Date(2026, 3, 7, 10, 0, 0, 0, time.Local))
+	drafts := parseMarketSummaryRecommendStockDrafts(summary, "test-model", dataTime)
 	if len(drafts) != 1 {
 		t.Fatalf("expected 1 draft, got %d", len(drafts))
 	}
@@ -239,6 +267,161 @@ func TestEnsureMarketSummaryRecommendStocksSavedSkipsObservationalRows(t *testin
 	}
 	if total != 0 {
 		t.Fatalf("expected no saved records, got %d", total)
+	}
+}
+
+func TestEnsureMarketSummaryRecommendStocksSavedFromRuntimeReport20260407_1130(t *testing.T) {
+	setupMarketSummaryRecommendBackfillRealtimeEnv(t, "market-summary-runtime-20260407.db")
+	loc := cnLocation()
+	startedAt := time.Date(2026, 4, 7, 11, 30, 0, 0, loc)
+	seedMinuteBars(t, "002371.SZ", []minuteBar{
+		{TradeTime: startedAt.Add(-time.Minute), Open: 360.1, High: 361.2, Low: 359.8, Close: 360.6, Volume: 900, Amount: 324540},
+		{TradeTime: startedAt, Open: 360.6, High: 361.5, Low: 360.2, Close: 360.8, Volume: 980, Amount: 353584},
+	})
+	seedMinuteBars(t, "300124.SZ", []minuteBar{
+		{TradeTime: startedAt.Add(-time.Minute), Open: 167.1, High: 167.8, Low: 166.8, Close: 167.4, Volume: 1300, Amount: 217620},
+		{TradeTime: startedAt, Open: 167.4, High: 168.1, Low: 167.2, Close: 167.6, Volume: 1500, Amount: 251400},
+	})
+	seedMinuteBars(t, "300308.SZ", []minuteBar{
+		{TradeTime: startedAt.Add(-time.Minute), Open: 169.2, High: 169.8, Low: 168.9, Close: 169.4, Volume: 1200, Amount: 203280},
+		{TradeTime: startedAt, Open: 169.4, High: 170.0, Low: 169.1, Close: 169.6, Volume: 1450, Amount: 245920},
+	})
+
+	summary := `# 推荐股票池
+| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 北方华创(002371.SZ) | 半导体设备 | 设备链景气修复 | [市场资讯] 订单预期回暖；[技术/资金/形态] 30分钟量价共振 | 360.8 | 355-365 | 382-398 | 346 | 股价进入355-365区间后，30分钟成交额不低于近5个30分钟均额的1.2倍再跟随 | 跌破346，或半导体设备板块30分钟成交额低于前一交易日同一时段的0.9倍则逻辑失效 | 高位震荡较大，需防设备链分歧 | 1-2周 | 86 | 82 | 80 | 84 | 等待量价确认后执行 |
+| 汇川技术(300124.SZ) | 工业自动化 | 自动化景气改善 | [市场资讯] 下游开工改善；[技术/资金/形态] 15分钟放量修复 | 167.6 | 166-169 | 176-182 | 161 | 股价回到166-169区间并在15分钟维度放量站稳后分批买入 | 跌破161，或工业自动化板块15分钟成交额低于前一交易日同一时段的0.9倍则逻辑失效 | 波动放大明显，需防冲高回落 | 1-2周 | 80 | 78 | 82 | 79 | 仅在量价共振时右侧跟随 |
+| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 15分钟放量突破前高 | 169.6 | 168-172 | 180-188 | 163 | 股价回到168-172区间并在15分钟维度放量站稳后分批买入 | 跌破163，或AI算力板块15分钟成交额低于前一交易日同一时段的0.9倍则逻辑失效 | 高位波动较大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
+`
+
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "runtime-test-model", startedAt)
+	if err != nil {
+		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
+	}
+	if saved != 3 {
+		t.Fatalf("expected save count 3, got %d", saved)
+	}
+
+	var rows []models.AiRecommendStocks
+	if err := db.Dao.Order("stock_code asc").Find(&rows).Error; err != nil {
+		t.Fatalf("query saved rows failed: %v", err)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("expected 3 saved rows, got %d", len(rows))
+	}
+
+	wantCodes := []string{"002371.SZ", "300124.SZ", "300308.SZ"}
+	for idx, row := range rows {
+		if row.StockCode != wantCodes[idx] {
+			t.Fatalf("unexpected stock code at %d: got=%s want=%s", idx, row.StockCode, wantCodes[idx])
+		}
+		if row.ActivationRuleJSON == "" {
+			t.Fatalf("expected activation rule for %s", row.StockCode)
+		}
+		if row.ExecutionState != recommendExecutionConditional {
+			t.Fatalf("expected conditional execution state for %s, got %s", row.StockCode, row.ExecutionState)
+		}
+	}
+}
+
+func TestEnsureMarketSummaryRecommendStocksSavedDowngradesPriceMismatchToAnalysisOnly(t *testing.T) {
+	withStubbedMinuteProviders(t)
+	db.Init(filepath.Join(t.TempDir(), "market-summary-price-mismatch.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	loc := cnLocation()
+	startedAt := time.Date(2026, 4, 7, 11, 30, 0, 0, loc)
+	seedMinuteBars(t, "300308.SZ", []minuteBar{
+		{TradeTime: startedAt.Add(-time.Minute), Open: 600, High: 603, Low: 598, Close: 600.5, Volume: 1000, Amount: 600500},
+		{TradeTime: startedAt, Open: 600.5, High: 602, Low: 599.5, Close: 601.2, Volume: 1100, Amount: 661320},
+	})
+
+	summary := `# 推荐股票池
+| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向15分钟放量突破前高 | 170 | 168-172 | 180-188 | 163 | 股价回到168-172区间并在前高附近15分钟放量站稳后分批买入 | 跌破163或AI算力板块15分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动风险较大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
+`
+
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "test-model", startedAt)
+	if err != nil {
+		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
+	}
+	if saved != 1 {
+		t.Fatalf("expected save count 1, got %d", saved)
+	}
+
+	var row models.AiRecommendStocks
+	if err := db.Dao.First(&row).Error; err != nil {
+		t.Fatalf("query saved record failed: %v", err)
+	}
+	if row.RecommendStatus != "missing_market_data" {
+		t.Fatalf("recommend status = %s, want missing_market_data", row.RecommendStatus)
+	}
+	if row.ExecutionState != recommendExecutionAnalysisOnly {
+		t.Fatalf("execution state = %s, want analysis_only", row.ExecutionState)
+	}
+	if row.RecommendBuyPrice != "" || row.RecommendStopProfitPrice != "" || row.RecommendStopLossPrice != "" {
+		t.Fatalf("expected trade fields cleared after downgrade: %+v", row)
+	}
+}
+
+func TestPrepareMarketSummaryReportForPersistence_DropsDuplicatesAndHumanizesAnalysisOnlyRows(t *testing.T) {
+	withStubbedMinuteProviders(t)
+	db.Init(filepath.Join(t.TempDir(), "market-summary-prepare-report.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	loc := cnLocation()
+	startedAt := time.Date(2026, 4, 7, 11, 30, 0, 0, loc)
+	existingTime := startedAt.Add(-2 * time.Hour)
+	existing := &models.AiRecommendStocks{
+		DataTime:        &existingTime,
+		StockCode:       "300308.SZ",
+		StockName:       "中际旭创",
+		BkName:          "AI算力",
+		RecommendReason: "seed",
+		RiskRemarks:     "seed risk",
+		SummaryVersion:  marketSummaryPhase3Version,
+	}
+	if err := db.Dao.Create(existing).Error; err != nil {
+		t.Fatalf("seed existing record failed: %v", err)
+	}
+	seedMinuteBars(t, "002371.SZ", []minuteBar{
+		{TradeTime: startedAt, Open: 360, High: 362, Low: 358, Close: 360.8, Volume: 900, Amount: 324720},
+	})
+
+	summary := `# 推荐股票池
+| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高 | 170 | 168-172 | 180-188 | 163 | 股价回到168-172区间并放量站稳后分批买入 | 跌破163则失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 已在早盘推荐 |
+| 北方华创(002371.SZ) | 半导体设备 | 展会催化强化 | [市场资讯] 设备链走强 | 170 | 168-172 | 180-188 | 163 | 股价回到168-172区间并放量站稳后分批买入 | 跌破163则失效 | 波动较大 | 1-2周 | 82 | 79 | 76 | 81 | 原始锚点待核对 |
+`
+
+	prepared, stats, err := PrepareMarketSummaryReportForPersistence(summary, startedAt)
+	if err != nil {
+		t.Fatalf("PrepareMarketSummaryReportForPersistence failed: %v", err)
+	}
+	if stats.DuplicateRowsOmit != 1 {
+		t.Fatalf("duplicate omit = %d, want 1", stats.DuplicateRowsOmit)
+	}
+	if stats.AnalysisOnlyRows != 1 {
+		t.Fatalf("analysis only rows = %d, want 1", stats.AnalysisOnlyRows)
+	}
+	if strings.Contains(prepared, "中际旭创(300308.SZ)") {
+		t.Fatalf("expected duplicate stock to be removed from prepared report: %s", prepared)
+	}
+	if !strings.Contains(prepared, "北方华创(002371.SZ)") {
+		t.Fatalf("expected remaining stock row in prepared report: %s", prepared)
+	}
+	if !strings.Contains(prepared, "仅保留逻辑分析") {
+		t.Fatalf("expected analysis-only explanation in prepared report: %s", prepared)
+	}
+	if !strings.Contains(prepared, "360.8") {
+		t.Fatalf("expected prepared report to anchor to real reference price: %s", prepared)
 	}
 }
 

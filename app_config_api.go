@@ -28,7 +28,6 @@ func (a *App) UpdateConfig(settingConfig *data.SettingConfig) string {
 	res := a.services.Config.UpdateConfig(settingConfig)
 	if strings.Contains(res, "保存成功") {
 		a.reloadSummaryStockNewsCron(settingConfig)
-		a.reloadYieldEmailCron(settingConfig)
 	}
 	return res
 }

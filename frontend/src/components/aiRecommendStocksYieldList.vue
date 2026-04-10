@@ -1,7 +1,6 @@
 <script setup>
-import {h, onBeforeUnmount, onMounted, reactive, ref} from 'vue'
+import {computed, h, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {
-  GetAiRecommendStocksDateRange,
   GetAiRecommendStocksYieldList,
   GetAiRecommendYieldMinuteChart,
   GetAiRecommendYieldErrorLogs,
@@ -10,8 +9,11 @@ import {
 import {NBadge, NText, useMessage} from "naive-ui";
 import { useDraggableDataTableColumns } from "../composables/useDraggableDataTableColumns";
 import AiRecommendYieldMinuteReplayChart from "./AiRecommendYieldMinuteReplayChart.vue";
+import { useSharedResearchDateRange } from "../composables/useSharedResearchDateRange";
 
 const message = useMessage()
+const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
+const rangeReadyRef = ref(false)
 
 const tableOverflowTooltip = {
   style: {
@@ -152,6 +154,17 @@ const defaultColumns = [
     },
     render(row) {
       return row.invalidSignal || "--"
+    }
+  },
+  {
+    title: '晨间复核',
+    key: 'latestOpeningReview',
+    minWidth: 220,
+    ellipsis: {
+      tooltip: tableOverflowTooltip
+    },
+    render(row) {
+      return openingReviewPreviewText(row?.latestOpeningReview)
     }
   },
   {
@@ -374,51 +387,59 @@ const paginationReactive = reactive({
   pageSize: 100,
   itemCount: 0,
   keyword: "",
-  range: [new Date(), new Date()],
   prefix({itemCount}) {
     return `${itemCount} 条记录`
   }
 })
 
-onMounted(() => {
-  initDefaultRange().finally(() => {
-    fetchYieldList(1)
-  })
+const startDateModel = computed({
+  get() {
+    const date = normalizePickerDate(researchDateRangeModel.value?.[0])
+    return date ? date.getTime() : null
+  },
+  set(value) {
+    const nextDate = normalizePickerDate(value)
+    if (!nextDate) {
+      return
+    }
+    const currentEnd = normalizePickerDate(researchDateRangeModel.value?.[1]) || nextDate
+    if (nextDate.getTime() <= currentEnd.getTime()) {
+      researchDateRangeModel.value = [nextDate, currentEnd]
+      return
+    }
+    researchDateRangeModel.value = [nextDate, nextDate]
+  }
+})
+
+const endDateModel = computed({
+  get() {
+    const date = normalizePickerDate(researchDateRangeModel.value?.[1])
+    return date ? date.getTime() : null
+  },
+  set(value) {
+    const nextDate = normalizePickerDate(value)
+    if (!nextDate) {
+      return
+    }
+    const currentStart = normalizePickerDate(researchDateRangeModel.value?.[0]) || nextDate
+    if (nextDate.getTime() >= currentStart.getTime()) {
+      researchDateRangeModel.value = [currentStart, nextDate]
+      return
+    }
+    researchDateRangeModel.value = [nextDate, nextDate]
+  }
+})
+
+onMounted(async () => {
+  await initSharedResearchDateRange()
+  rangeReadyRef.value = true
+  await fetchYieldList(1)
 })
 
 onBeforeUnmount(() => {
   stopAutoRefresh()
   stopCooldownTimer()
 })
-
-function parseDateOnly(dateStr) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr || ""))
-  if (!match) {
-    return null
-  }
-  const year = Number(match[1])
-  const month = Number(match[2]) - 1
-  const day = Number(match[3])
-  return new Date(year, month, day)
-}
-
-async function initDefaultRange() {
-  const fixedStart = new Date(2026, 1, 1) // 2026-02-01
-  let latestDate = new Date()
-  try {
-    const result = await GetAiRecommendStocksDateRange()
-    const end = parseDateOnly(result.endDate)
-    if (end) {
-      latestDate = end
-    }
-  } catch (e) {
-    console.error("initDefaultRange failed", e)
-  }
-  if (latestDate < fixedStart) {
-    latestDate = fixedStart
-  }
-  paginationReactive.range = [fixedStart, latestDate]
-}
 
 function query({
                  page,
@@ -464,14 +485,31 @@ function query({
   })
 }
 
+function normalizePickerDate(value) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return null
+  }
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function currentRangeParams() {
+  const range = researchDateRangeModel.value || []
+  return {
+    startDate: formatDate(range[0]),
+    endDate: formatDate(range[1])
+  }
+}
+
 function fetchYieldList(page, options = {}) {
   const silent = !!options.silent
+  const { startDate, endDate } = currentRangeParams()
   return query({
     page,
     pageSize: paginationReactive.pageSize,
     keyword: paginationReactive.keyword,
-    startDate: formatDate(paginationReactive.range[0]),
-    endDate: formatDate(paginationReactive.range[1])
+    startDate,
+    endDate
   }).then((data) => {
     dataRef.value = data.data
     strictPendingCountRef.value = countStrictPendingRows(data.data)
@@ -508,6 +546,14 @@ function fetchYieldList(page, options = {}) {
     }
   })
 }
+
+watch(researchDateRangeKey, async (nextKey, prevKey) => {
+  if (!rangeReadyRef.value || !prevKey || nextKey === prevKey) {
+    return
+  }
+  loadingRef.value = true
+  await fetchYieldList(1)
+})
 
 function handlePageChange(currentPage) {
   if (loadingRef.value) {
@@ -1049,6 +1095,30 @@ function skippedDisplayReason(row) {
   return "未激活，已按规则跳过"
 }
 
+function openingReviewActionText(review) {
+  const action = String(review?.action || '').trim()
+  const map = {
+    continue_plan: '继续按原计划执行',
+    observe_only: '继续观察，不提前激活',
+    cancel_plan: '取消隔夜计划',
+    hold: '继续持有',
+    reduce_risk: '优先风控/止盈'
+  }
+  return map[action] || action || '--'
+}
+
+function openingReviewPreviewText(review) {
+  if (!review) {
+    return '--'
+  }
+  const action = openingReviewActionText(review)
+  const reason = String(review?.reason || review?.rawSummary || '').trim()
+  if (!reason) {
+    return action
+  }
+  return `${action}；${reason}`
+}
+
 function replayChartStatusText() {
   const status = String(replayChartDataRef.value?.chartStatus || '').trim()
   if (status === 'ready') {
@@ -1133,7 +1203,9 @@ function sseBenchmarkTextType() {
 
 <template>
   <n-input-group>
-    <n-date-picker v-model:value="paginationReactive.range" type="daterange" style="width: 50%"/>
+    <n-date-picker v-model:value="startDateModel" type="date" style="width: 22%" />
+    <n-input value="至" readonly style="width: 8%; text-align: center;" />
+    <n-date-picker v-model:value="endDateModel" type="date" style="width: 22%" />
     <n-input clearable placeholder="输入关键词搜索" v-model:value="paginationReactive.keyword"/>
     <n-button type="primary" ghost @click="handleSearch" @input="handleSearch">
       搜索
@@ -1222,6 +1294,20 @@ function sseBenchmarkTextType() {
           <n-text depth="3" style="margin-left: 12px;">买入时间：{{ replayChartDataRef.buyTime || "--" }}</n-text>
           <n-text depth="3" style="margin-left: 12px;">卖出/当前：{{ replayChartDataRef.sellTime || replayChartDataRef.currentPriceTime || "--" }}</n-text>
         </div>
+        <n-alert
+            v-if="replayChartDataRef.latestOpeningReview"
+            type="warning"
+            :show-icon="false"
+            style="margin-bottom: 12px; text-align: left;"
+        >
+          <div>09:40 开盘复核：{{ openingReviewActionText(replayChartDataRef.latestOpeningReview) }}</div>
+          <div style="margin-top: 4px;">
+            开盘价 {{ replayChartDataRef.latestOpeningReview.openingPrice || '--' }}，
+            竞价价 {{ replayChartDataRef.latestOpeningReview.auctionPrice || '--' }}，
+            09:40 最新价 {{ replayChartDataRef.latestOpeningReview.minutePrice || '--' }}
+          </div>
+          <div style="margin-top: 4px;">原因：{{ replayChartDataRef.latestOpeningReview.reason || replayChartDataRef.latestOpeningReview.rawSummary || '--' }}</div>
+        </n-alert>
         <n-alert
             v-if="replayChartDataRef.message"
             :type="replayAlertType()"

@@ -50,9 +50,6 @@ import {
   WindowUnfullscreen
 } from '../../wailsjs/runtime'
 import {Add} from '@vicons/ionicons5'
-// preview.css相比style.css少了编辑器那部分样式
-//import 'md-editor-v3/lib/preview.css';
-import 'md-editor-v3/lib/style.css';
 import '@vavt/v3-extension/lib/asset/ExportPDF.css';
 import {useRoute, useRouter} from 'vue-router'
 import MoneyTrend from "./moneyTrend.vue";

@@ -216,34 +216,17 @@ function formatNumber(value, digits = 2) {
   return number.toFixed(digits)
 }
 
-function formatCompactVolume(value) {
+function formatInteger(value) {
   const number = Number(value)
-  if (!Number.isFinite(number) || number <= 0) {
+  if (!Number.isFinite(number)) {
+    return '--'
+  }
+  if (number === 0) {
     return '0'
   }
-  if (number >= 100000000) {
-    return `${(number / 100000000).toFixed(2)}亿`
-  }
-  if (number >= 10000) {
-    return `${(number / 10000).toFixed(1)}万`
-  }
-  return `${Math.round(number)}`
-}
-
-function toVolumeDisplayValue(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number) || number <= 0) {
-    return 0
-  }
-  return Math.log10(number + 1)
-}
-
-function fromVolumeDisplayValue(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number) || number <= 0) {
-    return 0
-  }
-  return Math.pow(10, number) - 1
+  return new Intl.NumberFormat('zh-CN', {
+    maximumFractionDigits: 0
+  }).format(Math.round(number))
 }
 
 function buildTooltipFormatter(params, points) {
@@ -265,7 +248,7 @@ function buildTooltipFormatter(params, points) {
     `收: ${formatNumber(bar.close)}`,
     `低: ${formatNumber(bar.low)}`,
     `高: ${formatNumber(bar.high)}`,
-    `量: ${formatNumber(bar.volume, 0)}`,
+    `量: ${formatInteger(bar.volume)}`,
   ]
 
   const markerParams = list.filter((item) => item.seriesName === '信号标记')
@@ -288,12 +271,6 @@ function buildOption(chartData) {
     }
     return [Number(bar.open), Number(bar.close), Number(bar.low), Number(bar.high)]
   })
-  const volumeDisplayValues = displayBars.map((bar) => {
-    if (isGapPoint(bar)) {
-      return null
-    }
-    return toVolumeDisplayValue(bar.volume)
-  })
   const volumeValues = displayBars.map((bar, index) => {
     if (isGapPoint(bar)) {
       return {
@@ -305,7 +282,7 @@ function buildOption(chartData) {
     }
     return [
       index,
-      volumeDisplayValues[index],
+      Number(bar.volume) > 0 ? Number(bar.volume) : 0,
       Number(bar.close) >= Number(bar.open) ? 1 : -1
     ]
   })
@@ -474,13 +451,13 @@ function buildOption(chartData) {
       {
         gridIndex: 1,
         min: 0,
-        splitNumber: 3,
+        splitNumber: 4,
         splitLine: {
           show: false
         },
         axisLabel: {
           color: '#5b6270',
-          formatter: (value) => formatCompactVolume(fromVolumeDisplayValue(value))
+          formatter: (value) => formatInteger(value)
         }
       }
     ],

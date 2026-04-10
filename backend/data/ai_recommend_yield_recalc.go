@@ -19,8 +19,9 @@ import (
 )
 
 const (
-	aiRecommendRecalcStaleTTL = 8 * time.Minute
-	frozenSellPriceFixVersion = "open-gap-v1"
+	aiRecommendRecalcStaleTTL      = 8 * time.Minute
+	aiRecommendQueryRecalcCooldown = 45 * time.Second
+	frozenSellPriceFixVersion      = "open-gap-v1"
 )
 
 type aiRecommendYieldAggregate struct {
@@ -66,6 +67,8 @@ var fetchMinuteBarsWithTencentFn = fetchMinuteBarsWithTencent
 var fetchMinuteBarsWithAkShareFn = fetchMinuteBarsWithAkShare
 var fetchMinuteBarsWithSinaFn = fetchMinuteBarsWithSina
 var fetchMinuteBarsWithDiemengFn = fetchMinuteBarsWithDiemeng
+var requestAiRecommendYieldRecalcForQueryFn = requestAiRecommendYieldRecalc
+var requestAiRecommendYieldScopedRecalcForQueryFn = requestAiRecommendYieldRecalcWithScope
 
 func requestAiRecommendYieldRecalc(force bool, reason string) {
 	requestAiRecommendYieldRecalcWithScope(force, reason, nil)
@@ -685,15 +688,164 @@ func executeAiRecommendYieldCalcTask(task aiRecommendYieldCalcTask, ctx yieldBui
 	result := aiRecommendYieldCalcResult{
 		RecordStates: make([]models.AiRecommendYieldRecordState, 0, len(task.Records)),
 	}
-	if task.Aggregate != nil {
-		state := buildYieldStateFromAggregate(task.Aggregate, task.ExistingState, ctx)
-		result.State = &state
-	}
 	for _, rec := range task.Records {
 		recordState := buildYieldRecordStateFromRecommend(rec, task.ExistingRecord[rec.ID], ctx)
 		result.RecordStates = append(result.RecordStates, recordState)
 	}
+	if task.Aggregate != nil {
+		state := buildYieldStateFromAggregate(task.Aggregate, task.ExistingState, ctx)
+		mergeAggregateYieldStateWithRecordStates(&state, result.RecordStates)
+		result.State = &state
+	}
 	return result
+}
+
+func mergeAggregateYieldStateWithRecordStates(state *models.AiRecommendYieldState, recordStates []models.AiRecommendYieldRecordState) {
+	if state == nil || len(recordStates) == 0 {
+		return
+	}
+	if activated := pickLatestActivatedRecordState(recordStates); activated != nil && strings.TrimSpace(state.ActivationStatus) != "activated" {
+		applyRecordStateToAggregateYieldState(state, activated)
+		return
+	}
+	if strings.TrimSpace(state.ActivationStatus) == "pending" && allRecordStatesSkipped(recordStates) {
+		if skipped := pickLatestSkippedRecordState(recordStates); skipped != nil {
+			applyRecordStateToAggregateYieldState(state, skipped)
+		}
+	}
+}
+
+func pickLatestActivatedRecordState(recordStates []models.AiRecommendYieldRecordState) *models.AiRecommendYieldRecordState {
+	var chosen *models.AiRecommendYieldRecordState
+	for i := range recordStates {
+		current := &recordStates[i]
+		if strings.TrimSpace(current.ActivationStatus) != "activated" {
+			continue
+		}
+		if chosen == nil {
+			chosen = current
+			continue
+		}
+		if compareYieldRecordStatePriority(current, chosen) > 0 {
+			chosen = current
+		}
+	}
+	return chosen
+}
+
+func pickLatestSkippedRecordState(recordStates []models.AiRecommendYieldRecordState) *models.AiRecommendYieldRecordState {
+	var chosen *models.AiRecommendYieldRecordState
+	for i := range recordStates {
+		current := &recordStates[i]
+		if strings.TrimSpace(current.ActivationStatus) != "skipped" {
+			continue
+		}
+		if chosen == nil {
+			chosen = current
+			continue
+		}
+		if compareYieldRecordStatePriority(current, chosen) > 0 {
+			chosen = current
+		}
+	}
+	return chosen
+}
+
+func allRecordStatesSkipped(recordStates []models.AiRecommendYieldRecordState) bool {
+	if len(recordStates) == 0 {
+		return false
+	}
+	for i := range recordStates {
+		status := strings.TrimSpace(recordStates[i].ActivationStatus)
+		if status != "skipped" {
+			return false
+		}
+	}
+	return true
+}
+
+func compareYieldRecordStatePriority(left, right *models.AiRecommendYieldRecordState) int {
+	if left == nil || right == nil {
+		return 0
+	}
+	leftTime := resolveYieldRecordStatePriorityTime(left)
+	rightTime := resolveYieldRecordStatePriorityTime(right)
+	switch {
+	case leftTime.After(rightTime):
+		return 1
+	case leftTime.Before(rightTime):
+		return -1
+	case left.RecommendID > right.RecommendID:
+		return 1
+	case left.RecommendID < right.RecommendID:
+		return -1
+	default:
+		return 0
+	}
+}
+
+func resolveYieldRecordStatePriorityTime(state *models.AiRecommendYieldRecordState) time.Time {
+	if state == nil {
+		return time.Time{}
+	}
+	if state.ActivationTime != nil && !state.ActivationTime.IsZero() {
+		return *state.ActivationTime
+	}
+	if state.RecommendTime != nil && !state.RecommendTime.IsZero() {
+		return *state.RecommendTime
+	}
+	if state.SignalTime != nil && !state.SignalTime.IsZero() {
+		return *state.SignalTime
+	}
+	return time.Time{}
+}
+
+func applyRecordStateToAggregateYieldState(target *models.AiRecommendYieldState, record *models.AiRecommendYieldRecordState) {
+	if target == nil || record == nil {
+		return
+	}
+	target.ActivationStatus = strings.TrimSpace(record.ActivationStatus)
+	if record.ActivationTime != nil && !record.ActivationTime.IsZero() {
+		t := *record.ActivationTime
+		target.ActivationTime = &t
+	} else {
+		target.ActivationTime = nil
+	}
+	target.ActivationPrice = round2(record.ActivationPrice)
+	if record.BuyTime != nil && !record.BuyTime.IsZero() {
+		t := *record.BuyTime
+		target.BuyTime = &t
+		target.TotalScopeStart = t.Format("2006-01-02")
+	} else {
+		target.BuyTime = nil
+	}
+	target.BuyAmount = round2(record.BuyAmount)
+	target.PositionStatus = strings.TrimSpace(record.PositionStatus)
+	if record.SellTime != nil && !record.SellTime.IsZero() {
+		t := *record.SellTime
+		target.SellTime = &t
+	} else {
+		target.SellTime = nil
+	}
+	if record.RealizedSellAmount != nil {
+		v := round2(*record.RealizedSellAmount)
+		target.RealizedSellAmount = &v
+	} else {
+		target.RealizedSellAmount = nil
+	}
+	target.CurrentPrice = round2(record.CurrentPrice)
+	target.CurrentPriceTime = record.CurrentPriceTime
+	target.YieldRate = round2(record.YieldRate)
+	target.YieldRateText = record.YieldRateText
+	target.DataStatus = record.DataStatus
+	target.DataStatusReason = record.DataStatusReason
+	target.LastMinuteTs = record.LastMinuteTs
+	target.LastRecalcAt = record.LastRecalcAt
+	target.MinuteCacheStart = record.MinuteCacheStart
+	target.MinuteCacheEnd = record.MinuteCacheEnd
+	target.MinuteCacheSource = record.MinuteCacheSource
+	target.MinuteCacheUpdated = record.MinuteCacheUpdated
+	target.Frozen = record.Frozen
 }
 
 func buildAiRecommendYieldCalcTasks(targets *aiRecommendYieldTargets) []aiRecommendYieldCalcTask {
@@ -1620,6 +1772,81 @@ func isSoldPositionStatus(status string) bool {
 	return status == "已止盈" || status == "已止损"
 }
 
+func hasActivatedAggregateLifecycle(state *models.AiRecommendYieldState) bool {
+	if state == nil {
+		return false
+	}
+	if strings.TrimSpace(state.ActivationStatus) != "activated" {
+		return false
+	}
+	if state.ActivationTime == nil || state.ActivationTime.IsZero() {
+		return false
+	}
+	return state.ActivationPrice > 0
+}
+
+func restoreActivatedAggregateLifecycle(target *models.AiRecommendYieldState, existing *models.AiRecommendYieldState) {
+	if target == nil || !hasActivatedAggregateLifecycle(existing) {
+		return
+	}
+	target.ActivationStatus = "activated"
+	if existing.StopProfitAmount != nil {
+		v := round2(*existing.StopProfitAmount)
+		target.StopProfitAmount = &v
+	}
+	if existing.StopLossAmount != nil {
+		v := round2(*existing.StopLossAmount)
+		target.StopLossAmount = &v
+	}
+	if strings.TrimSpace(existing.SellAmountText) != "" {
+		target.SellAmountText = existing.SellAmountText
+	}
+	if existing.ActivationTime != nil && !existing.ActivationTime.IsZero() {
+		t := *existing.ActivationTime
+		target.ActivationTime = &t
+	}
+	target.ActivationPrice = round2(existing.ActivationPrice)
+	if existing.BuyTime != nil && !existing.BuyTime.IsZero() {
+		t := *existing.BuyTime
+		target.BuyTime = &t
+	} else if target.ActivationTime != nil && !target.ActivationTime.IsZero() {
+		t := *target.ActivationTime
+		target.BuyTime = &t
+	}
+	if existing.BuyAmount > 0 {
+		target.BuyAmount = round2(existing.BuyAmount)
+	} else {
+		target.BuyAmount = round2(existing.ActivationPrice)
+	}
+	target.PositionStatus = strings.TrimSpace(existing.PositionStatus)
+	if target.PositionStatus == "" {
+		target.PositionStatus = "持有"
+	}
+	if existing.SellTime != nil && !existing.SellTime.IsZero() {
+		t := *existing.SellTime
+		target.SellTime = &t
+	} else {
+		target.SellTime = nil
+	}
+	if existing.RealizedSellAmount != nil {
+		v := round2(*existing.RealizedSellAmount)
+		target.RealizedSellAmount = &v
+	} else {
+		target.RealizedSellAmount = nil
+	}
+	target.Frozen = existing.Frozen
+	if target.BuyTime != nil && !target.BuyTime.IsZero() {
+		target.TotalScopeStart = target.BuyTime.Format("2006-01-02")
+	}
+	if strings.TrimSpace(existing.DataStatus) != "" {
+		target.DataStatus = existing.DataStatus
+		target.DataStatusReason = existing.DataStatusReason
+	} else {
+		target.DataStatus = "正常"
+		target.DataStatusReason = ""
+	}
+}
+
 func sanitizeYieldSellSnapshot(sellFloorTime time.Time, positionStatus *string, sellTime **time.Time, realizedSellAmount **float64, frozen *bool) bool {
 	invalid := false
 	if positionStatus != nil && isSoldPositionStatus(*positionStatus) {
@@ -1796,6 +2023,18 @@ func buildYieldStateFromAggregate(aggr *aiRecommendYieldAggregate, existing *mod
 	}
 	state.DataStatus = activationInfo.DataStatus
 	state.DataStatusReason = activationInfo.DataStatusReason
+
+	if activationTime == nil || activationTime.IsZero() || activationPrice <= 0 {
+		if hasActivatedAggregateLifecycle(existing) {
+			restoreActivatedAggregateLifecycle(&state, existing)
+			if existing.Frozen || isSoldPositionStatus(existing.PositionStatus) {
+				fillYieldMetrics(&state)
+				return state
+			}
+			activationTime = state.ActivationTime
+			activationPrice = state.ActivationPrice
+		}
+	}
 
 	if activationTime == nil || activationTime.IsZero() || activationPrice <= 0 {
 		if state.DataStatus == "已跳过" {
@@ -2149,6 +2388,38 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 }
 
 func parseRecommendEntryRange(rec models.AiRecommendStocks) (float64, float64, bool) {
+	if hasMachineActivationRule(&rec) {
+		rule, err := parseActivationRuleJSON(rec.ActivationRuleJSON)
+		if err == nil && rule != nil {
+			for _, path := range activationRulePaths(rule) {
+				if strings.TrimSpace(path.SignalType) != "price_range_with_volume" {
+					continue
+				}
+				minPrice := path.ThresholdValue
+				maxPrice := path.ThresholdMax
+				if minPrice > 0 && maxPrice <= 0 {
+					maxPrice = minPrice
+				}
+				if minPrice > 0 && maxPrice > 0 {
+					if minPrice > maxPrice {
+						minPrice, maxPrice = maxPrice, minPrice
+					}
+					rawText := strings.TrimSpace(rec.RecommendBuyPrice)
+					if shouldPreferTextResolvedBuyRange(rawText, minPrice, maxPrice) {
+						textMin, okMin := parsePriceMinFromText(rawText)
+						textMax, okMax := parsePriceMaxFromText(rawText)
+						if okMin && okMax && textMin > 0 && textMax > 0 {
+							if textMin > textMax {
+								textMin, textMax = textMax, textMin
+							}
+							return textMin, textMax, true
+						}
+					}
+					return minPrice, maxPrice, true
+				}
+			}
+		}
+	}
 	_, min, max, ok := resolveRecommendBuyRange(rec)
 	if !ok || min <= 0 || max <= 0 {
 		return 0, 0, false
@@ -2200,6 +2471,27 @@ func resolveActivationWindow(recordTime time.Time, now time.Time, inTrading bool
 	return start, end
 }
 
+func expandActivationWindowStartForPrevDayActivity(rec models.AiRecommendStocks, start time.Time) time.Time {
+	if start.IsZero() || !recommendRequiresPrevDayActivityFilter(rec) {
+		return start
+	}
+	prevStart := resolveActivitySessionStart(previousTradingMoment(start))
+	if prevStart.IsZero() || !prevStart.Before(start) {
+		return start
+	}
+	return prevStart
+}
+
+func clampRecordActivationTime(recordTime, activationTime time.Time) time.Time {
+	if recordTime.IsZero() || activationTime.IsZero() {
+		return activationTime
+	}
+	if activationTime.Before(recordTime) {
+		return recordTime
+	}
+	return activationTime
+}
+
 func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildContext, allowHeadBackfill bool) (*time.Time, float64, triggerEvalInfo) {
 	info := triggerEvalInfo{DataStatus: "正常", DataStatusReason: ""}
 	recordTime := recommendRecordTime(rec)
@@ -2213,13 +2505,25 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 		info.DataStatusReason = "回避标的不参与收益率"
 		return nil, 0, info
 	}
+	legacyDirectActivation := shouldUseLegacyDirectActivation(&rec)
+	if !hasMachineActivationRule(&rec) && !legacyDirectActivation {
+		info.DataStatus = "未结构化"
+		info.DataStatusReason = "缺少结构化激活规则"
+		return nil, 0, info
+	}
 	minPrice, maxPrice, ok := parseRecommendEntryRange(rec)
 	if !ok {
-		info.DataStatus = "无法判定"
-		info.DataStatusReason = "主买入区无法解析"
+		if legacyDirectActivation {
+			info.DataStatus = "无法判定"
+			info.DataStatusReason = "历史记录缺少可解析买入区间"
+		} else {
+			info.DataStatus = "未结构化"
+			info.DataStatusReason = "结构化激活规则无法解析"
+		}
 		return nil, 0, info
 	}
 	start, end := resolveActivationWindow(recordTime, ctx.Now, ctx.InTradingSession, ctx.LatestTradeDate)
+	start = expandActivationWindowStartForPrevDayActivity(rec, start)
 	if !start.Before(end) {
 		info.DataStatus = "待激活"
 		info.DataStatusReason = "主买入区尚未进入可扫描窗口"
@@ -2231,30 +2535,60 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 	info.CacheUpdated = cacheInfo.CacheUpdated
 	info.CacheSource = cacheInfo.CacheSource
 	info.LastMinuteTs = cacheInfo.LastMinuteTs
-	activationTime, activationPrice, ok, activityReason, activitySync := scanActivationFromBarsWithActivityFilter(
-		normalizeRecommendStockCode(rec.StockCode),
-		bars,
-		minPrice,
-		maxPrice,
-		recommendRequiresPrevDayActivityFilter(rec),
-		ctx,
-		allowHeadBackfill,
-	)
-	mergeTriggerEvalInfoCache(&info, activitySync)
-	if ok {
-		t := activationTime
-		info.ActivationTime = &t
-		info.ActivationPrice = activationPrice
-		return &t, activationPrice, info
+	if !legacyDirectActivation {
+		if rule, err := parseActivationRuleJSON(rec.ActivationRuleJSON); err == nil {
+			if policy := resolveActivationOpeningPolicy(rule); shouldApplyOpeningPolicyForActivation(recordTime, ctx.LatestTradeDate, policy) {
+				if bufferUntil, ok := resolveOpeningPolicyBufferUntil(ctx.LatestTradeDate, policy); ok {
+					preBars, postBars := splitMinuteBarsByCutoff(bars, bufferUntil)
+					sameDayBars := filterMinuteBarsByCNTradeDate(preBars, recordTime)
+					if scan := resolveActivationRuleScan(rec, sameDayBars); scan.Triggered {
+						scan.Time = clampRecordActivationTime(recordTime, scan.Time)
+						t := scan.Time
+						info.ActivationTime = &t
+						info.ActivationPrice = scan.Price
+						return &t, scan.Price, info
+					}
+					if skipReason := resolveOpeningPolicySkipReason(rec, policy, preBars); skipReason != "" {
+						info.DataStatus = "已跳过"
+						info.DataStatusReason = skipReason
+						return nil, 0, info
+					}
+					if ctx.Now.Before(bufferUntil) || end.Before(bufferUntil) {
+						info.DataStatus = "待激活"
+						info.DataStatusReason = fmt.Sprintf("隔夜推荐等待 %s 开盘复核完成后再开始激活扫描", bufferUntil.In(cnLocation()).Format("15:04"))
+						return nil, 0, info
+					}
+					bars = postBars
+				}
+			}
+		}
+	}
+	if legacyDirectActivation {
+		activationTime, activationPrice, ok := scanActivationFromBars(bars, minPrice, maxPrice)
+		if ok {
+			activationTime = clampRecordActivationTime(recordTime, activationTime)
+			t := activationTime
+			info.ActivationTime = &t
+			info.ActivationPrice = activationPrice
+			return &t, activationPrice, info
+		}
+	} else {
+		scan := resolveActivationRuleScan(rec, bars)
+		if scan.Triggered {
+			scan.Time = clampRecordActivationTime(recordTime, scan.Time)
+			t := scan.Time
+			info.ActivationTime = &t
+			info.ActivationPrice = scan.Price
+			return &t, scan.Price, info
+		}
+		if strings.TrimSpace(scan.Reason) != "" {
+			info.DataStatus = "待激活"
+			info.DataStatusReason = scan.Reason
+		}
 	}
 	if skipReason, skip := resolvePendingRecommendInvalidation(rec, recordTime, end, bars, cacheInfo.CoverageOK); skip {
 		info.DataStatus = "已跳过"
 		info.DataStatusReason = skipReason
-		return nil, 0, info
-	}
-	if strings.TrimSpace(activityReason) != "" {
-		info.DataStatus = "待激活"
-		info.DataStatusReason = activityReason
 		return nil, 0, info
 	}
 	if cacheInfo.SyncErr != nil {
@@ -2264,12 +2598,121 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 	}
 	if len(bars) == 0 {
 		info.DataStatus = "待激活"
-		info.DataStatusReason = "分钟线不可用或尚未覆盖主买入区"
+		info.DataStatusReason = "分钟线不可用或尚未覆盖当前激活扫描窗口"
+		return nil, 0, info
+	}
+	if strings.TrimSpace(info.DataStatusReason) != "" {
+		info.DataStatus = "待激活"
 		return nil, 0, info
 	}
 	info.DataStatus = "待激活"
 	info.DataStatusReason = "未触发主买入区"
 	return nil, 0, info
+}
+
+func shouldApplyOpeningPolicyForActivation(recordTime, latestTradeDate time.Time, policy *activationOpeningPolicy) bool {
+	if policy == nil || recordTime.IsZero() || latestTradeDate.IsZero() {
+		return false
+	}
+	if isSameCNTradeDate(recordTime, latestTradeDate) {
+		return false
+	}
+	return true
+}
+
+func resolveOpeningPolicyBufferUntil(latestTradeDate time.Time, policy *activationOpeningPolicy) (time.Time, bool) {
+	if latestTradeDate.IsZero() || policy == nil {
+		return time.Time{}, false
+	}
+	hhmm := openingReviewPhase0940
+	if strings.TrimSpace(policy.MorningBufferUntil) != "" {
+		hhmm = strings.TrimSpace(policy.MorningBufferUntil)
+	}
+	parsed, err := time.ParseInLocation("15:04", hhmm, cnLocation())
+	if err != nil {
+		return time.Time{}, false
+	}
+	loc := cnLocation()
+	day := latestTradeDate.In(loc)
+	return time.Date(day.Year(), day.Month(), day.Day(), parsed.Hour(), parsed.Minute(), 0, 0, loc), true
+}
+
+func splitMinuteBarsByCutoff(bars []minuteBar, cutoff time.Time) ([]minuteBar, []minuteBar) {
+	if len(bars) == 0 {
+		return nil, nil
+	}
+	before := make([]minuteBar, 0, len(bars))
+	after := make([]minuteBar, 0, len(bars))
+	for _, bar := range bars {
+		if bar.TradeTime.IsZero() {
+			continue
+		}
+		if bar.TradeTime.Before(cutoff) {
+			before = append(before, bar)
+			continue
+		}
+		after = append(after, bar)
+	}
+	return before, after
+}
+
+func filterMinuteBarsByCNTradeDate(bars []minuteBar, tradeTime time.Time) []minuteBar {
+	if len(bars) == 0 || tradeTime.IsZero() {
+		return nil
+	}
+	loc := cnLocation()
+	day := tradeTime.In(loc)
+	year, month, date := day.Date()
+	filtered := make([]minuteBar, 0, len(bars))
+	for _, bar := range bars {
+		if bar.TradeTime.IsZero() {
+			continue
+		}
+		cur := bar.TradeTime.In(loc)
+		if cur.Year() == year && cur.Month() == month && cur.Day() == date {
+			filtered = append(filtered, bar)
+		}
+	}
+	return filtered
+}
+
+func resolveOpeningPolicySkipReason(rec models.AiRecommendStocks, policy *activationOpeningPolicy, bars []minuteBar) string {
+	if len(bars) == 0 || policy == nil {
+		return ""
+	}
+	firstBar := minuteBar{}
+	for _, bar := range bars {
+		if bar.TradeTime.IsZero() {
+			continue
+		}
+		firstBar = bar
+		break
+	}
+	if firstBar.TradeTime.IsZero() {
+		return ""
+	}
+	openPrice := firstBar.Open
+	if openPrice <= 0 {
+		openPrice = firstBar.Close
+	}
+	stopLoss, hasStopLoss := parseStopLossPrice(rec)
+	if hasStopLoss && stopLoss > 0 && openPrice > 0 && openPrice <= stopLoss && strings.TrimSpace(policy.GapBelowStopAction) == "skip" {
+		return appendRecommendInvalidConditionText(
+			fmt.Sprintf("09:30 开盘价 %.2f 已低于止损/失效位 %.2f，按开盘复核策略直接跳过", round2(openPrice), round2(stopLoss)),
+			rec.InvalidCondition,
+		)
+	}
+	_, buyMax, ok := parseRecommendEntryRange(rec)
+	if ok {
+		maxChase := resolveRecommendOpeningMaxChasePrice(&rec, buyMax)
+		if maxChase > 0 && openPrice > maxChase && strings.TrimSpace(policy.GapAboveMaxChaseAction) == "skip" {
+			return appendRecommendInvalidConditionText(
+				fmt.Sprintf("09:30 开盘价 %.2f 高于追价上限 %.2f，按开盘复核策略直接跳过", round2(openPrice), round2(maxChase)),
+				rec.InvalidCondition,
+			)
+		}
+	}
+	return ""
 }
 
 func resolvePendingRecommendInvalidation(rec models.AiRecommendStocks, recordTime, evalEnd time.Time, bars []minuteBar, coverageOK bool) (string, bool) {
@@ -2505,7 +2948,18 @@ type minuteActivityWindow struct {
 }
 
 func recommendRequiresPrevDayActivityFilter(rec models.AiRecommendStocks) bool {
-	texts := []string{rec.BuySignal, rec.BuySignalDetail, rec.Remarks}
+	if hasMachineActivationRule(&rec) {
+		rule, err := parseActivationRuleJSON(rec.ActivationRuleJSON)
+		if err == nil && rule != nil {
+			for _, path := range activationRulePaths(rule) {
+				if strings.Contains(path.Baseline, "prev_day") {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	texts := []string{rec.BuySignal, rec.BuySignalDetail}
 	for _, text := range texts {
 		normalized := strings.TrimSpace(text)
 		if normalized == "" {
@@ -3097,6 +3551,17 @@ func minutePublicAkshareEnabled() bool {
 	return settings.AkshareEnabled
 }
 
+func minuteHistoricalPrivateFallbackReady() bool {
+	settings := minuteProviderSettings()
+	if settings == nil || !settings.PrivateMinuteEnabled {
+		return false
+	}
+	if strings.TrimSpace(appconfig.Load().Diemeng.BaseURL) == "" {
+		return false
+	}
+	return hasDiemengKey()
+}
+
 func currentMinuteProviderMode() string {
 	settings := minuteProviderSettings()
 	if settings == nil {
@@ -3233,6 +3698,9 @@ func buildPublicMinuteProviderPlan(start, end time.Time) ([]minuteProviderAttemp
 		}
 		return attempts, mergeUniqueProviders(fallback...), nil
 	default:
+		if minuteHistoricalPrivateFallbackReady() {
+			return []minuteProviderAttempt{{Provider: "diemeng"}}, nil, nil
+		}
 		return nil, nil, fmt.Errorf("公共分钟线仅适合实时与短周期窗口，长历史分钟线请改用私人分钟线来源")
 	}
 }

@@ -1,5 +1,5 @@
 <script setup>
-import {onBeforeMount, onMounted, reactive, ref, h} from 'vue'
+import {onBeforeMount, onMounted, reactive, ref, h, watch} from 'vue'
 import {
   GetAiRecommendStocksList,
   GetConfig,
@@ -8,8 +8,11 @@ import {
 import {NAlert, NButton, NDatePicker, NDivider, NGradientText, NInput, NInputGroup, NTag, NText, useNotification} from "naive-ui";
 import KLineChart from "./KLineChart.vue";
 import { useDraggableDataTableColumns } from "../composables/useDraggableDataTableColumns";
+import { useSharedResearchDateRange } from "../composables/useSharedResearchDateRange";
 
 const notify = useNotification()
+const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
+const rangeReadyRef = ref(false)
 const editorDataRef = reactive({
   darkTheme: false,
 })
@@ -36,20 +39,10 @@ onBeforeMount(() => {
   })
 })
 
-onMounted(() => {
-  query({
-    page: 1,
-    pageSize: paginationReactive.pageSize,
-    keyword: paginationReactive.keyword,
-    startDate: formatDate(paginationReactive.range[0]),
-    endDate: formatDate(paginationReactive.range[1])
-  }).then((data) => {
-    dataRef.value = data.data
-    paginationReactive.page = 1
-    paginationReactive.pageCount = data.pageCount
-    paginationReactive.itemCount = data.total
-    loadingRef.value = false
-  })
+onMounted(async () => {
+  await initSharedResearchDateRange()
+  rangeReadyRef.value = true
+  await refreshList(1)
 })
 
 const defaultColumns = [
@@ -198,10 +191,6 @@ const paginationReactive = reactive({
   pageSize: 12,
   itemCount: 0,
   keyword: "",
-  range: [
-    new Date(new Date().getTime() - 3 * 24 * 60 * 60 * 1000),
-    new Date()
-  ],
   prefix({itemCount}) {
     return `${itemCount} 条记录`
   }
@@ -233,6 +222,7 @@ const modalDataRef = reactive({
   capitalConfirmation: 0,
   fundamentalFit: 0,
   technicalFit: 0,
+  latestOpeningReview: null,
 })
 
 function query({
@@ -262,40 +252,46 @@ function query({
   })
 }
 
-function handlePageChange(currentPage) {
-  if (loadingRef.value) return
+function currentRangeParams() {
+  const range = researchDateRangeModel.value || []
+  return {
+    startDate: formatDate(range[0]),
+    endDate: formatDate(range[1])
+  }
+}
+
+async function refreshList(page) {
   loadingRef.value = true
-  query({
-    page: currentPage,
+  const { startDate, endDate } = currentRangeParams()
+  const data = await query({
+    page,
     pageSize: paginationReactive.pageSize,
     keyword: paginationReactive.keyword,
-    startDate: formatDate(paginationReactive.range[0]),
-    endDate: formatDate(paginationReactive.range[1])
-  }).then((data) => {
-    dataRef.value = data.data
-    paginationReactive.page = currentPage
-    paginationReactive.pageCount = data.pageCount
-    paginationReactive.itemCount = data.total
-    loadingRef.value = false
+    startDate,
+    endDate
   })
+  dataRef.value = data.data
+  paginationReactive.page = page
+  paginationReactive.pageCount = data.pageCount
+  paginationReactive.itemCount = data.total
+  loadingRef.value = false
+}
+
+watch(researchDateRangeKey, async (nextKey, prevKey) => {
+  if (!rangeReadyRef.value || !prevKey || nextKey === prevKey) {
+    return
+  }
+  await refreshList(1)
+})
+
+function handlePageChange(currentPage) {
+  if (loadingRef.value) return
+  refreshList(currentPage)
 }
 
 function handleSearch() {
   if (loadingRef.value) return
-  loadingRef.value = true
-  query({
-    page: 1,
-    pageSize: paginationReactive.pageSize,
-    keyword: paginationReactive.keyword,
-    startDate: formatDate(paginationReactive.range[0]),
-    endDate: formatDate(paginationReactive.range[1])
-  }).then((data) => {
-    dataRef.value = data.data
-    paginationReactive.page = 1
-    paginationReactive.pageCount = data.pageCount
-    paginationReactive.itemCount = data.total
-    loadingRef.value = false
-  })
+  refreshList(1)
 }
 
 function formatDate(dateValue) {
@@ -411,7 +407,20 @@ function showDetail(row) {
   modalDataRef.capitalConfirmation = Number(row.capitalConfirmation || 0)
   modalDataRef.fundamentalFit = Number(row.fundamentalFit || 0)
   modalDataRef.technicalFit = Number(row.technicalFit || 0)
+  modalDataRef.latestOpeningReview = row.latestOpeningReview || null
   modalDataRef.visible = true
+}
+
+function openingReviewActionText(review) {
+  const action = String(review?.action || '').trim()
+  const map = {
+    continue_plan: '继续按原计划执行',
+    observe_only: '继续观察，不提前激活',
+    cancel_plan: '取消隔夜计划',
+    hold: '继续持有',
+    reduce_risk: '优先风控/止盈'
+  }
+  return map[action] || action || '--'
 }
 
 function normalizePriceText(value) {
@@ -441,7 +450,7 @@ function deleteAiRecommendStocks(id) {
 
 <template>
   <n-input-group>
-    <n-date-picker v-model:value="paginationReactive.range" type="daterange" style="width: 50%" />
+    <n-date-picker v-model:value="researchDateRangeModel" type="daterange" style="width: 50%" />
     <n-input clearable placeholder="输入关键词搜索" v-model:value="paginationReactive.keyword" />
     <n-button type="primary" ghost @click="handleSearch" @input="handleSearch">
       搜索
@@ -493,6 +502,23 @@ function deleteAiRecommendStocks(id) {
           {{ hint }}
         </div>
       </n-alert>
+
+      <n-divider><n-gradient-text type="warning">09:40 开盘复核</n-gradient-text></n-divider>
+      <n-alert
+        v-if="modalDataRef.latestOpeningReview"
+        type="warning"
+        :show-icon="false"
+        style="margin-bottom: 12px; text-align: left;"
+      >
+        <div style="line-height: 1.8;">
+          <div>动作：{{ openingReviewActionText(modalDataRef.latestOpeningReview) }}</div>
+          <div>开盘价：{{ modalDataRef.latestOpeningReview.openingPrice || '--' }}，竞价价：{{ modalDataRef.latestOpeningReview.auctionPrice || '--' }}，09:40 最新价：{{ modalDataRef.latestOpeningReview.minutePrice || '--' }}</div>
+          <div>原因：{{ modalDataRef.latestOpeningReview.reason || modalDataRef.latestOpeningReview.rawSummary || '--' }}</div>
+        </div>
+      </n-alert>
+      <n-text v-else depth="3" style="white-space: pre-wrap; display: block; text-align: left;">
+        该推荐暂未生成 09:40 开盘复核记录。
+      </n-text>
 
       <n-divider><n-gradient-text type="error">买入依据</n-gradient-text></n-divider>
       <n-text type="error" style="white-space: pre-wrap; display: block; text-align: left;">

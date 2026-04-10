@@ -95,6 +95,7 @@ const defaultAiRecommendSummaryVersion = "phase2-v1"
 const recommendPendingActivationMaxTradeDays = 5
 const sseBenchmarkCalcTimeout = 6 * time.Second
 const sseBenchmarkCacheTTL = 5 * time.Minute
+const recommendKeywordInterceptionBypassDate = "2026-04-07"
 
 const (
 	recommendBacktestEligible   = "eligible"
@@ -106,6 +107,29 @@ const (
 
 func NewAiRecommendStocksService() *AiRecommendStocksService {
 	return &AiRecommendStocksService{}
+}
+
+func recommendKeywordInterceptionBypassStart() time.Time {
+	loc := cnLocation()
+	start, err := time.ParseInLocation("2006-01-02", recommendKeywordInterceptionBypassDate, loc)
+	if err != nil {
+		return time.Date(2026, 4, 7, 0, 0, 0, 0, loc)
+	}
+	return start
+}
+
+func shouldBypassRecommendKeywordInterceptionAt(at time.Time) bool {
+	if at.IsZero() {
+		return false
+	}
+	return !at.In(cnLocation()).Before(recommendKeywordInterceptionBypassStart())
+}
+
+func shouldBypassRecommendKeywordInterception(dataTime *time.Time) bool {
+	if dataTime == nil {
+		return false
+	}
+	return shouldBypassRecommendKeywordInterceptionAt(*dataTime)
 }
 
 func normalizeAiRecommendYieldMode(mode string) string {
@@ -173,8 +197,9 @@ var evidencePositiveKeywords = []string{"回购", "增持", "预增", "中标", 
 var evidenceNegativeKeywords = []string{"减持", "解禁", "问询", "监管", "立案", "亏损", "下滑", "不及预期", "低于预期", "跌破", "处罚", "终止", "质押", "风险", "波动", "走弱"}
 
 const (
-	recommendExecutionImmediate   = "immediate"
-	recommendExecutionConditional = "conditional"
+	recommendExecutionImmediate    = "immediate"
+	recommendExecutionConditional  = "conditional"
+	recommendExecutionAnalysisOnly = "analysis_only"
 )
 
 func normalizeAiRecommendStockForSave(recommend *models.AiRecommendStocks) error {
@@ -188,14 +213,28 @@ func normalizeAiRecommendStockForSave(recommend *models.AiRecommendStocks) error
 	repairRecommendBuyRangeFromSignals(recommend)
 	fillSignalDrivenRecommendCompat(recommend, signalDrivenMode, structuredMode)
 	finalizeAiRecommendStockDefaults(recommend)
+	applyAiRecommendStockTimeDefaults(recommend)
+	if err := normalizeMarketSummaryExecutionDataForSave(recommend); err != nil {
+		return err
+	}
+	if isAnalysisOnlyRecommend(recommend) {
+		recommend.ExecutionState = recommendExecutionAnalysisOnly
+		recommend.RecommendCategory = ""
+		return validateAiRecommendStockForSave(recommend, 0, 0, 0)
+	}
 
 	buyMin, buyMax, stopProfitMin, stopLossValue, err := validateAndNormalizeAiRecommendPrices(recommend)
 	if err != nil {
 		return err
 	}
 	applyAiRecommendStockPriceFallbacks(recommend, buyMin)
-	applyAiRecommendStockTimeDefaults(recommend)
+	if err := validateMarketSummaryRecommendForSave(recommend); err != nil {
+		return err
+	}
 	if err := validateAiRecommendStockForSave(recommend, buyMin, buyMax, stopLossValue); err != nil {
+		return err
+	}
+	if err := normalizeActivationRuleForSave(recommend); err != nil {
 		return err
 	}
 	if stopProfitMin <= buyMin {
@@ -237,6 +276,11 @@ func normalizeAiRecommendStockBaseFields(recommend *models.AiRecommendStocks) {
 	recommend.ExpectedCycle = strings.TrimSpace(recommend.ExpectedCycle)
 	recommend.RecommendStatus = normalizeRecommendStatus(recommend.RecommendStatus)
 	recommend.SummaryVersion = strings.TrimSpace(recommend.SummaryVersion)
+	recommend.ActivationRuleJSON = strings.TrimSpace(recommend.ActivationRuleJSON)
+	recommend.ActivationRuleVersion = strings.TrimSpace(recommend.ActivationRuleVersion)
+	recommend.ActivationRuleSource = strings.TrimSpace(recommend.ActivationRuleSource)
+	recommend.ActivationStatus = strings.TrimSpace(recommend.ActivationStatus)
+	recommend.ActivationInvalidReason = normalizeRecommendText(recommend.ActivationInvalidReason)
 	recommend.EventStrength = clampConfidenceScore(recommend.EventStrength)
 	recommend.CapitalConfirmation = clampConfidenceScore(recommend.CapitalConfirmation)
 	recommend.FundamentalFit = clampConfidenceScore(recommend.FundamentalFit)
@@ -365,6 +409,9 @@ func validateAiRecommendStockForSave(recommend *models.AiRecommendStocks, buyMin
 	if len([]rune(recommend.RiskRemarks)) < 6 {
 		return errors.New("风险提示不能为空，且至少包含一条有效风险")
 	}
+	if isAnalysisOnlyRecommend(recommend) {
+		return nil
+	}
 	if err := validateSignalDrivenRecommend(recommend); err != nil {
 		return err
 	}
@@ -375,19 +422,25 @@ func (s *AiRecommendStocksService) CreateAiRecommendStocks(recommend *models.AiR
 	if err := normalizeAiRecommendStockForSave(recommend); err != nil {
 		return err
 	}
-	result := db.Dao.Create(recommend)
-	if result.Error == nil {
-		scopeCodes := make([]string, 0, 1)
-		if recommend != nil {
-			code := strings.TrimSpace(recommend.StockCode)
-			if code != "" {
-				scopeCodes = append(scopeCodes, code)
-			}
+	resultErr := db.Dao.Transaction(func(tx *gorm.DB) error {
+		if err := validateRecommendDailyUniqueness(tx, []*models.AiRecommendStocks{recommend}); err != nil {
+			return err
 		}
-		_ = markAiRecommendYieldDirtyCodes(scopeCodes, "新增推荐后等待严格模式下载/回算", aiRecommendYieldModeStrict)
+		return tx.Create(recommend).Error
+	})
+		if resultErr == nil {
+			scopeCodes := make([]string, 0, 1)
+			if recommend != nil {
+				code := strings.TrimSpace(recommend.StockCode)
+				if code != "" {
+					scopeCodes = append(scopeCodes, code)
+				}
+			}
+			_ = markAiRecommendYieldDirtyCodes(scopeCodes, "新增推荐后等待严格模式下载/回算", aiRecommendYieldModeStrict)
+			requestAiRecommendYieldRecalcWithScope(false, "recommend_created", scopeCodes)
+		}
+		return resultErr
 	}
-	return result.Error
-}
 
 func (s *AiRecommendStocksService) BatchCreateAiRecommendStocks(recommends []*models.AiRecommendStocks) error {
 	normalized := make([]*models.AiRecommendStocks, 0, len(recommends))
@@ -403,10 +456,15 @@ func (s *AiRecommendStocksService) BatchCreateAiRecommendStocks(recommends []*mo
 	if len(normalized) == 0 {
 		return errors.New("没有可保存的推荐记录")
 	}
-	result := db.Dao.Create(normalized)
-	if result.Error == nil {
-		scopeCodes := make([]string, 0, len(normalized))
-		for _, item := range normalized {
+	resultErr := db.Dao.Transaction(func(tx *gorm.DB) error {
+		if err := validateRecommendDailyUniqueness(tx, normalized); err != nil {
+			return err
+		}
+		return tx.Create(normalized).Error
+	})
+		if resultErr == nil {
+			scopeCodes := make([]string, 0, len(normalized))
+			for _, item := range normalized {
 			if item == nil {
 				continue
 			}
@@ -414,17 +472,104 @@ func (s *AiRecommendStocksService) BatchCreateAiRecommendStocks(recommends []*mo
 			if code == "" {
 				continue
 			}
-			scopeCodes = append(scopeCodes, code)
+				scopeCodes = append(scopeCodes, code)
+			}
+			_ = markAiRecommendYieldDirtyCodes(scopeCodes, "批量新增推荐后等待严格模式下载/回算", aiRecommendYieldModeStrict)
+			requestAiRecommendYieldRecalcWithScope(false, "recommend_batch_created", scopeCodes)
 		}
-		_ = markAiRecommendYieldDirtyCodes(scopeCodes, "批量新增推荐后等待严格模式下载/回算", aiRecommendYieldModeStrict)
+		return resultErr
 	}
-	return result.Error
+
+type recommendDailyKey struct {
+	StockCode string
+	DayText   string
+}
+
+func validateRecommendDailyUniqueness(tx *gorm.DB, recommends []*models.AiRecommendStocks) error {
+	if len(recommends) == 0 {
+		return nil
+	}
+	if tx == nil {
+		tx = db.Dao
+	}
+
+	seen := make(map[recommendDailyKey]*models.AiRecommendStocks, len(recommends))
+	for _, recommend := range recommends {
+		if recommend == nil {
+			continue
+		}
+		dayStart, dayEnd, dayText, ok := recommendDayBounds(recommend)
+		if !ok {
+			continue
+		}
+		code := normalizeRecommendStockCode(recommend.StockCode)
+		if code == "" {
+			continue
+		}
+		key := recommendDailyKey{StockCode: code, DayText: dayText}
+		if existing := seen[key]; existing != nil {
+			return duplicateRecommendDailyError(recommend, dayText, true)
+		}
+		seen[key] = recommend
+
+		query := tx.Model(&models.AiRecommendStocks{}).
+			Where("stock_code = ?", code).
+			Where("COALESCE(data_time, created_at) BETWEEN ? AND ?", dayStart, dayEnd)
+		if recommend.ID != 0 {
+			query = query.Where("id <> ?", recommend.ID)
+		}
+		var count int64
+		if err := query.Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return duplicateRecommendDailyError(recommend, dayText, false)
+		}
+	}
+	return nil
+}
+
+func recommendDayBounds(recommend *models.AiRecommendStocks) (time.Time, time.Time, string, bool) {
+	if recommend == nil {
+		return time.Time{}, time.Time{}, "", false
+	}
+	recordTime := time.Time{}
+	if recommend.DataTime != nil && !recommend.DataTime.IsZero() {
+		recordTime = recommend.DataTime.In(cnLocation())
+	} else if !recommend.CreatedAt.IsZero() {
+		recordTime = recommend.CreatedAt.In(cnLocation())
+	}
+	if recordTime.IsZero() {
+		return time.Time{}, time.Time{}, "", false
+	}
+	dayStart := time.Date(recordTime.Year(), recordTime.Month(), recordTime.Day(), 0, 0, 0, 0, cnLocation())
+	dayEnd := dayStart.Add(24*time.Hour - time.Nanosecond)
+	return dayStart, dayEnd, dayStart.Format("2006-01-02"), true
+}
+
+func duplicateRecommendDailyError(recommend *models.AiRecommendStocks, dayText string, inBatch bool) error {
+	code := ""
+	name := ""
+	if recommend != nil {
+		code = normalizeRecommendStockCode(recommend.StockCode)
+		name = strings.TrimSpace(recommend.StockName)
+	}
+	label := strings.TrimSpace(strings.TrimSpace(name) + " " + strings.TrimSpace(code))
+	if label == "" {
+		label = code
+	}
+	if label == "" {
+		label = "该股票"
+	}
+	if inBatch {
+		return fmt.Errorf("硬性拦截：%s 在 %s 的批量推荐中重复出现，同一天不能同时买入同一只股票", label, dayText)
+	}
+	return fmt.Errorf("硬性拦截：%s 在 %s 已有推荐记录，同一天不能同时买入同一只股票", label, dayText)
 }
 
 // GetAiRecommendStocksList 分页查询AI推荐股票记录
 func (s *AiRecommendStocksService) GetAiRecommendStocksList(query *models.AiRecommendStocksQuery) (*models.AiRecommendStocksPageData, error) {
-	var list []models.AiRecommendStocks
-	var total int64
+	var rawList []models.AiRecommendStocks
 
 	q := db.Dao.Model(&models.AiRecommendStocks{})
 	loc := cnLocation()
@@ -481,12 +626,6 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksList(query *models.AiReco
 		q.Where("data_time BETWEEN ? AND ?", datetime.BeginOfDay(startDate), datetime.EndOfDay(startDate))
 	}
 
-	// 计算总数
-	err := q.Count(&total).Error
-	if err != nil {
-		return nil, err
-	}
-
 	// 设置默认分页参数
 	page := query.Page
 	pageSize := query.PageSize
@@ -497,34 +636,54 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksList(query *models.AiReco
 		pageSize = 10
 	}
 
-	// 执行分页查询
-	offset := (page - 1) * pageSize
-	err = q.Offset(offset).Limit(pageSize).Order("created_at DESC").Find(&list).Error
+	err := q.Order("created_at DESC").Find(&rawList).Error
 	if err != nil {
 		return nil, err
 	}
+	list := collapseRecommendRecordsSameDayByCode(rawList)
+	total := int64(len(list))
 
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
+	offset := (page - 1) * pageSize
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(list) {
+		offset = len(list)
+	}
+	end := offset + pageSize
+	if end > len(list) {
+		end = len(list)
+	}
+	pageList := list[offset:end]
 
-	stockCodes := slice.Map(list, func(index int, item models.AiRecommendStocks) string {
+	stockCodes := slice.Map(pageList, func(index int, item models.AiRecommendStocks) string {
 		return ConvertTushareCodeToStockCode(item.StockCode)
 	})
 	stockData, _ := NewStockDataApi().GetStockCodeRealTimeData(stockCodes...)
 	for _, info := range *stockData {
-		for idx, item := range list {
+		for idx, item := range pageList {
 			if ConvertTushareCodeToStockCode(item.StockCode) == ConvertTushareCodeToStockCode(info.Code) {
-				list[idx].StockCurrentPrice = info.Price
-				list[idx].StockPrePrice = info.PreClose
-				list[idx].StockCurrentPriceTime = info.Date + " " + info.Time
+				pageList[idx].StockCurrentPrice = info.Price
+				pageList[idx].StockPrePrice = info.PreClose
+				pageList[idx].StockCurrentPriceTime = info.Date + " " + info.Time
 			}
 		}
 	}
-	for idx := range list {
-		repairRecommendBuyRangeFromSignals(&list[idx])
+	for idx := range pageList {
+		repairRecommendBuyRangeFromSignals(&pageList[idx])
+		sanitizeAiRecommendStockForDisplay(&pageList[idx])
+	}
+	if latestReviewMap, err := loadLatestOpeningReviewSummaryMap(slice.Map(pageList, func(index int, item models.AiRecommendStocks) uint {
+		return item.ID
+	})); err == nil {
+		for idx := range pageList {
+			pageList[idx].LatestOpeningReview = latestReviewMap[pageList[idx].ID]
+		}
 	}
 
 	return &models.AiRecommendStocksPageData{
-		List:       list,
+		List:       pageList,
 		Total:      total,
 		Page:       page,
 		PageSize:   pageSize,
@@ -549,6 +708,160 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksDateRange() (string, stri
 		return "", "", nil
 	}
 	return result.StartDate.Format("2006-01-02"), result.EndDate.Format("2006-01-02"), nil
+}
+
+func parseYieldTradeDate(raw string) (time.Time, bool) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return time.Time{}, false
+	}
+	loc := cnLocation()
+	t, err := time.ParseInLocation("2006-01-02", text, loc)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, loc), true
+}
+
+func resolveExpectedYieldTradeDate(now time.Time) time.Time {
+	loc := cnLocation()
+	cur := now.In(loc)
+	day := time.Date(cur.Year(), cur.Month(), cur.Day(), 0, 0, 0, 0, loc)
+	if isCNOpenTradeDay(day) {
+		return day
+	}
+	return shiftToPrevCNOpenTradeDay(day)
+}
+
+func shouldTriggerYieldQueryRecalc(meta *models.AiRecommendYieldMeta, expectedTradeDate, now time.Time) bool {
+	if meta == nil || meta.ID == 0 || meta.RecalcInProgress || expectedTradeDate.IsZero() {
+		return false
+	}
+	if meta.QueryCooldownUntil != nil && meta.QueryCooldownUntil.After(now) {
+		return false
+	}
+	currentTradeDate, ok := parseYieldTradeDate(meta.CurrentTradeDate)
+	if !ok {
+		return true
+	}
+	return currentTradeDate.Before(expectedTradeDate)
+}
+
+func triggerYieldQueryRecalcIfStale(meta *models.AiRecommendYieldMeta, expectedTradeDate, now time.Time) bool {
+	if !shouldTriggerYieldQueryRecalc(meta, expectedTradeDate, now) {
+		return false
+	}
+	cooldownUntil := now.Add(aiRecommendQueryRecalcCooldown)
+	update := map[string]any{
+		"last_query_recalc_at": now,
+		"query_cooldown_until": cooldownUntil,
+		"updated_at":           now,
+	}
+	result := db.Dao.Model(&models.AiRecommendYieldMeta{}).
+		Where("id = ? AND recalc_in_progress = ?", meta.ID, false).
+		Where("(query_cooldown_until IS NULL OR query_cooldown_until <= ?)", now).
+		Updates(update)
+	if result.Error != nil {
+		logger.SugaredLogger.Warnf("mark query recalc trigger failed: %v", result.Error)
+		return false
+	}
+	if result.RowsAffected == 0 {
+		return false
+	}
+	meta.LastQueryRecalcAt = &now
+	meta.QueryCooldownUntil = &cooldownUntil
+	requestAiRecommendYieldRecalcForQueryFn(true, "query_stale_trade_date")
+	return true
+}
+
+func collectYieldPendingIntradayRecalcScope(
+	now time.Time,
+	latestTradeDate time.Time,
+	records []models.AiRecommendStocks,
+	recordStateMap map[uint]models.AiRecommendYieldRecordState,
+) []string {
+	if !isCNTradingSession(now) || latestTradeDate.IsZero() || len(records) == 0 {
+		return nil
+	}
+	scopeSet := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		code := normalizeRecommendStockCode(rec.StockCode)
+		if code == "" {
+			continue
+		}
+		recordTime := recommendRecordTime(rec)
+		if recordTime.IsZero() {
+			continue
+		}
+		recordDay := time.Date(
+			recordTime.In(cnLocation()).Year(),
+			recordTime.In(cnLocation()).Month(),
+			recordTime.In(cnLocation()).Day(),
+			0, 0, 0, 0,
+			cnLocation(),
+		)
+		if state, ok := recordStateMap[rec.ID]; ok {
+			if strings.TrimSpace(state.ActivationStatus) != "pending" {
+				continue
+			}
+			if state.LastRecalcAt == nil || now.Sub(*state.LastRecalcAt) >= 15*time.Minute {
+				scopeSet[code] = struct{}{}
+			}
+			continue
+		}
+		if !recordDay.After(latestTradeDate) {
+			scopeSet[code] = struct{}{}
+		}
+	}
+	if len(scopeSet) == 0 {
+		return nil
+	}
+	scopeCodes := make([]string, 0, len(scopeSet))
+	for code := range scopeSet {
+		scopeCodes = append(scopeCodes, code)
+	}
+	sort.Strings(scopeCodes)
+	return scopeCodes
+}
+
+func triggerYieldPendingIntradayRecalcIfStale(
+	meta *models.AiRecommendYieldMeta,
+	now time.Time,
+	latestTradeDate time.Time,
+	records []models.AiRecommendStocks,
+	recordStateMap map[uint]models.AiRecommendYieldRecordState,
+) bool {
+	if meta == nil || meta.ID == 0 || meta.RecalcInProgress {
+		return false
+	}
+	if meta.QueryCooldownUntil != nil && meta.QueryCooldownUntil.After(now) {
+		return false
+	}
+	scopeCodes := collectYieldPendingIntradayRecalcScope(now, latestTradeDate, records, recordStateMap)
+	if len(scopeCodes) == 0 {
+		return false
+	}
+	cooldownUntil := now.Add(aiRecommendQueryRecalcCooldown)
+	update := map[string]any{
+		"last_query_recalc_at": now,
+		"query_cooldown_until": cooldownUntil,
+		"updated_at":           now,
+	}
+	result := db.Dao.Model(&models.AiRecommendYieldMeta{}).
+		Where("id = ? AND recalc_in_progress = ?", meta.ID, false).
+		Where("(query_cooldown_until IS NULL OR query_cooldown_until <= ?)", now).
+		Updates(update)
+	if result.Error != nil {
+		logger.SugaredLogger.Warnf("mark pending intraday recalc trigger failed: %v", result.Error)
+		return false
+	}
+	if result.RowsAffected == 0 {
+		return false
+	}
+	meta.LastQueryRecalcAt = &now
+	meta.QueryCooldownUntil = &cooldownUntil
+	requestAiRecommendYieldScopedRecalcForQueryFn(false, "query_pending_intraday", scopeCodes)
+	return true
 }
 
 // GetAiRecommendStocksYieldList 聚合查询AI推荐股票收益率
@@ -579,9 +892,14 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	minuteUncoverable := 0
 	coverageIssues := make([]minuteCoverageIssue, 0, 32)
 	loc := cnLocation()
-	latestTradeDate := time.Now().In(loc)
+	now := timeNow().In(loc)
+	expectedTradeDate := resolveExpectedYieldTradeDate(now)
+	latestTradeDate := expectedTradeDate
+	queryTriggeredRecalc := false
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt = GetDiemengSelfCheckView()
+	metaPtr := (*models.AiRecommendYieldMeta)(nil)
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err == nil {
+		metaPtr = &meta
 		if resetStaleYieldRecalcIfNeeded(&meta) {
 			requestAiRecommendYieldRecalc(true, "recover_stale_recalc")
 		}
@@ -594,13 +912,29 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
 		minuteDone, minuteTotal, minutePending, minuteUncoverable = stats.Done, stats.Total, stats.Pending, stats.Uncoverable
 		coverageIssues = issues
-		if raw := strings.TrimSpace(meta.CurrentTradeDate); raw != "" {
-			if t, parseErr := time.ParseInLocation("2006-01-02", raw, loc); parseErr == nil {
-				latestTradeDate = t
-			}
+		if t, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
+			latestTradeDate = t
 		}
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		logger.SugaredLogger.Warnf("load ai_recommend_yield_meta failed: %v", err)
+	}
+	if metaPtr == nil {
+		if createdMeta, createErr := getOrCreateYieldMeta(); createErr == nil {
+			meta = *createdMeta
+			metaPtr = &meta
+		} else {
+			logger.SugaredLogger.Warnf("getOrCreateYieldMeta failed: %v", createErr)
+		}
+	}
+	if expectedTradeDate.After(latestTradeDate) {
+		latestTradeDate = expectedTradeDate
+	}
+	if metaPtr != nil && triggerYieldQueryRecalcIfStale(metaPtr, expectedTradeDate, now) {
+		queryTriggeredRecalc = true
+		recalcInProgress = true
+		if recalcProgress < 0 {
+			recalcProgress = 0
+		}
 	}
 	if minuteTotal <= 0 {
 		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(nil, -1)
@@ -612,6 +946,9 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	}
 	if recalcProgress > 100 {
 		recalcProgress = 100
+	}
+	if queryTriggeredRecalc && minutePending == 0 && minuteTotal > minuteDone {
+		minutePending = minuteTotal - minuteDone
 	}
 
 	latestTradeDate = time.Date(latestTradeDate.Year(), latestTradeDate.Month(), latestTradeDate.Day(), 0, 0, 0, 0, loc)
@@ -625,6 +962,8 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	if err != nil {
 		return nil, err
 	}
+	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
+	records = collapseRecommendRecordsSameDayByCode(records)
 	dirtyMap, err := loadDirtyAiRecommendYieldCodeSet(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
@@ -690,12 +1029,19 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			minutePending,
 			minuteUncoverable,
 			dirtyMap,
+			rawRepeatCountMap,
 		)
 	}
 
 	recordStateMap, err := loadYieldRecordStateMapByRecommendRecords(records)
 	if err != nil {
 		return nil, err
+	}
+	if metaPtr != nil && triggerYieldPendingIntradayRecalcIfStale(metaPtr, now, latestTradeDate, records, recordStateMap) {
+		recalcInProgress = true
+		if recalcProgress < 0 {
+			recalcProgress = 0
+		}
 	}
 	stateMap, err := loadYieldStateMapByRecommendRecords(records)
 	if err != nil {
@@ -705,29 +1051,8 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	if err != nil {
 		return nil, err
 	}
-	issueMap := make(map[string]minuteCoverageIssue, len(coverageIssues))
-	for _, issue := range coverageIssues {
-		key := strings.TrimSpace(issue.RowKey)
-		if key == "" {
-			continue
-		}
-		issueMap[key] = issue
-	}
-	items := make([]models.AiRecommendStocksYieldItem, 0, len(records))
-	for _, rec := range records {
-		item := mapRecommendRecordToYieldItemWithRecordState(rec, recordStateMap, stateMap)
-		if override, ok := overrideMap[rec.ID]; ok {
-			applyYieldOverrideToYieldItem(&item, &override)
-		}
-		item.CalcMode = aiRecommendYieldModeStrict
-		if issue, ok := issueMap[item.RowKey]; ok {
-			item.DataStatus = issue.Status
-			item.DataStatusReason = issue.RawReason
-		}
-		applyStrictPendingStateToYieldItem(&item, dirtyMap)
-		items = append(items, item)
-	}
-	applyRecommendRepeatCount(items)
+	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyMap, coverageIssues)
+	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
 	sseBenchmarkRate, sseBenchmarkRateText := calculateSSEBenchmarkRateByItems(items)
@@ -745,6 +1070,13 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		end = len(items)
 	}
 	pageItems := items[offset:end]
+	if latestReviewMap, reviewErr := loadLatestOpeningReviewSummaryMap(slice.Map(pageItems, func(index int, item models.AiRecommendStocksYieldItem) uint {
+		return item.RecommendID
+	})); reviewErr == nil {
+		for idx := range pageItems {
+			pageItems[idx].LatestOpeningReview = latestReviewMap[pageItems[idx].RecommendID]
+		}
+	}
 
 	return &models.AiRecommendStocksYieldPageData{
 		List:                      pageItems,
@@ -831,6 +1163,9 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldMinuteChart(recommendID ui
 		ChartStatus:      "missing",
 		Bars:             []models.AiRecommendYieldMinuteBarDTO{},
 		Markers:          []models.AiRecommendYieldChartMarker{},
+	}
+	if latestReviewMap, reviewErr := loadLatestOpeningReviewSummaryMap([]uint{recommendID}); reviewErr == nil {
+		chart.LatestOpeningReview = latestReviewMap[recommendID]
 	}
 	if chart.StockName == "" {
 		chart.StockName = strings.TrimSpace(rec.StockName)
@@ -1212,6 +1547,63 @@ func applyRecommendRepeatCount(items []models.AiRecommendStocksYieldItem) {
 	}
 }
 
+func applyRecommendRepeatCountByCodeMap(items []models.AiRecommendStocksYieldItem, counts map[string]int) {
+	if len(items) == 0 || len(counts) == 0 {
+		return
+	}
+	for i := range items {
+		code := strings.ToUpper(strings.TrimSpace(items[i].StockCode))
+		if code == "" {
+			code = strings.TrimSpace(items[i].StockName)
+		}
+		repeat := counts[code]
+		if repeat <= 1 {
+			items[i].RecommendCount = 0
+			continue
+		}
+		items[i].RecommendCount = repeat
+	}
+}
+
+func countRecommendOccurrencesByCode(records []models.AiRecommendStocks) map[string]int {
+	counts := make(map[string]int, len(records))
+	for _, rec := range records {
+		code := strings.ToUpper(normalizeRecommendStockCode(rec.StockCode))
+		if code == "" {
+			code = strings.TrimSpace(rec.StockName)
+		}
+		if code == "" {
+			continue
+		}
+		counts[code]++
+	}
+	return counts
+}
+
+func collapseRecommendRecordsSameDayByCode(records []models.AiRecommendStocks) []models.AiRecommendStocks {
+	if len(records) <= 1 {
+		return records
+	}
+	seen := make(map[string]struct{}, len(records))
+	result := make([]models.AiRecommendStocks, 0, len(records))
+	for _, rec := range records {
+		code := normalizeRecommendStockCode(rec.StockCode)
+		recordTime := recommendRecordTime(rec)
+		if code == "" || recordTime.IsZero() {
+			result = append(result, rec)
+			continue
+		}
+		dayKey := recordTime.In(cnLocation()).Format("2006-01-02")
+		key := strings.ToUpper(code) + "|" + dayKey
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, rec)
+	}
+	return result
+}
+
 func computeMinuteDownloadCoverageStats(meta *models.AiRecommendYieldMeta) minuteCoverageStats {
 	stats, _ := computeMinuteDownloadCoverageStatsWithIssues(meta, 0)
 	return stats
@@ -1233,14 +1625,11 @@ func resolveMinuteCoverageScope(state *models.AiRecommendYieldRecordState, stock
 
 func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
 	loc := cnLocation()
-	now := time.Now().In(loc)
-
-	// Prefer meta current trade date, otherwise fall back to "today" in CN TZ.
-	tradeDate := now
+	now := timeNow().In(loc)
+	tradeDate := resolveExpectedYieldTradeDate(now)
 	if meta != nil {
-		raw := strings.TrimSpace(meta.CurrentTradeDate)
-		if raw != "" {
-			if t, err := time.ParseInLocation("2006-01-02", raw, loc); err == nil {
+		if t, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
+			if tradeDate.IsZero() || t.After(tradeDate) {
 				tradeDate = t
 			}
 		}
@@ -1766,6 +2155,176 @@ func loadYieldStateMapByRecommendRecords(records []models.AiRecommendStocks) (ma
 	return stateMap, nil
 }
 
+func buildStrictAggregateYieldItems(
+	records []models.AiRecommendStocks,
+	recordStateMap map[uint]models.AiRecommendYieldRecordState,
+	stateMap map[string]models.AiRecommendYieldState,
+	overrideMap map[uint]models.AiRecommendYieldOverride,
+	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	coverageIssues []minuteCoverageIssue,
+) ([]models.AiRecommendStocksYieldItem, []models.AiRecommendStocksYieldItem) {
+	if len(records) == 0 {
+		return []models.AiRecommendStocksYieldItem{}, []models.AiRecommendStocksYieldItem{}
+	}
+
+	recordIssueMap := make(map[string]minuteCoverageIssue, len(coverageIssues))
+	stockIssueMap := make(map[string]minuteCoverageIssue, len(coverageIssues))
+	for _, issue := range coverageIssues {
+		rowKey := strings.TrimSpace(issue.RowKey)
+		if rowKey != "" {
+			recordIssueMap[rowKey] = issue
+		}
+		code := normalizeRecommendStockCode(issue.StockCode)
+		if code == "" {
+			code = normalizeRecommendStockCode(rowKey)
+		}
+		if code == "" {
+			continue
+		}
+		if _, exists := stockIssueMap[code]; exists {
+			continue
+		}
+		stockIssueMap[code] = issue
+	}
+
+	grouped := make(map[string][]models.AiRecommendStocks, len(records))
+	order := make([]string, 0, len(records))
+	fallbackList := make([]models.AiRecommendStocks, 0, len(records))
+	for _, rec := range records {
+		code := normalizeRecommendStockCode(rec.StockCode)
+		if code == "" {
+			fallbackList = append(fallbackList, rec)
+			continue
+		}
+		if _, exists := grouped[code]; !exists {
+			order = append(order, code)
+		}
+		grouped[code] = append(grouped[code], rec)
+	}
+
+	listItems := make([]models.AiRecommendStocksYieldItem, 0, len(order)+len(fallbackList))
+	metricItems := make([]models.AiRecommendStocksYieldItem, 0, len(records))
+
+	for _, rec := range fallbackList {
+		item := mapRecommendRecordToYieldItemWithRecordState(rec, recordStateMap, stateMap)
+		if override, ok := overrideMap[rec.ID]; ok {
+			applyYieldOverrideToYieldItem(&item, &override)
+		}
+		item.CalcMode = aiRecommendYieldModeStrict
+		if issue, ok := recordIssueMap[item.RowKey]; ok {
+			item.DataStatus = issue.Status
+			item.DataStatusReason = issue.RawReason
+		}
+		applyStrictPendingStateToYieldItem(&item, dirtyMap)
+		listItems = append(listItems, item)
+		metricItems = append(metricItems, item)
+	}
+
+	for _, code := range order {
+		group := grouped[code]
+		if len(group) == 0 {
+			continue
+		}
+		state, hasState := stateMap[code]
+		displayRecord := group[0]
+		representative := pickRepresentativeRecommendRecordForYieldAggregate(group, hasState, state)
+		recommendCount := len(group)
+		if recommendCount < 1 {
+			recommendCount = 1
+		}
+
+		if hasState {
+			listItem := mapRecommendAggregateStateToYieldItem(displayRecord, state, recommendCount)
+			listItem.RecommendID = 0
+			listItem.RowKey = code
+			listItem.CalcMode = aiRecommendYieldModeStrict
+			if issue, ok := stockIssueMap[code]; ok && shouldOverrideAggregateItemByCoverageIssue(listItem) {
+				listItem.DataStatus = issue.Status
+				listItem.DataStatusReason = issue.RawReason
+			}
+			applyStrictPendingStateToYieldItem(&listItem, dirtyMap)
+			listItems = append(listItems, listItem)
+		} else {
+			listItem := mapRecommendRecordToYieldItemWithRecordState(representative, recordStateMap, stateMap)
+			if override, ok := overrideMap[representative.ID]; ok {
+				applyYieldOverrideToYieldItem(&listItem, &override)
+			}
+			listItem.RowKey = code
+			listItem.RecommendCount = recommendCount
+			listItem.CalcMode = aiRecommendYieldModeStrict
+			if issue, ok := stockIssueMap[code]; ok {
+				listItem.DataStatus = issue.Status
+				listItem.DataStatusReason = issue.RawReason
+			}
+			applyStrictPendingStateToYieldItem(&listItem, dirtyMap)
+			listItems = append(listItems, listItem)
+		}
+
+		representativeID := representative.ID
+		representativeUsed := false
+		for _, rec := range group {
+			var item models.AiRecommendStocksYieldItem
+			if hasState && !representativeUsed && representativeID != 0 && rec.ID == representativeID {
+				item = mapRecommendAggregateStateToYieldItem(rec, state, 1)
+				representativeUsed = true
+			} else {
+				item = mapRecommendRecordToYieldItemWithRecordState(rec, recordStateMap, stateMap)
+				if override, ok := overrideMap[rec.ID]; ok {
+					applyYieldOverrideToYieldItem(&item, &override)
+				}
+			}
+			item.CalcMode = aiRecommendYieldModeStrict
+			if issue, ok := recordIssueMap[item.RowKey]; ok {
+				item.DataStatus = issue.Status
+				item.DataStatusReason = issue.RawReason
+			}
+			applyStrictPendingStateToYieldItem(&item, dirtyMap)
+			metricItems = append(metricItems, item)
+		}
+	}
+
+	return listItems, metricItems
+}
+
+func buildStrictYieldRecordItems(
+	records []models.AiRecommendStocks,
+	recordStateMap map[uint]models.AiRecommendYieldRecordState,
+	stateMap map[string]models.AiRecommendYieldState,
+	overrideMap map[uint]models.AiRecommendYieldOverride,
+	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	coverageIssues []minuteCoverageIssue,
+) []models.AiRecommendStocksYieldItem {
+	if len(records) == 0 {
+		return []models.AiRecommendStocksYieldItem{}
+	}
+
+	recordIssueMap := make(map[string]minuteCoverageIssue, len(coverageIssues))
+	for _, issue := range coverageIssues {
+		rowKey := strings.TrimSpace(issue.RowKey)
+		if rowKey == "" {
+			continue
+		}
+		recordIssueMap[rowKey] = issue
+	}
+
+	items := make([]models.AiRecommendStocksYieldItem, 0, len(records))
+	for _, rec := range records {
+		item := buildStrictYieldRecordItem(rec, recordStateMap, stateMap)
+		if override, ok := overrideMap[rec.ID]; ok {
+			applyYieldOverrideToYieldItem(&item, &override)
+		}
+		item.CalcMode = aiRecommendYieldModeStrict
+		if issue, ok := recordIssueMap[item.RowKey]; ok {
+			item.DataStatus = issue.Status
+			item.DataStatusReason = issue.RawReason
+		}
+		applyStrictPendingStateToYieldItem(&item, dirtyMap)
+		items = append(items, item)
+	}
+	applyRecommendRepeatCount(items)
+	return items
+}
+
 func loadYieldRecordStateMapByRecommendRecords(records []models.AiRecommendStocks) (map[uint]models.AiRecommendYieldRecordState, error) {
 	stateMap := map[uint]models.AiRecommendYieldRecordState{}
 	if len(records) == 0 {
@@ -1815,6 +2374,260 @@ func mapRecommendRecordToYieldItemWithRecordState(
 	return mapRecommendRecordToYieldItem(rec, stateMap)
 }
 
+func buildStrictYieldRecordItem(
+	rec models.AiRecommendStocks,
+	recordStateMap map[uint]models.AiRecommendYieldRecordState,
+	stateMap map[string]models.AiRecommendYieldState,
+) models.AiRecommendStocksYieldItem {
+	code := normalizeRecommendStockCode(rec.StockCode)
+	state, hasState := stateMap[code]
+	recordTime := recommendRecordTime(rec)
+	if recordState, hasRecordState := recordStateMap[rec.ID]; hasRecordState {
+		if hasState &&
+			aggregateYieldStateMatchesRecordTime(state, recordTime) &&
+			aggregateYieldStateConsistentForRecordTime(state, recordTime) &&
+			shouldPreferAggregateOverRecordPendingState(recordState, state) {
+			item := mapRecommendAggregateStateToYieldItem(rec, state, 1)
+			item.RecommendID = rec.ID
+			item.RowKey = yieldRowKeyFromRecommend(rec, code)
+			item.RecommendCount = 1
+			return item
+		}
+		return mapRecommendRecordStateToYieldItem(rec, recordState)
+	}
+	if hasState && aggregateYieldStateMatchesRecordTime(state, recordTime) && aggregateYieldStateConsistentForRecordTime(state, recordTime) {
+		item := mapRecommendAggregateStateToYieldItem(rec, state, 1)
+		item.RecommendID = rec.ID
+		item.RowKey = yieldRowKeyFromRecommend(rec, code)
+		item.RecommendCount = 1
+		return item
+	}
+	return mapRecommendRecordToYieldItem(rec, map[string]models.AiRecommendYieldState{})
+}
+
+func aggregateYieldStateMatchesRecordTime(state models.AiRecommendYieldState, recordTime time.Time) bool {
+	if recordTime.IsZero() {
+		return false
+	}
+	if state.RecommendTime != nil && !state.RecommendTime.IsZero() && yieldTimesAlmostEqual(recordTime, *state.RecommendTime) {
+		return true
+	}
+	if state.SignalTime != nil && !state.SignalTime.IsZero() && yieldTimesAlmostEqual(recordTime, *state.SignalTime) {
+		return true
+	}
+	return false
+}
+
+func aggregateYieldStateConsistentForRecordTime(state models.AiRecommendYieldState, recordTime time.Time) bool {
+	if recordTime.IsZero() {
+		return false
+	}
+	if strings.TrimSpace(state.ActivationStatus) != "activated" {
+		return true
+	}
+	if state.ActivationTime == nil || state.ActivationTime.IsZero() {
+		return true
+	}
+	return !state.ActivationTime.Before(recordTime)
+}
+
+func shouldPreferAggregateOverRecordPendingState(recordState models.AiRecommendYieldRecordState, aggregateState models.AiRecommendYieldState) bool {
+	recordStatus := strings.TrimSpace(recordState.ActivationStatus)
+	if recordStatus != "" && recordStatus != "pending" {
+		return false
+	}
+	aggregateStatus := strings.TrimSpace(aggregateState.ActivationStatus)
+	return aggregateStatus != "" && aggregateStatus != "pending"
+}
+
+func pickRepresentativeRecommendRecordForYieldAggregate(
+	records []models.AiRecommendStocks,
+	hasState bool,
+	state models.AiRecommendYieldState,
+) models.AiRecommendStocks {
+	if len(records) == 0 {
+		return models.AiRecommendStocks{}
+	}
+	if !hasState {
+		return records[0]
+	}
+
+	matchByTargetTime := func(target *time.Time) (models.AiRecommendStocks, bool) {
+		if target == nil || target.IsZero() {
+			return models.AiRecommendStocks{}, false
+		}
+		for _, rec := range records {
+			if yieldTimesAlmostEqual(recommendRecordTime(rec), *target) {
+				return rec, true
+			}
+		}
+		return models.AiRecommendStocks{}, false
+	}
+	if rec, ok := matchByTargetTime(state.RecommendTime); ok {
+		return rec
+	}
+	if rec, ok := matchByTargetTime(state.SignalTime); ok {
+		return rec
+	}
+
+	if state.ActivationTime != nil && !state.ActivationTime.IsZero() {
+		bestIndex := -1
+		bestDelta := time.Duration(1<<63 - 1)
+		for index, rec := range records {
+			recordTime := recommendRecordTime(rec)
+			if recordTime.IsZero() || recordTime.After(*state.ActivationTime) {
+				continue
+			}
+			delta := state.ActivationTime.Sub(recordTime)
+			if delta < bestDelta {
+				bestDelta = delta
+				bestIndex = index
+			}
+		}
+		if bestIndex >= 0 {
+			return records[bestIndex]
+		}
+	}
+
+	if strings.TrimSpace(state.ActivationStatus) == "activated" {
+		for _, rec := range records {
+			if eligibility, _ := resolveRecommendBacktestEligibility(&rec); eligibility == recommendBacktestEligible {
+				return rec
+			}
+		}
+	}
+
+	if strings.TrimSpace(state.ActivationStatus) == "skipped" {
+		for _, rec := range records {
+			if eligibility, _ := resolveRecommendBacktestEligibility(&rec); eligibility == recommendBacktestSkipped {
+				return rec
+			}
+		}
+	}
+
+	return records[0]
+}
+
+func yieldTimesAlmostEqual(lhs, rhs time.Time) bool {
+	if lhs.IsZero() || rhs.IsZero() {
+		return false
+	}
+	diff := lhs.Sub(rhs)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < time.Second
+}
+
+func mapRecommendAggregateStateToYieldItem(
+	rec models.AiRecommendStocks,
+	state models.AiRecommendYieldState,
+	recommendCount int,
+) models.AiRecommendStocksYieldItem {
+	item := mapRecommendRecordToYieldItem(rec, map[string]models.AiRecommendYieldState{})
+	code := normalizeRecommendStockCode(state.StockCode)
+	if code == "" {
+		code = normalizeRecommendStockCode(rec.StockCode)
+	}
+	if code != "" {
+		item.RowKey = code
+		item.StockCode = code
+	}
+	if strings.TrimSpace(item.StockName) == "" && strings.TrimSpace(state.StockName) != "" {
+		item.StockName = strings.TrimSpace(state.StockName)
+	}
+	if strings.TrimSpace(item.ModelNames) == "" && strings.TrimSpace(state.ModelNames) != "" {
+		item.ModelNames = strings.TrimSpace(state.ModelNames)
+	}
+	if strings.TrimSpace(item.BkName) == "" && strings.TrimSpace(state.BkName) != "" {
+		item.BkName = strings.TrimSpace(state.BkName)
+	}
+	if recommendCount < 1 {
+		recommendCount = 1
+	}
+	item.RecommendCount = recommendCount
+	if strings.TrimSpace(state.ActivationStatus) != "" {
+		item.ActivationStatus = strings.TrimSpace(state.ActivationStatus)
+	}
+	if state.ActivationTime != nil && !state.ActivationTime.IsZero() {
+		item.ActivationTime = state.ActivationTime.Format("2006-01-02 15:04:05")
+	}
+	item.ActivationPrice = round2(state.ActivationPrice)
+	if state.BuyTime != nil && !state.BuyTime.IsZero() {
+		item.BuyTime = state.BuyTime.Format("2006-01-02 15:04:05")
+	}
+	if state.BuyAmount > 0 {
+		item.BuyAmount = round2(state.BuyAmount)
+	}
+	if strings.TrimSpace(state.PositionStatus) != "" {
+		item.PositionStatus = strings.TrimSpace(state.PositionStatus)
+	}
+	if state.SellTime != nil && !state.SellTime.IsZero() {
+		item.SellTime = state.SellTime.Format("2006-01-02 15:04:05")
+		item.SellAmount = copyFloatPointer(state.RealizedSellAmount)
+	} else if strings.TrimSpace(state.ActivationStatus) == "activated" {
+		item.SellTime = "持有"
+	}
+	if state.CurrentPrice > 0 {
+		item.CurrentPrice = round2(state.CurrentPrice)
+	}
+	if strings.TrimSpace(state.CurrentPriceTime) != "" {
+		item.CurrentPriceTime = strings.TrimSpace(state.CurrentPriceTime)
+	}
+	if strings.TrimSpace(state.DataStatus) != "" {
+		item.DataStatus = strings.TrimSpace(state.DataStatus)
+	}
+	if strings.TrimSpace(state.DataStatusReason) != "" {
+		item.DataStatusReason = strings.TrimSpace(state.DataStatusReason)
+	}
+	if strings.TrimSpace(state.YieldRateText) != "" {
+		item.YieldRateText = strings.TrimSpace(state.YieldRateText)
+		item.YieldRate = round2(state.YieldRate)
+	}
+
+	switch strings.TrimSpace(state.ActivationStatus) {
+	case "activated":
+		applyAggregateStateBacktestEligibility(&item, state)
+	case "skipped":
+		applyAggregateStateBacktestEligibility(&item, state)
+	case "ineligible":
+		applyAggregateStateBacktestEligibility(&item, state)
+	}
+	applyInactiveYieldDefaults(&item)
+	return item
+}
+
+func applyAggregateStateBacktestEligibility(item *models.AiRecommendStocksYieldItem, state models.AiRecommendYieldState) {
+	if item == nil {
+		return
+	}
+	switch strings.TrimSpace(state.ActivationStatus) {
+	case "activated":
+		item.BacktestEligibility = recommendBacktestEligible
+		item.BacktestEligibilityReason = ""
+	case "skipped":
+		item.BacktestEligibility = recommendBacktestSkipped
+		if strings.TrimSpace(item.BacktestEligibilityReason) == "" {
+			item.BacktestEligibilityReason = strings.TrimSpace(state.DataStatusReason)
+		}
+	case "ineligible":
+		item.BacktestEligibility = recommendBacktestIneligible
+		if strings.TrimSpace(item.BacktestEligibilityReason) == "" {
+			item.BacktestEligibilityReason = strings.TrimSpace(state.DataStatusReason)
+		}
+	default:
+		item.BacktestEligibility = recommendBacktestEligible
+	}
+}
+
+func shouldOverrideAggregateItemByCoverageIssue(item models.AiRecommendStocksYieldItem) bool {
+	if strings.TrimSpace(item.ActivationStatus) == "activated" {
+		return false
+	}
+	status := strings.TrimSpace(item.DataStatus)
+	return status == "" || status == "正常" || status == "计算中" || status == "待激活"
+}
+
 func resolveRecommendSignalView(rec models.AiRecommendStocks) models.AiRecommendStocks {
 	view := rec
 	view.ExecutionState = normalizeRecommendExecutionState(view.ExecutionState)
@@ -1852,37 +2665,39 @@ func mapRecommendRecordStateToYieldItem(rec models.AiRecommendStocks, state mode
 	}
 
 	item := models.AiRecommendStocksYieldItem{
-		RecommendID:            rec.ID,
-		RowKey:                 yieldRowKeyFromRecommend(rec, code),
-		StockCode:              code,
-		StockName:              strings.TrimSpace(rec.StockName),
-		ModelNames:             strings.TrimSpace(rec.ModelName),
-		BacktestEligibility:    recommendBacktestEligible,
-		BkName:                 strings.TrimSpace(rec.BkName),
-		RecommendCategory:      strings.TrimSpace(rec.RecommendCategory),
-		RecommendCategoryLabel: recommendCategoryDisplayLabel(rec.RecommendCategory),
-		ExecutionState:         signalView.ExecutionState,
-		ExecutionStateLabel:    recommendExecutionStateLabel(signalView.ExecutionState),
-		BuySignal:              signalView.BuySignal,
-		BuySignalDetail:        signalView.BuySignalDetail,
-		SellSignal:             signalView.SellSignal,
-		SellSignalDetail:       signalView.SellSignalDetail,
-		InvalidSignal:          signalView.InvalidSignal,
-		RecommendCount:         1,
-		RecommendTime:          formatYieldDisplayTime(recordTime),
-		SignalTime:             formatYieldDisplayTime(recordTime),
-		RecommendBuyPrice:      resolveRecommendBuyRangeDisplay(rec),
-		StopProfitAmount:       stopProfitAmount,
-		StopLossAmount:         stopLossAmount,
-		SellTime:               "待激活",
-		SellAmountText:         buildSellAmountText(stopProfitAmount, stopLossAmount),
-		PositionStatus:         "待激活",
-		CurrentPrice:           round2(state.CurrentPrice),
-		CurrentPriceTime:       strings.TrimSpace(rec.StockCurrentPriceTime),
-		YieldRate:              0,
-		YieldRateText:          "--",
-		DataStatus:             "正常",
-		DataStatusReason:       strings.TrimSpace(state.DataStatusReason),
+		RecommendID:             rec.ID,
+		RowKey:                  yieldRowKeyFromRecommend(rec, code),
+		StockCode:               code,
+		StockName:               strings.TrimSpace(rec.StockName),
+		ModelNames:              strings.TrimSpace(rec.ModelName),
+		BacktestEligibility:     recommendBacktestEligible,
+		BkName:                  strings.TrimSpace(rec.BkName),
+		RecommendCategory:       strings.TrimSpace(rec.RecommendCategory),
+		RecommendCategoryLabel:  recommendCategoryDisplayLabel(rec.RecommendCategory),
+		ExecutionState:          signalView.ExecutionState,
+		ExecutionStateLabel:     recommendExecutionStateLabel(signalView.ExecutionState),
+		BuySignal:               signalView.BuySignal,
+		BuySignalDetail:         signalView.BuySignalDetail,
+		SellSignal:              signalView.SellSignal,
+		SellSignalDetail:        signalView.SellSignalDetail,
+		InvalidSignal:           signalView.InvalidSignal,
+		ActivationRule:          strings.TrimSpace(rec.ActivationRuleJSON),
+		ActivationInvalidReason: strings.TrimSpace(rec.ActivationInvalidReason),
+		RecommendCount:          1,
+		RecommendTime:           formatYieldDisplayTime(recordTime),
+		SignalTime:              formatYieldDisplayTime(recordTime),
+		RecommendBuyPrice:       resolveRecommendBuyRangeDisplay(rec),
+		StopProfitAmount:        stopProfitAmount,
+		StopLossAmount:          stopLossAmount,
+		SellTime:                "待激活",
+		SellAmountText:          buildSellAmountText(stopProfitAmount, stopLossAmount),
+		PositionStatus:          "待激活",
+		CurrentPrice:            round2(state.CurrentPrice),
+		CurrentPriceTime:        strings.TrimSpace(rec.StockCurrentPriceTime),
+		YieldRate:               0,
+		YieldRateText:           "--",
+		DataStatus:              "正常",
+		DataStatusReason:        strings.TrimSpace(state.DataStatusReason),
 	}
 
 	if item.StockName == "" {
@@ -1977,37 +2792,39 @@ func mapRecommendRecordToYieldItem(rec models.AiRecommendStocks, stateMap map[st
 	}
 
 	item := models.AiRecommendStocksYieldItem{
-		RecommendID:            rec.ID,
-		RowKey:                 yieldRowKeyFromRecommend(rec, code),
-		StockCode:              code,
-		StockName:              strings.TrimSpace(rec.StockName),
-		ModelNames:             strings.TrimSpace(rec.ModelName),
-		BacktestEligibility:    recommendBacktestEligible,
-		BkName:                 strings.TrimSpace(rec.BkName),
-		RecommendCategory:      strings.TrimSpace(rec.RecommendCategory),
-		RecommendCategoryLabel: recommendCategoryDisplayLabel(rec.RecommendCategory),
-		ExecutionState:         signalView.ExecutionState,
-		ExecutionStateLabel:    recommendExecutionStateLabel(signalView.ExecutionState),
-		BuySignal:              signalView.BuySignal,
-		BuySignalDetail:        signalView.BuySignalDetail,
-		SellSignal:             signalView.SellSignal,
-		SellSignalDetail:       signalView.SellSignalDetail,
-		InvalidSignal:          signalView.InvalidSignal,
-		RecommendCount:         1,
-		RecommendTime:          formatYieldDisplayTime(recordTime),
-		SignalTime:             formatYieldDisplayTime(recordTime),
-		ActivationStatus:       "pending",
-		RecommendBuyPrice:      resolveRecommendBuyRangeDisplay(rec),
-		StopProfitAmount:       stopProfitAmount,
-		StopLossAmount:         stopLossAmount,
-		SellTime:               "待激活",
-		SellAmountText:         buildSellAmountText(stopProfitAmount, stopLossAmount),
-		PositionStatus:         "待激活",
-		CurrentPrice:           0,
-		CurrentPriceTime:       strings.TrimSpace(rec.StockCurrentPriceTime),
-		YieldRate:              0,
-		YieldRateText:          "--",
-		DataStatus:             "计算中",
+		RecommendID:             rec.ID,
+		RowKey:                  yieldRowKeyFromRecommend(rec, code),
+		StockCode:               code,
+		StockName:               strings.TrimSpace(rec.StockName),
+		ModelNames:              strings.TrimSpace(rec.ModelName),
+		BacktestEligibility:     recommendBacktestEligible,
+		BkName:                  strings.TrimSpace(rec.BkName),
+		RecommendCategory:       strings.TrimSpace(rec.RecommendCategory),
+		RecommendCategoryLabel:  recommendCategoryDisplayLabel(rec.RecommendCategory),
+		ExecutionState:          signalView.ExecutionState,
+		ExecutionStateLabel:     recommendExecutionStateLabel(signalView.ExecutionState),
+		BuySignal:               signalView.BuySignal,
+		BuySignalDetail:         signalView.BuySignalDetail,
+		SellSignal:              signalView.SellSignal,
+		SellSignalDetail:        signalView.SellSignalDetail,
+		InvalidSignal:           signalView.InvalidSignal,
+		ActivationRule:          strings.TrimSpace(rec.ActivationRuleJSON),
+		ActivationInvalidReason: strings.TrimSpace(rec.ActivationInvalidReason),
+		RecommendCount:          1,
+		RecommendTime:           formatYieldDisplayTime(recordTime),
+		SignalTime:              formatYieldDisplayTime(recordTime),
+		ActivationStatus:        "pending",
+		RecommendBuyPrice:       resolveRecommendBuyRangeDisplay(rec),
+		StopProfitAmount:        stopProfitAmount,
+		StopLossAmount:          stopLossAmount,
+		SellTime:                "待激活",
+		SellAmountText:          buildSellAmountText(stopProfitAmount, stopLossAmount),
+		PositionStatus:          "待激活",
+		CurrentPrice:            0,
+		CurrentPriceTime:        strings.TrimSpace(rec.StockCurrentPriceTime),
+		YieldRate:               0,
+		YieldRateText:           "--",
+		DataStatus:              "计算中",
 	}
 
 	if item.StockName == "" && hasState {
@@ -2792,6 +3609,8 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 	if err != nil {
 		return nil, err
 	}
+	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
+	records = collapseRecommendRecordsSameDayByCode(records)
 	if len(records) == 0 {
 		stats := computeMinuteDownloadCoverageStats(nil)
 		return &models.AiRecommendStocksYieldPageData{
@@ -2843,7 +3662,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		}
 		resultItems = append(resultItems, item)
 	}
-	applyRecommendRepeatCount(resultItems)
+	applyRecommendRepeatCountByCodeMap(resultItems, rawRepeatCountMap)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(resultItems)
 	sseBenchmarkRate, sseBenchmarkRateText := calculateSSEBenchmarkRateByItems(resultItems)
@@ -2903,6 +3722,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 	minutePending int,
 	minuteUncoverable int,
 	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	rawRepeatCountMap map[string]int,
 ) (*models.AiRecommendStocksYieldPageData, error) {
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
 	currentPriceMap, currentPriceTimeMap := loadCurrentPriceSnapshotForRecommendRecords(records)
@@ -2923,7 +3743,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		}
 		items = append(items, item)
 	}
-	applyRecommendRepeatCount(items)
+	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
 	sseBenchmarkRate, sseBenchmarkRateText := calculateSSEBenchmarkRateByItems(items)
@@ -3035,35 +3855,37 @@ func mapRecommendRecordToFastYieldItem(
 	}
 
 	item := models.AiRecommendStocksYieldItem{
-		RecommendID:            rec.ID,
-		RowKey:                 yieldRowKeyFromRecommend(rec, code),
-		CalcMode:               aiRecommendYieldModeFast,
-		StockCode:              code,
-		StockName:              strings.TrimSpace(rec.StockName),
-		ModelNames:             strings.TrimSpace(rec.ModelName),
-		BacktestEligibility:    recommendBacktestEligible,
-		BkName:                 strings.TrimSpace(rec.BkName),
-		RecommendCategory:      strings.TrimSpace(rec.RecommendCategory),
-		RecommendCategoryLabel: recommendCategoryDisplayLabel(rec.RecommendCategory),
-		ExecutionState:         signalView.ExecutionState,
-		ExecutionStateLabel:    recommendExecutionStateLabel(signalView.ExecutionState),
-		BuySignal:              signalView.BuySignal,
-		BuySignalDetail:        signalView.BuySignalDetail,
-		SellSignal:             signalView.SellSignal,
-		SellSignalDetail:       signalView.SellSignalDetail,
-		InvalidSignal:          signalView.InvalidSignal,
-		RecommendCount:         1,
-		RecommendTime:          formatYieldDisplayTime(recordTime),
-		SignalTime:             formatYieldDisplayTime(recordTime),
-		RecommendBuyPrice:      resolveRecommendBuyRangeDisplay(rec),
-		StopProfitAmount:       stopProfitAmount,
-		StopLossAmount:         stopLossAmount,
-		SellAmountText:         buildSellAmountText(stopProfitAmount, stopLossAmount),
-		SellTime:               "持有",
-		PositionStatus:         "持有",
-		YieldRateText:          "--",
-		DataStatus:             "快速估算",
-		DataStatusReason:       "fast 模式按报告主买入区直接买入，不扫描分钟线触发条件",
+		RecommendID:             rec.ID,
+		RowKey:                  yieldRowKeyFromRecommend(rec, code),
+		CalcMode:                aiRecommendYieldModeFast,
+		StockCode:               code,
+		StockName:               strings.TrimSpace(rec.StockName),
+		ModelNames:              strings.TrimSpace(rec.ModelName),
+		BacktestEligibility:     recommendBacktestEligible,
+		BkName:                  strings.TrimSpace(rec.BkName),
+		RecommendCategory:       strings.TrimSpace(rec.RecommendCategory),
+		RecommendCategoryLabel:  recommendCategoryDisplayLabel(rec.RecommendCategory),
+		ExecutionState:          signalView.ExecutionState,
+		ExecutionStateLabel:     recommendExecutionStateLabel(signalView.ExecutionState),
+		BuySignal:               signalView.BuySignal,
+		BuySignalDetail:         signalView.BuySignalDetail,
+		SellSignal:              signalView.SellSignal,
+		SellSignalDetail:        signalView.SellSignalDetail,
+		InvalidSignal:           signalView.InvalidSignal,
+		ActivationRule:          strings.TrimSpace(rec.ActivationRuleJSON),
+		ActivationInvalidReason: strings.TrimSpace(rec.ActivationInvalidReason),
+		RecommendCount:          1,
+		RecommendTime:           formatYieldDisplayTime(recordTime),
+		SignalTime:              formatYieldDisplayTime(recordTime),
+		RecommendBuyPrice:       resolveRecommendBuyRangeDisplay(rec),
+		StopProfitAmount:        stopProfitAmount,
+		StopLossAmount:          stopLossAmount,
+		SellAmountText:          buildSellAmountText(stopProfitAmount, stopLossAmount),
+		SellTime:                "持有",
+		PositionStatus:          "持有",
+		YieldRateText:           "--",
+		DataStatus:              "快速估算",
+		DataStatusReason:        "fast 模式按报告主买入区直接买入，不扫描分钟线触发条件",
 	}
 
 	if currentPrice, ok := currentPriceMap[code]; ok {
@@ -3213,7 +4035,7 @@ func fillSignalDrivenRecommendCompat(recommend *models.AiRecommendStocks, signal
 		return
 	}
 	if buySignal := normalizeRecommendText(recommend.BuySignal); buySignal != "" &&
-		!hasRequiredStructuredPlanSection(buySignal, []string{"价格触发：", "量能触发：", "逻辑触发："}) {
+		!hasRequiredStructuredPlanSection(buySignal, []string{"价格触发：", "量能触发："}) {
 		if strings.TrimSpace(recommend.RecommendReason) == "" && strings.TrimSpace(recommend.BuySignalDetail) == "" {
 			recommend.BuySignalDetail = buySignal
 		}
@@ -3223,7 +4045,7 @@ func fillSignalDrivenRecommendCompat(recommend *models.AiRecommendStocks, signal
 		recommend.InvalidSignal = firstNonEmptyText(recommend.InvalidCondition, recommend.InvalidSignal)
 	}
 	if invalidSignal := normalizeRecommendText(recommend.InvalidSignal); invalidSignal != "" &&
-		!hasRequiredStructuredPlanSection(invalidSignal, []string{"时间失效：", "价格失效：", "逻辑失效："}) {
+		!hasRequiredStructuredPlanSection(invalidSignal, []string{"时间失效：", "价格失效："}) {
 		if strings.TrimSpace(recommend.InvalidCondition) == "" {
 			recommend.InvalidCondition = invalidSignal
 		}
@@ -3246,10 +4068,10 @@ func fillSignalDrivenRecommendCompat(recommend *models.AiRecommendStocks, signal
 		recommend.InvalidSignal = buildCompatInvalidSignal(recommend.RecommendStopLossPrice)
 	}
 	if recommend.BuySignalDetail == "" {
-		recommend.BuySignalDetail = buildCompatBuySignalDetail(recommend.Remarks)
+		recommend.BuySignalDetail = buildCompatBuySignalDetail(recommend.Remarks, shouldBypassRecommendKeywordInterception(recommend.DataTime))
 	}
 	if recommend.SellSignalDetail == "" {
-		recommend.SellSignalDetail = buildCompatSellSignalDetail(recommend.Remarks)
+		recommend.SellSignalDetail = buildCompatSellSignalDetail(recommend.Remarks, shouldBypassRecommendKeywordInterception(recommend.DataTime))
 	}
 	if !structuredMode && hasSignalDrivenRecommend(recommend) {
 		recommend.RecommendCategory = ""
@@ -3271,10 +4093,10 @@ func buildCompatBuySignal(executionState string, buyRange string) string {
 	if rangeText == "" {
 		rangeText = "主买入区"
 	}
-	return "价格触发：未来3-5个交易日内股价进入" + rangeText + "主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍；逻辑触发：核心催化未证伪且板块未转弱"
+	return "价格触发：未来3-5个交易日内股价进入" + rangeText + "主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍"
 }
 
-func buildCompatBuySignalDetail(remarks string) string {
+func buildCompatBuySignalDetail(remarks string, bypassKeywordInterception bool) string {
 	lines := strings.Split(normalizeRecommendText(remarks), "\n")
 	matched := make([]string, 0, len(lines))
 	for _, line := range lines {
@@ -3283,7 +4105,12 @@ func buildCompatBuySignalDetail(remarks string) string {
 			continue
 		}
 		if recommendActionKeywordRegexp.MatchString(line) {
-			if hasVolumeSignal(line) && !hasCompleteVolumeContext(line) {
+			if !bypassKeywordInterception {
+				if phrase := findAmbiguousTriggerPhrase(line); phrase != "" && !quantifiedThresholdRegexp.MatchString(line) {
+					continue
+				}
+			}
+			if !bypassKeywordInterception && hasVolumeSignal(line) && !hasCompleteVolumeContext(line) {
 				continue
 			}
 			matched = append(matched, line)
@@ -3307,8 +4134,8 @@ func buildCompatSellSignal(stopProfit, stopLoss string) string {
 	}
 }
 
-func buildCompatSellSignalDetail(remarks string) string {
-	return buildCompatBuySignalDetail(remarks)
+func buildCompatSellSignalDetail(remarks string, bypassKeywordInterception bool) string {
+	return buildCompatBuySignalDetail(remarks, bypassKeywordInterception)
 }
 
 func buildCompatInvalidSignal(stopLoss string) string {
@@ -3316,7 +4143,7 @@ func buildCompatInvalidSignal(stopLoss string) string {
 	if stopLoss == "" {
 		return ""
 	}
-	return "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破" + stopLoss + "；逻辑失效：核心催化被证伪或板块联动明显转弱"
+	return "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破" + stopLoss
 }
 
 func validateSignalDrivenRecommend(recommend *models.AiRecommendStocks) error {
@@ -3341,11 +4168,11 @@ func validateSignalDrivenRecommend(recommend *models.AiRecommendStocks) error {
 	if !containsConditionalCue(buyCombined) {
 		return errors.New("条件触发型记录的买入信号必须明确说明触发条件")
 	}
-	if !hasRequiredStructuredPlanSection(buyCombined, []string{"价格触发：", "量能触发：", "逻辑触发："}) {
-		return errors.New("买入信号必须严格包含“价格触发 / 量能触发 / 逻辑触发”三段")
+	if !hasRequiredStructuredPlanSection(buyCombined, []string{"价格触发：", "量能触发："}) {
+		return errors.New("买入信号必须严格包含“价格触发 / 量能触发”两段")
 	}
-	if !hasRequiredStructuredPlanSection(invalidCombined, []string{"时间失效：", "价格失效：", "逻辑失效："}) {
-		return errors.New("失效信号必须严格包含“时间失效 / 价格失效 / 逻辑失效”三段")
+	if !hasRequiredStructuredPlanSection(invalidCombined, []string{"时间失效：", "价格失效："}) {
+		return errors.New("失效信号必须严格包含“时间失效 / 价格失效”两段")
 	}
 	if hasVolumeSignal(buyCombined) && !hasCompleteVolumeContext(buyCombined) {
 		return errors.New("买入信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
@@ -3356,11 +4183,13 @@ func validateSignalDrivenRecommend(recommend *models.AiRecommendStocks) error {
 	if hasVolumeSignal(invalidCombined) && !hasCompleteVolumeContext(invalidCombined) {
 		return errors.New("失效信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
 	}
-	if phrase := findAmbiguousTriggerPhrase(buyCombined); phrase != "" {
-		return fmt.Errorf("买入信号包含未量化表述“%s”，必须改成可机械执行的阈值条件", phrase)
-	}
-	if phrase := findAmbiguousTriggerPhrase(invalidCombined); phrase != "" {
-		return fmt.Errorf("失效信号包含未量化表述“%s”，必须改成可机械执行的阈值条件", phrase)
+	if !shouldBypassRecommendKeywordInterception(recommend.DataTime) {
+		if phrase := findAmbiguousTriggerPhrase(buyCombined); phrase != "" {
+			return fmt.Errorf("买入信号包含未量化表述“%s”，必须改成可机械执行的阈值条件", phrase)
+		}
+		if phrase := findAmbiguousTriggerPhrase(invalidCombined); phrase != "" {
+			return fmt.Errorf("失效信号包含未量化表述“%s”，必须改成可机械执行的阈值条件", phrase)
+		}
 	}
 	return nil
 }

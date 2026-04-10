@@ -1,7 +1,10 @@
 package main
 
 import (
+	"go-stock/backend/data"
+	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +20,10 @@ type summaryRunResult struct {
 }
 
 func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) {
+	_ = a.runSummaryStockNewsTask(question, aiConfigId, sysPromptId, enableTools, think)
+}
+
+func (a *App) runSummaryStockNewsTask(question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) summaryRunResult {
 	if !a.tryAcquireSummaryTask() {
 		emitEvent(a.ctx, "summaryStockNewsToolStatus", map[string]any{
 			"event":  "summaryStockNewsToolStatus",
@@ -24,7 +31,7 @@ func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int
 			"status": "busy",
 			"time":   time.Now().Format(time.DateTime),
 		})
-		return
+		return summaryRunResult{errs: []string{"AI总结正在执行中"}}
 	}
 	defer a.releaseSummaryTask()
 	emitEvent(a.ctx, "summaryStockNewsToolStatus", map[string]any{
@@ -38,7 +45,7 @@ func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int
 	order := a.resolveSummaryFailoverOrder(aiConfigId)
 	if len(order) == 0 {
 		emitEvent(a.ctx, "summaryStockNews", "DONE")
-		return
+		return summaryRunResult{errs: []string{"未找到可用的 AI 配置"}}
 	}
 
 	res := summaryRunResult{}
@@ -63,6 +70,7 @@ func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int
 
 	a.persistSummaryRunResult(res, startedAt)
 	emitEvent(a.ctx, "summaryStockNews", "DONE")
+	return res
 }
 
 func (a *App) runSummaryWithFallback(targetAiConfigId int, question string, sysPromptId *int, withTools bool, thinking bool) summaryRunResult {
@@ -269,15 +277,80 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 	if res.text == "" {
 		return
 	}
-	a.services.AI.SaveAIResponseResult(a.ctx, "市场资讯", "市场资讯", res.text, res.chatID, res.finalQuestion, res.aiConfigId)
-	if saved, err := a.services.AI.EnsureMarketSummaryRecommendStocksSaved(res.text, res.modelName, startedAt); err != nil {
+
+	preparedText, prepStats, err := data.PrepareMarketSummaryReportForPersistence(res.text, startedAt)
+	if err != nil {
+		logger.SugaredLogger.Warnf("市场资讯AI总结净化失败，回退原始文本保存: %v", err)
+		preparedText = res.text
+	} else if prepStats.DuplicateRowsOmit > 0 || prepStats.AnalysisOnlyRows > 0 {
+		logger.SugaredLogger.Infof(
+			"市场资讯AI总结净化完成: rows=%d duplicateOmit=%d analysisOnly=%d kept=%d",
+			prepStats.RowsSeen,
+			prepStats.DuplicateRowsOmit,
+			prepStats.AnalysisOnlyRows,
+			prepStats.RecommendationRows,
+		)
+	}
+
+	reportText := preparedText
+	if startedAt.In(time.FixedZone("CST", 8*3600)).Format("15:04") == "09:40" {
+		if reviewMarkdown, reviewErr := data.RunMorningOpeningReview(startedAt); reviewErr != nil {
+			logger.SugaredLogger.Warnf("09:40 开盘复核生成失败: %v", reviewErr)
+		} else if strings.TrimSpace(reviewMarkdown) != "" {
+			reportText = strings.TrimSpace(preparedText) + "\n\n" + strings.TrimSpace(reviewMarkdown)
+		}
+	}
+
+	report := buildMarketSummaryEmailReport(reportText, res.finalQuestion, res.modelName, startedAt.Format(time.DateTime))
+	if report == nil {
+		report = &models.AIResponseResult{
+			StockCode: "市场资讯",
+			StockName: "市场资讯",
+			ModelName: strings.TrimSpace(res.modelName),
+			ChatId:    res.chatID,
+			Question:  strings.TrimSpace(res.finalQuestion),
+			Content:   data.HumanizeMarketSummaryReport(reportText),
+		}
+		report.CreatedAt = startedAt
+	}
+	report.ChatId = res.chatID
+	if err := db.Dao.Create(report).Error; err != nil {
+		logger.SugaredLogger.Warnf("市场资讯AI总结保存失败: %v", err)
+	}
+
+	if saved, err := a.services.AI.EnsureMarketSummaryRecommendStocksSaved(preparedText, res.modelName, startedAt); err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结补写推荐记录失败: %v", err)
 	} else if saved > 0 {
 		logger.SugaredLogger.Infof("市场资讯AI总结自动补写推荐记录成功: +%d", saved)
 	}
-	if saved, err := a.services.AI.EnsureMarketSummaryYieldOverridesSaved(res.text, startedAt); err != nil {
+	if saved, err := a.services.AI.EnsureMarketSummaryYieldOverridesSaved(preparedText, startedAt); err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结补写收益率复审覆盖失败: %v", err)
 	} else if saved > 0 {
 		logger.SugaredLogger.Infof("市场资讯AI总结自动补写收益率复审覆盖成功: +%d", saved)
 	}
+
+	setting := a.services.Config.GetConfig()
+	if report != nil && setting != nil && setting.Settings != nil && setting.YieldEmailEnable && setting.MarketSummaryEmailEnable {
+		if !a.tryAcquireYieldEmailTask() {
+			logger.SugaredLogger.Warn("市场资讯AI总结自动发送邮件已跳过: 上一次邮件发送任务仍在执行")
+			return
+		}
+		defer a.releaseYieldEmailTask()
+		if err := a.services.AI.SendMarketSummaryEmail("summary_auto", report, summarizeSummaryRunError(res)); err != nil {
+			logger.SugaredLogger.Warnf("市场资讯AI总结生成后自动发送邮件失败: %v", err)
+		}
+	}
+}
+
+func summarizeSummaryRunError(res summaryRunResult) string {
+	for _, item := range res.errs {
+		text := strings.TrimSpace(item)
+		if text != "" {
+			return text
+		}
+	}
+	if strings.TrimSpace(res.text) == "" {
+		return "未生成可保存的总结内容"
+	}
+	return ""
 }

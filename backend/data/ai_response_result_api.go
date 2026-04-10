@@ -28,6 +28,7 @@ func (s *AIResponseResultService) GetAIResponseResultList(query models.AIRespons
 	}
 	if query.ModelName != "" {
 		q.Or("model_name LIKE ?", "%"+query.ModelName+"%")
+		q.Or("provider_name LIKE ?", "%"+query.ModelName+"%")
 	}
 	if query.StockCode != "" {
 		q.Or("stock_code LIKE ?", "%"+query.StockCode+"%")
@@ -81,9 +82,7 @@ func (s *AIResponseResultService) GetAIResponseResultList(query models.AIRespons
 		return nil, err
 	}
 	for i := range list {
-		if list[i].StockCode == "市场资讯" || list[i].StockName == "市场资讯" {
-			list[i].Question = NormalizeMarketSummaryQuestion(list[i].Question)
-		}
+		sanitizeAIResponseResultForDisplay(&list[i])
 	}
 
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))

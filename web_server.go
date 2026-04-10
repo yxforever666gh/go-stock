@@ -9,8 +9,8 @@ import (
 	"io"
 	"io/fs"
 	"net/http"
-	"path"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -225,14 +225,15 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":         ok,
-			"id":         latest.ID,
-			"createdAt":  latest.CreatedAt,
-			"stockCode":  latest.StockCode,
-			"stockName":  latest.StockName,
-			"question":   latest.Question,
-			"modelName":  latest.ModelName,
-			"contentLen": len(strings.TrimSpace(latest.Content)),
+			"ok":           ok,
+			"id":           latest.ID,
+			"createdAt":    latest.CreatedAt,
+			"stockCode":    latest.StockCode,
+			"stockName":    latest.StockName,
+			"question":     latest.Question,
+			"providerName": latest.ProviderName,
+			"modelName":    latest.ModelName,
+			"contentLen":   len(strings.TrimSpace(latest.Content)),
 		})
 	})
 

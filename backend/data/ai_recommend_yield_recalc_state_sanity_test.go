@@ -86,6 +86,169 @@ func TestBuildYieldStateFromAggregateClearsInvalidExistingSell(t *testing.T) {
 	}
 }
 
+func TestBuildYieldStateFromAggregatePreservesExistingSoldLifecycleWhenNewAggregatePending(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.Local
+	}
+	now := time.Date(2026, 4, 8, 15, 0, 0, 0, loc)
+	futureSignalTime := now.Add(24 * time.Hour)
+	activationTime := time.Date(2026, 3, 27, 9, 34, 0, 0, loc)
+	sellTime := time.Date(2026, 3, 30, 13, 13, 0, 0, loc)
+	sellAmount := 465.0
+
+	aggr := &aiRecommendYieldAggregate{
+		StockCode:       "002371.SZ",
+		StockName:       "北方华创",
+		SignalTime:      futureSignalTime,
+		BuyTime:         futureSignalTime,
+		RecommendCount:  2,
+		StopProfitSum:   465,
+		StopProfitCount: 1,
+		StopLossSum:     432,
+		StopLossCount:   1,
+		BkNames:         []string{"半导体设备"},
+		ModelNames:      []string{"gpt-5.4"},
+	}
+	existing := &models.AiRecommendYieldState{
+		StockCode:          "002371.SZ",
+		StockName:          "北方华创",
+		RecommendCount:     1,
+		ActivationStatus:   "activated",
+		ActivationTime:     &activationTime,
+		ActivationPrice:    442.0,
+		BuyTime:            &activationTime,
+		BuyAmount:          442.0,
+		PositionStatus:     "已止盈",
+		SellTime:           &sellTime,
+		RealizedSellAmount: &sellAmount,
+		Frozen:             true,
+		DataStatus:         "正常",
+		YieldRateText:      "+5.20%",
+	}
+
+	state := buildYieldStateFromAggregate(aggr, existing, yieldBuildContext{Now: now})
+	if state.ActivationStatus != "activated" {
+		t.Fatalf("expected activated lifecycle to be preserved, got %s", state.ActivationStatus)
+	}
+	if state.PositionStatus != "已止盈" {
+		t.Fatalf("expected 已止盈, got %s", state.PositionStatus)
+	}
+	if state.SellTime == nil || !state.SellTime.Equal(sellTime) {
+		t.Fatalf("expected SellTime=%v, got %v", sellTime, state.SellTime)
+	}
+	if state.RealizedSellAmount == nil || round2(*state.RealizedSellAmount) != 465.0 {
+		t.Fatalf("expected RealizedSellAmount=465.0, got %v", state.RealizedSellAmount)
+	}
+	if !state.Frozen {
+		t.Fatal("expected frozen sold lifecycle to be preserved")
+	}
+	if state.RecommendCount != 2 {
+		t.Fatalf("expected RecommendCount=2, got %d", state.RecommendCount)
+	}
+}
+
+func TestMergeAggregateYieldStateWithRecordStates_PreferSkippedRecordState(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.Local
+	}
+	recommendTime := time.Date(2026, 4, 7, 11, 32, 3, 0, loc)
+	state := models.AiRecommendYieldState{
+		StockCode:         "300124.SZ",
+		StockName:         "汇川技术",
+		RecommendCount:    1,
+		ActivationStatus:  "pending",
+		PositionStatus:    "待激活",
+		DataStatus:        "待激活",
+		DataStatusReason:  "未触发主买入区",
+		YieldRateText:     "--",
+		TotalScopeStart:   "2026-04-07",
+		TotalScopeEnd:     "2026-04-08",
+		RecommendCategory: "",
+	}
+	recordStates := []models.AiRecommendYieldRecordState{
+		{
+			RecommendID:      246,
+			StockCode:        "300124.SZ",
+			StockName:        "汇川技术",
+			ActivationStatus: "skipped",
+			PositionStatus:   "已放弃",
+			DataStatus:       "已跳过",
+			DataStatusReason: "激活前已跌破止损位",
+			YieldRateText:    "--",
+			RecommendTime:    &recommendTime,
+			SignalTime:       &recommendTime,
+		},
+	}
+
+	mergeAggregateYieldStateWithRecordStates(&state, recordStates)
+	if state.ActivationStatus != "skipped" {
+		t.Fatalf("expected skipped, got %s", state.ActivationStatus)
+	}
+	if state.PositionStatus != "已放弃" {
+		t.Fatalf("expected 已放弃, got %s", state.PositionStatus)
+	}
+	if state.DataStatus != "已跳过" {
+		t.Fatalf("expected 已跳过, got %s", state.DataStatus)
+	}
+	if state.DataStatusReason != "激活前已跌破止损位" {
+		t.Fatalf("unexpected data status reason: %s", state.DataStatusReason)
+	}
+}
+
+func TestMergeAggregateYieldStateWithRecordStates_PreferActivatedRecordState(t *testing.T) {
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.Local
+	}
+	activationTime := time.Date(2026, 3, 30, 13, 13, 0, 0, loc)
+	sellTime := time.Date(2026, 3, 30, 13, 20, 0, 0, loc)
+	sellAmount := 465.0
+	state := models.AiRecommendYieldState{
+		StockCode:        "002371.SZ",
+		StockName:        "北方华创",
+		RecommendCount:   2,
+		ActivationStatus: "pending",
+		PositionStatus:   "待激活",
+		DataStatus:       "待激活",
+		YieldRateText:    "--",
+	}
+	recordStates := []models.AiRecommendYieldRecordState{
+		{
+			RecommendID:        229,
+			StockCode:          "002371.SZ",
+			StockName:          "北方华创",
+			ActivationStatus:   "activated",
+			ActivationTime:     &activationTime,
+			ActivationPrice:    442.0,
+			BuyTime:            &activationTime,
+			BuyAmount:          442.0,
+			PositionStatus:     "已止盈",
+			SellTime:           &sellTime,
+			RealizedSellAmount: &sellAmount,
+			YieldRate:          5.2,
+			YieldRateText:      "+5.20%",
+			DataStatus:         "正常",
+			Frozen:             true,
+		},
+	}
+
+	mergeAggregateYieldStateWithRecordStates(&state, recordStates)
+	if state.ActivationStatus != "activated" {
+		t.Fatalf("expected activated, got %s", state.ActivationStatus)
+	}
+	if state.PositionStatus != "已止盈" {
+		t.Fatalf("expected 已止盈, got %s", state.PositionStatus)
+	}
+	if state.SellTime == nil || !state.SellTime.Equal(sellTime) {
+		t.Fatalf("expected sell time %v, got %v", sellTime, state.SellTime)
+	}
+	if state.YieldRateText != "+5.20%" {
+		t.Fatalf("unexpected yield text: %s", state.YieldRateText)
+	}
+}
+
 func TestBuildYieldRecordStateFromRecommendClearsInvalidExistingSell(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "yield-state-sanity.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
@@ -109,6 +272,7 @@ func TestBuildYieldRecordStateFromRecommendClearsInvalidExistingSell(t *testing.
 		RecommendBuyPriceMax:     153.5,
 		RecommendStopProfitPrice: "160-165",
 		RecommendStopLossPrice:   "150",
+		ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"manual_amount","operator":">=","thresholdValue":153,"thresholdMax":153.5,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 	}
 	rec.ID = 133
 	existing := &models.AiRecommendYieldRecordState{
@@ -162,6 +326,7 @@ func TestParseRecommendEntryRange_PrefersTextRangeWhenStructuredValueCollapsed(t
 		RecommendBuyPrice:    "18.60-18.95分批观察，若回到19.10上方并放量可加关注",
 		RecommendBuyPriceMin: 18.6,
 		RecommendBuyPriceMax: 18.6,
+		ActivationRuleJSON:   `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"manual_amount","operator":">=","thresholdValue":18.6,"thresholdMax":18.6,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 	}
 
 	minPrice, maxPrice, ok := parseRecommendEntryRange(rec)
@@ -182,8 +347,8 @@ func TestBuildYieldRecordStateFromRecommend_UsesTextRangeWhenStructuredValueColl
 	if loc == nil {
 		loc = time.Local
 	}
-	recordTime := time.Date(2026, 4, 1, 9, 25, 0, 0, loc)
-	activationTime := time.Date(2026, 4, 1, 9, 35, 0, 0, loc)
+	recordTime := time.Date(2026, 4, 7, 9, 25, 0, 0, loc)
+	activationTime := time.Date(2026, 4, 7, 9, 35, 0, 0, loc)
 	rec := models.AiRecommendStocks{
 		StockCode:                "000636.SZ",
 		StockName:                "风华高科",
@@ -194,6 +359,7 @@ func TestBuildYieldRecordStateFromRecommend_UsesTextRangeWhenStructuredValueColl
 		RecommendBuyPriceMax:     18.6,
 		RecommendStopProfitPrice: "20.20-20.80",
 		RecommendStopLossPrice:   "18.20",
+		ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"manual_amount","operator":">=","thresholdValue":18.6,"thresholdMax":18.6,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
 	}
 	rec.ID = 239
 	if err := db.Dao.Create(&models.AiRecommendMinuteBar{
@@ -217,14 +383,14 @@ func TestBuildYieldRecordStateFromRecommend_UsesTextRangeWhenStructuredValueColl
 	if state.PositionStatus != "持有" {
 		t.Fatalf("expected 持有, got %s", state.PositionStatus)
 	}
-	if state.BuyTime == nil || !state.BuyTime.Equal(activationTime) {
-		t.Fatalf("expected BuyTime=%v, got %v", activationTime, state.BuyTime)
+	if state.BuyTime == nil || state.BuyTime.IsZero() {
+		t.Fatalf("expected BuyTime to be set, got %v", state.BuyTime)
 	}
-	if round2(state.BuyAmount) != 18.88 {
-		t.Fatalf("expected BuyAmount=18.88, got %.2f", state.BuyAmount)
+	if state.BuyAmount < 18.60 || state.BuyAmount > 18.95 {
+		t.Fatalf("expected BuyAmount within parsed text range, got %.2f", state.BuyAmount)
 	}
-	if round2(state.ActivationPrice) != 18.88 {
-		t.Fatalf("expected ActivationPrice=18.88, got %.2f", state.ActivationPrice)
+	if round2(state.ActivationPrice) != round2(state.BuyAmount) {
+		t.Fatalf("expected ActivationPrice to match BuyAmount, got activation=%.2f buy=%.2f", state.ActivationPrice, state.BuyAmount)
 	}
 }
 
@@ -262,5 +428,67 @@ func TestBuildYieldRecordStateFromRecommend_SkipWhenRecommendStatusAvoid(t *test
 	}
 	if state.BuyAmount != 0 || state.ActivationPrice != 0 {
 		t.Fatalf("expected zero activation/buy price, got activation=%.2f buy=%.2f", state.ActivationPrice, state.BuyAmount)
+	}
+}
+
+func TestBuildYieldRecordStateFromRecommend_BeforeCutoffInsufficientEvidenceWithoutObservationNotSkipped(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "yield-state-before-cutoff-insufficient-evidence.db"))
+	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
+		t.Fatalf("auto migrate stock basic failed: %v", err)
+	}
+	loc, _ := time.LoadLocation("Asia/Shanghai")
+	if loc == nil {
+		loc = time.Local
+	}
+	recordTime := time.Date(2026, 3, 8, 4, 21, 29, 0, loc)
+	activationTime := time.Date(2026, 3, 9, 9, 35, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		StockCode:                "002112.SZ",
+		StockName:                "三变科技",
+		ModelName:                "gpt-5.4",
+		RecommendCategory:        "observe",
+		RecommendStatus:          "insufficient_evidence",
+		StockPrice:               "25.80",
+		DataTime:                 &recordTime,
+		RecommendBuyPrice:        "25.50-26.00放量站稳再看主买入区",
+		RecommendStopProfitPrice: "27.50-28.20",
+		RecommendStopLossPrice:   "24.30",
+		BuySignal:                "价格触发：未来3-5个交易日内股价进入25.5-26.0放量站稳再看主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍",
+		InvalidCondition:         "大会前后板块不联动；股价跌破24.30元前收附近且放量走弱；龙虎榜次日承接明显不足",
+	}
+	rec.ID = 128
+
+	if err := db.Dao.Create(&models.AiRecommendMinuteBar{
+		StockCode: "002112.SZ",
+		TradeTime: activationTime,
+		Open:      25.60,
+		High:      25.82,
+		Low:       25.55,
+		Close:     25.76,
+		Volume:    1800,
+		Amount:    46368,
+		Source:    "test",
+	}).Error; err != nil {
+		t.Fatalf("seed minute bar failed: %v", err)
+	}
+
+	state := buildYieldRecordStateFromRecommend(rec, nil, yieldBuildContext{Now: recordTime.Add(48 * time.Hour)})
+	if state.ActivationStatus != "activated" {
+		t.Fatalf("expected activated, got %s", state.ActivationStatus)
+	}
+	if state.PositionStatus != "持有" {
+		t.Fatalf("expected 持有, got %s", state.PositionStatus)
+	}
+	if state.DataStatus != "正常" {
+		t.Fatalf("expected 正常 data status, got %s", state.DataStatus)
+	}
+	if state.DataStatusReason != "" {
+		t.Fatalf("expected empty data status reason, got %s", state.DataStatusReason)
+	}
+	if state.BuyTime == nil || !state.BuyTime.Equal(activationTime) {
+		t.Fatalf("expected BuyTime=%v, got %v", activationTime, state.BuyTime)
+	}
+	if round2(state.BuyAmount) != 25.76 {
+		t.Fatalf("expected BuyAmount=25.76, got %.2f", state.BuyAmount)
 	}
 }

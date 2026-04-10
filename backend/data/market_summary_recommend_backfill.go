@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"sort"
@@ -52,21 +53,34 @@ func EnsureMarketSummaryRecommendStocksSaved(summaryText string, modelName strin
 	}
 
 	items := make([]*models.AiRecommendStocks, 0, len(missing))
+	saved := 0
+	failures := make([]string, 0, len(missing))
 	for _, draft := range missing {
 		item, err := draft.toRecommendStock()
 		if err != nil {
-			return 0, err
+			failures = append(failures, err.Error())
+			continue
 		}
 		items = append(items, item)
 	}
 	if len(items) == 0 {
-		return 0, nil
+		if len(failures) == 0 {
+			return 0, nil
+		}
+		return 0, errors.New(strings.Join(failures, "；"))
 	}
-
-	if err := NewAiRecommendStocksService().BatchCreateAiRecommendStocks(items); err != nil {
-		return 0, err
+	service := NewAiRecommendStocksService()
+	for idx, item := range items {
+		if err := service.CreateAiRecommendStocks(item); err != nil {
+			failures = append(failures, fmt.Sprintf("第%d条推荐记录不完整: %v", idx+1, err))
+			continue
+		}
+		saved++
 	}
-	return len(items), nil
+	if len(failures) > 0 {
+		return saved, errors.New(strings.Join(failures, "；"))
+	}
+	return saved, nil
 }
 
 func EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
@@ -98,6 +112,254 @@ func marketSummaryDayBounds(at time.Time) (time.Time, time.Time) {
 	}
 	start := time.Date(at.In(loc).Year(), at.In(loc).Month(), at.In(loc).Day(), 0, 0, 0, 0, loc)
 	return start, start.Add(24 * time.Hour)
+}
+
+func PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time.Time) (string, marketSummaryReportPrepareStats, error) {
+	stats := marketSummaryReportPrepareStats{}
+	lines := strings.Split(summaryText, "\n")
+	if len(lines) == 0 {
+		return strings.TrimSpace(summaryText), stats, nil
+	}
+
+	existingCodes, err := loadMarketSummaryExistingRecommendCodeSet(startedAt)
+	if err != nil {
+		return "", stats, err
+	}
+
+	out := make([]string, 0, len(lines))
+	replaced := false
+	for idx := 0; idx < len(lines); {
+		line := strings.TrimSpace(lines[idx])
+		if !strings.HasPrefix(line, "|") {
+			out = append(out, lines[idx])
+			idx++
+			continue
+		}
+		blockStart := idx
+		for idx < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[idx]), "|") {
+			idx++
+		}
+		block := lines[blockStart:idx]
+		rows := extractMarkdownRowsFromTableBlock(block)
+		if replaced || len(rows) == 0 {
+			out = append(out, block...)
+			continue
+		}
+		sanitizedRows, rowStats := sanitizeMarketSummaryRowsForPersistence(rows, existingCodes, startedAt)
+		stats.RowsSeen += rowStats.RowsSeen
+		stats.DuplicateRowsOmit += rowStats.DuplicateRowsOmit
+		stats.AnalysisOnlyRows += rowStats.AnalysisOnlyRows
+		stats.RecommendationRows = len(sanitizedRows)
+		out = append(out, buildPreparedMarketSummaryTableLines(sanitizedRows)...)
+		replaced = true
+	}
+	return strings.TrimSpace(strings.Join(out, "\n")), stats, nil
+}
+
+func loadMarketSummaryExistingRecommendCodeSet(startedAt time.Time) (map[string]struct{}, error) {
+	startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
+	rows := make([]models.AiRecommendStocks, 0, 16)
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("data_time >= ? AND data_time < ? AND summary_version = ?", startOfDay, endOfDay, marketSummaryPhase3Version).
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if code == "" {
+			continue
+		}
+		result[code] = struct{}{}
+	}
+	return result, nil
+}
+
+func sanitizeMarketSummaryRowsForPersistence(rows []marketSummaryRow, existingCodes map[string]struct{}, startedAt time.Time) ([]marketSummaryRow, marketSummaryReportPrepareStats) {
+	stats := marketSummaryReportPrepareStats{}
+	if len(rows) == 0 {
+		return nil, stats
+	}
+	seen := make(map[string]struct{}, len(rows))
+	out := make([]marketSummaryRow, 0, len(rows))
+	for _, row := range rows {
+		stats.RowsSeen++
+		stockName, stockCode := parseMarketSummaryStockCell(row.stockCell)
+		if stockName == "" {
+			continue
+		}
+		resolvedCode, resolvedName := resolveMarketSummaryStockIdentity(stockName, stockCode)
+		if resolvedName != "" {
+			stockName = resolvedName
+		}
+		if resolvedCode != "" {
+			stockCode = resolvedCode
+		}
+		stockCode = normalizeRecommendStockCode(stockCode)
+		if stockCode != "" {
+			if _, ok := existingCodes[stockCode]; ok {
+				stats.DuplicateRowsOmit++
+				continue
+			}
+			if _, ok := seen[stockCode]; ok {
+				stats.DuplicateRowsOmit++
+				continue
+			}
+			seen[stockCode] = struct{}{}
+		}
+		sanitized, analysisOnly := sanitizeSingleMarketSummaryRow(row, stockName, stockCode, startedAt)
+		if analysisOnly {
+			stats.AnalysisOnlyRows++
+		}
+		out = append(out, sanitized)
+	}
+	return out, stats
+}
+
+func sanitizeSingleMarketSummaryRow(row marketSummaryRow, stockName, stockCode string, startedAt time.Time) (marketSummaryRow, bool) {
+	sanitized := row
+	if stockName != "" {
+		if stockCode != "" {
+			sanitized.stockCell = fmt.Sprintf("%s(%s)", stockName, stockCode)
+		} else {
+			sanitized.stockCell = stockName
+		}
+	}
+	sanitized.remarks = HumanizeRecommendRemarks(sanitized.remarks)
+
+	rec := buildMarketSummaryPriceCheckRecommend(row, stockName, stockCode, startedAt)
+	if rec == nil {
+		return sanitized, false
+	}
+	snapshot, ok := loadMarketSummaryReferenceSnapshot(*rec)
+	if !ok || snapshot.Price <= 0 || snapshot.Amount <= 0 {
+		return rewriteMarketSummaryRowAsAnalysisOnly(sanitized, marketSummaryReferenceSnapshot{}, marketSummaryAnalysisOnlySkipReason), true
+	}
+	if reason, bad := detectMarketSummaryPriceMismatch(*rec); bad {
+		return rewriteMarketSummaryRowAsAnalysisOnly(sanitized, snapshot, reason+"，本次仅保留逻辑分析"), true
+	}
+	return sanitized, false
+}
+
+func buildMarketSummaryPriceCheckRecommend(row marketSummaryRow, stockName, stockCode string, startedAt time.Time) *models.AiRecommendStocks {
+	if strings.TrimSpace(stockCode) == "" {
+		return nil
+	}
+	observePrice := firstNumericValue(row.latestPrice)
+	focusText, focusMin, focusMax := parseMarketSummaryNumericRange(firstNonEmptyText(
+		row.focusPrice,
+		extractSignalPriceRange(row.buySignal),
+		extractSignalPriceRange(row.buySignalDetail),
+		observePrice,
+	))
+	stopProfitText, stopProfitMin, stopProfitMax := parseMarketSummaryNumericRange(row.stopProfit)
+	stopLossText := firstNumericValue(row.stopLoss)
+	executionState := normalizeRecommendExecutionState(row.executionState)
+	if executionState == "" {
+		executionState = recommendExecutionConditional
+	}
+	return &models.AiRecommendStocks{
+		DataTime:                    &startedAt,
+		StockCode:                   stockCode,
+		StockName:                   strings.TrimSpace(stockName),
+		StockPrice:                  observePrice,
+		StockCurrentPrice:           observePrice,
+		StockCurrentPriceTime:       startedAt.Format(time.DateTime),
+		StockClosePrice:             observePrice,
+		RecommendBuyPrice:           focusText,
+		RecommendBuyPriceMin:        focusMin,
+		RecommendBuyPriceMax:        focusMax,
+		RecommendStopProfitPrice:    stopProfitText,
+		RecommendStopProfitPriceMin: stopProfitMin,
+		RecommendStopProfitPriceMax: stopProfitMax,
+		RecommendStopLossPrice:      stopLossText,
+		ExecutionState:              executionState,
+		BuySignal:                   normalizeRecommendText(firstNonEmptyText(row.buySignal, row.buySignalDetail)),
+		BuySignalDetail:             normalizeRecommendText(row.buySignalDetail),
+		SellSignal:                  normalizeRecommendText(row.sellSignal),
+		SellSignalDetail:            normalizeRecommendText(row.sellSignalDetail),
+		InvalidSignal:               normalizeRecommendText(firstNonEmptyText(row.invalid, row.invalidSignal)),
+		InvalidCondition:            normalizeRecommendText(firstNonEmptyText(row.invalid, row.invalidSignal)),
+		ObservePrice:                observePrice,
+		FocusPrice:                  focusText,
+		ExpectedCycle:               strings.TrimSpace(row.expectedCycle),
+		ActivationRuleSource:        "market_summary",
+		SummaryVersion:              marketSummaryPhase3Version,
+	}
+}
+
+func rewriteMarketSummaryRowAsAnalysisOnly(row marketSummaryRow, snapshot marketSummaryReferenceSnapshot, reason string) marketSummaryRow {
+	row.executionState = "仅分析"
+	if snapshot.Price > 0 {
+		row.latestPrice = formatRecommendPrice(snapshot.Price)
+	} else {
+		row.latestPrice = "数据缺失"
+	}
+	row.focusPrice = "-"
+	row.stopProfit = "-"
+	row.stopLoss = "-"
+	row.buySignal = "缺少真实价格/量能数据，本次仅保留逻辑分析"
+	row.buySignalDetail = ""
+	row.sellSignal = "-"
+	row.sellSignalDetail = ""
+	row.invalidSignal = marketSummaryAnalysisOnlySkipReason
+	row.invalid = marketSummaryAnalysisOnlySkipReason
+	reason = normalizeRecommendText(reason)
+	if reason == "" {
+		reason = marketSummaryAnalysisOnlySkipReason
+	}
+	remarkParts := []string{}
+	if text := HumanizeRecommendRemarks(row.remarks); text != "" {
+		remarkParts = append(remarkParts, text)
+	}
+	if !strings.Contains(strings.Join(remarkParts, "\n"), reason) {
+		remarkParts = append(remarkParts, reason)
+	}
+	row.remarks = strings.Join(remarkParts, "\n")
+	return row
+}
+
+func buildPreparedMarketSummaryTableLines(rows []marketSummaryRow) []string {
+	headers := []string{
+		"| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |",
+		"| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+	}
+	lines := append([]string{}, headers...)
+	if len(rows) == 0 {
+		lines = append(lines, "| 暂无新增高质量候选标的 | - | - | - | - | - | - | - | - | - | - | - | - | - | - | - | 同日已无新增正式推荐 |")
+		return lines
+	}
+	for _, row := range rows {
+		line := []string{
+			renderPreparedMarketSummaryCell(row.stockCell),
+			renderPreparedMarketSummaryCell(row.direction),
+			renderPreparedMarketSummaryCell(row.catalyst),
+			renderPreparedMarketSummaryCell(row.evidence),
+			renderPreparedMarketSummaryCell(row.latestPrice),
+			renderPreparedMarketSummaryCell(row.focusPrice),
+			renderPreparedMarketSummaryCell(row.stopProfit),
+			renderPreparedMarketSummaryCell(row.stopLoss),
+			renderPreparedMarketSummaryCell(row.buySignal),
+			renderPreparedMarketSummaryCell(firstNonEmptyText(row.invalid, row.invalidSignal)),
+			renderPreparedMarketSummaryCell(row.risk),
+			renderPreparedMarketSummaryCell(row.expectedCycle),
+			renderPreparedMarketSummaryCell(row.eventStrength),
+			renderPreparedMarketSummaryCell(row.capitalConfirmation),
+			renderPreparedMarketSummaryCell(row.fundamentalFit),
+			renderPreparedMarketSummaryCell(row.technicalFit),
+			renderPreparedMarketSummaryCell(row.remarks),
+		}
+		lines = append(lines, "| "+strings.Join(line, " | ")+" |")
+	}
+	return lines
+}
+
+func renderPreparedMarketSummaryCell(text string) string {
+	text = HumanizeRecommendRemarks(normalizeRecommendText(text))
+	if text == "" {
+		return "-"
+	}
+	return strings.ReplaceAll(text, "\n", "<br>")
 }
 
 func collectMarketSummaryRecommendStocksForSave(parsed []*marketSummaryRecommendDraft, existing []models.AiRecommendStocks) []*marketSummaryRecommendDraft {
@@ -190,6 +452,11 @@ type marketSummaryRecommendDraft struct {
 	CapitalConfirmation         int
 	FundamentalFit              int
 	TechnicalFit                int
+	ActivationRuleJSON          string
+	ActivationRuleVersion       string
+	ActivationRuleSource        string
+	ActivationInvalidReason     string
+	RecommendStatus             string
 	SummaryVersion              string
 	RiskRemarks                 string
 	Remarks                     string
@@ -210,6 +477,93 @@ type marketSummaryYieldOverrideRow struct {
 	buySignal        string
 	invalidCondition string
 	reviewReason     string
+}
+
+type marketSummaryReportPrepareStats struct {
+	RowsSeen           int
+	DuplicateRowsOmit  int
+	AnalysisOnlyRows   int
+	RecommendationRows int
+}
+
+func (d *marketSummaryRecommendDraft) toPreviewRecommend() *models.AiRecommendStocks {
+	if d == nil {
+		return nil
+	}
+	return &models.AiRecommendStocks{
+		DataTime:                    d.DataTime,
+		ModelName:                   d.ModelName,
+		StockCode:                   d.StockCode,
+		StockName:                   d.StockName,
+		BkName:                      d.BkName,
+		StockPrice:                  d.StockPrice,
+		StockCurrentPrice:           d.StockCurrentPrice,
+		StockCurrentPriceTime:       d.StockCurrentPriceTime,
+		StockClosePrice:             d.StockClosePrice,
+		RecommendBuyPrice:           d.RecommendBuyPrice,
+		RecommendBuyPriceMin:        d.RecommendBuyPriceMin,
+		RecommendBuyPriceMax:        d.RecommendBuyPriceMax,
+		RecommendStopProfitPrice:    d.RecommendStopProfitPrice,
+		RecommendStopProfitPriceMin: d.RecommendStopProfitPriceMin,
+		RecommendStopProfitPriceMax: d.RecommendStopProfitPriceMax,
+		RecommendStopLossPrice:      d.RecommendStopLossPrice,
+		RecommendCategory:           d.RecommendCategory,
+		ExecutionState:              d.ExecutionState,
+		BuySignal:                   d.BuySignal,
+		BuySignalDetail:             d.BuySignalDetail,
+		SellSignal:                  d.SellSignal,
+		SellSignalDetail:            d.SellSignalDetail,
+		InvalidSignal:               d.InvalidSignal,
+		CoreCatalyst:                d.CoreCatalyst,
+		KeyEvidence:                 d.KeyEvidence,
+		InvalidCondition:            d.InvalidCondition,
+		ObservePrice:                d.ObservePrice,
+		FocusPrice:                  d.FocusPrice,
+		ExpectedCycle:               d.ExpectedCycle,
+		EventStrength:               d.EventStrength,
+		CapitalConfirmation:         d.CapitalConfirmation,
+		FundamentalFit:              d.FundamentalFit,
+		TechnicalFit:                d.TechnicalFit,
+		ActivationRuleJSON:          d.ActivationRuleJSON,
+		ActivationRuleVersion:       d.ActivationRuleVersion,
+		ActivationRuleSource:        d.ActivationRuleSource,
+		ActivationInvalidReason:     d.ActivationInvalidReason,
+		RecommendStatus:             d.RecommendStatus,
+		SummaryVersion:              d.SummaryVersion,
+		RiskRemarks:                 d.RiskRemarks,
+		Remarks:                     d.Remarks,
+	}
+}
+
+func (d *marketSummaryRecommendDraft) applyPreviewRecommend(rec *models.AiRecommendStocks) {
+	if d == nil || rec == nil {
+		return
+	}
+	d.StockPrice = rec.StockPrice
+	d.StockCurrentPrice = rec.StockCurrentPrice
+	d.StockCurrentPriceTime = rec.StockCurrentPriceTime
+	d.StockClosePrice = rec.StockClosePrice
+	d.RecommendBuyPrice = rec.RecommendBuyPrice
+	d.RecommendBuyPriceMin = rec.RecommendBuyPriceMin
+	d.RecommendBuyPriceMax = rec.RecommendBuyPriceMax
+	d.RecommendStopProfitPrice = rec.RecommendStopProfitPrice
+	d.RecommendStopProfitPriceMin = rec.RecommendStopProfitPriceMin
+	d.RecommendStopProfitPriceMax = rec.RecommendStopProfitPriceMax
+	d.RecommendStopLossPrice = rec.RecommendStopLossPrice
+	d.ExecutionState = rec.ExecutionState
+	d.BuySignal = rec.BuySignal
+	d.BuySignalDetail = rec.BuySignalDetail
+	d.SellSignal = rec.SellSignal
+	d.SellSignalDetail = rec.SellSignalDetail
+	d.InvalidSignal = rec.InvalidSignal
+	d.InvalidCondition = rec.InvalidCondition
+	d.ObservePrice = rec.ObservePrice
+	d.FocusPrice = rec.FocusPrice
+	d.ActivationRuleJSON = rec.ActivationRuleJSON
+	d.ActivationRuleVersion = rec.ActivationRuleVersion
+	d.ActivationInvalidReason = rec.ActivationInvalidReason
+	d.RecommendStatus = rec.RecommendStatus
+	d.Remarks = rec.Remarks
 }
 
 func (d *marketSummaryRecommendDraft) toRecommendStock() (*models.AiRecommendStocks, error) {
@@ -251,12 +605,19 @@ func (d *marketSummaryRecommendDraft) toRecommendStock() (*models.AiRecommendSto
 		CapitalConfirmation:         d.CapitalConfirmation,
 		FundamentalFit:              d.FundamentalFit,
 		TechnicalFit:                d.TechnicalFit,
+		ActivationRuleJSON:          d.ActivationRuleJSON,
+		ActivationRuleVersion:       d.ActivationRuleVersion,
+		ActivationRuleSource:        d.ActivationRuleSource,
+		ActivationInvalidReason:     d.ActivationInvalidReason,
+		RecommendStatus:             d.RecommendStatus,
 		SummaryVersion:              d.SummaryVersion,
 		RiskRemarks:                 d.RiskRemarks,
 		Remarks:                     d.Remarks,
 	}
 	item.RecommendReason = buildRecommendReasonCompat(item)
-	fillSignalDrivenRecommendCompat(item, hasSignalDrivenRecommend(item), false)
+	if !isAnalysisOnlyRecommend(item) {
+		fillSignalDrivenRecommendCompat(item, hasSignalDrivenRecommend(item), false)
+	}
 	return item, nil
 }
 
@@ -694,7 +1055,8 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, modelName string, dat
 		observePrice = firstNumericValue(focusText)
 	}
 
-	remarks := strings.TrimSpace(row.remarks)
+	embeddedRuleJSONs := extractActivationRuleJSONPayloads(row.remarks)
+	remarks := HumanizeRecommendRemarks(strings.TrimSpace(row.remarks))
 	if remarks == "" && buySignal != "" {
 		remarks = "买入依据：" + buySignal
 	}
@@ -704,11 +1066,12 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, modelName string, dat
 	if remarks == "" {
 		remarks = "auto-backfill-market-summary"
 	}
-	if shouldRejectMarketSummaryBackfillRow(row, focusText, buySignal, buySignalDetail, remarks) {
+	if shouldRejectMarketSummaryBackfillRow(row, dataTime, focusText, buySignal, buySignalDetail, remarks) {
 		return nil
 	}
-	if stopProfitText == "" || stopLossText == "" || strings.TrimSpace(row.expectedCycle) == "" {
-		return nil
+	analysisOnlyReason := detectPreparedMarketSummaryAnalysisOnlyReason(row)
+	if analysisOnlyReason != "" {
+		executionState = recommendExecutionAnalysisOnly
 	}
 
 	bkName := strings.TrimSpace(row.direction)
@@ -756,9 +1119,67 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, modelName string, dat
 		CapitalConfirmation:         parseCellInt(row.capitalConfirmation),
 		FundamentalFit:              parseCellInt(row.fundamentalFit),
 		TechnicalFit:                parseCellInt(row.technicalFit),
+		ActivationRuleVersion:       activationRuleVersionV1,
+		ActivationRuleSource:        "market_summary",
+		RecommendStatus:             "valid",
 		SummaryVersion:              marketSummaryPhase3Version,
 		RiskRemarks:                 risk,
 		Remarks:                     remarks,
+	}
+	preview := draft.toPreviewRecommend()
+	if rule, err := buildActivationRuleFromRecommend(preview); err == nil && rule != nil {
+		if raw, marshalErr := json.Marshal(rule); marshalErr == nil {
+			draft.ActivationRuleJSON = string(raw)
+		}
+	} else if err != nil {
+		draft.ActivationInvalidReason = err.Error()
+		for _, rawJSON := range embeddedRuleJSONs {
+			rule, parseErr := parseActivationRuleJSON(rawJSON)
+			if parseErr != nil || rule == nil {
+				continue
+			}
+			raw, marshalErr := json.Marshal(rule)
+			if marshalErr != nil {
+				continue
+			}
+			draft.ActivationRuleJSON = string(raw)
+			draft.ActivationRuleSource = "market_summary_embedded"
+			draft.ActivationInvalidReason = ""
+			break
+		}
+	}
+	if analysisOnlyReason != "" {
+		draft.RecommendStatus = "missing_market_data"
+		draft.ExecutionState = recommendExecutionAnalysisOnly
+		draft.RecommendBuyPrice = ""
+		draft.RecommendBuyPriceMin = 0
+		draft.RecommendBuyPriceMax = 0
+		draft.RecommendStopProfitPrice = ""
+		draft.RecommendStopProfitPriceMin = 0
+		draft.RecommendStopProfitPriceMax = 0
+		draft.RecommendStopLossPrice = ""
+		draft.FocusPrice = ""
+		draft.BuySignal = "缺少真实价格/量能数据，本次仅保留逻辑分析"
+		draft.BuySignalDetail = ""
+		draft.SellSignal = ""
+		draft.SellSignalDetail = ""
+		draft.InvalidSignal = marketSummaryAnalysisOnlySkipReason
+		draft.InvalidCondition = marketSummaryAnalysisOnlySkipReason
+		draft.ActivationRuleJSON = ""
+		draft.ActivationRuleVersion = ""
+		draft.ActivationInvalidReason = analysisOnlyReason
+		if !strings.Contains(draft.Remarks, analysisOnlyReason) {
+			draft.Remarks = normalizeRecommendText(draft.Remarks + "\n" + analysisOnlyReason)
+		}
+	}
+	preview = draft.toPreviewRecommend()
+	if preview != nil {
+		_ = normalizeMarketSummaryExecutionDataForSave(preview)
+		draft.applyPreviewRecommend(preview)
+	}
+	if preview != nil && !isAnalysisOnlyRecommend(preview) &&
+		(stopProfitText == "" || stopLossText == "" || strings.TrimSpace(row.expectedCycle) == "") {
+		return nil
 	}
 	if draft.ModelName == "" {
 		draft.ModelName = "market-summary-auto-backfill"
@@ -857,7 +1278,10 @@ func normalizeMarketSummaryYieldOverrideVerdict(raw string) string {
 	}
 }
 
-func shouldRejectMarketSummaryBackfillRow(row marketSummaryRow, focusText, buySignal, buySignalDetail, remarks string) bool {
+func shouldRejectMarketSummaryBackfillRow(row marketSummaryRow, dataTime time.Time, focusText, buySignal, buySignalDetail, remarks string) bool {
+	if shouldBypassRecommendKeywordInterceptionAt(dataTime) {
+		return false
+	}
 	texts := []string{
 		row.category,
 		row.focusPrice,
@@ -880,6 +1304,28 @@ func shouldRejectMarketSummaryBackfillRow(row marketSummaryRow, focusText, buySi
 		}
 	}
 	return false
+}
+
+func detectPreparedMarketSummaryAnalysisOnlyReason(row marketSummaryRow) string {
+	text := normalizeRecommendText(strings.Join([]string{
+		row.buySignal,
+		row.invalid,
+		row.invalidSignal,
+		row.remarks,
+	}, "\n"))
+	if text == "" {
+		return ""
+	}
+	switch {
+	case strings.Contains(text, "已跳过激活与回测"):
+		return text
+	case strings.Contains(text, "仅保留逻辑分析"):
+		return text
+	case strings.Contains(text, "缺少真实价格/量能数据"):
+		return text
+	default:
+		return ""
+	}
 }
 
 func extractSignalPriceRange(text string) string {

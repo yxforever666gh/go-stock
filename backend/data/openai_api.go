@@ -35,6 +35,7 @@ type OpenAi struct {
 	ctx              context.Context
 	BaseUrl          string  `json:"base_url"`
 	ApiKey           string  `json:"api_key"`
+	ProviderName     string  `json:"provider_name"`
 	Model            string  `json:"model"`
 	MaxTokens        int     `json:"max_tokens"`
 	Temperature      float64 `json:"temperature"`
@@ -86,6 +87,7 @@ func NewOpenAiWithConfig(ctx context.Context, aiConfig *AIConfig) *OpenAi {
 		ctx:              ctx,
 		BaseUrl:          aiConfig.BaseUrl,
 		ApiKey:           aiConfig.ApiKey,
+		ProviderName:     DetectAIProviderName(aiConfig),
 		Model:            aiConfig.ModelName,
 		MaxTokens:        aiConfig.MaxTokens,
 		Temperature:      aiConfig.Temperature,
@@ -2673,20 +2675,19 @@ func GetTopNewsList(crawlTimeOut int64) *[]string {
 
 func (o *OpenAi) SaveAIResponseResult(stockCode, stockName, result, chatId, question string) {
 	db.Dao.Create(&models.AIResponseResult{
-		StockCode: stockCode,
-		StockName: stockName,
-		ModelName: o.Model,
-		Content:   result,
-		ChatId:    chatId,
-		Question:  question,
+		StockCode:    stockCode,
+		StockName:    stockName,
+		ProviderName: strings.TrimSpace(o.ProviderName),
+		ModelName:    o.Model,
+		Content:      result,
+		ChatId:       chatId,
+		Question:     question,
 	})
 }
 
 func (o *OpenAi) GetAIResponseResult(stock string) *models.AIResponseResult {
 	var result models.AIResponseResult
 	db.Dao.Where("stock_code = ?", stock).Order("id desc").Limit(1).Find(&result)
-	if result.StockCode == "市场资讯" || result.StockName == "市场资讯" {
-		result.Question = NormalizeMarketSummaryQuestion(result.Question)
-	}
+	sanitizeAIResponseResultForDisplay(&result)
 	return &result
 }

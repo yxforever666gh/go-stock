@@ -38,7 +38,7 @@ type App struct {
 	domReadyDone       bool
 }
 
-const defaultMarketSummaryCronTimes = "09:30,11:30,18:00"
+const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
 const summaryStockNewsEntryPrefix = "SummaryStockNewsCustom_"
 const summaryStockNewsTestEntryKey = "SummaryStockNewsTest_1min"
 const yieldEmailCronEntryPrefix = "YieldEmailCustom_"
@@ -491,7 +491,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 		Type: "function",
 		Function: data.ToolFunction{
 			Name:        "CreateAiRecommendStocks",
-			Description: "创建/保存AI推荐股票记录。必须优先输出结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...；逻辑触发：...”，失效条件需明确为“时间失效：...；价格失效：...；逻辑失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。只有满足至少两类证据且至少一条高信任证据时，才允许进入等待激活计划；证据不足或存在冲突时应直接回避。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
+			Description: "创建/保存AI推荐股票记录。必须优先输出结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...”，失效条件需明确为“时间失效：...；价格失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。只有满足至少两类证据且至少一条高信任证据时，才允许进入等待激活计划；证据不足或存在冲突时应直接回避。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
 			Parameters: &data.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
@@ -529,7 +529,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 					},
 					"recommendReason": map[string]any{
 						"type":        "string",
-						"description": "推荐理由/驱动因素/逻辑。必须包含结构化交易计划文本，至少写出：买入依据：价格触发...；量能触发...；逻辑触发...。失效条件：时间失效...；价格失效...；逻辑失效...。禁止只写“放量/缩量/强势/承接/不追”等抽象词，必须写清价位、周期、比较基准、阈值。",
+						"description": "推荐理由/驱动因素。必须包含结构化交易计划文本，至少写出：买入依据：价格触发...；量能触发...。失效条件：时间失效...；价格失效...。禁止只写“放量/缩量/强势/承接/不追”等抽象词，必须写清价位、周期、比较基准、阈值。",
 					},
 					"recommendBuyPrice": map[string]any{
 						"type":        "string",
@@ -578,7 +578,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 					},
 					"invalidCondition": map[string]any{
 						"type":        "string",
-						"description": "失效条件。必须写成：时间失效：...；价格失效：...；逻辑失效：...，不能只写“逻辑走弱”“不及预期”等空泛表述。",
+						"description": "失效条件。必须写成：时间失效：...；价格失效：...，不能只写“失效”“不及预期”等空泛表述。",
 					},
 					"observePrice": map[string]any{
 						"type":        "string",
@@ -608,6 +608,10 @@ func AddTools(tools []data.Tool) []data.Tool {
 						"type":        "integer",
 						"description": "技术面匹配度，0-100整数",
 					},
+					"activationRuleJson": map[string]any{
+						"type":        "string",
+						"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，还应包含 thresholdMax；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
+					},
 					"riskRemarks": map[string]any{
 						"type":        "string",
 						"description": "风险提示/风险点",
@@ -617,7 +621,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 						"description": "操作总结/备注",
 					},
 				},
-				Required: []string{"stockCode", "stockName", "bkName", "recommendCategory", "coreCatalyst", "keyEvidence", "riskRemarks", "invalidCondition", "observePrice", "focusPrice", "recommendBuyPrice", "recommendStopProfitPrice", "recommendStopLossPrice", "expectedCycle", "eventStrength", "capitalConfirmation", "fundamentalFit", "technicalFit"},
+				Required: []string{"stockCode", "stockName", "bkName", "recommendCategory", "coreCatalyst", "keyEvidence", "riskRemarks", "invalidCondition", "observePrice", "focusPrice", "recommendBuyPrice", "recommendStopProfitPrice", "recommendStopLossPrice", "expectedCycle", "eventStrength", "capitalConfirmation", "fundamentalFit", "technicalFit", "activationRuleJson"},
 			},
 		},
 	})
@@ -627,7 +631,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 		Type: "function",
 		Function: data.ToolFunction{
 			Name:        "BatchCreateAiRecommendStocks",
-			Description: "批量创建/保存AI推荐股票记录。每条记录都必须包含结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...；逻辑触发：...”，失效条件需明确为“时间失效：...；价格失效：...；逻辑失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。证据不足或存在冲突时只能直接回避，不应混入观察标签；建议每次批量保存不超过5条。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
+			Description: "批量创建/保存AI推荐股票记录。每条记录都必须包含结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...”，失效条件需明确为“时间失效：...；价格失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。证据不足或存在冲突时只能直接回避，不应混入观察标签；建议每次批量保存不超过5条。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
 			Parameters: &data.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
@@ -670,7 +674,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 								},
 								"recommendReason": map[string]any{
 									"type":        "string",
-									"description": "推荐理由/驱动因素/逻辑。必须包含结构化交易计划文本，至少写出：买入依据：价格触发...；量能触发...；逻辑触发...。失效条件：时间失效...；价格失效...；逻辑失效...。禁止只写“放量/缩量/强势/承接/不追”等抽象词，必须写清价位、周期、比较基准、阈值。",
+									"description": "推荐理由/驱动因素。必须包含结构化交易计划文本，至少写出：买入依据：价格触发...；量能触发...。失效条件：时间失效...；价格失效...。禁止只写“放量/缩量/强势/承接/不追”等抽象词，必须写清价位、周期、比较基准、阈值。",
 								},
 								"recommendBuyPrice": map[string]any{
 									"type":        "string",
@@ -714,7 +718,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 								},
 								"invalidCondition": map[string]any{
 									"type":        "string",
-									"description": "失效条件。必须写成：时间失效：...；价格失效：...；逻辑失效：...，不能只写“逻辑走弱”“不及预期”等空泛表述。",
+									"description": "失效条件。必须写成：时间失效：...；价格失效：...，不能只写“失效”“不及预期”等空泛表述。",
 								},
 								"observePrice": map[string]any{
 									"type":        "string",
@@ -744,6 +748,10 @@ func AddTools(tools []data.Tool) []data.Tool {
 									"type":        "integer",
 									"description": "技术面匹配度，0-100整数",
 								},
+								"activationRuleJson": map[string]any{
+									"type":        "string",
+									"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，还应包含 thresholdMax；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
+								},
 								"riskRemarks": map[string]any{
 									"type":        "string",
 									"description": "风险提示/风险点",
@@ -753,7 +761,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 									"description": "操作总结/备注",
 								},
 							},
-							"required": []string{"stockCode", "stockName", "bkName", "recommendCategory", "coreCatalyst", "keyEvidence", "riskRemarks", "invalidCondition", "observePrice", "focusPrice", "recommendBuyPrice", "recommendStopProfitPrice", "recommendStopLossPrice", "expectedCycle", "eventStrength", "capitalConfirmation", "fundamentalFit", "technicalFit"},
+							"required": []string{"stockCode", "stockName", "bkName", "recommendCategory", "coreCatalyst", "keyEvidence", "riskRemarks", "invalidCondition", "observePrice", "focusPrice", "recommendBuyPrice", "recommendStopProfitPrice", "recommendStopLossPrice", "expectedCycle", "eventStrength", "capitalConfirmation", "fundamentalFit", "technicalFit", "activationRuleJson"},
 						},
 					},
 				},

@@ -98,6 +98,24 @@ func (a *App) registerTelegraphRuntime(config *data.SettingConfig) {
 
 func (a *App) startImmediateRuntimeTasks(config *data.SettingConfig) {
 	go data.EnsureDiemengSelfCheckAsync("app_dom_ready")
+	go func() {
+		stats, err := data.RepairHistoricalLegacySkippedRecommendations(time.Now())
+		if err != nil {
+			logger.SugaredLogger.Errorf("历史跳过记录修复失败: %v", err)
+			return
+		}
+		if stats.RecalcQueuedCodes > 0 || stats.RecordStatesReset > 0 || stats.AggregateReset > 0 {
+			logger.SugaredLogger.Infof(
+				"历史跳过记录修复完成: scanned=%d stillSkipped=%d overrideKept=%d recordReset=%d aggregateReset=%d queuedCodes=%d",
+				stats.Scanned,
+				stats.StillSkipped,
+				stats.OverrideKept,
+				stats.RecordStatesReset,
+				stats.AggregateReset,
+				stats.RecalcQueuedCodes,
+			)
+		}
+	}()
 	go MonitorStockPrices(a)
 	if config.EnableFund {
 		go MonitorFundPrices(a)
@@ -127,7 +145,6 @@ func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
 
 func (a *App) registerConfiguredCronRuntimes(config *data.SettingConfig) {
 	a.reloadSummaryStockNewsCron(config)
-	a.reloadYieldEmailCron(config)
 	a.enableSummaryStockNewsTestCron()
 }
 

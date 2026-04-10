@@ -1,5 +1,4 @@
 <script setup>
-import 'md-editor-v3/lib/preview.css';
 import { h, onBeforeUnmount, onMounted, ref } from 'vue';
 import { CheckUpdate, GetVersionInfo, OpenURL } from '../services/app-api';
 import { Environment, EventsOff, EventsOn } from '../../wailsjs/runtime';
@@ -120,6 +119,7 @@ const handleUpdateAction = () => {
         <div style="justify-self: center; text-align: left;">
           <p>go-stock 是一个本地优先的股票分析工作台，基于 Go、Wails、Vue 3 和 Naive UI 构建，支持桌面模式与本地 Web 模式。</p>
           <p>当前公开版聚焦真正可维护的核心能力：自选股、市场资讯、AI 分析报告、推荐收益跟踪、邮件报告与运行时任务管理。</p>
+          <p>当前 `1.2.5` 版本重点修复市场资讯 AI 推荐落库稳定性，并把收益率激活条件收敛为结构化机器规则，避免“放量/不追”这类模糊词继续污染 strict 收益率口径。</p>
           <p>来源说明：当前仓库基于 <a href="https://github.com/ArvinLovegood/go-stock" target="_blank">ArvinLovegood/go-stock</a> 改编整理而来，不是原作者官方仓库；当前维护的是公开清理版与后续改动。</p>
           <p>公开仓库已经移除个人赞赏码、联系方式、赞助码入口、私有接入说明和本地工作区配置，只保留适合协作与二次开发的公开内容。</p>
           <p>
@@ -145,7 +145,7 @@ const handleUpdateAction = () => {
       </div>
       <n-divider title-placement="center">公开说明</n-divider>
       <div style="justify-self: center; text-align: left;">
-        <p>当前 `1.2.4` 公开快照已经清理构建产物、运行数据库、支付二维码、赞助码入口、超大测试库和本地私有说明，适合作为对外公开仓库的基线版本。</p>
+        <p>当前 `1.2.5` 公开快照已经清理构建产物、运行数据库、支付二维码、赞助码入口、超大测试库和本地私有说明，适合作为对外公开仓库的基线版本。</p>
         <p>如果你准备继续二次开发，建议优先阅读 README、CHANGELOG、Release Notes 和仓库中的公开发布检查清单。</p>
       </div>
       <n-divider title-placement="center">鸣谢</n-divider>
