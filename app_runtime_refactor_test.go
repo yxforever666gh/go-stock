@@ -119,3 +119,22 @@ func TestSelectPrimaryAIConfigID(t *testing.T) {
 		t.Fatalf("unexpected primary ai config id: got=%d want=%d", got, 7)
 	}
 }
+
+func TestResolveAIProviderNameFromConfigs_ByConfigID(t *testing.T) {
+	configs := []*data.AIConfig{
+		{ID: 3, Name: "OpenAI Primary", BaseUrl: "https://api.openai.com/v1", ModelName: "gpt-5.4"},
+	}
+
+	if got := resolveAIProviderNameFromConfigs(configs, 3, "gpt-5.4"); got != "OpenAI" {
+		t.Fatalf("unexpected provider by config id: got=%q want=%q", got, "OpenAI")
+	}
+}
+
+func TestResolveAIProviderNameFromConfigs_FallbackToModelName(t *testing.T) {
+	if got := resolveAIProviderNameFromConfigs(nil, 0, "gpt-5.4"); got != "" {
+		t.Fatalf("unexpected fallback provider for gpt model: got=%q want empty", got)
+	}
+	if got := resolveAIProviderNameFromConfigs(nil, 0, "deepseek-chat"); got != "DeepSeek" {
+		t.Fatalf("unexpected provider by model fallback: got=%q want=%q", got, "DeepSeek")
+	}
+}

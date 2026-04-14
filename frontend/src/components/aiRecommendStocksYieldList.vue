@@ -1,6 +1,7 @@
 <script setup>
 import {computed, h, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {
+  GetAiRecommendYieldDailyOverview,
   GetAiRecommendStocksYieldList,
   GetAiRecommendYieldMinuteChart,
   GetAiRecommendYieldErrorLogs,
@@ -9,6 +10,7 @@ import {
 import {NBadge, NText, useMessage} from "naive-ui";
 import { useDraggableDataTableColumns } from "../composables/useDraggableDataTableColumns";
 import AiRecommendYieldMinuteReplayChart from "./AiRecommendYieldMinuteReplayChart.vue";
+import AiRecommendYieldDailyOverviewChart from "./AiRecommendYieldDailyOverviewChart.vue";
 import { useSharedResearchDateRange } from "../composables/useSharedResearchDateRange";
 
 const message = useMessage()
@@ -53,6 +55,10 @@ const replayModalVisibleRef = ref(false)
 const replayModalLoadingRef = ref(false)
 const replayChartDataRef = ref(null)
 const replayModalTitleRef = ref("")
+const dailyOverviewModalVisibleRef = ref(false)
+const dailyOverviewLoadingRef = ref(false)
+const dailyOverviewDataRef = ref(null)
+const dailyOverviewTabRef = ref("cumulative")
 let pollTimer = null
 let cooldownTimer = null
 let manualCooldownUntilMs = 0
@@ -673,6 +679,39 @@ async function handleRefreshReplay() {
   await loadReplayChart(recommendId)
 }
 
+async function handleOpenDailyOverview() {
+  dailyOverviewModalVisibleRef.value = true
+  if (dailyOverviewDataRef.value) {
+    return
+  }
+  await loadDailyOverview()
+}
+
+async function loadDailyOverview() {
+  if (dailyOverviewLoadingRef.value) {
+    return
+  }
+  dailyOverviewLoadingRef.value = true
+  try {
+    const result = await GetAiRecommendYieldDailyOverview()
+    dailyOverviewDataRef.value = result || {
+      calcMode: "strict",
+      warnings: ["读取全库收益走势失败，请稍后重试"],
+      points: []
+    }
+  } catch (e) {
+    console.error("loadDailyOverview failed", e)
+    dailyOverviewDataRef.value = {
+      calcMode: "strict",
+      warnings: ["读取全库收益走势失败，请稍后重试"],
+      points: []
+    }
+    message.error("读取全库收益走势失败，请稍后重试")
+  } finally {
+    dailyOverviewLoadingRef.value = false
+  }
+}
+
 function parseDateTime(dateStr) {
   const match = /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/.exec(String(dateStr || ""))
   if (!match) {
@@ -1199,6 +1238,38 @@ function sseBenchmarkTextType() {
   }
   return "default"
 }
+
+function dailyOverviewSummaryText() {
+  const data = dailyOverviewDataRef.value
+  if (!data) {
+    return "--"
+  }
+  const total = Number(data.totalRecordCount || 0)
+  const included = Number(data.includedRecordCount || 0)
+  const skipped = Number(data.skippedRecordCount || 0)
+  return `总记录 ${total}，纳入 ${included}，跳过 ${skipped}`
+}
+
+function dailyOverviewRangeText() {
+  const data = dailyOverviewDataRef.value
+  if (!data) {
+    return "--"
+  }
+  const start = String(data.rangeStart || '').trim()
+  const end = String(data.rangeEnd || '').trim()
+  if (!start && !end) {
+    return "--"
+  }
+  return `${start || '--'} -> ${end || '--'}`
+}
+
+function dailyOverviewWarningText() {
+  const warnings = Array.isArray(dailyOverviewDataRef.value?.warnings) ? dailyOverviewDataRef.value.warnings : []
+  if (warnings.length === 0) {
+    return ""
+  }
+  return warnings.join("；")
+}
 </script>
 
 <template>
@@ -1243,6 +1314,9 @@ function sseBenchmarkTextType() {
     <n-text depth="3" style="margin-left: 12px;">覆盖进度：{{ minuteCoveragePercentText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">任务进度：{{ taskProgressText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">{{ taskStatusHintText() }}</n-text>
+    <n-button text type="primary" style="margin-left: 12px; padding: 0;" @click="handleOpenDailyOverview">
+      查看全库收益走势
+    </n-button>
   </div>
   <n-data-table
       ref="tableRef"
@@ -1319,6 +1393,53 @@ function sseBenchmarkTextType() {
         <ai-recommend-yield-minute-replay-chart :chart-data="replayChartDataRef"/>
       </div>
       <n-empty v-else description="暂无回放数据"></n-empty>
+    </n-spin>
+  </n-modal>
+
+  <n-modal
+      transform-origin="center"
+      v-model:show="dailyOverviewModalVisibleRef"
+      preset="card"
+      style="width: 1200px;"
+      title="全库按交易日收益走势"
+  >
+    <div style="margin-bottom: 10px; text-align: right;">
+      <n-button size="small" ghost type="primary" :loading="dailyOverviewLoadingRef" @click="loadDailyOverview">
+        刷新走势
+      </n-button>
+    </div>
+    <n-spin :show="dailyOverviewLoadingRef">
+      <div v-if="dailyOverviewDataRef">
+        <div style="margin-bottom: 10px;">
+          <n-text depth="3">范围：{{ dailyOverviewRangeText() }}</n-text>
+          <n-text depth="3" style="margin-left: 12px;">数据时间：{{ dailyOverviewDataRef.dataAsOf || "--" }}</n-text>
+          <n-text depth="3" style="margin-left: 12px;">口径：{{ dailyOverviewDataRef.calcMode || "strict" }}</n-text>
+          <n-text depth="3" style="margin-left: 12px;">{{ dailyOverviewSummaryText() }}</n-text>
+        </div>
+        <n-alert
+            v-if="dailyOverviewWarningText()"
+            type="warning"
+            :show-icon="false"
+            style="margin-bottom: 12px; text-align: left;"
+        >
+          {{ dailyOverviewWarningText() }}
+        </n-alert>
+        <n-tabs v-model:value="dailyOverviewTabRef" type="line" animated>
+          <n-tab-pane name="cumulative" tab="累计走势">
+            <ai-recommend-yield-daily-overview-chart
+                :overview-data="dailyOverviewDataRef"
+                mode="cumulative"
+            />
+          </n-tab-pane>
+          <n-tab-pane name="daily" tab="单日变化">
+            <ai-recommend-yield-daily-overview-chart
+                :overview-data="dailyOverviewDataRef"
+                mode="daily"
+            />
+          </n-tab-pane>
+        </n-tabs>
+      </div>
+      <n-empty v-else description="暂无全库收益走势数据"></n-empty>
     </n-spin>
   </n-modal>
 

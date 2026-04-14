@@ -1211,6 +1211,32 @@ type AiRecommendYieldMinuteChartData struct {
 	LatestOpeningReview *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty"`
 }
 
+type AiRecommendYieldDailyOverviewPoint struct {
+	TradeDate               string  `json:"tradeDate"`
+	CostBasisNet            float64 `json:"costBasisNet"`
+	DailyHoldingCostNet     float64 `json:"dailyHoldingCostNet"`
+	HoldingCount            int     `json:"holdingCount"`
+	CumulativeAmountChange  float64 `json:"cumulativeAmountChange"`
+	CumulativeYieldRate     float64 `json:"cumulativeYieldRate"`
+	DailyAmountChange       float64 `json:"dailyAmountChange"`
+	DailyYieldRate          float64 `json:"dailyYieldRate"`
+	BenchmarkClose          float64 `json:"benchmarkClose"`
+	BenchmarkCumulativeRate float64 `json:"benchmarkCumulativeRate"`
+	BenchmarkDailyRate      float64 `json:"benchmarkDailyRate"`
+}
+
+type AiRecommendYieldDailyOverviewData struct {
+	RangeStart          string                               `json:"rangeStart"`
+	RangeEnd            string                               `json:"rangeEnd"`
+	DataAsOf            string                               `json:"dataAsOf"`
+	CalcMode            string                               `json:"calcMode"`
+	TotalRecordCount    int                                  `json:"totalRecordCount"`
+	IncludedRecordCount int                                  `json:"includedRecordCount"`
+	SkippedRecordCount  int                                  `json:"skippedRecordCount"`
+	Warnings            []string                             `json:"warnings"`
+	Points              []AiRecommendYieldDailyOverviewPoint `json:"points"`
+}
+
 type AiRecommendStocksYieldPageData struct {
 	List                      []AiRecommendStocksYieldItem `json:"list"`
 	Total                     int64                        `json:"total"`

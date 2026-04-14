@@ -114,6 +114,10 @@ export function GetAiRecommendStocksYieldList(arg1) {
   return window['go']['main']['App']['GetAiRecommendStocksYieldList'](arg1);
 }
 
+export function GetAiRecommendYieldDailyOverview() {
+  return window['go']['main']['App']['GetAiRecommendYieldDailyOverview']();
+}
+
 export function GetAiRecommendYieldErrorLogs(arg1) {
   return window['go']['main']['App']['GetAiRecommendYieldErrorLogs'](arg1);
 }

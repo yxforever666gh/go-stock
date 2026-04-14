@@ -60,6 +60,8 @@ export function GetAiRecommendStocksList(arg1:models.AiRecommendStocksQuery):Pro
 
 export function GetAiRecommendStocksYieldList(arg1:models.AiRecommendStocksQuery):Promise<models.AiRecommendStocksYieldPageData>;
 
+export function GetAiRecommendYieldDailyOverview():Promise<models.AiRecommendYieldDailyOverviewData>;
+
 export function GetAiRecommendYieldErrorLogs(arg1:number):Promise<Array<Record<string, string>>>;
 
 export function GetAiRecommendYieldMinuteChart(arg1:number):Promise<models.AiRecommendYieldMinuteChartData>;

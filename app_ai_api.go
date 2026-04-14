@@ -112,7 +112,13 @@ func (a *App) SendLatestAIAnalysisReportNow() string {
 
 func (a *App) SendMarketSummaryEmailNow(summaryText, question, modelName, summaryTime, errorMessage string) string {
 	return a.withYieldEmailTaskLock("manual_market_summary_email", func() string {
-		report := buildMarketSummaryEmailReport(summaryText, question, modelName, summaryTime)
+		report := buildMarketSummaryEmailReport(
+			summaryText,
+			question,
+			resolveAIProviderName(0, modelName),
+			modelName,
+			summaryTime,
+		)
 		failureReason := strings.TrimSpace(errorMessage)
 		if report == nil && failureReason == "" {
 			return "发送失败: 当前没有可发送的 AI 总结内容"
@@ -141,7 +147,29 @@ func (a *App) RunMarketSummaryHumanizeCompatFixNow() string {
 	)
 }
 
-func buildMarketSummaryEmailReport(summaryText, question, modelName, summaryTime string) *models.AIResponseResult {
+func resolveAIProviderName(aiConfigID int, modelName string) string {
+	cfg := data.GetSettingConfig()
+	if cfg == nil {
+		return resolveAIProviderNameFromConfigs(nil, aiConfigID, modelName)
+	}
+	return resolveAIProviderNameFromConfigs(cfg.AiConfigs, aiConfigID, modelName)
+}
+
+func resolveAIProviderNameFromConfigs(aiConfigs []*data.AIConfig, aiConfigID int, modelName string) string {
+	if aiConfigID > 0 {
+		for _, item := range aiConfigs {
+			if item != nil && int(item.ID) == aiConfigID {
+				if provider := strings.TrimSpace(data.DetectAIProviderName(item)); provider != "" {
+					return provider
+				}
+				break
+			}
+		}
+	}
+	return strings.TrimSpace(data.DetectAIProviderName(&data.AIConfig{ModelName: strings.TrimSpace(modelName)}))
+}
+
+func buildMarketSummaryEmailReport(summaryText, question, providerName, modelName, summaryTime string) *models.AIResponseResult {
 	content := data.HumanizeMarketSummaryReport(summaryText)
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -155,11 +183,12 @@ func buildMarketSummaryEmailReport(summaryText, question, modelName, summaryTime
 		}
 	}
 	report := &models.AIResponseResult{
-		ModelName: strings.TrimSpace(modelName),
-		StockCode: "市场资讯",
-		StockName: "市场资讯",
-		Question:  strings.TrimSpace(question),
-		Content:   content,
+		ProviderName: strings.TrimSpace(providerName),
+		ModelName:    strings.TrimSpace(modelName),
+		StockCode:    "市场资讯",
+		StockName:    "市场资讯",
+		Question:     strings.TrimSpace(question),
+		Content:      content,
 	}
 	report.CreatedAt = reportTime
 	return report
@@ -235,7 +264,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.2.5：市场资讯 AI 推荐改为结构化激活规则驱动，收益率 strict 模式不再解析模糊自然语言。"
+		content = "1.2.6：补齐市场资讯 AI 报告 provider 展示，并新增全库收益日级弹窗与收益口径一致性修复。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

@@ -301,15 +301,17 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 		}
 	}
 
-	report := buildMarketSummaryEmailReport(reportText, res.finalQuestion, res.modelName, startedAt.Format(time.DateTime))
+	providerName := resolveAIProviderName(res.aiConfigId, res.modelName)
+	report := buildMarketSummaryEmailReport(reportText, res.finalQuestion, providerName, res.modelName, startedAt.Format(time.DateTime))
 	if report == nil {
 		report = &models.AIResponseResult{
-			StockCode: "市场资讯",
-			StockName: "市场资讯",
-			ModelName: strings.TrimSpace(res.modelName),
-			ChatId:    res.chatID,
-			Question:  strings.TrimSpace(res.finalQuestion),
-			Content:   data.HumanizeMarketSummaryReport(reportText),
+			ProviderName: strings.TrimSpace(providerName),
+			StockCode:    "市场资讯",
+			StockName:    "市场资讯",
+			ModelName:    strings.TrimSpace(res.modelName),
+			ChatId:       res.chatID,
+			Question:     strings.TrimSpace(res.finalQuestion),
+			Content:      data.HumanizeMarketSummaryReport(reportText),
 		}
 		report.CreatedAt = startedAt
 	}

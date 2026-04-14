@@ -43,6 +43,10 @@ func (s RecommendService) GetAiRecommendYieldMinuteChart(recommendID uint) (*mod
 	return data.NewAiRecommendStocksService().GetAiRecommendYieldMinuteChart(recommendID)
 }
 
+func (s RecommendService) GetAiRecommendYieldDailyOverview() (*models.AiRecommendYieldDailyOverviewData, error) {
+	return data.NewAiRecommendStocksService().GetAiRecommendYieldDailyOverview()
+}
+
 func (s RecommendService) StartAiRecommendMinuteDownload() (map[string]any, error) {
 	return data.NewAiRecommendStocksService().StartAiRecommendMinuteDownload()
 }

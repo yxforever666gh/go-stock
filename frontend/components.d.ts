@@ -13,6 +13,7 @@ declare module 'vue' {
     AgentChat_bk: typeof import('./src/components/agent-chat_bk.vue')['default']
     AiRecommendStocksList: typeof import('./src/components/aiRecommendStocksList.vue')['default']
     AiRecommendStocksYieldList: typeof import('./src/components/aiRecommendStocksYieldList.vue')['default']
+    AiRecommendYieldDailyOverviewChart: typeof import('./src/components/AiRecommendYieldDailyOverviewChart.vue')['default']
     AiRecommendYieldMinuteReplayChart: typeof import('./src/components/AiRecommendYieldMinuteReplayChart.vue')['default']
     AnalyzeMartket: typeof import('./src/components/AnalyzeMartket.vue')['default']
     ClsCalendarTimeLine: typeof import('./src/components/ClsCalendarTimeLine.vue')['default']

@@ -86,6 +86,18 @@ func (a *App) GetAiRecommendYieldMinuteChart(recommendID uint) *models.AiRecomme
 	return data
 }
 
+func (a *App) GetAiRecommendYieldDailyOverview() *models.AiRecommendYieldDailyOverviewData {
+	data, err := a.services.Recommend.GetAiRecommendYieldDailyOverview()
+	if err != nil {
+		return &models.AiRecommendYieldDailyOverviewData{
+			CalcMode: "strict",
+			Warnings: []string{"读取全库收益走势失败: " + err.Error()},
+			Points:   []models.AiRecommendYieldDailyOverviewPoint{},
+		}
+	}
+	return data
+}
+
 func (a *App) StartAiRecommendMinuteDownload() map[string]any {
 	resp, err := a.services.Recommend.StartAiRecommendMinuteDownload()
 	if err != nil {
