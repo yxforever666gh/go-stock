@@ -49,7 +49,7 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
-	items := parseMarketSummaryRecommendStocks(summary, "test-model", dataTime)
+	items := parseMarketSummaryRecommendStocks(summary, "TestProvider", "test-model", dataTime)
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(items))
 	}
@@ -59,6 +59,9 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 	}
 	if item.BkName != "AI算力" {
 		t.Fatalf("unexpected bkName: %s", item.BkName)
+	}
+	if item.ProviderName != "TestProvider" {
+		t.Fatalf("unexpected provider name: %s", item.ProviderName)
 	}
 	if item.RecommendCategory != "" {
 		t.Fatalf("expected signal-driven item to clear legacy category, got: %s", item.RecommendCategory)
@@ -127,12 +130,15 @@ func TestParseMarketSummaryRecommendStockDraftsAndToRecommendStock(t *testing.T)
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
-	drafts := parseMarketSummaryRecommendStockDrafts(summary, "test-model", dataTime)
+	drafts := parseMarketSummaryRecommendStockDrafts(summary, "TestProvider", "test-model", dataTime)
 	if len(drafts) != 1 {
 		t.Fatalf("expected 1 draft, got %d", len(drafts))
 	}
 	if drafts[0].StockCode != "300308.SZ" {
 		t.Fatalf("unexpected draft stock code: %s", drafts[0].StockCode)
+	}
+	if drafts[0].ProviderName != "TestProvider" {
+		t.Fatalf("unexpected draft provider name: %s", drafts[0].ProviderName)
 	}
 	item, err := drafts[0].toRecommendStock()
 	if err != nil {
@@ -220,7 +226,7 @@ func TestCollectMarketSummaryRecommendStocksForSaveSkipsSameDayExistingStock(t *
 | 新易盛(300502.SZ) | AI算力 | 光模块景气扩散 | [市场资讯] 资金持续流入；[技术/资金/形态] 量能持续放大 | 92.3 | 91-93 | 98-102 | 88 | 股价回到91-93区间并在前高附近5分钟放量站稳后分批买入 | 跌破88或板块转弱则本次交易逻辑失效 | 短线波动风险较大 | 1-2周 | 82 | 80 | 76 | 84 | 放量站稳后执行右侧突破计划 |
 `
 
-	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "test-model", startedAt)
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "TestProvider", "test-model", startedAt)
 	if err != nil {
 		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
 	}
@@ -253,7 +259,7 @@ func TestEnsureMarketSummaryRecommendStocksSavedSkipsObservationalRows(t *testin
 | 三环集团(300408.SZ) | 被动元件 | 景气修复 | [市场资讯] 海外提价；[一级披露] 董事会公告 | 52.85 | 52.00-53.20观察，只有重新站回54.20上方并放量时才考虑转入右侧跟踪 | 56.50-58.50 | 51.80 | 只有重新站回54.20上方并放量时才考虑转入右侧跟踪 | 跌破51.80且无资金回流 | 活跃度高但分歧大 | 1-4周 | 75 | 65 | 70 | 68 | 仅观察，不建议先手 |
 `
 
-	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "test-model", startedAt)
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "TestProvider", "test-model", startedAt)
 	if err != nil {
 		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
 	}
@@ -295,7 +301,7 @@ func TestEnsureMarketSummaryRecommendStocksSavedFromRuntimeReport20260407_1130(t
 | 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 15分钟放量突破前高 | 169.6 | 168-172 | 180-188 | 163 | 股价回到168-172区间并在15分钟维度放量站稳后分批买入 | 跌破163，或AI算力板块15分钟成交额低于前一交易日同一时段的0.9倍则逻辑失效 | 高位波动较大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
 
-	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "runtime-test-model", startedAt)
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "TestProvider", "runtime-test-model", startedAt)
 	if err != nil {
 		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
 	}
@@ -345,7 +351,7 @@ func TestEnsureMarketSummaryRecommendStocksSavedDowngradesPriceMismatchToAnalysi
 | 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向15分钟放量突破前高 | 170 | 168-172 | 180-188 | 163 | 股价回到168-172区间并在前高附近15分钟放量站稳后分批买入 | 跌破163或AI算力板块15分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动风险较大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
 
-	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "test-model", startedAt)
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "TestProvider", "test-model", startedAt)
 	if err != nil {
 		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
 	}

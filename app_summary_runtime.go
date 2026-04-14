@@ -320,7 +320,7 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 		logger.SugaredLogger.Warnf("市场资讯AI总结保存失败: %v", err)
 	}
 
-	if saved, err := a.services.AI.EnsureMarketSummaryRecommendStocksSaved(preparedText, res.modelName, startedAt); err != nil {
+	if saved, err := a.services.AI.EnsureMarketSummaryRecommendStocksSaved(preparedText, providerName, res.modelName, startedAt); err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结补写推荐记录失败: %v", err)
 	} else if saved > 0 {
 		logger.SugaredLogger.Infof("市场资讯AI总结自动补写推荐记录成功: +%d", saved)

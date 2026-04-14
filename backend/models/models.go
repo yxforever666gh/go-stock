@@ -1001,6 +1001,7 @@ type StockConceptInfo struct {
 type AiRecommendStocks struct {
 	gorm.Model
 	DataTime                    *time.Time                       `json:"dataTime" gorm:"index;autoCreateTime"`
+	ProviderName                string                           `json:"providerName" gorm:"size:128"`
 	ModelName                   string                           `json:"modelName" md:"模型名称"`
 	StockCode                   string                           `json:"stockCode" md:"股票代码"`
 	StockName                   string                           `json:"stockName" md:"股票名称"`

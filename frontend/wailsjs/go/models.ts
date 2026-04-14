@@ -992,6 +992,7 @@ export namespace models {
 	    DeletedAt: any;
 	    // Go type: time
 	    dataTime?: any;
+	    providerName: string;
 	    modelName: string;
 	    stockCode: string;
 	    stockName: string;
@@ -1045,6 +1046,7 @@ export namespace models {
 	        this.UpdatedAt = this.convertValues(source["UpdatedAt"], null);
 	        this.DeletedAt = this.convertValues(source["DeletedAt"], null);
 	        this.dataTime = this.convertValues(source["dataTime"], null);
+	        this.providerName = source["providerName"];
 	        this.modelName = source["modelName"];
 	        this.stockCode = source["stockCode"];
 	        this.stockName = source["stockName"];

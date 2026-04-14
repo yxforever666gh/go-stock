@@ -2325,6 +2325,9 @@ func AskAiWithTools(o *OpenAi, err error, messages []map[string]interface{}, ch 
 									emitSummaryToolStatus(ch, "CreateAiRecommendStocks", "error", err, time.Since(toolStart))
 									return
 								}
+								if strings.TrimSpace(recommend.ProviderName) == "" {
+									recommend.ProviderName = strings.TrimSpace(o.ProviderName)
+								}
 								err = NewAiRecommendStocksService().CreateAiRecommendStocks(&recommend)
 								messages = append(messages, map[string]interface{}{
 									"role":              "assistant",
@@ -2382,6 +2385,13 @@ func AskAiWithTools(o *OpenAi, err error, messages []map[string]interface{}, ch 
 									logger.SugaredLogger.Infof("BatchCreateAiRecommendStocks error : %s", err.Error())
 									emitSummaryToolStatus(ch, "BatchCreateAiRecommendStocks", "error", err, time.Since(toolStart))
 									return
+								}
+								providerName := strings.TrimSpace(o.ProviderName)
+								for _, item := range recommends {
+									if item == nil || strings.TrimSpace(item.ProviderName) != "" {
+										continue
+									}
+									item.ProviderName = providerName
 								}
 								err = NewAiRecommendStocksService().BatchCreateAiRecommendStocks(recommends)
 								messages = append(messages, map[string]interface{}{

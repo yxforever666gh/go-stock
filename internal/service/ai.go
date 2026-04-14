@@ -100,8 +100,8 @@ func (s AIService) NormalizeMarketSummaryQuestion(question string) string {
 	return data.NormalizeMarketSummaryQuestion(question)
 }
 
-func (s AIService) EnsureMarketSummaryRecommendStocksSaved(summaryText, modelName string, startedAt time.Time) (int, error) {
-	return data.EnsureMarketSummaryRecommendStocksSaved(summaryText, modelName, startedAt)
+func (s AIService) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
+	return data.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
 }
 
 func (s AIService) EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {

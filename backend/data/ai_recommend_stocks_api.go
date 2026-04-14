@@ -278,7 +278,11 @@ func normalizeAiRecommendStockForSave(recommend *models.AiRecommendStocks) error
 }
 
 func normalizeAiRecommendStockBaseFields(recommend *models.AiRecommendStocks) {
+	recommend.ProviderName = strings.TrimSpace(recommend.ProviderName)
 	recommend.ModelName = strings.TrimSpace(recommend.ModelName)
+	if recommend.ProviderName == "" && recommend.ModelName != "" {
+		recommend.ProviderName = strings.TrimSpace(DetectAIProviderName(&AIConfig{ModelName: recommend.ModelName}))
+	}
 	recommend.StockCode = normalizeRecommendStockCode(recommend.StockCode)
 	recommend.StockName = strings.TrimSpace(recommend.StockName)
 	recommend.BkCode = strings.TrimSpace(strings.ToUpper(recommend.BkCode))
@@ -620,6 +624,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksList(query *models.AiReco
 	}
 	if query.ModelName != "" {
 		q.Or("model_name LIKE ?", "%"+query.ModelName+"%")
+		q.Or("provider_name LIKE ?", "%"+query.ModelName+"%")
 	}
 
 	if query.StartDate != "" && query.EndDate != "" {

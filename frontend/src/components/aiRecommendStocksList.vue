@@ -51,7 +51,8 @@ const defaultColumns = [
     key: 'modelName',
     minWidth: 120,
     render(row) {
-      return h(NText, {type: "info"}, {default: () => row.modelName || '--'})
+      const label = formatProviderModelLabel(row.providerName, row.modelName)
+      return h(NText, {type: "info"}, {default: () => label})
     }
   },
   {
@@ -300,6 +301,15 @@ function formatDate(dateValue) {
   const month = String(date.getMonth() + 1).padStart(2, '0')
   const day = String(date.getDate()).padStart(2, '0')
   return `${year}-${month}-${day}`
+}
+
+function formatProviderModelLabel(providerName, modelName) {
+  const provider = String(providerName || "").trim()
+  const model = String(modelName || "").trim()
+  if (provider && model) {
+    return `${provider} / ${model}`
+  }
+  return provider || model || '--'
 }
 
 function formatDateTime(value) {

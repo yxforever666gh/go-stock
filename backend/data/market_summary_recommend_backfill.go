@@ -33,8 +33,8 @@ var marketSummaryObservationPhrases = []string{
 	"再评估",
 }
 
-func EnsureMarketSummaryRecommendStocksSaved(summaryText string, modelName string, startedAt time.Time) (int, error) {
-	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, modelName, startedAt)
+func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
+	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, startedAt)
 	if len(drafts) == 0 {
 		return 0, nil
 	}
@@ -402,8 +402,8 @@ func shouldSkipMarketSummaryBackfill(item *marketSummaryRecommendDraft) bool {
 	return category == "avoid"
 }
 
-func parseMarketSummaryRecommendStocks(summaryText string, modelName string, dataTime time.Time) []*models.AiRecommendStocks {
-	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, modelName, dataTime)
+func parseMarketSummaryRecommendStocks(summaryText, providerName, modelName string, dataTime time.Time) []*models.AiRecommendStocks {
+	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, dataTime)
 	if len(drafts) == 0 {
 		return nil
 	}
@@ -420,6 +420,7 @@ func parseMarketSummaryRecommendStocks(summaryText string, modelName string, dat
 
 type marketSummaryRecommendDraft struct {
 	DataTime                    *time.Time
+	ProviderName                string
 	ModelName                   string
 	StockCode                   string
 	StockName                   string
@@ -492,6 +493,7 @@ func (d *marketSummaryRecommendDraft) toPreviewRecommend() *models.AiRecommendSt
 	}
 	return &models.AiRecommendStocks{
 		DataTime:                    d.DataTime,
+		ProviderName:                d.ProviderName,
 		ModelName:                   d.ModelName,
 		StockCode:                   d.StockCode,
 		StockName:                   d.StockName,
@@ -572,6 +574,7 @@ func (d *marketSummaryRecommendDraft) toRecommendStock() (*models.AiRecommendSto
 	}
 	item := &models.AiRecommendStocks{
 		DataTime:                    d.DataTime,
+		ProviderName:                d.ProviderName,
 		ModelName:                   d.ModelName,
 		StockCode:                   d.StockCode,
 		StockName:                   d.StockName,
@@ -647,7 +650,7 @@ type marketSummaryRow struct {
 	remarks             string
 }
 
-func parseMarketSummaryRecommendStockDrafts(summaryText string, modelName string, dataTime time.Time) []*marketSummaryRecommendDraft {
+func parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName string, dataTime time.Time) []*marketSummaryRecommendDraft {
 	rows := extractMarkdownTableRows(summaryText)
 	if len(rows) == 0 {
 		return nil
@@ -655,7 +658,7 @@ func parseMarketSummaryRecommendStockDrafts(summaryText string, modelName string
 
 	drafts := make([]*marketSummaryRecommendDraft, 0, len(rows))
 	for _, row := range rows {
-		draft := buildRecommendStockDraftFromRow(row, modelName, dataTime)
+		draft := buildRecommendStockDraftFromRow(row, providerName, modelName, dataTime)
 		if draft == nil {
 			continue
 		}
@@ -1003,7 +1006,7 @@ func normalizeMarkdownCell(cell string) string {
 	return text
 }
 
-func buildRecommendStockDraftFromRow(row marketSummaryRow, modelName string, dataTime time.Time) *marketSummaryRecommendDraft {
+func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelName string, dataTime time.Time) *marketSummaryRecommendDraft {
 	stockName, stockCode := parseMarketSummaryStockCell(row.stockCell)
 	if stockName == "" {
 		return nil
@@ -1087,6 +1090,7 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, modelName string, dat
 
 	draft := &marketSummaryRecommendDraft{
 		DataTime:                    &dataTime,
+		ProviderName:                strings.TrimSpace(providerName),
 		ModelName:                   strings.TrimSpace(modelName),
 		StockCode:                   strings.ToUpper(strings.TrimSpace(stockCode)),
 		StockName:                   strings.TrimSpace(stockName),
@@ -1183,6 +1187,9 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, modelName string, dat
 	}
 	if draft.ModelName == "" {
 		draft.ModelName = "market-summary-auto-backfill"
+	}
+	if draft.ProviderName == "" && draft.ModelName != "" {
+		draft.ProviderName = strings.TrimSpace(DetectAIProviderName(&AIConfig{ModelName: draft.ModelName}))
 	}
 	return draft
 }
