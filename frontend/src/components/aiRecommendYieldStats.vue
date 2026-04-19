@@ -270,6 +270,10 @@ function dailyOverviewWarningText() {
   }
   return warnings.join('；')
 }
+
+function benchmarkTooltipText() {
+  return `${benchmarkNameRef.value} 会按策略真实买入/卖出现金流去匹配同口径的基准收益，避免把一次性满仓指数涨跌拿来和分批买入策略硬比。`
+}
 </script>
 
 <template>
@@ -295,7 +299,12 @@ function dailyOverviewWarningText() {
       <n-grid x-gap="12" y-gap="12" cols="1 s:2 m:3 l:4" responsive="screen">
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">策略收益率</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">策略收益率</div>
+              </template>
+              当前纳入统计的可执行推荐，按统一交易成本口径汇总后的总净收益率。它回答的是整套策略最终赚了多少。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="totalYieldTextType()">{{ totalYieldRateTextRef }}</n-text>
             </div>
@@ -304,7 +313,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">{{ benchmarkNameRef }}</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">{{ benchmarkNameRef }}</div>
+              </template>
+              {{ benchmarkTooltipText() }}
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="benchmarkTextType()">{{ benchmarkRateTextRef }}</n-text>
             </div>
@@ -313,7 +327,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">超额收益率</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">超额收益率</div>
+              </template>
+              策略收益率减去基准收益率后的差值。大于 0 代表整体跑赢基准，小于 0 代表没有跑赢。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="excessYieldTextType()">{{ excessYieldRateTextRef }}</n-text>
             </div>
@@ -322,7 +341,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">最大回撤</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">最大回撤</div>
+              </template>
+              从任一阶段高点往后看，净值曾经最大跌回去多少。它衡量的是“最难熬的时候有多痛”，越接近 0 通常越稳。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="drawdownTextType()">{{ maxDrawdownTextRef }}</n-text>
             </div>
@@ -331,7 +355,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">策略 XIRR</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">策略 XIRR</div>
+              </template>
+              把每次真实买入、卖出发生的时间点都算进去后，折算出来的年化收益率。适合衡量分批进出、现金流不规则的策略表现。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(strategyXirrRef, strategyXirrTextRef)">{{ strategyXirrTextRef }}</n-text>
             </div>
@@ -340,7 +369,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">基准 XIRR</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">基准 XIRR</div>
+              </template>
+              用和策略同样的现金流时点去买入并持有基准指数，再折算出的年化收益率。它回答的是“如果同样的钱拿去买基准会怎样”。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(benchmarkXirrRef, benchmarkXirrTextRef)">{{ benchmarkXirrTextRef }}</n-text>
             </div>
@@ -349,7 +383,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">超额 XIRR</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">超额 XIRR</div>
+              </template>
+              策略 XIRR 减去基准 XIRR。它比普通超额收益率更适合看分批买入、持仓时长不一致时，策略是否真的在资金效率上跑赢基准。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(excessXirrRef, excessXirrTextRef)">{{ excessXirrTextRef }}</n-text>
             </div>
@@ -358,7 +397,12 @@ function dailyOverviewWarningText() {
         </n-grid-item>
         <n-grid-item>
           <n-card size="small" class="metric-card">
-            <div class="metric-label">跑赢基准占比</div>
+            <n-tooltip trigger="hover">
+              <template #trigger>
+                <div class="metric-label metric-label-help">跑赢基准占比</div>
+              </template>
+              纳入统计的记录里，有多少比例的单笔推荐最终收益高于对应基准收益。它看的是稳定性，而不只是少数大赚样本。
+            </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(winRateVsBenchmarkRef, winRateVsBenchmarkTextRef)">{{ winRateVsBenchmarkTextRef }}</n-text>
             </div>
@@ -371,13 +415,23 @@ function dailyOverviewWarningText() {
         <n-grid-item>
           <n-card size="small" title="超额表现概览">
             <div class="detail-row">
-              <span class="detail-label">超额收益中位数</span>
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <span class="detail-label detail-label-help">超额收益中位数</span>
+                </template>
+                把每条记录的超额收益率从小到大排序后，取中间那个值。它比平均值更不容易被极端大赚或大亏样本带偏。
+              </n-tooltip>
               <n-text :type="metricTextType(medianExcessYieldRateRef, medianExcessYieldRateTextRef)">
                 {{ medianExcessYieldRateTextRef }}
               </n-text>
             </div>
             <div class="detail-row">
-              <span class="detail-label">数据时间</span>
+              <n-tooltip trigger="hover">
+                <template #trigger>
+                  <span class="detail-label detail-label-help">数据时间</span>
+                </template>
+                当前统计结果最近一次完成刷新或回算的时间。若它较旧，说明页面里的收益率不一定是最新状态。
+              </n-tooltip>
               <n-text depth="3">{{ dataAsOfRef || '--' }}</n-text>
             </div>
             <div class="detail-row">
@@ -463,6 +517,13 @@ function dailyOverviewWarningText() {
   color: #64748b;
   font-size: 13px;
   line-height: 1.5;
+}
+
+.metric-label-help,
+.detail-label-help {
+  cursor: help;
+  text-decoration: underline dotted rgba(100, 116, 139, 0.6);
+  text-underline-offset: 3px;
 }
 
 .metric-value {
