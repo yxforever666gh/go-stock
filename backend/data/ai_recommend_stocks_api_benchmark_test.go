@@ -1,6 +1,7 @@
 package data
 
 import (
+	"math"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"testing"
@@ -166,5 +167,106 @@ func TestCalculateSSEBenchmarkRateByItems_Integration(t *testing.T) {
 	}
 	if rate == 0 {
 		t.Fatalf("expected non-zero benchmark rate, got 0")
+	}
+}
+
+func TestCalculateStrategySummaryByEntries_ProducesStrategyOnlyMetrics(t *testing.T) {
+	loc := cnLocation()
+	buyTime := time.Date(2026, 4, 14, 9, 35, 0, 0, loc)
+	sellTime := time.Date(2026, 4, 18, 14, 55, 0, 0, loc)
+	sellAmount := 11.2
+	buyAmount := 10.0
+	entries := []yieldDailyOverviewEntry{
+		{
+			RecommendID:      1,
+			StockCode:        "000001.SZ",
+			BuyTime:          buyTime,
+			BuyDay:           time.Date(2026, 4, 14, 0, 0, 0, 0, loc),
+			SellDay:          time.Date(2026, 4, 18, 0, 0, 0, 0, loc),
+			CurrentDay:       time.Date(2026, 4, 18, 0, 0, 0, 0, loc),
+			BuyAmount:        buyAmount,
+			SellAmount:       sellAmount,
+			HasSellAmount:    true,
+			BuyCostNet:       round2(calcBuyTradeCost(buyAmount, resolveTradingMarket("000001.SZ")).NetAmount),
+			RealizedValueNet: round2(calcSellTradeCost(buyAmount, sellAmount, resolveTradingMarket("000001.SZ")).NetAmount),
+			SellTime:         sellTime.Format("2006-01-02 15:04:05"),
+		},
+	}
+
+	summary := calculateStrategySummaryByEntries(entries)
+	if summary.StrategyXirrText == "--" {
+		t.Fatalf("expected strategy xirr text, got --")
+	}
+}
+
+func TestCalculateStrategyMaxDrawdownByEntries_WithPriceSeries(t *testing.T) {
+	loc := cnLocation()
+	entries := []yieldDailyOverviewEntry{
+		{
+			RecommendID:      1,
+			StockCode:        "000001.SZ",
+			BuyTime:          time.Date(2026, 4, 14, 9, 35, 0, 0, loc),
+			BuyDay:           time.Date(2026, 4, 14, 0, 0, 0, 0, loc),
+			CurrentDay:       time.Date(2026, 4, 16, 0, 0, 0, 0, loc),
+			BuyAmount:        10,
+			CurrentPrice:     9.2,
+			BuyCostNet:       round2(calcBuyTradeCost(10, resolveTradingMarket("000001.SZ")).NetAmount),
+			CurrentPriceTime: "2026-04-16 15:00:00",
+		},
+	}
+	tradingDays := []time.Time{
+		time.Date(2026, 4, 14, 0, 0, 0, 0, loc),
+		time.Date(2026, 4, 15, 0, 0, 0, 0, loc),
+		time.Date(2026, 4, 16, 0, 0, 0, 0, loc),
+	}
+	priceSeriesMap := map[string]*yieldDailyOverviewPriceSeries{
+		"000001.SZ": {
+			Code: "000001.SZ",
+			CloseByDay: map[string]float64{
+				"2026-04-14": 10.0,
+				"2026-04-15": 9.6,
+				"2026-04-16": 9.2,
+			},
+		},
+	}
+
+	maxDrawdown := calculateMaxDrawdownByDailyRatesWithPriceSeries(entries, tradingDays, priceSeriesMap)
+	if math.Abs(maxDrawdown) < 0.001 {
+		t.Fatalf("expected non-zero max drawdown")
+	}
+}
+
+func TestCalculateBenchmarkSummaryByItems_MissingStockPriceSeriesKeepsStrategyXirr(t *testing.T) {
+	items := []models.AiRecommendStocksYieldItem{
+		{
+			RecommendID:         1,
+			StockCode:           "BAD.CODE",
+			BacktestEligibility: recommendBacktestEligible,
+			ActivationStatus:    "activated",
+			BuyTime:             "2026-04-14 09:35:00",
+			ActivationTime:      "2026-04-14 09:35:00",
+			BuyAmount:           10,
+			CurrentPrice:        11.2,
+			CurrentPriceTime:    "2026-04-18 14:55:00",
+			YieldRate:           11.6,
+			YieldRateText:       "+11.60%",
+		},
+	}
+
+	result := calculateBenchmarkSummaryByItemsCore(items)
+	if result.StrategyXirrText == "--" {
+		t.Fatalf("expected strategy xirr text when benchmark fails")
+	}
+	if result.RateText == "--" {
+		t.Fatalf("expected benchmark rate text to still be available")
+	}
+	if result.BenchmarkXirrText == "--" {
+		t.Fatalf("expected benchmark xirr text to still be available")
+	}
+	if result.MaxDrawdownText != "--" {
+		t.Fatalf("expected max drawdown text to remain -- when stock price series are unavailable, got %s", result.MaxDrawdownText)
+	}
+	if result.ExcessXirrText == "--" {
+		t.Fatalf("expected excess xirr text to still be available")
 	}
 }

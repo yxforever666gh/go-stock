@@ -73,9 +73,15 @@ if (hasWindow) {
         }, 1000)
       }
 
+      // Web mode may be started without the websocket bridge being reachable yet.
+      // Avoid polluting the console on transient connection failures.
       socket.onerror = () => {
-        if (socket && socket.readyState === WebSocket.OPEN) {
-          socket.close()
+        if (socket) {
+          try {
+            socket.close()
+          } catch (_) {
+            // Ignore close failures on broken websocket handshakes.
+          }
         }
       }
     }

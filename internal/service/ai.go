@@ -112,8 +112,8 @@ func (s AIService) SendYieldEmailTestMessage() error {
 	return data.SendYieldEmailTestMessage()
 }
 
-func (s AIService) SendYieldEmailCSVNow() (int, error) {
-	return data.SendYieldEmailCSVNow()
+func (s AIService) SendYieldEmailXLSXNow() (int, error) {
+	return data.SendYieldEmailXLSXNow()
 }
 
 func (s AIService) SendLatestAIAnalysisReportEmail() (*models.AIResponseResult, error) {

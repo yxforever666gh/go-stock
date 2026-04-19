@@ -15,6 +15,7 @@ declare module 'vue' {
     AiRecommendStocksYieldList: typeof import('./src/components/aiRecommendStocksYieldList.vue')['default']
     AiRecommendYieldDailyOverviewChart: typeof import('./src/components/AiRecommendYieldDailyOverviewChart.vue')['default']
     AiRecommendYieldMinuteReplayChart: typeof import('./src/components/AiRecommendYieldMinuteReplayChart.vue')['default']
+    AiRecommendYieldStats: typeof import('./src/components/aiRecommendYieldStats.vue')['default']
     AnalyzeMartket: typeof import('./src/components/AnalyzeMartket.vue')['default']
     ClsCalendarTimeLine: typeof import('./src/components/ClsCalendarTimeLine.vue')['default']
     EmbeddedUrl: typeof import('./src/components/EmbeddedUrl.vue')['default']

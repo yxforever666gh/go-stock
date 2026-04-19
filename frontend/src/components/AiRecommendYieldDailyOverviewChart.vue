@@ -104,12 +104,14 @@ function buildRateTooltip(params, points) {
   const isDaily = isDailyMode.value
   const strategyRate = isDaily ? point.dailyYieldRate : point.cumulativeYieldRate
   const benchmarkRate = isDaily ? point.benchmarkDailyRate : point.benchmarkCumulativeRate
+  const excessRate = isDaily ? point.excessDailyRate : point.excessCumulativeRate
   const amount = isDaily ? point.dailyAmountChange : point.cumulativeAmountChange
   const displayedCost = resolveDisplayedCost(point)
   const lines = [
     point.tradeDate,
     `${isDaily ? '策略单日收益率' : '策略累计收益率'}: ${formatPercent(strategyRate)}`,
-    `${isDaily ? '大盘单日走势' : '大盘累计走势'}: ${formatPercent(benchmarkRate)}`,
+    `${isDaily ? '基准单日收益率' : '基准累计收益率'}: ${formatPercent(benchmarkRate)}`,
+    `${isDaily ? '超额单日收益率' : '超额累计收益率'}: ${formatPercent(excessRate)}`,
     `${isDaily ? '当日盈亏金额' : '累计盈亏金额'}: ${formatMoney(amount)}`,
     `${isDaily ? '当日持仓成本' : '组合净买入'}: ${formatMoney(displayedCost)}`,
     `持仓数: ${Number(point.holdingCount || 0)}`
@@ -125,10 +127,14 @@ function buildAmountTooltip(params, points) {
   }
   const isDaily = isDailyMode.value
   const amount = isDaily ? point.dailyAmountChange : point.cumulativeAmountChange
+  const benchmarkAmount = isDaily ? point.benchmarkDailyAmountChange : point.benchmarkCumulativeAmountChange
+  const excessAmount = isDaily ? point.excessDailyAmountChange : point.excessCumulativeAmountChange
   const displayedCost = resolveDisplayedCost(point)
   const lines = [
     point.tradeDate,
-    `${isDaily ? '当日盈亏金额' : '累计盈亏金额'}: ${formatMoney(amount)}`,
+    `${isDaily ? '策略当日盈亏金额' : '策略累计盈亏金额'}: ${formatMoney(amount)}`,
+    `${isDaily ? '基准当日盈亏金额' : '基准累计盈亏金额'}: ${formatMoney(benchmarkAmount)}`,
+    `${isDaily ? '超额当日盈亏金额' : '超额累计盈亏金额'}: ${formatMoney(excessAmount)}`,
     `${isDaily ? '策略单日收益率' : '策略累计收益率'}: ${formatPercent(isDaily ? point.dailyYieldRate : point.cumulativeYieldRate)}`,
     `${isDaily ? '当日持仓成本' : '组合净买入'}: ${formatMoney(displayedCost)}`,
     `持仓数: ${Number(point.holdingCount || 0)}`
@@ -141,11 +147,13 @@ function buildRateOption() {
   const categories = buildSharedCategories()
   const strategyValues = points.map((item) => Number(isDailyMode.value ? item.dailyYieldRate : item.cumulativeYieldRate) || 0)
   const benchmarkValues = points.map((item) => Number(isDailyMode.value ? item.benchmarkDailyRate : item.benchmarkCumulativeRate) || 0)
+  const excessValues = points.map((item) => Number(isDailyMode.value ? item.excessDailyRate : item.excessCumulativeRate) || 0)
+  const benchmarkName = String(props.overviewData?.benchmarkName || '沪深300（现金流匹配）').trim()
 
   return {
     animation: false,
     backgroundColor: '#ffffff',
-    color: ['#b91c1c', '#2563eb'],
+    color: ['#b91c1c', '#2563eb', '#d97706'],
     title: {
       text: isDailyMode.value ? '收益率走势' : '累计收益率走势',
       left: 12,
@@ -233,7 +241,7 @@ function buildRateOption() {
         data: strategyValues
       },
       {
-        name: isDailyMode.value ? '大盘单日走势' : '大盘累计走势',
+        name: isDailyMode.value ? `${benchmarkName}单日收益率` : `${benchmarkName}累计收益率`,
         type: 'line',
         smooth: true,
         symbol: 'circle',
@@ -243,6 +251,18 @@ function buildRateOption() {
           type: 'dashed'
         },
         data: benchmarkValues
+      },
+      {
+        name: isDailyMode.value ? '超额单日收益率' : '超额累计收益率',
+        type: 'line',
+        smooth: true,
+        symbol: 'circle',
+        symbolSize: 5,
+        lineStyle: {
+          width: 2,
+          type: 'dotted'
+        },
+        data: excessValues
       }
     ]
   }
@@ -251,12 +271,15 @@ function buildRateOption() {
 function buildAmountOption() {
   const points = Array.isArray(props.overviewData?.points) ? props.overviewData.points : []
   const categories = buildSharedCategories()
-  const amountValues = points.map((item) => Number(isDailyMode.value ? item.dailyAmountChange : item.cumulativeAmountChange) || 0)
+  const strategyAmountValues = points.map((item) => Number(isDailyMode.value ? item.dailyAmountChange : item.cumulativeAmountChange) || 0)
+  const benchmarkAmountValues = points.map((item) => Number(isDailyMode.value ? item.benchmarkDailyAmountChange : item.benchmarkCumulativeAmountChange) || 0)
+  const excessAmountValues = points.map((item) => Number(isDailyMode.value ? item.excessDailyAmountChange : item.excessCumulativeAmountChange) || 0)
+  const benchmarkName = String(props.overviewData?.benchmarkName || '沪深300（现金流匹配）').trim()
 
   return {
     animation: false,
     backgroundColor: '#ffffff',
-    color: [isDailyMode.value ? '#d97706' : '#0f766e'],
+    color: ['#0f766e', '#2563eb', '#d97706'],
     title: {
       text: isDailyMode.value ? '金额变化' : '累计金额变化',
       left: 12,
@@ -265,6 +288,13 @@ function buildAmountOption() {
         color: '#334155',
         fontSize: 14,
         fontWeight: 600
+      }
+    },
+    legend: {
+      top: 8,
+      right: 20,
+      textStyle: {
+        color: '#4b5563'
       }
     },
     tooltip: {
@@ -308,30 +338,56 @@ function buildAmountOption() {
       }
     },
     series: [
-      isDailyMode.value
-        ? {
-          name: '当日盈亏金额',
-          type: 'bar',
-          data: amountValues,
-          barMaxWidth: 18,
-          itemStyle: {
-            color: (params) => Number(params.value || 0) >= 0 ? '#d97706' : '#0891b2'
-          }
-        }
-        : {
-          name: '累计盈亏金额',
-          type: 'line',
-          smooth: true,
-          symbol: 'circle',
-          symbolSize: 6,
-          lineStyle: {
-            width: 2.2
-          },
-          areaStyle: {
-            color: 'rgba(15, 118, 110, 0.08)'
-          },
-          data: amountValues
-        }
+      {
+        name: isDailyMode.value ? '策略当日盈亏金额' : '策略累计盈亏金额',
+        type: isDailyMode.value ? 'bar' : 'line',
+        smooth: !isDailyMode.value,
+        symbol: isDailyMode.value ? undefined : 'circle',
+        symbolSize: isDailyMode.value ? undefined : 6,
+        lineStyle: isDailyMode.value ? undefined : {
+          width: 2.2
+        },
+        areaStyle: isDailyMode.value ? undefined : {
+          color: 'rgba(15, 118, 110, 0.08)'
+        },
+        barMaxWidth: isDailyMode.value ? 14 : undefined,
+        itemStyle: isDailyMode.value ? {
+          color: (params) => Number(params.value || 0) >= 0 ? '#0f766e' : '#0891b2'
+        } : undefined,
+        data: strategyAmountValues
+      },
+      {
+        name: isDailyMode.value ? `${benchmarkName}当日盈亏金额` : `${benchmarkName}累计盈亏金额`,
+        type: isDailyMode.value ? 'bar' : 'line',
+        smooth: !isDailyMode.value,
+        symbol: isDailyMode.value ? undefined : 'circle',
+        symbolSize: isDailyMode.value ? undefined : 5,
+        lineStyle: isDailyMode.value ? undefined : {
+          width: 2,
+          type: 'dashed'
+        },
+        barMaxWidth: isDailyMode.value ? 14 : undefined,
+        itemStyle: isDailyMode.value ? {
+          color: (params) => Number(params.value || 0) >= 0 ? '#2563eb' : '#1d4ed8'
+        } : undefined,
+        data: benchmarkAmountValues
+      },
+      {
+        name: isDailyMode.value ? '超额当日盈亏金额' : '超额累计盈亏金额',
+        type: isDailyMode.value ? 'bar' : 'line',
+        smooth: !isDailyMode.value,
+        symbol: isDailyMode.value ? undefined : 'circle',
+        symbolSize: isDailyMode.value ? undefined : 5,
+        lineStyle: isDailyMode.value ? undefined : {
+          width: 2,
+          type: 'dotted'
+        },
+        barMaxWidth: isDailyMode.value ? 14 : undefined,
+        itemStyle: isDailyMode.value ? {
+          color: (params) => Number(params.value || 0) >= 0 ? '#d97706' : '#b45309'
+        } : undefined,
+        data: excessAmountValues
+      }
     ]
   }
 }

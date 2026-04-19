@@ -492,3 +492,163 @@ func TestBuildYieldRecordStateFromRecommend_BeforeCutoffInsufficientEvidenceWith
 		t.Fatalf("expected BuyAmount=25.76, got %.2f", state.BuyAmount)
 	}
 }
+
+func TestSyncRecommendActivationStatusFromRecordStates(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "yield-sync-recommend-activation.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	rows := []models.AiRecommendStocks{
+		{ActivationStatus: "pending", ActivationInvalidReason: "旧原因"},
+		{ActivationStatus: "pending", ActivationInvalidReason: "应清空"},
+		{ActivationStatus: "pending", ActivationInvalidReason: "应保留为空"},
+	}
+	for i := range rows {
+		if err := db.Dao.Create(&rows[i]).Error; err != nil {
+			t.Fatalf("seed recommend row %d failed: %v", i, err)
+		}
+	}
+
+	err := syncRecommendActivationStatusFromRecordStates([]models.AiRecommendYieldRecordState{
+		{
+			RecommendID:      rows[0].ID,
+			ActivationStatus: "activated",
+			DataStatusReason: "不应保留",
+		},
+		{
+			RecommendID:      rows[1].ID,
+			ActivationStatus: "invalid",
+			DataStatusReason: "分钟线缺失",
+		},
+		{
+			RecommendID:      rows[2].ID,
+			ActivationStatus: "skipped",
+			DataStatusReason: "已跳过",
+		},
+	})
+	if err != nil {
+		t.Fatalf("sync recommend activation status failed: %v", err)
+	}
+
+	var synced []models.AiRecommendStocks
+	if err := db.Dao.Order("id asc").Find(&synced).Error; err != nil {
+		t.Fatalf("load synced rows failed: %v", err)
+	}
+	if len(synced) != 3 {
+		t.Fatalf("expected 3 synced rows, got %d", len(synced))
+	}
+
+	if synced[0].ActivationStatus != "activated" {
+		t.Fatalf("expected row0 activated, got %s", synced[0].ActivationStatus)
+	}
+	if synced[0].ActivationInvalidReason != "" {
+		t.Fatalf("expected row0 invalid reason cleared, got %s", synced[0].ActivationInvalidReason)
+	}
+
+	if synced[1].ActivationStatus != "invalid" {
+		t.Fatalf("expected row1 invalid, got %s", synced[1].ActivationStatus)
+	}
+	if synced[1].ActivationInvalidReason != "分钟线缺失" {
+		t.Fatalf("expected row1 invalid reason synced, got %s", synced[1].ActivationInvalidReason)
+	}
+
+	if synced[2].ActivationStatus != "skipped" {
+		t.Fatalf("expected row2 skipped, got %s", synced[2].ActivationStatus)
+	}
+	if synced[2].ActivationInvalidReason != "" {
+		t.Fatalf("expected row2 invalid reason cleared, got %s", synced[2].ActivationInvalidReason)
+	}
+}
+
+func TestApplyStrictPendingStateToYieldItem_DoesNotOverrideTerminalOrAnalysisOnlyState(t *testing.T) {
+	dirtyMap := map[string]models.AiRecommendYieldDirtyCode{
+		"002328.SZ": {
+			StockCode: "002328.SZ",
+			Reason:    "跳过复审覆盖后等待严格模式回算",
+		},
+	}
+
+	invalidItem := models.AiRecommendStocksYieldItem{
+		StockCode:        "002328.SZ",
+		ActivationStatus: "invalid",
+		ExecutionState:   recommendExecutionConditional,
+		DataStatus:       "无法判定",
+	}
+	applyStrictPendingStateToYieldItem(&invalidItem, dirtyMap)
+	if !invalidItem.StrictReady {
+		t.Fatal("expected invalid terminal item to stay strict-ready")
+	}
+	if invalidItem.ActivationStatus != "invalid" {
+		t.Fatalf("expected invalid activation status to be preserved, got %s", invalidItem.ActivationStatus)
+	}
+	if invalidItem.DataStatus != "无法判定" {
+		t.Fatalf("expected invalid data status to be preserved, got %s", invalidItem.DataStatus)
+	}
+
+	analysisOnlyItem := models.AiRecommendStocksYieldItem{
+		StockCode:        "002328.SZ",
+		ActivationStatus: "pending",
+		ExecutionState:   recommendExecutionAnalysisOnly,
+		DataStatus:       "未结构化",
+	}
+	applyStrictPendingStateToYieldItem(&analysisOnlyItem, dirtyMap)
+	if !analysisOnlyItem.StrictReady {
+		t.Fatal("expected analysis-only item to stay strict-ready")
+	}
+	if analysisOnlyItem.ActivationStatus != "pending" {
+		t.Fatalf("expected analysis-only activation status unchanged, got %s", analysisOnlyItem.ActivationStatus)
+	}
+	if analysisOnlyItem.DataStatus != "未结构化" {
+		t.Fatalf("expected analysis-only data status unchanged, got %s", analysisOnlyItem.DataStatus)
+	}
+}
+
+func TestUpsertYieldRecordStates_ClearsDirtyForTerminalRecordStates(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "yield-clear-dirty-terminal.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	rec := models.AiRecommendStocks{
+		StockCode:          "002328.SZ",
+		StockName:          "新朋股份",
+		ActivationStatus:   "pending",
+		ExecutionState:     recommendExecutionAnalysisOnly,
+		RecommendStatus:    "missing_market_data",
+		ActivationRuleJSON: "",
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("seed recommend failed: %v", err)
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldDirtyCode{
+		StockCode:  "002328.SZ",
+		Reason:     "跳过复审覆盖后等待严格模式回算",
+		ModeNeeded: aiRecommendYieldModeStrict,
+	}).Error; err != nil {
+		t.Fatalf("seed dirty failed: %v", err)
+	}
+
+	if err := upsertYieldRecordStates([]models.AiRecommendYieldRecordState{
+		{
+			RecommendID:      rec.ID,
+			StockCode:        "002328.SZ",
+			StockName:        "新朋股份",
+			ActivationStatus: "invalid",
+			DataStatus:       "无法判定",
+			DataStatusReason: "缺少可信实时价格/量能数据",
+		},
+	}); err != nil {
+		t.Fatalf("upsert yield record states failed: %v", err)
+	}
+
+	var dirtyCount int64
+	if err := db.Dao.Model(&models.AiRecommendYieldDirtyCode{}).
+		Where("stock_code = ?", "002328.SZ").
+		Count(&dirtyCount).Error; err != nil {
+		t.Fatalf("count dirty failed: %v", err)
+	}
+	if dirtyCount != 0 {
+		t.Fatalf("expected terminal record state to clear dirty flag, got %d", dirtyCount)
+	}
+}

@@ -171,7 +171,7 @@ func (CronTaskRun) TableName() string {
 // EmailSendLog 记录每次邮件发送尝试的审计信息，用于排查重复发送、错误配置和发送结果。
 type EmailSendLog struct {
 	gorm.Model
-	SendType        string     `json:"sendType" gorm:"size:64;index"` // test/csv/manual_ai/cron_ai
+	SendType        string     `json:"sendType" gorm:"size:64;index"` // test/xlsx/csv/manual_ai/cron_ai
 	TriggeredAt     time.Time  `json:"triggeredAt" gorm:"index"`
 	Status          string     `json:"status" gorm:"size:32;index"` // success/failed
 	Recipients      string     `json:"recipients" gorm:"type:text"`
@@ -1166,6 +1166,10 @@ type AiRecommendStocksYieldItem struct {
 	CurrentPriceTime          string                           `json:"currentPriceTime"`
 	YieldRate                 float64                          `json:"yieldRate"`
 	YieldRateText             string                           `json:"yieldRateText"`
+	BenchmarkYieldRate        float64                          `json:"benchmarkYieldRate"`
+	BenchmarkYieldRateText    string                           `json:"benchmarkYieldRateText"`
+	ExcessYieldRate           float64                          `json:"excessYieldRate"`
+	ExcessYieldRateText       string                           `json:"excessYieldRateText"`
 	DataStatus                string                           `json:"dataStatus"`
 	DataStatusReason          string                           `json:"dataStatusReason,omitempty"`
 	LatestOpeningReview       *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty"`
@@ -1213,17 +1217,25 @@ type AiRecommendYieldMinuteChartData struct {
 }
 
 type AiRecommendYieldDailyOverviewPoint struct {
-	TradeDate               string  `json:"tradeDate"`
-	CostBasisNet            float64 `json:"costBasisNet"`
-	DailyHoldingCostNet     float64 `json:"dailyHoldingCostNet"`
-	HoldingCount            int     `json:"holdingCount"`
-	CumulativeAmountChange  float64 `json:"cumulativeAmountChange"`
-	CumulativeYieldRate     float64 `json:"cumulativeYieldRate"`
-	DailyAmountChange       float64 `json:"dailyAmountChange"`
-	DailyYieldRate          float64 `json:"dailyYieldRate"`
-	BenchmarkClose          float64 `json:"benchmarkClose"`
-	BenchmarkCumulativeRate float64 `json:"benchmarkCumulativeRate"`
-	BenchmarkDailyRate      float64 `json:"benchmarkDailyRate"`
+	TradeDate                      string  `json:"tradeDate"`
+	CostBasisNet                   float64 `json:"costBasisNet"`
+	DailyHoldingCostNet            float64 `json:"dailyHoldingCostNet"`
+	HoldingCount                   int     `json:"holdingCount"`
+	CumulativeAmountChange         float64 `json:"cumulativeAmountChange"`
+	CumulativeYieldRate            float64 `json:"cumulativeYieldRate"`
+	DailyAmountChange              float64 `json:"dailyAmountChange"`
+	DailyYieldRate                 float64 `json:"dailyYieldRate"`
+	BenchmarkClose                 float64 `json:"benchmarkClose"`
+	BenchmarkCumulativeAmountChange float64 `json:"benchmarkCumulativeAmountChange"`
+	BenchmarkDailyAmountChange     float64 `json:"benchmarkDailyAmountChange"`
+	BenchmarkCumulativeRate        float64 `json:"benchmarkCumulativeRate"`
+	BenchmarkDailyRate             float64 `json:"benchmarkDailyRate"`
+	ExcessCumulativeAmountChange   float64 `json:"excessCumulativeAmountChange"`
+	ExcessDailyAmountChange        float64 `json:"excessDailyAmountChange"`
+	ExcessCumulativeRate           float64 `json:"excessCumulativeRate"`
+	ExcessDailyRate                float64 `json:"excessDailyRate"`
+	StrategyNav                    float64 `json:"strategyNav"`
+	BenchmarkNav                   float64 `json:"benchmarkNav"`
 }
 
 type AiRecommendYieldDailyOverviewData struct {
@@ -1231,6 +1243,8 @@ type AiRecommendYieldDailyOverviewData struct {
 	RangeEnd            string                               `json:"rangeEnd"`
 	DataAsOf            string                               `json:"dataAsOf"`
 	CalcMode            string                               `json:"calcMode"`
+	BenchmarkCode       string                               `json:"benchmarkCode"`
+	BenchmarkName       string                               `json:"benchmarkName"`
 	TotalRecordCount    int                                  `json:"totalRecordCount"`
 	IncludedRecordCount int                                  `json:"includedRecordCount"`
 	SkippedRecordCount  int                                  `json:"skippedRecordCount"`
@@ -1247,8 +1261,24 @@ type AiRecommendStocksYieldPageData struct {
 	CalcMode                  string                       `json:"calcMode,omitempty"`
 	TotalYieldRate            float64                      `json:"totalYieldRate"`
 	TotalYieldRateText        string                       `json:"totalYieldRateText"`
-	SseBenchmarkRate          float64                      `json:"sseBenchmarkRate"`
-	SseBenchmarkRateText      string                       `json:"sseBenchmarkRateText"`
+	BenchmarkCode             string                       `json:"benchmarkCode"`
+	BenchmarkName             string                       `json:"benchmarkName"`
+	BenchmarkRate             float64                      `json:"benchmarkRate"`
+	BenchmarkRateText         string                       `json:"benchmarkRateText"`
+	ExcessYieldRate           float64                      `json:"excessYieldRate"`
+	ExcessYieldRateText       string                       `json:"excessYieldRateText"`
+	StrategyXirr              float64                      `json:"strategyXirr"`
+	StrategyXirrText          string                       `json:"strategyXirrText"`
+	BenchmarkXirr             float64                      `json:"benchmarkXirr"`
+	BenchmarkXirrText         string                       `json:"benchmarkXirrText"`
+	ExcessXirr                float64                      `json:"excessXirr"`
+	ExcessXirrText            string                       `json:"excessXirrText"`
+	MaxDrawdown               float64                      `json:"maxDrawdown"`
+	MaxDrawdownText           string                       `json:"maxDrawdownText"`
+	WinRateVsBenchmark        float64                      `json:"winRateVsBenchmark"`
+	WinRateVsBenchmarkText    string                       `json:"winRateVsBenchmarkText"`
+	MedianExcessYieldRate     float64                      `json:"medianExcessYieldRate"`
+	MedianExcessYieldRateText string                       `json:"medianExcessYieldRateText"`
 	DataAsOf                  string                       `json:"dataAsOf"`
 	RecalcInProgress          bool                         `json:"recalcInProgress"`
 	RecalcProgress            int                          `json:"recalcProgress"`
@@ -1258,6 +1288,15 @@ type AiRecommendStocksYieldPageData struct {
 	MinuteDownloadUncoverable int                          `json:"minuteDownloadUncoverable"`
 	ManualCooldownUntil       string                       `json:"manualCooldownUntil"`
 	ManualCooldownRemainSec   int                          `json:"manualCooldownRemainSec"`
+	LastManualStartedAt       string                       `json:"lastManualStartedAt,omitempty"`
+	LastManualFinishedAt      string                       `json:"lastManualFinishedAt,omitempty"`
+	LastManualScopeCount      int                          `json:"lastManualScopeCount,omitempty"`
+	LastManualPrefetchMs      int64                        `json:"lastManualPrefetchMs,omitempty"`
+	LastManualRecalcMs        int64                        `json:"lastManualRecalcMs,omitempty"`
+	LastManualTotalMs         int64                        `json:"lastManualTotalMs,omitempty"`
+	LastManualSqliteBusyCount int                          `json:"lastManualSqliteBusyCount,omitempty"`
+	LastManualProviderSummary string                       `json:"lastManualProviderSummary,omitempty"`
+	LastManualAuditReady      bool                         `json:"lastManualAuditReady,omitempty"`
 	DiemengHealthStatus       string                       `json:"diemengHealthStatus,omitempty"`
 	DiemengHealthSummary      string                       `json:"diemengHealthSummary,omitempty"`
 	DiemengHealthCheckedAt    string                       `json:"diemengHealthCheckedAt,omitempty"`
@@ -1402,6 +1441,13 @@ type AiRecommendYieldMeta struct {
 	AkshareCheckedAt          *time.Time `json:"akshareCheckedAt"`
 	AkshareInstallError       string     `json:"akshareInstallError"`
 	FrozenSellPriceFixVersion string     `json:"frozenSellPriceFixVersion"`
+	LastManualFinishedAt      *time.Time `json:"lastManualFinishedAt" gorm:"index"`
+	LastManualScopeCount      int        `json:"lastManualScopeCount"`
+	LastManualPrefetchMs      int64      `json:"lastManualPrefetchMs"`
+	LastManualRecalcMs        int64      `json:"lastManualRecalcMs"`
+	LastManualTotalMs         int64      `json:"lastManualTotalMs"`
+	LastManualSqliteBusyCount int        `json:"lastManualSqliteBusyCount"`
+	LastManualProviderSummary string     `json:"lastManualProviderSummary" gorm:"type:text"`
 }
 
 func (AiRecommendYieldMeta) TableName() string { return "ai_recommend_yield_meta" }

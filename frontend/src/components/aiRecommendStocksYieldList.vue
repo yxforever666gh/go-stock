@@ -1,7 +1,6 @@
 <script setup>
 import {computed, h, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {
-  GetAiRecommendYieldDailyOverview,
   GetAiRecommendStocksYieldList,
   GetAiRecommendYieldMinuteChart,
   GetAiRecommendYieldErrorLogs,
@@ -10,7 +9,6 @@ import {
 import {NBadge, NText, useMessage} from "naive-ui";
 import { useDraggableDataTableColumns } from "../composables/useDraggableDataTableColumns";
 import AiRecommendYieldMinuteReplayChart from "./AiRecommendYieldMinuteReplayChart.vue";
-import AiRecommendYieldDailyOverviewChart from "./AiRecommendYieldDailyOverviewChart.vue";
 import { useSharedResearchDateRange } from "../composables/useSharedResearchDateRange";
 
 const message = useMessage()
@@ -31,10 +29,6 @@ const tableOverflowTooltip = {
 
 const dataRef = ref([])
 const loadingRef = ref(true)
-const totalYieldRateRef = ref(0)
-const totalYieldRateTextRef = ref("--")
-const sseBenchmarkRateRef = ref(0)
-const sseBenchmarkRateTextRef = ref("--")
 const dataAsOfRef = ref("")
 const recalcInProgressRef = ref(false)
 const recalcProgressRef = ref(0)
@@ -45,6 +39,15 @@ const minuteDownloadUncoverableRef = ref(0)
 const diemengHealthStatusRef = ref("")
 const diemengHealthSummaryRef = ref("尚未执行自检")
 const diemengHealthCheckedAtRef = ref("")
+const lastManualStartedAtRef = ref("")
+const lastManualFinishedAtRef = ref("")
+const lastManualScopeCountRef = ref(0)
+const lastManualPrefetchMsRef = ref(0)
+const lastManualRecalcMsRef = ref(0)
+const lastManualTotalMsRef = ref(0)
+const lastManualSqliteBusyCountRef = ref(0)
+const lastManualProviderSummaryRef = ref("")
+const lastManualAuditReadyRef = ref(false)
 const strictPendingCountRef = ref(0)
 const manualDownloadLoadingRef = ref(false)
 const manualCooldownRemainSecRef = ref(0)
@@ -55,10 +58,6 @@ const replayModalVisibleRef = ref(false)
 const replayModalLoadingRef = ref(false)
 const replayChartDataRef = ref(null)
 const replayModalTitleRef = ref("")
-const dailyOverviewModalVisibleRef = ref(false)
-const dailyOverviewLoadingRef = ref(false)
-const dailyOverviewDataRef = ref(null)
-const dailyOverviewTabRef = ref("cumulative")
 let pollTimer = null
 let cooldownTimer = null
 let manualCooldownUntilMs = 0
@@ -310,6 +309,46 @@ const defaultColumns = [
     }
   },
   {
+    title: '基准收益率',
+    key: 'benchmarkYieldRate',
+    minWidth: 110,
+    render(row) {
+      if (isStrictRowPending(row)) {
+        return h(NText, {type: "warning"}, {default: () => "待回算"})
+      }
+      if (!row.benchmarkYieldRateText || row.benchmarkYieldRateText === "--") {
+        return h(NText, {type: "default"}, {default: () => "--"})
+      }
+      if (Number(row.benchmarkYieldRate) > 0) {
+        return h(NText, {type: "error"}, {default: () => row.benchmarkYieldRateText})
+      }
+      if (Number(row.benchmarkYieldRate) < 0) {
+        return h(NText, {type: "success"}, {default: () => row.benchmarkYieldRateText})
+      }
+      return h(NText, {type: "default"}, {default: () => row.benchmarkYieldRateText})
+    }
+  },
+  {
+    title: '超额收益率',
+    key: 'excessYieldRate',
+    minWidth: 110,
+    render(row) {
+      if (isStrictRowPending(row)) {
+        return h(NText, {type: "warning"}, {default: () => "待回算"})
+      }
+      if (!row.excessYieldRateText || row.excessYieldRateText === "--") {
+        return h(NText, {type: "default"}, {default: () => "--"})
+      }
+      if (Number(row.excessYieldRate) > 0) {
+        return h(NText, {type: "error"}, {default: () => row.excessYieldRateText})
+      }
+      if (Number(row.excessYieldRate) < 0) {
+        return h(NText, {type: "success"}, {default: () => row.excessYieldRateText})
+      }
+      return h(NText, {type: "default"}, {default: () => row.excessYieldRateText})
+    }
+  },
+  {
     title: '数据状态',
     key: 'dataSync',
     minWidth: 360,
@@ -470,10 +509,6 @@ function query({
         pageCount: res.totalPages,
         data: res.list,
         total: res.total,
-        totalYieldRate: res.totalYieldRate,
-        totalYieldRateText: res.totalYieldRateText || "--",
-        sseBenchmarkRate: Number(res.sseBenchmarkRate || 0),
-        sseBenchmarkRateText: res.sseBenchmarkRateText || "--",
         dataAsOf: res.dataAsOf || "",
         recalcInProgress: !!res.recalcInProgress,
         recalcProgress: Number(res.recalcProgress || 0),
@@ -484,6 +519,15 @@ function query({
         diemengHealthStatus: res.diemengHealthStatus || "",
         diemengHealthSummary: res.diemengHealthSummary || "",
         diemengHealthCheckedAt: res.diemengHealthCheckedAt || "",
+        lastManualStartedAt: res.lastManualStartedAt || "",
+        lastManualFinishedAt: res.lastManualFinishedAt || "",
+        lastManualScopeCount: Number(res.lastManualScopeCount || 0),
+        lastManualPrefetchMs: Number(res.lastManualPrefetchMs || 0),
+        lastManualRecalcMs: Number(res.lastManualRecalcMs || 0),
+        lastManualTotalMs: Number(res.lastManualTotalMs || 0),
+        lastManualSqliteBusyCount: Number(res.lastManualSqliteBusyCount || 0),
+        lastManualProviderSummary: res.lastManualProviderSummary || "",
+        lastManualAuditReady: !!res.lastManualAuditReady,
         manualCooldownUntil: res.manualCooldownUntil || "",
         manualCooldownRemainSec: Number(res.manualCooldownRemainSec || 0)
       })
@@ -522,10 +566,6 @@ function fetchYieldList(page, options = {}) {
     paginationReactive.page = page
     paginationReactive.pageCount = data.pageCount
     paginationReactive.itemCount = data.total
-    totalYieldRateRef.value = Number(data.totalYieldRate || 0)
-    totalYieldRateTextRef.value = data.totalYieldRateText || "--"
-    sseBenchmarkRateRef.value = Number(data.sseBenchmarkRate || 0)
-    sseBenchmarkRateTextRef.value = data.sseBenchmarkRateText || "--"
     dataAsOfRef.value = data.dataAsOf
     recalcInProgressRef.value = data.recalcInProgress
     recalcProgressRef.value = Number(data.recalcProgress || 0)
@@ -536,6 +576,15 @@ function fetchYieldList(page, options = {}) {
     diemengHealthStatusRef.value = data.diemengHealthStatus || ""
     diemengHealthSummaryRef.value = data.diemengHealthSummary || "尚未执行自检"
     diemengHealthCheckedAtRef.value = data.diemengHealthCheckedAt || ""
+    lastManualStartedAtRef.value = data.lastManualStartedAt || ""
+    lastManualFinishedAtRef.value = data.lastManualFinishedAt || ""
+    lastManualScopeCountRef.value = Number(data.lastManualScopeCount || 0)
+    lastManualPrefetchMsRef.value = Number(data.lastManualPrefetchMs || 0)
+    lastManualRecalcMsRef.value = Number(data.lastManualRecalcMs || 0)
+    lastManualTotalMsRef.value = Number(data.lastManualTotalMs || 0)
+    lastManualSqliteBusyCountRef.value = Number(data.lastManualSqliteBusyCount || 0)
+    lastManualProviderSummaryRef.value = data.lastManualProviderSummary || ""
+    lastManualAuditReadyRef.value = !!data.lastManualAuditReady
     applyManualCooldown(data.manualCooldownUntil, data.manualCooldownRemainSec)
     if (recalcInProgressRef.value) {
       ensureAutoRefresh()
@@ -677,39 +726,6 @@ async function handleRefreshReplay() {
     return
   }
   await loadReplayChart(recommendId)
-}
-
-async function handleOpenDailyOverview() {
-  dailyOverviewModalVisibleRef.value = true
-  if (dailyOverviewDataRef.value) {
-    return
-  }
-  await loadDailyOverview()
-}
-
-async function loadDailyOverview() {
-  if (dailyOverviewLoadingRef.value) {
-    return
-  }
-  dailyOverviewLoadingRef.value = true
-  try {
-    const result = await GetAiRecommendYieldDailyOverview()
-    dailyOverviewDataRef.value = result || {
-      calcMode: "strict",
-      warnings: ["读取全库收益走势失败，请稍后重试"],
-      points: []
-    }
-  } catch (e) {
-    console.error("loadDailyOverview failed", e)
-    dailyOverviewDataRef.value = {
-      calcMode: "strict",
-      warnings: ["读取全库收益走势失败，请稍后重试"],
-      points: []
-    }
-    message.error("读取全库收益走势失败，请稍后重试")
-  } finally {
-    dailyOverviewLoadingRef.value = false
-  }
 }
 
 function parseDateTime(dateStr) {
@@ -890,6 +906,63 @@ function taskStatusHintText() {
     return "后台任务已结束，但仍有待覆盖/不可覆盖记录"
   }
   return "后台任务已结束，覆盖已完成"
+}
+
+function formatDurationMs(ms) {
+  const total = Math.max(0, Number(ms || 0))
+  if (!total) {
+    return "--"
+  }
+  if (total < 1000) {
+    return `${total}ms`
+  }
+  const seconds = Math.round(total / 100) / 10
+  if (seconds < 60) {
+    return `${seconds}s`
+  }
+  const mins = Math.floor(seconds / 60)
+  const remain = Math.round((seconds - mins * 60) * 10) / 10
+  if (remain <= 0) {
+    return `${mins}m`
+  }
+  return `${mins}m${remain}s`
+}
+
+function lastManualSummaryText() {
+  const hasStarted = !!String(lastManualStartedAtRef.value || '').trim()
+  const hasFinished = !!String(lastManualFinishedAtRef.value || '').trim()
+  const hasAnyTiming = Number(lastManualPrefetchMsRef.value || 0) > 0
+    || Number(lastManualRecalcMsRef.value || 0) > 0
+    || Number(lastManualTotalMsRef.value || 0) > 0
+  if (!hasStarted && !hasFinished && !hasAnyTiming) {
+    return "暂无手动任务记录"
+  }
+  const parts = []
+  if (hasStarted) {
+    parts.push(`开始 ${lastManualStartedAtRef.value}`)
+  }
+  if (hasFinished) {
+    parts.push(`结束 ${lastManualFinishedAtRef.value}`)
+  }
+  if (lastManualScopeCountRef.value > 0) {
+    parts.push(`scope ${lastManualScopeCountRef.value}`)
+  }
+  if (!lastManualAuditReadyRef.value) {
+    if (recalcInProgressRef.value) {
+      parts.push("执行中，详细审计待任务完成后写入")
+      return parts.join("；")
+    }
+    parts.push("历史版本未记录详细耗时")
+    return parts.join("；")
+  }
+  parts.push(`预取 ${formatDurationMs(lastManualPrefetchMsRef.value)}`)
+  parts.push(`回算 ${formatDurationMs(lastManualRecalcMsRef.value)}`)
+  parts.push(`总耗时 ${formatDurationMs(lastManualTotalMsRef.value)}`)
+  parts.push(`busy ${Number(lastManualSqliteBusyCountRef.value || 0)}`)
+  if (lastManualProviderSummaryRef.value) {
+    parts.push(`源 ${lastManualProviderSummaryRef.value}`)
+  }
+  return parts.join("；")
 }
 
 function diemengHealthTextType() {
@@ -1213,63 +1286,6 @@ function replayMarkerSummaryText() {
   }).join('、')
 }
 
-function totalYieldTextType() {
-  if (totalYieldRateTextRef.value === "--") {
-    return "default"
-  }
-  if (totalYieldRateRef.value > 0) {
-    return "error"
-  }
-  if (totalYieldRateRef.value < 0) {
-    return "success"
-  }
-  return "default"
-}
-
-function sseBenchmarkTextType() {
-  if (sseBenchmarkRateTextRef.value === "--") {
-    return "default"
-  }
-  if (sseBenchmarkRateRef.value > 0) {
-    return "error"
-  }
-  if (sseBenchmarkRateRef.value < 0) {
-    return "success"
-  }
-  return "default"
-}
-
-function dailyOverviewSummaryText() {
-  const data = dailyOverviewDataRef.value
-  if (!data) {
-    return "--"
-  }
-  const total = Number(data.totalRecordCount || 0)
-  const included = Number(data.includedRecordCount || 0)
-  const skipped = Number(data.skippedRecordCount || 0)
-  return `总记录 ${total}，纳入 ${included}，跳过 ${skipped}`
-}
-
-function dailyOverviewRangeText() {
-  const data = dailyOverviewDataRef.value
-  if (!data) {
-    return "--"
-  }
-  const start = String(data.rangeStart || '').trim()
-  const end = String(data.rangeEnd || '').trim()
-  if (!start && !end) {
-    return "--"
-  }
-  return `${start || '--'} -> ${end || '--'}`
-}
-
-function dailyOverviewWarningText() {
-  const warnings = Array.isArray(dailyOverviewDataRef.value?.warnings) ? dailyOverviewDataRef.value.warnings : []
-  if (warnings.length === 0) {
-    return ""
-  }
-  return warnings.join("；")
-}
 </script>
 
 <template>
@@ -1305,18 +1321,15 @@ function dailyOverviewWarningText() {
     <n-text depth="3" style="margin-left: 12px;">strict 只读取已落库的严格快照；待回算股票需要先下载分钟线并等待后台刷新。</n-text>
   </div>
   <div style="margin-top: 6px;">
-    <n-text depth="3">总净收益率（仅统计可执行推荐）：</n-text>
-    <n-text :type="totalYieldTextType()">{{ totalYieldRateTextRef }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">上证指数（同口径）：</n-text>
-    <n-text :type="sseBenchmarkTextType()">{{ sseBenchmarkRateTextRef }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">数据时间：{{ dataAsOfRef || "--" }}</n-text>
+    <n-text depth="3">最近一次手动任务：</n-text>
+    <n-text depth="3">{{ lastManualSummaryText() }}</n-text>
+  </div>
+  <div style="margin-top: 6px;">
+    <n-text depth="3">数据时间：{{ dataAsOfRef || "--" }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">分钟线覆盖：{{ minuteCoverageText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">覆盖进度：{{ minuteCoveragePercentText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">任务进度：{{ taskProgressText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">{{ taskStatusHintText() }}</n-text>
-    <n-button text type="primary" style="margin-left: 12px; padding: 0;" @click="handleOpenDailyOverview">
-      查看全库收益走势
-    </n-button>
   </div>
   <n-data-table
       ref="tableRef"
@@ -1393,53 +1406,6 @@ function dailyOverviewWarningText() {
         <ai-recommend-yield-minute-replay-chart :chart-data="replayChartDataRef"/>
       </div>
       <n-empty v-else description="暂无回放数据"></n-empty>
-    </n-spin>
-  </n-modal>
-
-  <n-modal
-      transform-origin="center"
-      v-model:show="dailyOverviewModalVisibleRef"
-      preset="card"
-      style="width: 1200px;"
-      title="全库按交易日收益走势"
-  >
-    <div style="margin-bottom: 10px; text-align: right;">
-      <n-button size="small" ghost type="primary" :loading="dailyOverviewLoadingRef" @click="loadDailyOverview">
-        刷新走势
-      </n-button>
-    </div>
-    <n-spin :show="dailyOverviewLoadingRef">
-      <div v-if="dailyOverviewDataRef">
-        <div style="margin-bottom: 10px;">
-          <n-text depth="3">范围：{{ dailyOverviewRangeText() }}</n-text>
-          <n-text depth="3" style="margin-left: 12px;">数据时间：{{ dailyOverviewDataRef.dataAsOf || "--" }}</n-text>
-          <n-text depth="3" style="margin-left: 12px;">口径：{{ dailyOverviewDataRef.calcMode || "strict" }}</n-text>
-          <n-text depth="3" style="margin-left: 12px;">{{ dailyOverviewSummaryText() }}</n-text>
-        </div>
-        <n-alert
-            v-if="dailyOverviewWarningText()"
-            type="warning"
-            :show-icon="false"
-            style="margin-bottom: 12px; text-align: left;"
-        >
-          {{ dailyOverviewWarningText() }}
-        </n-alert>
-        <n-tabs v-model:value="dailyOverviewTabRef" type="line" animated>
-          <n-tab-pane name="cumulative" tab="累计走势">
-            <ai-recommend-yield-daily-overview-chart
-                :overview-data="dailyOverviewDataRef"
-                mode="cumulative"
-            />
-          </n-tab-pane>
-          <n-tab-pane name="daily" tab="单日变化">
-            <ai-recommend-yield-daily-overview-chart
-                :overview-data="dailyOverviewDataRef"
-                mode="daily"
-            />
-          </n-tab-pane>
-        </n-tabs>
-      </div>
-      <n-empty v-else description="暂无全库收益走势数据"></n-empty>
     </n-spin>
   </n-modal>
 

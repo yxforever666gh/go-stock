@@ -91,7 +91,7 @@ const stockCode= ref('')
 const enableTools= ref(true)
 const thinkingMode = ref(true)
 const summaryCronEnabled = ref(true)
-const summaryCronTimes = ref("09:30,11:30,18:00")
+const summaryCronTimes = ref("09:40,11:30,14:30")
 const summaryCronSaving = ref(false)
 const treemapRef = ref(null);
 let treemapchart =null;
@@ -227,7 +227,7 @@ onBeforeMount(() => {
     darkTheme.value = result.darkTheme
     httpProxyEnabled.value = result.httpProxyEnabled
     summaryCronEnabled.value = result.marketSummaryCronEnabled !== false
-    summaryCronTimes.value = result.marketSummaryCronTimes || "09:30,11:30,18:00"
+    summaryCronTimes.value = result.marketSummaryCronTimes || "09:40,11:30,14:30"
     savedSystemPrompt.value = result.prompt || ''
     savedQuestionTemplate.value = result.questionTemplate || ''
     setDraftQuestion(resolveMarketSummaryQuestionFromConfig(savedQuestionTemplate.value), false)
@@ -451,7 +451,7 @@ function isValidTimeText(hhmm) {
 async function saveSummaryCronConfig() {
   const times = parseSummaryCronTimes(summaryCronTimes.value)
   if (summaryCronEnabled.value && times.length === 0) {
-    message.error("请至少填写一个时间点，例如 09:30,11:30,18:00")
+    message.error("请至少填写一个时间点，例如 09:40,11:30,14:30")
     return
   }
   const invalid = times.filter(item => !isValidTimeText(item))
@@ -466,7 +466,7 @@ async function saveSummaryCronConfig() {
     cfg.marketSummaryCronEnabled = summaryCronEnabled.value
     cfg.marketSummaryCronTimes = times.join(",")
     const res = await UpdateConfig(cfg)
-    summaryCronTimes.value = cfg.marketSummaryCronTimes || "09:30,11:30,18:00"
+    summaryCronTimes.value = cfg.marketSummaryCronTimes || "09:40,11:30,14:30"
     message.success(`AI总结定时已保存：${res}`)
   } catch (e) {
     message.error(`保存失败：${e}`)
@@ -1025,7 +1025,7 @@ function ReFlesh(source) {
         <n-input
             v-model:value="summaryCronTimes"
             :disabled="!summaryCronEnabled"
-            placeholder="请输入时间，逗号分隔，例如 09:30,11:30,18:00"
+            placeholder="请输入时间，逗号分隔，例如 09:40,11:30,14:30"
             style="width: 420px;text-align:left;"
         />
         <n-button size="tiny" type="primary" :loading="summaryCronSaving" @click="saveSummaryCronConfig">

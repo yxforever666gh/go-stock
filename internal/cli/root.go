@@ -24,10 +24,12 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	if _, err := Bootstrap(opts.DataDir, opts.DBPath); err != nil {
+	resolvedDBPath, err := Bootstrap(opts.DataDir, opts.DBPath)
+	if err != nil {
 		fmt.Fprintf(stderr, "初始化失败: %v\n", err)
 		return 1
 	}
+	opts.DBPath = resolvedDBPath
 
 	var runErr error
 	switch cmd {
@@ -37,6 +39,10 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		runErr = runSearch(cmdArgs, opts, stdout, stderr)
 	case "ai":
 		runErr = runAI(cmdArgs, opts, stdout, stderr)
+	case "network-audit":
+		runErr = runNetworkAudit(cmdArgs, opts, stdout, stderr)
+	case "repair-market-summary":
+		runErr = runRepairMarketSummary(cmdArgs, opts, stdout, stderr)
 	case "help", "-h", "--help":
 		printRootUsage(stdout)
 		return 0
@@ -88,4 +94,6 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  quote   查询实时行情")
 	fmt.Fprintln(w, "  search  自然语言选股")
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
+	fmt.Fprintln(w, "  network-audit  审计当前环境下所有主要网络数据接口")
+	fmt.Fprintln(w, "  repair-market-summary  修复市场资讯历史激活规则与脏数据")
 }

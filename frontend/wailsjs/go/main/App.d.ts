@@ -156,7 +156,7 @@ export function SendMarketSummaryEmailNow(arg1:string,arg2:string,arg3:string,ar
 
 export function RunMarketSummaryHumanizeCompatFixNow():Promise<string>;
 
-export function SendYieldEmailCSVNow():Promise<string>;
+export function SendYieldEmailXLSXNow():Promise<string>;
 
 export function SendYieldEmailTestMessage():Promise<string>;
 

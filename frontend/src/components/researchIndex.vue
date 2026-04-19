@@ -3,12 +3,14 @@ import { nextTick, onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 
 import ResearchReport from "./researchReport.vue";
 import AiRecommendStocksList from "./aiRecommendStocksList.vue";
 import AiRecommendStocksYieldList from "./aiRecommendStocksYieldList.vue";
+import AiRecommendYieldStats from "./aiRecommendYieldStats.vue";
 import { EventsOff, EventsOn } from "../../wailsjs/runtime";
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order'
 const defaultTabs = [
   { name: "股票收益率", component: AiRecommendStocksYieldList },
+  { name: "收益率统计", component: AiRecommendYieldStats },
   { name: "AI分析报告", component: ResearchReport },
   { name: "股票推荐记录", component: AiRecommendStocksList },
 ]
@@ -16,6 +18,7 @@ const defaultTabs = [
 const tabs = ref([...defaultTabs])
 const nowTab = ref("股票收益率")
 const route = useRoute()
+const router = useRouter()
 const cardRef = ref(null)
 const dragSourceName = ref("")
 const dragTargetName = ref("")
@@ -54,6 +57,15 @@ function persistTabOrder() {
 function updateTab(name) {
   if (tabs.value.some((tab) => tab.name === name)) {
     nowTab.value = name
+    if (String(route.query.name || "") !== name) {
+      router.replace({
+        name: 'research',
+        query: {
+          ...route.query,
+          name,
+        },
+      })
+    }
   }
 }
 

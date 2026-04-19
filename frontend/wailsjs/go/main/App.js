@@ -306,8 +306,8 @@ export function RunMarketSummaryHumanizeCompatFixNow() {
   return window['go']['main']['App']['RunMarketSummaryHumanizeCompatFixNow']();
 }
 
-export function SendYieldEmailCSVNow() {
-  return window['go']['main']['App']['SendYieldEmailCSVNow']();
+export function SendYieldEmailXLSXNow() {
+  return window['go']['main']['App']['SendYieldEmailXLSXNow']();
 }
 
 export function SendYieldEmailTestMessage() {

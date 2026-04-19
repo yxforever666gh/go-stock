@@ -3,8 +3,10 @@ package data
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -87,6 +89,89 @@ func diemengAPIKey() string {
 
 func diemengBaseURL() string {
 	return appconfig.Load().Diemeng.BaseURL
+}
+
+func diemengConfiguredBaseURL() string {
+	baseURL := strings.TrimSpace(diemengBaseURL())
+	if baseURL != "" {
+		return baseURL
+	}
+	return defaultDiemengBaseURL
+}
+
+func diemengEffectiveBaseURL() string {
+	return normalizeDiemengEffectiveBaseURL(diemengConfiguredBaseURL())
+}
+
+func DiemengEffectiveBaseURLForDisplay() string {
+	return diemengEffectiveBaseURL()
+}
+
+func normalizeDiemengEffectiveBaseURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = defaultDiemengBaseURL
+	}
+	normalized := appconfig.Load().Diemeng.BaseURL
+	if normalized == "" || strings.TrimSpace(raw) != strings.TrimSpace(normalized) {
+		normalized = normalizeDiemengBaseURLWithFallback(raw)
+	}
+	parsed, err := url.Parse(normalized)
+	if err != nil || parsed == nil || strings.TrimSpace(parsed.Scheme) == "" || strings.TrimSpace(parsed.Host) == "" {
+		return normalized
+	}
+	if diemengShouldUseConfiguredHost() {
+		return strings.TrimRight(parsed.String(), "/")
+	}
+	switch strings.ToLower(strings.TrimSpace(parsed.Hostname())) {
+	case "mg.diemeng.chat", "diemeng.chat":
+		parsed.Host = replaceURLHostPreservePort(parsed, "data.diemeng.chat")
+	}
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func normalizeDiemengBaseURLWithFallback(value string) string {
+	trimmed := strings.TrimRight(strings.TrimSpace(value), "/")
+	if trimmed == "" {
+		return trimmed
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed == nil || strings.TrimSpace(parsed.Scheme) == "" || strings.TrimSpace(parsed.Host) == "" {
+		return trimmed
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	path := strings.TrimRight(strings.TrimSpace(parsed.Path), "/")
+	if host != "" && (path == "" || path == "/") {
+		parsed.Path = "/api"
+	} else {
+		parsed.Path = path
+	}
+	return strings.TrimRight(parsed.String(), "/")
+}
+
+func replaceURLHostPreservePort(parsed *url.URL, host string) string {
+	port := parsed.Port()
+	if port == "" {
+		return host
+	}
+	return net.JoinHostPort(host, port)
+}
+
+func diemengShouldUseConfiguredHost() bool {
+	return systemProxyContains("mohomoparty")
+}
+
+func systemProxyContains(keyword string) bool {
+	keyword = strings.ToLower(strings.TrimSpace(keyword))
+	if keyword == "" {
+		return false
+	}
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		if strings.Contains(strings.ToLower(strings.TrimSpace(os.Getenv(key))), keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func diemengTimeout() time.Duration {
@@ -199,7 +284,7 @@ func diemengProxyFromSettings() string {
 
 func newDiemengClient() *resty.Client {
 	client := newNoProxyRestyClient().
-		SetBaseURL(diemengBaseURL()).
+		SetBaseURL(diemengEffectiveBaseURL()).
 		SetTimeout(diemengTimeout()).
 		SetRetryCount(0).
 		SetHeader("Content-Type", "application/json")
@@ -216,7 +301,7 @@ func newDiemengClient() *resty.Client {
 	switch mode {
 	case "inherit":
 		client = resty.New().
-			SetBaseURL(diemengBaseURL()).
+			SetBaseURL(diemengEffectiveBaseURL()).
 			SetTimeout(diemengTimeout()).
 			SetRetryCount(0).
 			SetHeader("Content-Type", "application/json")

@@ -2,21 +2,27 @@ package data
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/util"
+	"io"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
 	"github.com/coocood/freecache"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/strutil"
+	"github.com/go-resty/resty/v2"
 	"github.com/robertkrimen/otto"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
@@ -29,40 +35,265 @@ import (
 type MarketNewsApi struct {
 }
 
+type marketNewsFetchMeta struct {
+	NetworkPath  string
+	FallbackUsed bool
+}
+
+type marketNewsFetchOutcome struct {
+	body        []byte
+	networkPath string
+}
+
+type marketNewsFetchAttempt struct {
+	label  string
+	client *resty.Client
+}
+
+var (
+	marketNewsFetchMetaMu       sync.RWMutex
+	marketNewsFetchMetaBySource = map[string]marketNewsFetchMeta{}
+	sinaJSONPEnvelopeRegexp     = regexp.MustCompile(`(?s)^try\{callback\((.*)\);\}catch\(e\)\{\};?$`)
+	sinaJSONPCallbackRegexp     = regexp.MustCompile(`(?s)^callback\((.*)\)$`)
+)
+
 func NewMarketNewsApi() *MarketNewsApi {
 	return &MarketNewsApi{}
 }
 
+func marketNewsSetFetchMeta(source string, meta marketNewsFetchMeta) {
+	source = strings.TrimSpace(source)
+	if source == "" {
+		return
+	}
+	marketNewsFetchMetaMu.Lock()
+	defer marketNewsFetchMetaMu.Unlock()
+	marketNewsFetchMetaBySource[source] = meta
+}
+
+func GetMarketNewsFetchMeta(source string) map[string]any {
+	source = strings.TrimSpace(source)
+	marketNewsFetchMetaMu.RLock()
+	defer marketNewsFetchMetaMu.RUnlock()
+	meta, ok := marketNewsFetchMetaBySource[source]
+	if !ok {
+		return map[string]any{}
+	}
+	result := map[string]any{}
+	if meta.NetworkPath != "" {
+		result["networkPath"] = meta.NetworkPath
+	}
+	result["fallbackUsed"] = meta.FallbackUsed
+	return result
+}
+
+func marketNewsFetchURL(url string, timeout time.Duration, configure func(*resty.Request)) (*marketNewsFetchOutcome, error) {
+	attempts := []marketNewsFetchAttempt{
+		{label: "direct", client: newNoProxyRestyClient()},
+	}
+	if proxyClient, ok := newSettingsProxyRestyClientIfConfigured(); ok {
+		attempts = append(attempts, marketNewsFetchAttempt{label: "proxy", client: proxyClient})
+	}
+	if len(attempts) == 0 {
+		return nil, errors.New("no fetch client available")
+	}
+	if len(attempts) == 1 {
+		body, err := marketNewsFetchDoRequest(url, timeout, attempts[0].client, configure)
+		if err != nil {
+			return nil, err
+		}
+		return &marketNewsFetchOutcome{body: body, networkPath: attempts[0].label}, nil
+	}
+
+	type result struct {
+		outcome *marketNewsFetchOutcome
+		err     error
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := make(chan result, len(attempts))
+	for _, attempt := range attempts {
+		attempt := attempt
+		go func() {
+			body, err := marketNewsFetchDoRequestWithContext(ctx, url, timeout, attempt.client, configure)
+			if err != nil {
+				ch <- result{err: fmt.Errorf("%s: %w", attempt.label, err)}
+				return
+			}
+			ch <- result{outcome: &marketNewsFetchOutcome{body: body, networkPath: attempt.label}}
+		}()
+	}
+	var errs []string
+	for range attempts {
+		res := <-ch
+		if res.err == nil && res.outcome != nil {
+			cancel()
+			return res.outcome, nil
+		}
+		if res.err != nil {
+			errs = append(errs, res.err.Error())
+		}
+	}
+	if len(errs) == 0 {
+		return nil, errors.New("all news fetch attempts failed")
+	}
+	return nil, fmt.Errorf("all news fetch attempts failed: %s", strings.Join(errs, "; "))
+}
+
+func marketNewsFetchDoRequest(url string, timeout time.Duration, client *resty.Client, configure func(*resty.Request)) ([]byte, error) {
+	return marketNewsFetchDoRequestWithContext(context.Background(), url, timeout, client, configure)
+}
+
+func marketNewsFetchDoRequestWithContext(ctx context.Context, url string, timeout time.Duration, client *resty.Client, configure func(*resty.Request)) ([]byte, error) {
+	if client == nil {
+		return nil, errors.New("nil client")
+	}
+	req := client.SetTimeout(timeout).R().SetContext(ctx)
+	if configure != nil {
+		configure(req)
+	}
+	resp, err := req.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	if resp == nil {
+		return nil, errors.New("empty response")
+	}
+	if resp.StatusCode() >= 400 {
+		return nil, fmt.Errorf("http %d", resp.StatusCode())
+	}
+	body := resp.Body()
+	if len(body) == 0 {
+		return nil, io.EOF
+	}
+	return append([]byte(nil), body...), nil
+}
+
+func stringsBuilderUserAgent() string {
+	return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60"
+}
+
+func safeString(value any) string {
+	switch v := value.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case fmt.Stringer:
+		return strings.TrimSpace(v.String())
+	case json.Number:
+		return strings.TrimSpace(v.String())
+	case float64:
+		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
+	case int:
+		return strconv.Itoa(v)
+	case int64:
+		return strconv.FormatInt(v, 10)
+	case uint64:
+		return strconv.FormatUint(v, 10)
+	default:
+		return strings.TrimSpace(convertor.ToString(v))
+	}
+}
+
+func safeInt64(value any) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	default:
+		n, _ := convertor.ToInt(value)
+		return int64(n)
+	}
+}
+
+func safeMap(value any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	if m, ok := value.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func safeSlice(value any) []any {
+	if value == nil {
+		return nil
+	}
+	if items, ok := value.([]any); ok {
+		return items
+	}
+	return nil
+}
+
+func normalizeSinaJSONPBody(body []byte) ([]byte, error) {
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return nil, errors.New("empty body")
+	}
+	if matches := sinaJSONPEnvelopeRegexp.FindStringSubmatch(raw); len(matches) == 2 {
+		return []byte(matches[1]), nil
+	}
+	if matches := sinaJSONPCallbackRegexp.FindStringSubmatch(raw); len(matches) == 2 {
+		return []byte(matches[1]), nil
+	}
+	return nil, errors.New("unexpected jsonp payload")
+}
+
 func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
-	//https://www.cls.cn/nodeapi/telegraphList
-	url := "https://www.cls.cn/nodeapi/telegraphList"
-	res := map[string]any{}
-	_, _ = newFetchRestyClient().SetTimeout(time.Duration(crawlTimeOut)*time.Second).R().
-		SetHeader("Referer", "https://www.cls.cn/").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		SetResult(&res).
-		Get(url)
 	var telegraphs []models.Telegraph
+	url := "https://www.cls.cn/nodeapi/telegraphList"
+	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
+		req.SetHeader("Referer", "https://www.cls.cn/").
+			SetHeader("User-Agent", stringsBuilderUserAgent())
+	})
+	if err != nil {
+		logger.SugaredLogger.Errorf("TelegraphList err:%v", err)
+		marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{})
+		return &telegraphs
+	}
+	marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{
+		NetworkPath:  outcome.networkPath,
+		FallbackUsed: outcome.networkPath != "direct",
+	})
+
+	res := map[string]any{}
+	if err = json.Unmarshal(outcome.body, &res); err != nil {
+		logger.SugaredLogger.Errorf("TelegraphList unmarshal err:%v", err)
+		return &telegraphs
+	}
 
 	if v, _ := convertor.ToInt(res["error"]); v == 0 {
-		if res["data"] == nil {
+		data := safeMap(res["data"])
+		if data == nil {
 			return m.GetNewTelegraph(30)
 		}
-		data := res["data"].(map[string]any)
-		rollData := data["roll_data"].([]any)
+		rollData := safeSlice(data["roll_data"])
 		for _, v := range rollData {
-			news := v.(map[string]any)
-			ctime, _ := convertor.ToInt(news["ctime"])
+			news := safeMap(v)
+			if news == nil {
+				continue
+			}
+			content := safeString(news["content"])
+			if content == "" {
+				continue
+			}
+			ctime := safeInt64(news["ctime"])
 			dataTime := time.Unix(ctime, 0).Local()
 			telegraph := models.Telegraph{
-				Title:           news["title"].(string),
-				Content:         news["content"].(string),
+				Title:           safeString(news["title"]),
+				Content:         content,
 				Time:            dataTime.Format("15:04:05"),
 				DataTime:        &dataTime,
-				Url:             news["shareurl"].(string),
+				Url:             safeString(news["shareurl"]),
 				Source:          "财联社电报",
-				IsRed:           (news["level"].(string)) != "C",
-				SentimentResult: AnalyzeSentiment(news["content"].(string)).Description,
+				IsRed:           safeString(news["level"]) != "C",
+				SentimentResult: AnalyzeSentiment(content).Description,
 			}
 			cnt := int64(0)
 			if telegraph.Title == "" {
@@ -76,12 +307,15 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 			telegraphs = append(telegraphs, telegraph)
 			db.Dao.Model(&models.Telegraph{}).Create(&telegraph)
 			logger.SugaredLogger.Debugf("telegraph: %+v", &telegraph)
-			if news["subjects"] == nil {
+			subjects := safeSlice(news["subjects"])
+			if len(subjects) == 0 {
 				continue
 			}
-			subjects := news["subjects"].([]any)
 			for _, subject := range subjects {
-				name := subject.(map[string]any)["subject_name"].(string)
+				name := safeString(safeMap(subject)["subject_name"])
+				if name == "" {
+					continue
+				}
 				tag := &models.Tags{
 					Name: name,
 					Type: "subject",
@@ -103,21 +337,32 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 
 func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 	url := "https://www.cls.cn/telegraph"
-	response, _ := newFetchRestyClient().SetTimeout(time.Duration(crawlTimeOut)*time.Second).R().
-		SetHeader("Referer", "https://www.cls.cn/").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		Get(url)
 	var telegraphs []models.Telegraph
-	//logger.SugaredLogger.Info(string(response.Body()))
-	document, _ := goquery.NewDocumentFromReader(strings.NewReader(string(response.Body())))
+	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
+		req.SetHeader("Referer", "https://www.cls.cn/").
+			SetHeader("User-Agent", stringsBuilderUserAgent())
+	})
+	if err != nil {
+		logger.SugaredLogger.Errorf("GetNewTelegraph err:%v", err)
+		marketNewsSetFetchMeta("cls_telegraph_web", marketNewsFetchMeta{})
+		return &telegraphs
+	}
+	marketNewsSetFetchMeta("cls_telegraph_web", marketNewsFetchMeta{
+		NetworkPath:  outcome.networkPath,
+		FallbackUsed: outcome.networkPath != "direct",
+	})
+	document, err := goquery.NewDocumentFromReader(strings.NewReader(string(outcome.body)))
+	if err != nil {
+		logger.SugaredLogger.Errorf("GetNewTelegraph parse err:%v", err)
+		return &telegraphs
+	}
 
 	document.Find(".telegraph-content-box").Each(func(i int, selection *goquery.Selection) {
-		//logger.SugaredLogger.Info(selection.Text())
 		telegraph := models.Telegraph{Source: "财联社电报"}
-		spans := selection.Find("div.telegraph-content-box span")
+		spans := selection.Find("span")
 		if spans.Length() == 2 {
-			telegraph.Time = spans.First().Text()
-			telegraph.Content = spans.Last().Text()
+			telegraph.Time = strings.TrimSpace(spans.First().Text())
+			telegraph.Content = strings.TrimSpace(spans.Last().Text())
 			if spans.Last().HasClass("c-de0422") {
 				telegraph.IsRed = true
 			}
@@ -141,7 +386,6 @@ func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 			telegraph.StocksTags = append(telegraph.StocksTags, selection.Text())
 		})
 
-		//telegraph = append(telegraph, ReplaceSensitiveWords(selection.Text()))
 		if telegraph.Content != "" {
 			telegraph.SentimentResult = AnalyzeSentiment(telegraph.Content).Description
 			cnt := int64(0)
@@ -253,94 +497,99 @@ func (m MarketNewsApi) GetTelegraphListWithPaging(source string, page, pageSize 
 
 func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 	news := &[]models.Telegraph{}
-	response, _ := newFetchRestyClient().SetTimeout(time.Duration(crawlTimeOut)*time.Second).R().
-		SetHeader("Referer", "https://finance.sina.com.cn").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		Get("https://zhibo.sina.com.cn/api/zhibo/feed?callback=callback&page=1&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1&pagesize=20&id=4161089&type=0&_=" + strconv.FormatInt(time.Now().Unix(), 10))
-	js := string(response.Body())
-	js = strutil.ReplaceWithMap(js, map[string]string{
-		"try{callback(":  "var data=",
-		");}catch(e){};": ";",
+	url := "https://zhibo.sina.com.cn/api/zhibo/feed?callback=callback&page=1&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1&pagesize=20&id=4161089&type=0&_=" + strconv.FormatInt(time.Now().Unix(), 10)
+	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
+		req.SetHeader("Referer", "https://finance.sina.com.cn").
+			SetHeader("User-Agent", stringsBuilderUserAgent())
 	})
-	//logger.SugaredLogger.Info(js)
-	vm := otto.New()
-	_, err := vm.Run(js)
 	if err != nil {
-		logger.SugaredLogger.Error(err)
+		logger.SugaredLogger.Errorf("GetSinaNews err:%v", err)
+		marketNewsSetFetchMeta("sina_live_news", marketNewsFetchMeta{})
+		return news
 	}
-	vm.Run("var result = data.result;")
-	//vm.Run("var resultStr =JSON.stringify(data);")
-	vm.Run("var resultData = result.data;")
-	vm.Run("var feed = resultData.feed;")
-	vm.Run("var feedStr = JSON.stringify(feed);")
-
-	value, _ := vm.Get("feedStr")
-	//resultStr, _ := vm.Get("resultStr")
-
-	//logger.SugaredLogger.Info(resultStr)
-	feed := make(map[string]any)
-	err = json.Unmarshal([]byte(value.String()), &feed)
+	marketNewsSetFetchMeta("sina_live_news", marketNewsFetchMeta{
+		NetworkPath:  outcome.networkPath,
+		FallbackUsed: outcome.networkPath != "direct",
+	})
+	jsonBody, err := normalizeSinaJSONPBody(outcome.body)
 	if err != nil {
-		logger.SugaredLogger.Errorf("json.Unmarshal error:%v", err.Error())
+		logger.SugaredLogger.Errorf("GetSinaNews normalize body err:%v", err)
+		return news
 	}
+	payload := map[string]any{}
+	err = json.Unmarshal(jsonBody, &payload)
+	if err != nil {
+		logger.SugaredLogger.Errorf("GetSinaNews json.Unmarshal err:%v", err)
+		return news
+	}
+	resultData := safeMap(safeMap(safeMap(payload["result"])["data"])["feed"])
 	var telegraphs []models.Telegraph
-
-	if feed["list"] != nil {
-		for _, item := range feed["list"].([]any) {
-			telegraph := models.Telegraph{Source: "新浪财经"}
-			data := item.(map[string]any)
-			//logger.SugaredLogger.Infof("%s:%s", data["create_time"], data["rich_text"])
-			telegraph.Content = data["rich_text"].(string)
-			telegraph.Title = strutil.SubInBetween(data["rich_text"].(string), "【", "】")
-			telegraph.Time = strings.Split(data["create_time"].(string), " ")[1]
-			dataTime, _ := time.ParseInLocation("2006-01-02 15:04:05", data["create_time"].(string), time.Local)
-			if &dataTime != nil {
-				telegraph.DataTime = &dataTime
+	for _, item := range safeSlice(resultData["list"]) {
+		data := safeMap(item)
+		if data == nil {
+			continue
+		}
+		content := safeString(data["rich_text"])
+		createTime := safeString(data["create_time"])
+		if content == "" || createTime == "" {
+			continue
+		}
+		telegraph := models.Telegraph{Source: "新浪财经"}
+		telegraph.Content = content
+		telegraph.Title = strutil.SubInBetween(content, "【", "】")
+		parts := strings.Split(createTime, " ")
+		if len(parts) >= 2 {
+			telegraph.Time = parts[1]
+		}
+		dataTime, parseErr := time.ParseInLocation("2006-01-02 15:04:05", createTime, time.Local)
+		if parseErr == nil {
+			telegraph.DataTime = &dataTime
+		}
+		for _, tagItem := range safeSlice(data["tag"]) {
+			name := safeString(safeMap(tagItem)["name"])
+			if name == "" {
+				continue
 			}
-			tags := data["tag"].([]any)
-			telegraph.SubjectTags = lo.Map(tags, func(tagItem any, index int) string {
-				name := tagItem.(map[string]any)["name"].(string)
-				tag := &models.Tags{
-					Name: name,
-					Type: "sina_subject",
-				}
-				db.Dao.Model(tag).Where("name=? and type=?", name, "sina_subject").FirstOrCreate(&tag)
-				return name
-			})
-			if _, ok := lo.Find(telegraph.SubjectTags, func(item string) bool { return item == "焦点" }); ok {
-				telegraph.IsRed = true
+			tag := &models.Tags{
+				Name: name,
+				Type: "sina_subject",
 			}
-			logger.SugaredLogger.Infof("telegraph.SubjectTags:%v %s", telegraph.SubjectTags, telegraph.Content)
+			db.Dao.Model(tag).Where("name=? and type=?", name, "sina_subject").FirstOrCreate(&tag)
+			telegraph.SubjectTags = append(telegraph.SubjectTags, name)
+		}
+		if _, ok := lo.Find(telegraph.SubjectTags, func(item string) bool { return item == "焦点" }); ok {
+			telegraph.IsRed = true
+		}
+		logger.SugaredLogger.Infof("telegraph.SubjectTags:%v %s", telegraph.SubjectTags, telegraph.Content)
 
-			if telegraph.Content != "" {
-				telegraph.SentimentResult = AnalyzeSentiment(telegraph.Content).Description
-				cnt := int64(0)
-				if telegraph.Title == "" {
-					db.Dao.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
-				} else {
-					db.Dao.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
-				}
-				if cnt == 0 {
-					db.Dao.Create(&telegraph)
-					telegraphs = append(telegraphs, telegraph)
-					for _, tag := range telegraph.SubjectTags {
-						tagInfo := &models.Tags{}
-						db.Dao.Model(models.Tags{}).Where("name=? and type=?", tag, "sina_subject").First(&tagInfo)
-						if tagInfo.ID > 0 {
-							db.Dao.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tagInfo.ID).FirstOrCreate(&models.TelegraphTags{
-								TelegraphId: telegraph.ID,
-								TagId:       tagInfo.ID,
-							})
-						}
+		if telegraph.Content != "" {
+			telegraph.SentimentResult = AnalyzeSentiment(telegraph.Content).Description
+			cnt := int64(0)
+			if telegraph.Title == "" {
+				db.Dao.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
+			} else {
+				db.Dao.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
+			}
+			if cnt == 0 {
+				db.Dao.Create(&telegraph)
+				telegraphs = append(telegraphs, telegraph)
+				for _, tag := range telegraph.SubjectTags {
+					tagInfo := &models.Tags{}
+					db.Dao.Model(models.Tags{}).Where("name=? and type=?", tag, "sina_subject").First(&tagInfo)
+					if tagInfo.ID > 0 {
+						db.Dao.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tagInfo.ID).FirstOrCreate(&models.TelegraphTags{
+							TelegraphId: telegraph.ID,
+							TagId:       tagInfo.ID,
+						})
 					}
 				}
 			}
 		}
+	}
+	if len(telegraphs) > 0 {
 		return &telegraphs
 	}
-
 	return news
-
 }
 
 func (m MarketNewsApi) GlobalStockIndexes(crawlTimeOut uint) map[string]any {

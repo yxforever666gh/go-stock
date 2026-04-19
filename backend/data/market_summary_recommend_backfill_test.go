@@ -152,6 +152,16 @@ func TestParseMarketSummaryRecommendStockDraftsAndToRecommendStock(t *testing.T)
 	}
 }
 
+func TestParseMarketSummaryBuyRange_PrefersPullbackSegment(t *testing.T) {
+	text, min, max := parseMarketSummaryBuyRange("398.80-401.20（回踩激活）；404.80-407.00上破确认（突破激活）")
+	if text != "398.80-401.20" {
+		t.Fatalf("buy range text = %q, want 398.80-401.20", text)
+	}
+	if min != 398.8 || max != 401.2 {
+		t.Fatalf("buy range min/max = %.2f/%.2f, want 398.80/401.20", min, max)
+	}
+}
+
 func containsAll(text string, subs []string) bool {
 	for _, sub := range subs {
 		if !strings.Contains(text, sub) {

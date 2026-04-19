@@ -79,13 +79,13 @@ func (a *App) SendYieldEmailTestMessage() string {
 	})
 }
 
-func (a *App) SendYieldEmailCSVNow() string {
-	return a.withYieldEmailTaskLock("manual_yield_csv_email", func() string {
-		rowCount, err := a.services.AI.SendYieldEmailCSVNow()
+func (a *App) SendYieldEmailXLSXNow() string {
+	return a.withYieldEmailTaskLock("manual_yield_xlsx_email", func() string {
+		rowCount, err := a.services.AI.SendYieldEmailXLSXNow()
 		if err != nil {
 			return "发送失败: " + err.Error()
 		}
-		return fmt.Sprintf("收益率 CSV 已发送，共 %d 条记录", rowCount)
+		return fmt.Sprintf("收益率 XLSX 已发送，共 %d 条记录", rowCount)
 	})
 }
 
@@ -264,7 +264,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.2.6：补齐市场资讯 AI 报告 provider 展示，并新增全库收益日级弹窗与收益口径一致性修复。"
+		content = "1.2.7：研究中心新增“收益率统计”独立栏目，集中展示股票收益率、沪深300 现金流匹配基准、超额收益、XIRR、回撤与全库收益走势可视化，便于判断策略是否真正跑赢基准。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

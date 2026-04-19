@@ -497,19 +497,42 @@ const menuOptions = ref([
                     to: {
                       name: 'research',
                       query: {
-                        name:"AI分析报告",
+                        name:"收益率统计",
                       },
                     },
                     onClick: () => {
                       activeKey.value = 'research'
                       setTimeout(() => {
-                        EventsEmit("changeResearchTab", {ID: 1, name: 'AI分析报告'})
+                        EventsEmit("changeResearchTab", {ID: 1, name: '收益率统计'})
                       }, 100)
                     },
                   },
-                  {default: () => 'AI分析报告'}
+                  {default: () => '收益率统计'}
               ),
           key: 'research2',
+          icon: renderIcon(ReportSearch),
+        },
+        {
+          label: () =>
+              h(
+                  RouterLink,
+                  {
+                    to: {
+                      name: 'research',
+                      query: {
+                        name:"AI分析报告",
+                      },
+                    },
+                      onClick: () => {
+                        activeKey.value = 'research'
+                        setTimeout(() => {
+                          EventsEmit("changeResearchTab", {ID: 2, name: 'AI分析报告'})
+                        }, 100)
+                      },
+                    },
+                  {default: () => 'AI分析报告'}
+              ),
+          key: 'research3',
           icon: renderIcon(ReportAnalytics),
         },
         {
@@ -523,16 +546,16 @@ const menuOptions = ref([
                         name:"股票推荐记录",
                       },
                     },
-                    onClick: () => {
-                      activeKey.value = 'research'
-                      setTimeout(() => {
-                        EventsEmit("changeResearchTab", {ID: 2, name: '股票推荐记录'})
-                      }, 100)
+                      onClick: () => {
+                        activeKey.value = 'research'
+                        setTimeout(() => {
+                          EventsEmit("changeResearchTab", {ID: 3, name: '股票推荐记录'})
+                        }, 100)
+                      },
                     },
-                  },
                   {default: () => '股票推荐记录'}
               ),
-          key: 'research3',
+          key: 'research4',
           icon: renderIcon(DiamondOutline),
         }
       ],

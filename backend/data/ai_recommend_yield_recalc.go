@@ -59,9 +59,11 @@ type aiRecommendYieldRecalcManager struct {
 }
 
 var globalAiRecommendYieldRecalcManager = &aiRecommendYieldRecalcManager{}
-var ensureYieldMetaSchemaOnce sync.Once
-var ensureYieldMetaSchemaErr error
 var canonicalAShareTsCodeCache sync.Map
+var activeManualYieldAuditState struct {
+	mu    sync.RWMutex
+	audit *aiRecommendYieldManualAudit
+}
 var timeNow = time.Now
 var fetchMinuteBarsWithTencentFn = fetchMinuteBarsWithTencent
 var fetchMinuteBarsWithAkShareFn = fetchMinuteBarsWithAkShare
@@ -115,18 +117,27 @@ func startManualAiRecommendMinuteDownload() (map[string]any, error) {
 		}, nil
 	}
 
-	if err = db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", meta.ID).Updates(map[string]any{
-		"last_manual_download_at": now,
-		"manual_cooldown_until":   nil,
-		"last_query_recalc_at":    nil,
-		"query_cooldown_until":    nil,
-		"akshare_install_error":   "",
-		"download_in_progress":    true,
-		"download_total":          len(scopeCodes),
-		"download_done":           0,
-		"download_progress":       0,
-		"last_download_error":     "",
-	}).Error; err != nil {
+	if err = runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", meta.ID).Updates(map[string]any{
+			"last_manual_download_at": now,
+			"manual_cooldown_until":   nil,
+			"last_query_recalc_at":    nil,
+			"query_cooldown_until":    nil,
+			"akshare_install_error":   "",
+			"download_in_progress":    true,
+			"download_total":          len(scopeCodes),
+			"download_done":           0,
+			"download_progress":       0,
+			"last_download_error":     "",
+			"last_manual_finished_at": nil,
+			"last_manual_scope_count": len(scopeCodes),
+			"last_manual_prefetch_ms": 0,
+			"last_manual_recalc_ms":   0,
+			"last_manual_total_ms":    0,
+			"last_manual_sqlite_busy_count": 0,
+			"last_manual_provider_summary":  "",
+		}).Error
+	}); err != nil {
 		return nil, err
 	}
 
@@ -147,21 +158,100 @@ func loadScopeCodesForManualDownload() ([]string, error) {
 		return nil, err
 	}
 	if len(dirtyCodes) > 0 {
-		return dirtyCodes, nil
+		filtered, filterErr := filterManualDownloadScopeCodes(dirtyCodes)
+		if filterErr != nil {
+			return nil, filterErr
+		}
+		if len(filtered) > 0 {
+			return filtered, nil
+		}
 	}
-	aggrMap, err := loadAiRecommendYieldAggregates()
+	return loadManualDownloadScopeCodesByCoverage()
+}
+
+func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
+	normalized := normalizeScopeCodes(codes)
+	if len(normalized) == 0 {
+		return []string{}, nil
+	}
+	rows := make([]models.AiRecommendStocks, 0, len(normalized)*2)
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("stock_code IN ?", keysFromScopeMap(normalized)).
+		Order("COALESCE(data_time, created_at) ASC, id ASC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	rows, err := applyYieldOverridesToRecommendRecords(rows)
 	if err != nil {
 		return nil, err
 	}
-	if len(aggrMap) == 0 {
-		return []string{}, nil
+	recordStateMap, err := loadExistingYieldRecordStateMap()
+	if err != nil {
+		return nil, err
 	}
-	codes := make([]string, 0, len(aggrMap))
-	for code := range aggrMap {
+	resultSet := make(map[string]struct{}, len(normalized))
+	for _, rec := range rows {
+		code := normalizeRecommendStockCode(rec.StockCode)
+		if code == "" {
+			continue
+		}
+		if !shouldDisplayRecommendInYield(&rec) {
+			continue
+		}
+		eligibility, _ := resolveRecommendBacktestEligibility(&rec)
+		if eligibility != recommendBacktestEligible {
+			continue
+		}
+		if normalizeRecommendExecutionState(rec.ExecutionState) == recommendExecutionAnalysisOnly {
+			continue
+		}
+		status := strings.TrimSpace(strings.ToLower(rec.ActivationStatus))
+		if state, ok := recordStateMap[rec.ID]; ok && strings.TrimSpace(state.ActivationStatus) != "" {
+			status = strings.TrimSpace(strings.ToLower(state.ActivationStatus))
+		}
+		if status == "invalid" || status == "skipped" || status == "ineligible" {
+			continue
+		}
+		resultSet[code] = struct{}{}
+	}
+	return keysFromScopeMap(resultSet), nil
+}
+
+func loadManualDownloadScopeCodesByCoverage() ([]string, error) {
+	meta, err := getOrCreateYieldMeta()
+	if err != nil {
+		return nil, err
+	}
+	_, issues := computeMinuteDownloadCoverageStatsWithIssues(meta, -1)
+	scopeSet := make(map[string]struct{}, len(issues))
+	for _, issue := range issues {
+		status := strings.TrimSpace(issue.Status)
+		if status != "待覆盖" {
+			continue
+		}
+		code := normalizeRecommendStockCode(issue.StockCode)
+		if code == "" {
+			continue
+		}
+		scopeSet[code] = struct{}{}
+	}
+	return keysFromScopeMap(scopeSet), nil
+}
+
+func keysFromScopeMap(scope map[string]struct{}) []string {
+	if len(scope) == 0 {
+		return []string{}
+	}
+	codes := make([]string, 0, len(scope))
+	for code := range scope {
+		code = normalizeRecommendStockCode(code)
+		if code == "" {
+			continue
+		}
 		codes = append(codes, code)
 	}
 	sort.Strings(codes)
-	return codes, nil
+	return codes
 }
 
 func ensureYieldDirtySchema() error {
@@ -256,6 +346,33 @@ func clearAiRecommendYieldDirtyCodes(scopeCodes []string) error {
 	return db.Dao.Where("stock_code IN ?", codes).Delete(&models.AiRecommendYieldDirtyCode{}).Error
 }
 
+func clearAiRecommendYieldDirtyCodesByRecordStates(states []models.AiRecommendYieldRecordState) error {
+	if len(states) == 0 {
+		return nil
+	}
+	scopeSet := make(map[string]struct{}, len(states))
+	for _, state := range states {
+		status := strings.TrimSpace(strings.ToLower(state.ActivationStatus))
+		if status != "invalid" && status != "skipped" && status != "ineligible" {
+			continue
+		}
+		code := normalizeRecommendStockCode(state.StockCode)
+		if code == "" {
+			continue
+		}
+		scopeSet[code] = struct{}{}
+	}
+	if len(scopeSet) == 0 {
+		return nil
+	}
+	scopeCodes := make([]string, 0, len(scopeSet))
+	for code := range scopeSet {
+		scopeCodes = append(scopeCodes, code)
+	}
+	sort.Strings(scopeCodes)
+	return clearAiRecommendYieldDirtyCodes(scopeCodes)
+}
+
 func (m *aiRecommendYieldRecalcManager) Request(force bool, reason string, scope map[string]struct{}) {
 	m.mu.Lock()
 	if m.running {
@@ -303,11 +420,12 @@ func (m *aiRecommendYieldRecalcManager) run(force bool, reason string, scope map
 }
 
 type aiRecommendYieldRecalcRuntime struct {
-	meta       *models.AiRecommendYieldMeta
-	now        time.Time
-	inTrading  bool
-	latestDate time.Time
-	ctx        yieldBuildContext
+	meta        *models.AiRecommendYieldMeta
+	now         time.Time
+	inTrading   bool
+	latestDate  time.Time
+	ctx         yieldBuildContext
+	manualAudit *aiRecommendYieldManualAudit
 }
 
 type aiRecommendYieldTargets struct {
@@ -350,6 +468,227 @@ type aiRecommendYieldCalcResult struct {
 	RecordStates []models.AiRecommendYieldRecordState
 }
 
+type aiRecommendYieldManualAudit struct {
+	StartedAt          time.Time
+	ScopeCount         int
+	mu                 sync.Mutex
+	PrefetchStartedAt  time.Time
+	PrefetchFinishedAt time.Time
+	RecalcStartedAt    time.Time
+	RecalcFinishedAt   time.Time
+	FinishedAt         time.Time
+	SQLiteBusyCount    int
+	ProviderCounts     map[string]int
+}
+
+type aiRecommendYieldManualAuditSnapshot struct {
+	StartedAt       time.Time
+	FinishedAt      time.Time
+	ScopeCount      int
+	PrefetchMs      int64
+	RecalcMs        int64
+	TotalMs         int64
+	SQLiteBusyCount int
+	ProviderSummary string
+}
+
+func newAiRecommendYieldManualAudit(startedAt time.Time, scopeCount int) *aiRecommendYieldManualAudit {
+	return &aiRecommendYieldManualAudit{
+		StartedAt:      startedAt,
+		ScopeCount:     scopeCount,
+		ProviderCounts: make(map[string]int, 4),
+	}
+}
+
+func (a *aiRecommendYieldManualAudit) markPrefetchStart(now time.Time) {
+	if a == nil || now.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	if a.PrefetchStartedAt.IsZero() {
+		a.PrefetchStartedAt = now
+	}
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) markPrefetchDone(now time.Time) {
+	if a == nil || now.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	if a.PrefetchStartedAt.IsZero() {
+		a.PrefetchStartedAt = now
+	}
+	a.PrefetchFinishedAt = now
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) markRecalcStart(now time.Time) {
+	if a == nil || now.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	if a.RecalcStartedAt.IsZero() {
+		a.RecalcStartedAt = now
+	}
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) markRecalcDone(now time.Time) {
+	if a == nil || now.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	if a.RecalcStartedAt.IsZero() {
+		a.RecalcStartedAt = now
+	}
+	a.RecalcFinishedAt = now
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) markFinished(now time.Time) {
+	if a == nil || now.IsZero() {
+		return
+	}
+	a.mu.Lock()
+	a.FinishedAt = now
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) incrementSQLiteBusy() {
+	if a == nil {
+		return
+	}
+	a.mu.Lock()
+	a.SQLiteBusyCount++
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) recordProvider(source string) {
+	if a == nil {
+		return
+	}
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		return
+	}
+	a.mu.Lock()
+	if a.ProviderCounts == nil {
+		a.ProviderCounts = make(map[string]int, 4)
+	}
+	a.ProviderCounts[source]++
+	a.mu.Unlock()
+}
+
+func (a *aiRecommendYieldManualAudit) snapshot() aiRecommendYieldManualAuditSnapshot {
+	if a == nil {
+		return aiRecommendYieldManualAuditSnapshot{}
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	finishedAt := a.FinishedAt
+	if finishedAt.IsZero() {
+		finishedAt = time.Now()
+	}
+	return aiRecommendYieldManualAuditSnapshot{
+		StartedAt:       a.StartedAt,
+		FinishedAt:      finishedAt,
+		ScopeCount:      a.ScopeCount,
+		PrefetchMs:      durationMillisBetween(a.PrefetchStartedAt, a.PrefetchFinishedAt),
+		RecalcMs:        durationMillisBetween(a.RecalcStartedAt, a.RecalcFinishedAt),
+		TotalMs:         durationMillisBetween(a.StartedAt, finishedAt),
+		SQLiteBusyCount: a.SQLiteBusyCount,
+		ProviderSummary: formatManualProviderSummary(a.ProviderCounts),
+	}
+}
+
+func durationMillisBetween(start, end time.Time) int64 {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return 0
+	}
+	return end.Sub(start).Milliseconds()
+}
+
+func formatManualProviderSummary(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(counts))
+	for key, count := range counts {
+		if count <= 0 {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return ""
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, key := range keys {
+		parts = append(parts, fmt.Sprintf("%s:%d", key, counts[key]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func setActiveManualYieldAudit(audit *aiRecommendYieldManualAudit) {
+	activeManualYieldAuditState.mu.Lock()
+	activeManualYieldAuditState.audit = audit
+	activeManualYieldAuditState.mu.Unlock()
+}
+
+func clearActiveManualYieldAudit(audit *aiRecommendYieldManualAudit) {
+	activeManualYieldAuditState.mu.Lock()
+	if activeManualYieldAuditState.audit == audit {
+		activeManualYieldAuditState.audit = nil
+	}
+	activeManualYieldAuditState.mu.Unlock()
+}
+
+func currentActiveManualYieldAudit() *aiRecommendYieldManualAudit {
+	activeManualYieldAuditState.mu.RLock()
+	defer activeManualYieldAuditState.mu.RUnlock()
+	return activeManualYieldAuditState.audit
+}
+
+func isSQLiteBusyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "database is locked") ||
+		strings.Contains(lower, "database table is locked") ||
+		strings.Contains(lower, "sqlite_busy")
+}
+
+func runWithSQLiteBusyRetry(fn func() error) error {
+	if fn == nil {
+		return nil
+	}
+	backoffs := []time.Duration{
+		100 * time.Millisecond,
+		200 * time.Millisecond,
+		400 * time.Millisecond,
+		800 * time.Millisecond,
+		1600 * time.Millisecond,
+	}
+	var lastErr error
+	for attempt := 0; attempt <= len(backoffs); attempt++ {
+		lastErr = fn()
+		if !isSQLiteBusyError(lastErr) {
+			return lastErr
+		}
+		if audit := currentActiveManualYieldAudit(); audit != nil {
+			audit.incrementSQLiteBusy()
+		}
+		if attempt >= len(backoffs) {
+			break
+		}
+		time.Sleep(backoffs[attempt])
+	}
+	return lastErr
+}
+
 func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string]struct{}) error {
 	if schemaErr := ensureYieldMetaSchema(); schemaErr != nil {
 		return schemaErr
@@ -360,6 +699,9 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 		return err
 	}
 	defer finalize(&err)
+	if reason == "manual_minute_download" && runtime.manualAudit != nil {
+		runtime.manualAudit.ScopeCount = len(scope)
+	}
 
 	targets, err := loadAiRecommendYieldTargets(runtime, scope, force)
 	if err != nil {
@@ -383,10 +725,20 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 	}
 
 	warmManualAiRecommendMinuteData(reason, runtime, targets.targetCodes)
+	if runtime.manualAudit != nil {
+		runtime.manualAudit.markPrefetchStart(time.Now())
+	}
 	prefetchAiRecommendMinuteCoverage(runtime, targets)
+	if runtime.manualAudit != nil {
+		runtime.manualAudit.markPrefetchDone(time.Now())
+		runtime.manualAudit.markRecalcStart(time.Now())
+	}
 	if err = processAiRecommendYieldTargets(runtime, targets, writer); err != nil {
 		markAiRecommendYieldRecalcError(runtime.meta.ID, err)
 		return err
+	}
+	if runtime.manualAudit != nil {
+		runtime.manualAudit.markRecalcDone(time.Now())
 	}
 	if err = writer.Flush(); err != nil {
 		markAiRecommendYieldRecalcError(runtime.meta.ID, err)
@@ -405,7 +757,7 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 		}
 	}
 
-	go sendYieldCSVEmailIfEnabled(reason, fullRecalc)
+	go sendYieldXLSXEmailIfEnabled(reason, fullRecalc)
 	return nil
 }
 
@@ -425,22 +777,35 @@ func beginAiRecommendYieldRecalc(force bool, reason string) (*aiRecommendYieldRe
 		close(heartbeatStop)
 		return nil, nil, err
 	}
+	if reason == "manual_minute_download" {
+		runtime.manualAudit = newAiRecommendYieldManualAudit(now, 0)
+		setActiveManualYieldAudit(runtime.manualAudit)
+	}
 
 	finalize := func(runErr *error) {
 		close(heartbeatStop)
+		if runtime.manualAudit != nil {
+			runtime.manualAudit.markFinished(time.Now())
+		}
 		finishAiRecommendYieldRecalc(meta.ID, runtime.now, *runErr)
+		if runtime.manualAudit != nil {
+			_ = persistManualYieldAudit(meta.ID, runtime.manualAudit)
+			clearActiveManualYieldAudit(runtime.manualAudit)
+		}
 	}
 	return runtime, finalize, nil
 }
 
 func markAiRecommendYieldRecalcStarted(metaID uint) error {
-	return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
-		"recalc_in_progress": true,
-		"last_error":         "",
-		"recalc_total":       0,
-		"recalc_done":        0,
-		"recalc_progress":    1,
-	}).Error
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
+			"recalc_in_progress": true,
+			"last_error":         "",
+			"recalc_total":       0,
+			"recalc_done":        0,
+			"recalc_progress":    1,
+		}).Error
+	})
 }
 
 func startAiRecommendYieldHeartbeat(metaID uint) chan struct{} {
@@ -451,9 +816,11 @@ func startAiRecommendYieldHeartbeat(metaID uint) chan struct{} {
 		for {
 			select {
 			case <-ticker.C:
-				_ = db.Dao.Model(&models.AiRecommendYieldMeta{}).
-					Where("id = ? AND recalc_in_progress = ?", metaID, true).
-					Updates(map[string]any{"updated_at": time.Now()}).Error
+				_ = runWithSQLiteBusyRetry(func() error {
+					return db.Dao.Model(&models.AiRecommendYieldMeta{}).
+						Where("id = ? AND recalc_in_progress = ?", metaID, true).
+						Updates(map[string]any{"updated_at": time.Now()}).Error
+				})
 			case <-heartbeatStop:
 				return
 			}
@@ -478,9 +845,38 @@ func finishAiRecommendYieldRecalc(metaID uint, startedAt time.Time, runErr error
 		updateMap["download_in_progress"] = false
 		updateMap["last_download_error"] = runErr.Error()
 	}
-	if e := db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(updateMap).Error; e != nil {
+	if e := runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(updateMap).Error
+	}); e != nil {
 		logger.SugaredLogger.Errorf("update ai_recommend_yield_meta failed: %v", e)
 	}
+}
+
+func persistManualYieldAudit(metaID uint, audit *aiRecommendYieldManualAudit) error {
+	if audit == nil || metaID == 0 {
+		return nil
+	}
+	snapshot := audit.snapshot()
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
+			"last_manual_finished_at":       nullableTime(snapshot.FinishedAt),
+			"last_manual_scope_count":       snapshot.ScopeCount,
+			"last_manual_prefetch_ms":       snapshot.PrefetchMs,
+			"last_manual_recalc_ms":         snapshot.RecalcMs,
+			"last_manual_total_ms":          snapshot.TotalMs,
+			"last_manual_sqlite_busy_count": snapshot.SQLiteBusyCount,
+			"last_manual_provider_summary":  snapshot.ProviderSummary,
+			"updated_at":                    time.Now(),
+		}).Error
+	})
+}
+
+func nullableTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	value := t
+	return &value
 }
 
 func buildAiRecommendYieldRecalcRuntime(meta *models.AiRecommendYieldMeta, now time.Time, force bool, reason string) (*aiRecommendYieldRecalcRuntime, error) {
@@ -945,9 +1341,13 @@ func prefetchAiRecommendMinuteCoverage(runtime *aiRecommendYieldRecalcRuntime, t
 	}()
 
 	done := 0
+	lastFlush := time.Now()
 	for range progressCh {
 		done++
-		_ = updateYieldDownloadProgress(runtime.meta.ID, done, total)
+		if done == total || done%10 == 0 || time.Since(lastFlush) >= time.Second {
+			_ = updateYieldDownloadProgress(runtime.meta.ID, done, total)
+			lastFlush = time.Now()
+		}
 	}
 }
 
@@ -1048,9 +1448,11 @@ func markAiRecommendYieldRecalcError(metaID uint, err error) {
 	if err == nil {
 		return
 	}
-	_ = db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
-		"last_error": err.Error(),
-	}).Error
+	_ = runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
+			"last_error": err.Error(),
+		}).Error
+	})
 }
 
 func newAiRecommendYieldSnapshotWriter(metaID uint, total int) *aiRecommendYieldSnapshotWriter {
@@ -1437,26 +1839,22 @@ func resetStaleYieldRecalcIfNeeded(meta *models.AiRecommendYieldMeta) bool {
 }
 
 func ensureYieldMetaSchema() error {
-	ensureYieldMetaSchemaOnce.Do(func() {
-		ensureYieldMetaSchemaErr = db.Dao.AutoMigrate(
-			&models.AiRecommendYieldMeta{},
-			&models.AiRecommendYieldState{},
-			&models.AiRecommendYieldRecordState{},
-			&models.AiRecommendYieldDirtyCode{},
-			&models.AiRecommendMinuteBar{},
-		)
-		if ensureYieldMetaSchemaErr != nil {
-			return
-		}
-		if err := syncYieldStateIdentityFields(); err != nil {
-			ensureYieldMetaSchemaErr = err
-			return
-		}
-		if err := syncYieldRecordStateIdentityFields(); err != nil {
-			ensureYieldMetaSchemaErr = err
-		}
-	})
-	return ensureYieldMetaSchemaErr
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldDirtyCode{},
+		&models.AiRecommendMinuteBar{},
+	); err != nil {
+		return err
+	}
+	if err := syncYieldStateIdentityFields(); err != nil {
+		return err
+	}
+	if err := syncYieldRecordStateIdentityFields(); err != nil {
+		return err
+	}
+	return nil
 }
 
 func loadYieldScopeCodesForQuery(query *models.AiRecommendStocksQuery) ([]string, error) {
@@ -3331,6 +3729,9 @@ func syncMinuteBars(tsCode string, start, end time.Time, _ int64, allowHeadBackf
 			continue
 		}
 		fetched, source, fetchErr := fetchMinuteBarsFromProviders(tsCode, window.Start, window.End)
+		if audit := currentActiveManualYieldAudit(); audit != nil && source != "" {
+			audit.recordProvider(source)
+		}
 		if source != "" {
 			info.CacheSource = source
 		}
@@ -4185,10 +4586,12 @@ func upsertYieldStates(states []models.AiRecommendYieldState) error {
 		"total_scope_end",
 	}
 
-	return db.Dao.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "stock_code"}},
-		DoUpdates: clause.AssignmentColumns(updateColumns),
-	}).CreateInBatches(states, 100).Error
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "stock_code"}},
+			DoUpdates: clause.AssignmentColumns(updateColumns),
+		}).CreateInBatches(states, 100).Error
+	})
 }
 
 func upsertYieldRecordStates(states []models.AiRecommendYieldRecordState) error {
@@ -4229,10 +4632,77 @@ func upsertYieldRecordStates(states []models.AiRecommendYieldRecordState) error 
 		"total_scope_end",
 	}
 
-	return db.Dao.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "recommend_id"}},
-		DoUpdates: clause.AssignmentColumns(updateColumns),
-	}).CreateInBatches(states, 100).Error
+	if err := runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "recommend_id"}},
+			DoUpdates: clause.AssignmentColumns(updateColumns),
+		}).CreateInBatches(states, 100).Error
+	}); err != nil {
+		return err
+	}
+	if err := syncRecommendActivationStatusFromRecordStates(states); err != nil {
+		return err
+	}
+	return clearAiRecommendYieldDirtyCodesByRecordStates(states)
+}
+
+func syncRecommendActivationStatusFromRecordStates(states []models.AiRecommendYieldRecordState) error {
+	if len(states) == 0 {
+		return nil
+	}
+
+	type recommendActivationSync struct {
+		RecommendID             uint
+		ActivationStatus        string
+		ActivationInvalidReason string
+	}
+
+	updates := make([]recommendActivationSync, 0, len(states))
+	seen := make(map[uint]struct{}, len(states))
+	for _, state := range states {
+		if state.RecommendID == 0 {
+			continue
+		}
+		if _, exists := seen[state.RecommendID]; exists {
+			continue
+		}
+		seen[state.RecommendID] = struct{}{}
+
+		status := strings.TrimSpace(strings.ToLower(state.ActivationStatus))
+		if status == "" {
+			continue
+		}
+		update := recommendActivationSync{
+			RecommendID:      state.RecommendID,
+			ActivationStatus: status,
+		}
+		if status == "invalid" {
+			update.ActivationInvalidReason = strings.TrimSpace(state.DataStatusReason)
+		}
+		updates = append(updates, update)
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	for _, update := range updates {
+		updateMap := map[string]any{
+			"activation_status": update.ActivationStatus,
+		}
+		if update.ActivationStatus == "invalid" {
+			updateMap["activation_invalid_reason"] = update.ActivationInvalidReason
+		} else {
+			updateMap["activation_invalid_reason"] = ""
+		}
+		if err := runWithSQLiteBusyRetry(func() error {
+			return db.Dao.Model(&models.AiRecommendStocks{}).
+				Where("id = ?", update.RecommendID).
+				Updates(updateMap).Error
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func cleanRemovedYieldStates(codes []string) error {
@@ -4251,23 +4721,27 @@ func cleanRemovedYieldRecordStates(recordIDs []uint) error {
 
 func updateYieldRecalcProgress(metaID uint, done, total int) error {
 	percent := calculateRecalcPercent(done, total)
-	return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
-		"recalc_done":     done,
-		"recalc_total":    total,
-		"recalc_progress": percent,
-		"updated_at":      time.Now(),
-	}).Error
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
+			"recalc_done":     done,
+			"recalc_total":    total,
+			"recalc_progress": percent,
+			"updated_at":      time.Now(),
+		}).Error
+	})
 }
 
 func updateYieldDownloadProgress(metaID uint, done, total int) error {
 	percent := calculateRecalcPercent(done, total)
-	return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
-		"download_done":        done,
-		"download_total":       total,
-		"download_progress":    percent,
-		"download_in_progress": total > 0 && done < total,
-		"updated_at":           time.Now(),
-	}).Error
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
+			"download_done":        done,
+			"download_total":       total,
+			"download_progress":    percent,
+			"download_in_progress": total > 0 && done < total,
+			"updated_at":           time.Now(),
+		}).Error
+	})
 }
 
 func yieldDownloadWorkerCount() int {

@@ -17,6 +17,7 @@ import (
 var (
 	marketSummaryStockCellPattern = regexp.MustCompile(`^(.+?)[（(]([0-9]{6}(?:\.(?:SH|SZ|BJ))?)[）)]$`)
 	marketSummaryNumberPattern    = regexp.MustCompile(`\d+(?:\.\d+)?`)
+	marketSummaryRangePattern     = regexp.MustCompile(`\d+(?:\.\d+)?\s*(?:-|~|至|到)\s*\d+(?:\.\d+)?`)
 )
 
 var marketSummaryObservationPhrases = []string{
@@ -246,7 +247,7 @@ func buildMarketSummaryPriceCheckRecommend(row marketSummaryRow, stockName, stoc
 		return nil
 	}
 	observePrice := firstNumericValue(row.latestPrice)
-	focusText, focusMin, focusMax := parseMarketSummaryNumericRange(firstNonEmptyText(
+	focusText, focusMin, focusMax := parseMarketSummaryBuyRange(firstNonEmptyText(
 		row.focusPrice,
 		extractSignalPriceRange(row.buySignal),
 		extractSignalPriceRange(row.buySignalDetail),
@@ -1038,7 +1039,7 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelNa
 
 	observePrice := firstNumericValue(row.latestPrice)
 	buyAnchorText := firstNonEmptyText(row.focusPrice, extractSignalPriceRange(row.buySignal), extractSignalPriceRange(row.buySignalDetail), observePrice)
-	focusText, focusMin, focusMax := parseMarketSummaryNumericRange(buyAnchorText)
+	focusText, focusMin, focusMax := parseMarketSummaryBuyRange(buyAnchorText)
 	stopProfitText, stopProfitMin, stopProfitMax := parseMarketSummaryNumericRange(row.stopProfit)
 	stopLossText := firstNumericValue(row.stopLoss)
 	executionState := normalizeRecommendExecutionState(row.executionState)
@@ -1232,7 +1233,7 @@ func buildMarketSummaryYieldOverrideDraftFromRow(row marketSummaryYieldOverrideR
 		DataStatusReason:         normalizeRecommendText(firstNonEmptyText(row.reviewReason, row.invalidCondition)),
 	}
 
-	if text, min, max := parseMarketSummaryNumericRange(row.buyRange); text != "" {
+	if text, min, max := parseMarketSummaryBuyRange(row.buyRange); text != "" {
 		override.RecommendBuyPrice = text
 		override.RecommendBuyPriceMin = min
 		override.RecommendBuyPriceMax = max
@@ -1340,8 +1341,7 @@ func extractSignalPriceRange(text string) string {
 	if text == "" {
 		return ""
 	}
-	rangePattern := regexp.MustCompile(`\d+(?:\.\d+)?\s*(?:-|~|至|到)\s*\d+(?:\.\d+)?`)
-	if matched := strings.TrimSpace(rangePattern.FindString(text)); matched != "" {
+	if matched := strings.TrimSpace(marketSummaryRangePattern.FindString(text)); matched != "" {
 		return matched
 	}
 	return firstNumericValue(text)
@@ -1349,6 +1349,60 @@ func extractSignalPriceRange(text string) string {
 
 func firstNumericValue(text string) string {
 	return strings.TrimSpace(marketSummaryNumberPattern.FindString(strings.TrimSpace(text)))
+}
+
+func parseMarketSummaryBuyRange(text string) (string, float64, float64) {
+	primary := extractMarketSummaryPrimaryBuyRangeText(text)
+	if primary == "" {
+		return "", 0, 0
+	}
+	return parseMarketSummaryNumericRange(primary)
+}
+
+func extractMarketSummaryPrimaryBuyRangeText(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" {
+		return ""
+	}
+	segments := splitMarketSummaryRangeSegments(trimmed)
+	for _, segment := range segments {
+		if !strings.Contains(segment, "回踩") {
+			continue
+		}
+		if matched := strings.TrimSpace(marketSummaryRangePattern.FindString(segment)); matched != "" {
+			return matched
+		}
+	}
+	for _, segment := range segments {
+		if containsAnyText(segment, []string{"突破", "上破", "breakout"}) {
+			continue
+		}
+		if matched := strings.TrimSpace(marketSummaryRangePattern.FindString(segment)); matched != "" {
+			return matched
+		}
+	}
+	if matched := strings.TrimSpace(marketSummaryRangePattern.FindString(trimmed)); matched != "" {
+		return matched
+	}
+	return firstNumericValue(trimmed)
+}
+
+func splitMarketSummaryRangeSegments(text string) []string {
+	rawSegments := strings.FieldsFunc(text, func(r rune) bool {
+		return r == '\n' || r == ';' || r == '；'
+	})
+	segments := make([]string, 0, len(rawSegments))
+	for _, segment := range rawSegments {
+		segment = strings.TrimSpace(segment)
+		if segment == "" {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	if len(segments) == 0 && strings.TrimSpace(text) != "" {
+		return []string{strings.TrimSpace(text)}
+	}
+	return segments
 }
 
 func parseMarketSummaryNumericRange(text string) (string, float64, float64) {

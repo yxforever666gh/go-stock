@@ -7,7 +7,7 @@ import {
   GetEmailSendLogList,
   GetPromptTemplates,
   RunMarketSummaryHumanizeCompatFixNow,
-  SendYieldEmailCSVNow,
+  SendYieldEmailXLSXNow,
   SendYieldEmailTestMessage,
   UpdateConfig
 } from "../services/app-api";
@@ -70,7 +70,7 @@ const formValue = ref({
   marketSummaryCronTimes: '09:40,11:30,14:30',
 })
 const yieldEmailTestSending = ref(false)
-const yieldEmailCsvSending = ref(false)
+const yieldEmailXlsxSending = ref(false)
 const marketSummaryCompatFixing = ref(false)
 const emailSendLogsLoading = ref(false)
 const emailSendLogs = ref([])
@@ -452,17 +452,17 @@ async function sendYieldEmailTest() {
   }
 }
 
-async function sendYieldEmailCSVNowAction() {
-  if (yieldEmailCsvSending.value) {
+async function sendYieldEmailXLSXNowAction() {
+  if (yieldEmailXlsxSending.value) {
     return
   }
-  yieldEmailCsvSending.value = true
+  yieldEmailXlsxSending.value = true
   try {
     const saved = await saveCurrentConfig({notifyError: true})
     if (!saved) {
       return
     }
-    const res = await SendYieldEmailCSVNow()
+    const res = await SendYieldEmailXLSXNow()
     if (String(res || '').includes('失败')) {
       message.error(res)
       await refreshEmailSendLogs(1)
@@ -471,7 +471,7 @@ async function sendYieldEmailCSVNowAction() {
     message.success(res)
     await refreshEmailSendLogs(1)
   } finally {
-    yieldEmailCsvSending.value = false
+    yieldEmailXlsxSending.value = false
   }
 }
 
@@ -508,8 +508,10 @@ function formatSendType(value) {
   switch (String(value || "").trim()) {
     case "test":
       return "测试邮件"
+    case "xlsx":
+      return "收益率 XLSX"
     case "csv":
-      return "收益率 CSV"
+      return "收益率 CSV（旧版）"
     case "manual_ai":
       return "手动 AI 报告"
     case "cron_ai":
@@ -865,11 +867,11 @@ function deletePrompt(ID) {
               <n-space vertical>
                 <n-space>
                   <n-button type="primary" :loading="yieldEmailTestSending" @click="sendYieldEmailTest">发送“你好”测试邮件</n-button>
-                  <n-button type="success" :loading="yieldEmailCsvSending" @click="sendYieldEmailCSVNowAction">立刻发送收益率 CSV</n-button>
+                  <n-button type="success" :loading="yieldEmailXlsxSending" @click="sendYieldEmailXLSXNowAction">立刻发送收益率 XLSX</n-button>
                   <n-button tertiary :loading="marketSummaryCompatFixing" @click="runMarketSummaryCompatFixAction">修复历史 AI 总结备注</n-button>
                   <n-button tertiary @click="refreshEmailSendLogs" :loading="emailSendLogsLoading">刷新发送日志</n-button>
                 </n-space>
-                <n-text depth="3">收益率 CSV 会单独发送整张收益率表。若开启上面的开关，只有“市场资讯 AI 总结定时任务”完成后才会自动发邮件；手动总结不会自动发。</n-text>
+                <n-text depth="3">收益率 XLSX 会单独发送与网页收益率列表一致的全量表格，不受页面 100 条分页限制，并保留主要状态颜色。若开启上面的开关，只有“市场资讯 AI 总结定时任务”完成后才会自动发邮件；手动总结不会自动发。</n-text>
                 <n-text depth="3">“修复历史 AI 总结备注”会一次性把旧报告和旧推荐备注里的 `activationRuleJson` 转成人话，不影响机器侧 strict 规则。</n-text>
               </n-space>
             </n-form-item-gi>

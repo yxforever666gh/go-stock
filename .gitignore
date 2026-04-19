@@ -12,10 +12,10 @@ build/bin/
 *.db
 *.sqlite
 *.sqlite3
-data/
+/data/
 
 # Logs
-logs/
+/logs/
 *.log
 *.nohup.pid
 
@@ -23,6 +23,7 @@ logs/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
+frontend/test-results/
 
 # Editor
 .vscode/
@@ -39,9 +40,13 @@ Thumbs.db
 *.tmp
 *.bak
 *.cache
-tmp/
-runtime/db/*.bak-*
+/tmp/
+/runtime/db/*.bak-*
+/runtime/db/
+/runtime/network-audit/
 data.test
+/test-results/
+/.playwright-mcp/
 
 # Local workspace
 .claude/settings.local.json

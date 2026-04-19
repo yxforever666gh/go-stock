@@ -1,0 +1,336 @@
+package data
+
+import (
+	"path/filepath"
+	"testing"
+	"time"
+
+	"go-stock/backend/db"
+	"go-stock/backend/models"
+)
+
+func TestEnsureYieldMetaSchema_AddsManualAuditColumnsToLegacyTable(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "yield-meta-legacy.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
+		t.Fatalf("auto migrate recommend table failed: %v", err)
+	}
+	if err := db.Dao.Exec(`CREATE TABLE ai_recommend_yield_meta (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		created_at datetime,
+		updated_at datetime,
+		last_full_recalc_at datetime,
+		last_yield_email_sent_at datetime,
+		last_yield_email_sent_reason TEXT,
+		last_query_recalc_at datetime,
+		query_cooldown_until datetime,
+		last_manual_download_at datetime,
+		manual_cooldown_until datetime,
+		recalc_in_progress numeric,
+		recalc_total INTEGER,
+		recalc_done INTEGER,
+		recalc_progress INTEGER,
+		last_error TEXT,
+		current_trade_date TEXT,
+		akshare_ready numeric,
+		akshare_checked_at datetime,
+		akshare_install_error TEXT,
+		frozen_sell_price_fix_version TEXT,
+		download_in_progress numeric,
+		download_total INTEGER,
+		download_done INTEGER,
+		download_progress INTEGER,
+		last_download_error TEXT
+	)`).Error; err != nil {
+		t.Fatalf("create legacy meta table failed: %v", err)
+	}
+
+	if err := ensureYieldMetaSchema(); err != nil {
+		t.Fatalf("ensureYieldMetaSchema failed: %v", err)
+	}
+
+	type pragmaRow struct {
+		Name string
+	}
+	rows := make([]pragmaRow, 0, 32)
+	if err := db.Dao.Raw("PRAGMA table_info(ai_recommend_yield_meta)").Scan(&rows).Error; err != nil {
+		t.Fatalf("load table info failed: %v", err)
+	}
+	names := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		names[row.Name] = struct{}{}
+	}
+	for _, col := range []string{
+		"last_manual_finished_at",
+		"last_manual_scope_count",
+		"last_manual_prefetch_ms",
+		"last_manual_recalc_ms",
+		"last_manual_total_ms",
+		"last_manual_sqlite_busy_count",
+		"last_manual_provider_summary",
+	} {
+		if _, ok := names[col]; !ok {
+			t.Fatalf("expected column %s to be added", col)
+		}
+	}
+}
+
+func TestPersistManualYieldAudit_WritesFinishedSummary(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "yield-manual-audit-persist.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
+		t.Fatalf("auto migrate recommend table failed: %v", err)
+	}
+	if err := ensureYieldMetaSchema(); err != nil {
+		t.Fatalf("ensureYieldMetaSchema failed: %v", err)
+	}
+
+	meta := models.AiRecommendYieldMeta{}
+	if err := db.Dao.Create(&meta).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+
+	started := time.Date(2026, 4, 15, 8, 25, 2, 0, cnLocation())
+	audit := newAiRecommendYieldManualAudit(started, 12)
+	audit.markPrefetchStart(started)
+	audit.markPrefetchDone(started.Add(45 * time.Second))
+	audit.markRecalcStart(started.Add(45 * time.Second))
+	audit.markRecalcDone(started.Add(2*time.Minute + 15*time.Second))
+	audit.incrementSQLiteBusy()
+	audit.recordProvider("tencent")
+	audit.recordProvider("diemeng")
+	audit.markFinished(started.Add(2*time.Minute + 20*time.Second))
+
+	if err := persistManualYieldAudit(meta.ID, audit); err != nil {
+		t.Fatalf("persistManualYieldAudit failed: %v", err)
+	}
+
+	var got models.AiRecommendYieldMeta
+	if err := db.Dao.First(&got, meta.ID).Error; err != nil {
+		t.Fatalf("reload meta failed: %v", err)
+	}
+	if got.LastManualFinishedAt == nil || !got.LastManualFinishedAt.Equal(started.Add(2*time.Minute+20*time.Second)) {
+		t.Fatalf("unexpected LastManualFinishedAt: %v", got.LastManualFinishedAt)
+	}
+	if got.LastManualScopeCount != 12 {
+		t.Fatalf("LastManualScopeCount=%d, want 12", got.LastManualScopeCount)
+	}
+	if got.LastManualPrefetchMs != int64(45*time.Second/time.Millisecond) {
+		t.Fatalf("LastManualPrefetchMs=%d", got.LastManualPrefetchMs)
+	}
+	if got.LastManualRecalcMs != int64(90*time.Second/time.Millisecond) {
+		t.Fatalf("LastManualRecalcMs=%d", got.LastManualRecalcMs)
+	}
+	if got.LastManualTotalMs != int64((2*time.Minute+20*time.Second)/time.Millisecond) {
+		t.Fatalf("LastManualTotalMs=%d", got.LastManualTotalMs)
+	}
+	if got.LastManualSqliteBusyCount != 1 {
+		t.Fatalf("LastManualSqliteBusyCount=%d, want 1", got.LastManualSqliteBusyCount)
+	}
+	if got.LastManualProviderSummary != "diemeng:1, tencent:1" {
+		t.Fatalf("LastManualProviderSummary=%q", got.LastManualProviderSummary)
+	}
+}
+
+func TestBuildAiRecommendMinuteCoverageTasks_ManualDownloadExtendsStartForPrevDayActivity(t *testing.T) {
+	loc := cnLocation()
+	now := time.Date(2026, 3, 10, 15, 10, 0, 0, loc)
+	recordTime := time.Date(2026, 3, 10, 9, 30, 0, 0, loc)
+
+	targets := &aiRecommendYieldTargets{
+		aggrMap: map[string]*aiRecommendYieldAggregate{
+			"300274.SZ": {
+				StockCode:                    "300274.SZ",
+				SignalTime:                   recordTime,
+				RequirePrevDayActivityFilter: true,
+			},
+		},
+		targetCodes: []string{"300274.SZ"},
+		targetRecords: []models.AiRecommendStocks{
+			{
+				StockCode: "300274.SZ",
+				DataTime:  &recordTime,
+				BuySignal: "5分钟成交额不能低于上一交易日同一时刻活跃度",
+				ModelName: "gpt-5.4",
+				StockName: "阳光电源",
+				BkName:    "光伏设备",
+			},
+		},
+	}
+	runtime := &aiRecommendYieldRecalcRuntime{
+		now:        now,
+		inTrading:  false,
+		latestDate: time.Date(2026, 3, 10, 0, 0, 0, 0, loc),
+		ctx: yieldBuildContext{
+			Reason:           "manual_minute_download",
+			Now:              now,
+			InTradingSession: false,
+			LatestTradeDate:  time.Date(2026, 3, 10, 0, 0, 0, 0, loc),
+		},
+	}
+
+	tasks := buildAiRecommendMinuteCoverageTasks(runtime, targets)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	gotStart := tasks[0].Start
+	wantStart := time.Date(2026, 3, 9, 9, 31, 0, 0, loc)
+	if !gotStart.Equal(wantStart) {
+		t.Fatalf("expected start=%v, got %v", wantStart, gotStart)
+	}
+}
+
+func TestBuildAiRecommendMinuteCoverageTasks_ManualDownloadExtendsStartForNormalRecommend(t *testing.T) {
+	loc := cnLocation()
+	now := time.Date(2026, 3, 10, 15, 10, 0, 0, loc)
+	recordTime := time.Date(2026, 3, 10, 9, 30, 0, 0, loc)
+
+	targets := &aiRecommendYieldTargets{
+		aggrMap: map[string]*aiRecommendYieldAggregate{
+			"300274.SZ": {
+				StockCode:  "300274.SZ",
+				SignalTime: recordTime,
+			},
+		},
+		targetCodes: []string{"300274.SZ"},
+		targetRecords: []models.AiRecommendStocks{
+			{
+				StockCode: "300274.SZ",
+				DataTime:  &recordTime,
+				BuySignal: "回到10.00-10.08主买入区即可",
+			},
+		},
+	}
+	runtime := &aiRecommendYieldRecalcRuntime{
+		now:        now,
+		inTrading:  false,
+		latestDate: time.Date(2026, 3, 10, 0, 0, 0, 0, loc),
+		ctx: yieldBuildContext{
+			Reason:           "manual_minute_download",
+			Now:              now,
+			InTradingSession: false,
+			LatestTradeDate:  time.Date(2026, 3, 10, 0, 0, 0, 0, loc),
+		},
+	}
+
+	tasks := buildAiRecommendMinuteCoverageTasks(runtime, targets)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	gotStart := tasks[0].Start
+	wantStart := time.Date(2026, 3, 9, 9, 31, 0, 0, loc)
+	if !gotStart.Equal(wantStart) {
+		t.Fatalf("expected start=%v, got %v", wantStart, gotStart)
+	}
+}
+
+func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-scope-filter.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	now := time.Date(2026, 4, 15, 9, 45, 0, 0, cnLocation())
+	ruleJSON := `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"manual_amount","operator":">=","thresholdValue":10,"thresholdMax":10.5,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`
+	rows := []models.AiRecommendStocks{
+		{
+			StockCode:                "300001.SZ",
+			StockName:                "特锐德",
+			RecommendCategory:        "conditional",
+			ExecutionState:           recommendExecutionAnalysisOnly,
+			RecommendBuyPrice:        "18.90-19.10",
+			BuySignal:                "价格触发：回到18.90-19.10主买入区；量能触发：5分钟成交额不低于100万",
+			SellSignal:               "触及20.50止盈区间卖出；若跌破18.80止损位立即止损",
+			InvalidSignal:            "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破18.80",
+			ActivationRuleJSON:       ruleJSON,
+			RecommendStopLossPrice:   "18.80",
+			RecommendStopProfitPrice: "20.50",
+			ActivationStatus:         "pending",
+			DataTime:                 &now,
+		},
+		{
+			StockCode:                "300002.SZ",
+			StockName:                "神州泰岳",
+			RecommendCategory:        "conditional",
+			ExecutionState:           recommendExecutionConditional,
+			RecommendBuyPrice:        "9.90-10.10",
+			BuySignal:                "价格触发：回到9.90-10.10主买入区；量能触发：5分钟成交额不低于100万",
+			SellSignal:               "触及10.80止盈区间卖出；若跌破9.80止损位立即止损",
+			InvalidSignal:            "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破9.80",
+			ActivationRuleJSON:       ruleJSON,
+			RecommendStopLossPrice:   "9.80",
+			RecommendStopProfitPrice: "10.80",
+			ActivationStatus:         "skipped",
+			DataTime:                 &now,
+		},
+		{
+			StockCode:                "300003.SZ",
+			StockName:                "乐普医疗",
+			RecommendCategory:        "conditional",
+			ExecutionState:           recommendExecutionConditional,
+			RecommendBuyPrice:        "15.10-15.30",
+			BuySignal:                "价格触发：回到15.10-15.30主买入区；量能触发：5分钟成交额不低于100万",
+			SellSignal:               "触及16.80止盈区间卖出；若跌破14.80止损位立即止损",
+			InvalidSignal:            "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破14.80",
+			ActivationRuleJSON:       ruleJSON,
+			RecommendStopLossPrice:   "14.80",
+			RecommendStopProfitPrice: "16.80",
+			ActivationStatus:         "pending",
+			DataTime:                 &now,
+		},
+	}
+	for _, row := range rows {
+		if err := db.Dao.Create(&row).Error; err != nil {
+			t.Fatalf("create recommend failed: %v", err)
+		}
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldRecordState{
+		RecommendID:      2,
+		StockCode:        "300002.SZ",
+		ActivationStatus: "skipped",
+		DataStatus:       "已跳过",
+		DataStatusReason: "已终态",
+	}).Error; err != nil {
+		t.Fatalf("create skipped record state failed: %v", err)
+	}
+
+	got, err := filterManualDownloadScopeCodes([]string{"300001.SZ", "300002.SZ", "300003.SZ"})
+	if err != nil {
+		t.Fatalf("filterManualDownloadScopeCodes failed: %v", err)
+	}
+	if len(got) != 1 || got[0] != "300003.SZ" {
+		t.Fatalf("unexpected filtered scope: %#v", got)
+	}
+}
+
+func TestManualYieldAuditSnapshot_FormatsDurationsAndProviders(t *testing.T) {
+	started := time.Date(2026, 4, 15, 8, 25, 2, 0, cnLocation())
+	audit := newAiRecommendYieldManualAudit(started, 99)
+	audit.markPrefetchStart(started)
+	audit.markPrefetchDone(started.Add(90 * time.Second))
+	audit.markRecalcStart(started.Add(90 * time.Second))
+	audit.markRecalcDone(started.Add(4 * time.Minute))
+	audit.recordProvider("tencent")
+	audit.recordProvider("diemeng")
+	audit.recordProvider("tencent")
+	audit.incrementSQLiteBusy()
+	audit.markFinished(started.Add(4*time.Minute + 18*time.Second))
+
+	snapshot := audit.snapshot()
+	if snapshot.ScopeCount != 99 {
+		t.Fatalf("scopeCount=%d, want 99", snapshot.ScopeCount)
+	}
+	if snapshot.PrefetchMs != int64(90*time.Second/time.Millisecond) {
+		t.Fatalf("prefetchMs=%d", snapshot.PrefetchMs)
+	}
+	if snapshot.RecalcMs != int64(150*time.Second/time.Millisecond) {
+		t.Fatalf("recalcMs=%d", snapshot.RecalcMs)
+	}
+	if snapshot.TotalMs != int64((4*time.Minute+18*time.Second)/time.Millisecond) {
+		t.Fatalf("totalMs=%d", snapshot.TotalMs)
+	}
+	if snapshot.SQLiteBusyCount != 1 {
+		t.Fatalf("sqliteBusyCount=%d, want 1", snapshot.SQLiteBusyCount)
+	}
+	if snapshot.ProviderSummary != "diemeng:1, tencent:2" {
+		t.Fatalf("providerSummary=%q", snapshot.ProviderSummary)
+	}
+}
