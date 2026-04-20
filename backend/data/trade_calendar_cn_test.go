@@ -32,12 +32,12 @@ func TestIsCNOpenTradeDayStrictWeekend(t *testing.T) {
 func TestIsCNOpenTradeDayStrictCalendarUnavailable(t *testing.T) {
 	initTradeCalendarTestDB(t)
 
-	backup := *globalCNTradeCalCache
+	backup := globalCNTradeCalCache
 	globalCNTradeCalCache = &cnTradeCalCache{
 		lastError: "tushare token is empty",
 	}
 	defer func() {
-		globalCNTradeCalCache = &backup
+		globalCNTradeCalCache = backup
 	}()
 
 	loc := cnLocation()

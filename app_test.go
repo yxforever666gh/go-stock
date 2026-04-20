@@ -3,13 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"go-stock/backend/db"
-	"go-stock/backend/logger"
-	"go-stock/backend/models"
 	"testing"
 	"time"
 
-	"github.com/go-resty/resty/v2"
+	"go-stock/backend/db"
+	"go-stock/backend/logger"
+	"go-stock/backend/models"
 )
 
 // @Author spark
@@ -31,50 +30,49 @@ func TestIsUSTradingTime(t *testing.T) {
 }
 
 func TestCheckStockBaseInfo(t *testing.T) {
+	requireIntegration(t)
 	db.Init("./data/stock.db")
 	NewApp().CheckStockBaseInfo(context.Background())
 }
 
-func TestJson(t *testing.T) {
-	db.Init("./data/stock.db")
-
+func TestStockInfoUSJSONUnmarshal(t *testing.T) {
 	jsonStr := "{\n\t\t\"id\" : 3334,\n\t\t\"created_at\" : \"2025-02-28 16:49:31.8342514+08:00\",\n\t\t\"updated_at\" : \"2025-02-28 16:49:31.8342514+08:00\",\n\t\t\"deleted_at\" : null,\n\t\t\"code\" : \"PUK.US\",\n\t\t\"name\" : \"英国保诚集团\",\n\t\t\"full_name\" : \"\",\n\t\t\"e_name\" : \"\",\n\t\t\"exchange\" : \"NASDAQ\",\n\t\t\"type\" : \"stock\",\n\t\t\"is_del\" : 0,\n\t\t\"bk_name\" : null,\n\t\t\"bk_code\" : null\n\t}"
 
 	v := &models.StockInfoUS{}
-	json.Unmarshal([]byte(jsonStr), v)
-	logger.SugaredLogger.Infof("v:%+v", v)
-
-	db.Dao.Model(v).Updates(v)
-
+	if err := json.Unmarshal([]byte(jsonStr), v); err != nil {
+		t.Fatalf("json unmarshal failed: %v", err)
+	}
+	if v.Code != "PUK.US" {
+		t.Fatalf("unexpected code: %s", v.Code)
+	}
+	if v.Name != "英国保诚集团" {
+		t.Fatalf("unexpected name: %s", v.Name)
+	}
+	if v.Exchange != "NASDAQ" {
+		t.Fatalf("unexpected exchange: %s", v.Exchange)
+	}
 }
 
 func TestUpdateCheck(t *testing.T) {
-	releaseVersion := &models.GitHubReleaseVersion{}
-	_, err := resty.New().R().
-		SetResult(releaseVersion).
-		SetHeader("Accept", "application/vnd.github+json").
-		SetHeader("X-GitHub-Api-Version", "2022-11-28").
-		Get(latestReleaseAPIURL())
-	//  https://api.github.com/repos/OWNER/REPO/releases/latest
+	requireIntegration(t)
+	releaseVersion, err := NewApp().fetchLatestReleaseVersion()
 	if err != nil {
-		logger.SugaredLogger.Errorf("get github release version error:%s", err.Error())
-		return
+		t.Fatalf("fetch latest release version failed: %v", err)
+	}
+	if releaseVersion == nil {
+		t.Fatal("expected release version")
+	}
+	if releaseVersion.TagName == "" {
+		t.Fatal("expected non-empty release tag")
 	}
 	logger.SugaredLogger.Infof("releaseVersion:%+v", releaseVersion)
 }
 
 func TestGetScreenResolution(t *testing.T) {
+	requireDesktopTest(t)
 	x, y, w, h, err := getScreenResolution()
 	if err != nil {
-		logger.SugaredLogger.Errorf("get screen resolution error:%s", err.Error())
-		return
+		t.Fatalf("get screen resolution error:%s", err.Error())
 	}
 	logger.SugaredLogger.Infof("x:%d,y:%d,w:%d,h:%d", x, y, w, h)
-
-}
-
-func TestCheckUpdate(t *testing.T) {
-	db.Init("./data/stock.db")
-	BuildKey = "8171b192a21b4d95a42fdcd54478e3ed"
-	NewApp().CheckUpdate(1)
 }

@@ -332,11 +332,30 @@ func TestEnsureMarketSummaryRecommendStocksSavedFromRuntimeReport20260407_1130(t
 		if row.StockCode != wantCodes[idx] {
 			t.Fatalf("unexpected stock code at %d: got=%s want=%s", idx, row.StockCode, wantCodes[idx])
 		}
-		if row.ActivationRuleJSON == "" {
-			t.Fatalf("expected activation rule for %s", row.StockCode)
+		if row.SummaryVersion != marketSummaryCurrentVersion {
+			t.Fatalf("unexpected summary version for %s: %s", row.StockCode, row.SummaryVersion)
 		}
-		if row.ExecutionState != recommendExecutionConditional {
-			t.Fatalf("expected conditional execution state for %s, got %s", row.StockCode, row.ExecutionState)
+		switch row.StockCode {
+		case "300124.SZ":
+			if row.ExecutionState != recommendExecutionAnalysisOnly {
+				t.Fatalf("expected analysis_only execution state for %s, got %s", row.StockCode, row.ExecutionState)
+			}
+			if row.ActivationRuleJSON != "" {
+				t.Fatalf("expected downgraded record to clear activation rule for %s", row.StockCode)
+			}
+			if row.RecommendBuyPrice != "" || row.RecommendStopProfitPrice != "" || row.RecommendStopLossPrice != "" {
+				t.Fatalf("expected downgraded record to clear trade plan for %s", row.StockCode)
+			}
+			if !strings.Contains(row.InvalidCondition, "最多2只生产候选") {
+				t.Fatalf("expected downgrade reason recorded for %s, got %s", row.StockCode, row.InvalidCondition)
+			}
+		default:
+			if row.ActivationRuleJSON == "" {
+				t.Fatalf("expected activation rule for %s", row.StockCode)
+			}
+			if row.ExecutionState != recommendExecutionConditional {
+				t.Fatalf("expected conditional execution state for %s, got %s", row.StockCode, row.ExecutionState)
+			}
 		}
 	}
 }

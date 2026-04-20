@@ -382,6 +382,17 @@ export namespace data {
 	    browserPath: string;
 	    enableNews: boolean;
 	    darkTheme: boolean;
+	    browserPoolSize: number;
+	    enableFund: boolean;
+	    enablePushNews: boolean;
+	    enableOnlyPushRedNews: boolean;
+	    httpProxy: string;
+	    httpProxyEnabled: boolean;
+	    forceNoProxyForFetch: boolean;
+	    enableAgent: boolean;
+	    qgqpBId: string;
+	    marketSummaryCronEnabled: boolean;
+	    marketSummaryCronTimes: string;
 	    minuteProviderMode: string;
 	    minuteLongHistoryHintEnabled: boolean;
 	    privateMinuteEnabled: boolean;
@@ -396,17 +407,6 @@ export namespace data {
 	    tencentMinuteEnabled: boolean;
 	    eastmoneyMinuteEnabled: boolean;
 	    akshareMinuteSourceMode: string;
-	    browserPoolSize: number;
-	    enableFund: boolean;
-	    enablePushNews: boolean;
-	    enableOnlyPushRedNews: boolean;
-	    httpProxy: string;
-	    httpProxyEnabled: boolean;
-	    forceNoProxyForFetch: boolean;
-	    enableAgent: boolean;
-	    qgqpBId: string;
-	    marketSummaryCronEnabled: boolean;
-	    marketSummaryCronTimes: string;
 	    aiConfigs: AIConfig[];
 	
 	    static createFrom(source: any = {}) {
@@ -445,6 +445,17 @@ export namespace data {
 	        this.browserPath = source["browserPath"];
 	        this.enableNews = source["enableNews"];
 	        this.darkTheme = source["darkTheme"];
+	        this.browserPoolSize = source["browserPoolSize"];
+	        this.enableFund = source["enableFund"];
+	        this.enablePushNews = source["enablePushNews"];
+	        this.enableOnlyPushRedNews = source["enableOnlyPushRedNews"];
+	        this.httpProxy = source["httpProxy"];
+	        this.httpProxyEnabled = source["httpProxyEnabled"];
+	        this.forceNoProxyForFetch = source["forceNoProxyForFetch"];
+	        this.enableAgent = source["enableAgent"];
+	        this.qgqpBId = source["qgqpBId"];
+	        this.marketSummaryCronEnabled = source["marketSummaryCronEnabled"];
+	        this.marketSummaryCronTimes = source["marketSummaryCronTimes"];
 	        this.minuteProviderMode = source["minuteProviderMode"];
 	        this.minuteLongHistoryHintEnabled = source["minuteLongHistoryHintEnabled"];
 	        this.privateMinuteEnabled = source["privateMinuteEnabled"];
@@ -459,17 +470,6 @@ export namespace data {
 	        this.tencentMinuteEnabled = source["tencentMinuteEnabled"];
 	        this.eastmoneyMinuteEnabled = source["eastmoneyMinuteEnabled"];
 	        this.akshareMinuteSourceMode = source["akshareMinuteSourceMode"];
-	        this.browserPoolSize = source["browserPoolSize"];
-	        this.enableFund = source["enableFund"];
-	        this.enablePushNews = source["enablePushNews"];
-	        this.enableOnlyPushRedNews = source["enableOnlyPushRedNews"];
-	        this.httpProxy = source["httpProxy"];
-	        this.httpProxyEnabled = source["httpProxyEnabled"];
-	        this.forceNoProxyForFetch = source["forceNoProxyForFetch"];
-	        this.enableAgent = source["enableAgent"];
-	        this.qgqpBId = source["qgqpBId"];
-	        this.marketSummaryCronEnabled = source["marketSummaryCronEnabled"];
-	        this.marketSummaryCronTimes = source["marketSummaryCronTimes"];
 	        this.aiConfigs = this.convertValues(source["aiConfigs"], AIConfig);
 	    }
 	
@@ -957,11 +957,11 @@ export namespace models {
 	    suggestedTakeProfit: number;
 	    modelName: string;
 	    rawSummary: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendOpeningReviewSummary(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.recommendId = source["recommendId"];
@@ -1029,6 +1029,11 @@ export namespace models {
 	    capitalConfirmation: number;
 	    fundamentalFit: number;
 	    technicalFit: number;
+	    activationRuleJson: string;
+	    activationRuleVersion: string;
+	    activationRuleSource: string;
+	    activationStatus: string;
+	    activationInvalidReason: string;
 	    recommendStatus: string;
 	    summaryVersion: string;
 	    riskRemarks: string;
@@ -1083,6 +1088,11 @@ export namespace models {
 	        this.capitalConfirmation = source["capitalConfirmation"];
 	        this.fundamentalFit = source["fundamentalFit"];
 	        this.technicalFit = source["technicalFit"];
+	        this.activationRuleJson = source["activationRuleJson"];
+	        this.activationRuleVersion = source["activationRuleVersion"];
+	        this.activationRuleSource = source["activationRuleSource"];
+	        this.activationStatus = source["activationStatus"];
+	        this.activationInvalidReason = source["activationInvalidReason"];
 	        this.recommendStatus = source["recommendStatus"];
 	        this.summaryVersion = source["summaryVersion"];
 	        this.riskRemarks = source["riskRemarks"];
@@ -1114,6 +1124,7 @@ export namespace models {
 	    page: number;
 	    pageSize: number;
 	    totalPages: number;
+	    strategyCohort?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksPageData(source);
@@ -1126,6 +1137,7 @@ export namespace models {
 	        this.page = source["page"];
 	        this.pageSize = source["pageSize"];
 	        this.totalPages = source["totalPages"];
+	        this.strategyCohort = source["strategyCohort"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1157,6 +1169,7 @@ export namespace models {
 	    startDate: string;
 	    endDate: string;
 	    yieldMode: string;
+	    strategyCohort: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksQuery(source);
@@ -1174,6 +1187,7 @@ export namespace models {
 	        this.startDate = source["startDate"];
 	        this.endDate = source["endDate"];
 	        this.yieldMode = source["yieldMode"];
+	        this.strategyCohort = source["strategyCohort"];
 	    }
 	}
 	export class AiRecommendStocksYieldItem {
@@ -1197,6 +1211,8 @@ export namespace models {
 	    sellSignal: string;
 	    sellSignalDetail: string;
 	    invalidSignal: string;
+	    activationRule?: string;
+	    activationInvalidReason?: string;
 	    recommendCount: number;
 	    recommendTime: string;
 	    signalTime: string;
@@ -1250,6 +1266,8 @@ export namespace models {
 	        this.sellSignal = source["sellSignal"];
 	        this.sellSignalDetail = source["sellSignalDetail"];
 	        this.invalidSignal = source["invalidSignal"];
+	        this.activationRule = source["activationRule"];
+	        this.activationInvalidReason = source["activationInvalidReason"];
 	        this.recommendCount = source["recommendCount"];
 	        this.recommendTime = source["recommendTime"];
 	        this.signalTime = source["signalTime"];
@@ -1277,6 +1295,24 @@ export namespace models {
 	        this.dataStatusReason = source["dataStatusReason"];
 	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class AiRecommendStocksYieldPageData {
 	    list: AiRecommendStocksYieldItem[];
@@ -1305,6 +1341,18 @@ export namespace models {
 	    winRateVsBenchmarkText: string;
 	    medianExcessYieldRate: number;
 	    medianExcessYieldRateText: string;
+	    strategyCohort?: string;
+	    sameDayActivationRate: number;
+	    sameDayActivationRateText?: string;
+	    staleActivationRate: number;
+	    staleActivationRateText?: string;
+	    structuredRuleCoverage: number;
+	    structuredRuleCoverageText?: string;
+	    analysisOnlyRate: number;
+	    analysisOnlyRateText?: string;
+	    stopLossCount: number;
+	    takeProfitCount: number;
+	    openCount: number;
 	    dataAsOf: string;
 	    recalcInProgress: boolean;
 	    recalcProgress: number;
@@ -1359,6 +1407,18 @@ export namespace models {
 	        this.winRateVsBenchmarkText = source["winRateVsBenchmarkText"];
 	        this.medianExcessYieldRate = source["medianExcessYieldRate"];
 	        this.medianExcessYieldRateText = source["medianExcessYieldRateText"];
+	        this.strategyCohort = source["strategyCohort"];
+	        this.sameDayActivationRate = source["sameDayActivationRate"];
+	        this.sameDayActivationRateText = source["sameDayActivationRateText"];
+	        this.staleActivationRate = source["staleActivationRate"];
+	        this.staleActivationRateText = source["staleActivationRateText"];
+	        this.structuredRuleCoverage = source["structuredRuleCoverage"];
+	        this.structuredRuleCoverageText = source["structuredRuleCoverageText"];
+	        this.analysisOnlyRate = source["analysisOnlyRate"];
+	        this.analysisOnlyRateText = source["analysisOnlyRateText"];
+	        this.stopLossCount = source["stopLossCount"];
+	        this.takeProfitCount = source["takeProfitCount"];
+	        this.openCount = source["openCount"];
 	        this.dataAsOf = source["dataAsOf"];
 	        this.recalcInProgress = source["recalcInProgress"];
 	        this.recalcProgress = source["recalcProgress"];
@@ -1420,6 +1480,107 @@ export namespace models {
 	        this.status = source["status"];
 	    }
 	}
+	export class AiRecommendYieldDailyOverviewPoint {
+	    tradeDate: string;
+	    costBasisNet: number;
+	    dailyHoldingCostNet: number;
+	    holdingCount: number;
+	    cumulativeAmountChange: number;
+	    cumulativeYieldRate: number;
+	    dailyAmountChange: number;
+	    dailyYieldRate: number;
+	    benchmarkClose: number;
+	    benchmarkCumulativeAmountChange: number;
+	    benchmarkDailyAmountChange: number;
+	    benchmarkCumulativeRate: number;
+	    benchmarkDailyRate: number;
+	    excessCumulativeAmountChange: number;
+	    excessDailyAmountChange: number;
+	    excessCumulativeRate: number;
+	    excessDailyRate: number;
+	    strategyNav: number;
+	    benchmarkNav: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AiRecommendYieldDailyOverviewPoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tradeDate = source["tradeDate"];
+	        this.costBasisNet = source["costBasisNet"];
+	        this.dailyHoldingCostNet = source["dailyHoldingCostNet"];
+	        this.holdingCount = source["holdingCount"];
+	        this.cumulativeAmountChange = source["cumulativeAmountChange"];
+	        this.cumulativeYieldRate = source["cumulativeYieldRate"];
+	        this.dailyAmountChange = source["dailyAmountChange"];
+	        this.dailyYieldRate = source["dailyYieldRate"];
+	        this.benchmarkClose = source["benchmarkClose"];
+	        this.benchmarkCumulativeAmountChange = source["benchmarkCumulativeAmountChange"];
+	        this.benchmarkDailyAmountChange = source["benchmarkDailyAmountChange"];
+	        this.benchmarkCumulativeRate = source["benchmarkCumulativeRate"];
+	        this.benchmarkDailyRate = source["benchmarkDailyRate"];
+	        this.excessCumulativeAmountChange = source["excessCumulativeAmountChange"];
+	        this.excessDailyAmountChange = source["excessDailyAmountChange"];
+	        this.excessCumulativeRate = source["excessCumulativeRate"];
+	        this.excessDailyRate = source["excessDailyRate"];
+	        this.strategyNav = source["strategyNav"];
+	        this.benchmarkNav = source["benchmarkNav"];
+	    }
+	}
+	export class AiRecommendYieldDailyOverviewData {
+	    rangeStart: string;
+	    rangeEnd: string;
+	    dataAsOf: string;
+	    calcMode: string;
+	    benchmarkCode: string;
+	    benchmarkName: string;
+	    strategyCohort?: string;
+	    totalRecordCount: number;
+	    includedRecordCount: number;
+	    skippedRecordCount: number;
+	    warnings: string[];
+	    points: AiRecommendYieldDailyOverviewPoint[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AiRecommendYieldDailyOverviewData(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rangeStart = source["rangeStart"];
+	        this.rangeEnd = source["rangeEnd"];
+	        this.dataAsOf = source["dataAsOf"];
+	        this.calcMode = source["calcMode"];
+	        this.benchmarkCode = source["benchmarkCode"];
+	        this.benchmarkName = source["benchmarkName"];
+	        this.strategyCohort = source["strategyCohort"];
+	        this.totalRecordCount = source["totalRecordCount"];
+	        this.includedRecordCount = source["includedRecordCount"];
+	        this.skippedRecordCount = source["skippedRecordCount"];
+	        this.warnings = source["warnings"];
+	        this.points = this.convertValues(source["points"], AiRecommendYieldDailyOverviewPoint);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class AiRecommendYieldMinuteBarDTO {
 	    tradeTime: string;
 	    open: number;
@@ -1494,104 +1655,6 @@ export namespace models {
 	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
 	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class AiRecommendYieldDailyOverviewPoint {
-	    tradeDate: string;
-	    costBasisNet: number;
-	    dailyHoldingCostNet: number;
-	    holdingCount: number;
-	    cumulativeAmountChange: number;
-	    cumulativeYieldRate: number;
-	    dailyAmountChange: number;
-	    dailyYieldRate: number;
-	    benchmarkClose: number;
-	    benchmarkCumulativeAmountChange: number;
-	    benchmarkDailyAmountChange: number;
-	    benchmarkCumulativeRate: number;
-	    benchmarkDailyRate: number;
-	    excessCumulativeAmountChange: number;
-	    excessDailyAmountChange: number;
-	    excessCumulativeRate: number;
-	    excessDailyRate: number;
-	    strategyNav: number;
-	    benchmarkNav: number;
-
-	    static createFrom(source: any = {}) {
-	        return new AiRecommendYieldDailyOverviewPoint(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.tradeDate = source["tradeDate"];
-	        this.costBasisNet = source["costBasisNet"];
-	        this.dailyHoldingCostNet = source["dailyHoldingCostNet"];
-	        this.holdingCount = source["holdingCount"];
-	        this.cumulativeAmountChange = source["cumulativeAmountChange"];
-	        this.cumulativeYieldRate = source["cumulativeYieldRate"];
-	        this.dailyAmountChange = source["dailyAmountChange"];
-	        this.dailyYieldRate = source["dailyYieldRate"];
-	        this.benchmarkClose = source["benchmarkClose"];
-	        this.benchmarkCumulativeAmountChange = source["benchmarkCumulativeAmountChange"];
-	        this.benchmarkDailyAmountChange = source["benchmarkDailyAmountChange"];
-	        this.benchmarkCumulativeRate = source["benchmarkCumulativeRate"];
-	        this.benchmarkDailyRate = source["benchmarkDailyRate"];
-	        this.excessCumulativeAmountChange = source["excessCumulativeAmountChange"];
-	        this.excessDailyAmountChange = source["excessDailyAmountChange"];
-	        this.excessCumulativeRate = source["excessCumulativeRate"];
-	        this.excessDailyRate = source["excessDailyRate"];
-	        this.strategyNav = source["strategyNav"];
-	        this.benchmarkNav = source["benchmarkNav"];
-	    }
-	}
-	export class AiRecommendYieldDailyOverviewData {
-	    rangeStart: string;
-	    rangeEnd: string;
-	    dataAsOf: string;
-	    calcMode: string;
-	    benchmarkCode: string;
-	    benchmarkName: string;
-	    totalRecordCount: number;
-	    includedRecordCount: number;
-	    skippedRecordCount: number;
-	    warnings: string[];
-	    points: AiRecommendYieldDailyOverviewPoint[];
-
-	    static createFrom(source: any = {}) {
-	        return new AiRecommendYieldDailyOverviewData(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.rangeStart = source["rangeStart"];
-	        this.rangeEnd = source["rangeEnd"];
-	        this.dataAsOf = source["dataAsOf"];
-	        this.calcMode = source["calcMode"];
-	        this.benchmarkCode = source["benchmarkCode"];
-	        this.benchmarkName = source["benchmarkName"];
-	        this.totalRecordCount = source["totalRecordCount"];
-	        this.includedRecordCount = source["includedRecordCount"];
-	        this.skippedRecordCount = source["skippedRecordCount"];
-	        this.warnings = source["warnings"];
-	        this.points = this.convertValues(source["points"], AiRecommendYieldDailyOverviewPoint);
-	    }
-
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1846,3 +1909,4 @@ export namespace models {
 	}
 
 }
+

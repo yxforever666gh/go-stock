@@ -441,7 +441,7 @@ func (o *OpenAi) NewSummaryStockNewsStreamWithTools(userQuestion string, sysProm
 			"role":    "user",
 			"content": executionQuestion,
 		})
-		AskAiWithTools(o, errors.New(""), msg, ch, displayQuestion, tools, thinking)
+		AskAiWithTools(o, msg, ch, displayQuestion, tools, thinking)
 	}()
 	return ch
 }
@@ -614,7 +614,9 @@ func (o *OpenAi) NewSummaryStockNewsStream(userQuestion string, sysPromptId *int
 			res := NewSearchStockApi("").HotStrategy()
 			bytes, _ := json.Marshal(res)
 			strategy := &models.HotStrategy{}
-			json.Unmarshal(bytes, strategy)
+			if err := json.Unmarshal(bytes, strategy); err != nil {
+				return nil, err
+			}
 			for _, data := range strategy.Data {
 				data.Chg = mathutil.RoundToFloat(100*data.Chg, 2)
 			}
@@ -664,7 +666,7 @@ func (o *OpenAi) NewSummaryStockNewsStream(userQuestion string, sysPromptId *int
 			"role":    "user",
 			"content": executionQuestion,
 		})
-		AskAi(o, errors.New(""), msg, ch, displayQuestion, think)
+		AskAi(o, msg, ch, displayQuestion, think)
 	}()
 	return ch
 }
@@ -745,7 +747,6 @@ func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptI
 		if userQuestion == "" {
 			question = strutil.ReplaceWithMap(o.QuestionTemplate, replaceTemplates)
 		} else {
-			question = userQuestion
 			question = strutil.ReplaceWithMap(userQuestion, replaceTemplates)
 		}
 
@@ -1044,9 +1045,9 @@ func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptI
 		//reqJson, _ := json.Marshal(msg)
 		//logger.SugaredLogger.Errorf("Stream request: \n%s\n", reqJson)
 		if tools != nil && len(tools) > 0 {
-			AskAiWithTools(o, err, msg, ch, question, tools, thinking)
+			AskAiWithTools(o, msg, ch, question, tools, thinking)
 		} else {
-			AskAi(o, err, msg, ch, question, thinking)
+			AskAi(o, msg, ch, question, thinking)
 		}
 	}()
 	return ch
@@ -1109,7 +1110,7 @@ func (o *OpenAi) NewChatStreamLite(stock, stockCode, userQuestion string, thinki
 			"content": question,
 		})
 
-		AskAi(o, nil, msg, ch, question, thinking)
+		AskAi(o, msg, ch, question, thinking)
 	}()
 	return ch
 }
@@ -1129,7 +1130,7 @@ func shouldRetryAIRequest(err error) bool {
 		return true
 	}
 	var netErr net.Error
-	if errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary()) {
+	if errors.As(err, &netErr) && netErr.Timeout() {
 		return true
 	}
 	errMsg := strings.ToLower(err.Error())
@@ -1202,7 +1203,7 @@ func (o *OpenAi) formatAIRequestError(err error) string {
 	return msg
 }
 
-func AskAi(o *OpenAi, err error, messages []map[string]interface{}, ch chan map[string]any, question string, think bool) {
+func AskAi(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string, think bool) {
 	client := o.newAIClient()
 	thinking := "disabled"
 	if think {
@@ -1375,7 +1376,7 @@ func AskAi(o *OpenAi, err error, messages []map[string]interface{}, ch chan map[
 		}
 	}
 }
-func AskAiWithTools(o *OpenAi, err error, messages []map[string]interface{}, ch chan map[string]any, question string, tools []Tool, thinkingMode bool) {
+func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string, tools []Tool, thinkingMode bool) {
 	bytes, _ := json.Marshal(messages)
 	logger.SugaredLogger.Debugf("Stream request: \n%s\n", string(bytes))
 
@@ -2432,7 +2433,7 @@ func AskAiWithTools(o *OpenAi, err error, messages []map[string]interface{}, ch 
 							}
 
 						}
-						AskAiWithTools(o, err, messages, ch, question, tools, thinkingMode)
+						AskAiWithTools(o, messages, ch, question, tools, thinkingMode)
 						return
 					}
 
@@ -2481,7 +2482,7 @@ func AskAiWithTools(o *OpenAi, err error, messages []map[string]interface{}, ch 
 							}
 							newMessages = append(newMessages, message)
 						}
-						AskAi(o, err, newMessages, ch, question, thinkingMode)
+						AskAi(o, newMessages, ch, question, thinkingMode)
 					} else {
 						ch <- map[string]any{
 							"code":     0,

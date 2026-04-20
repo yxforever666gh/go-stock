@@ -114,8 +114,8 @@ export function GetAiRecommendStocksYieldList(arg1) {
   return window['go']['main']['App']['GetAiRecommendStocksYieldList'](arg1);
 }
 
-export function GetAiRecommendYieldDailyOverview() {
-  return window['go']['main']['App']['GetAiRecommendYieldDailyOverview']();
+export function GetAiRecommendYieldDailyOverview(arg1) {
+  return window['go']['main']['App']['GetAiRecommendYieldDailyOverview'](arg1);
 }
 
 export function GetAiRecommendYieldErrorLogs(arg1) {
@@ -266,6 +266,10 @@ export function ResetAgentSession(arg1) {
   return window['go']['main']['App']['ResetAgentSession'](arg1);
 }
 
+export function RunMarketSummaryHumanizeCompatFixNow() {
+  return window['go']['main']['App']['RunMarketSummaryHumanizeCompatFixNow']();
+}
+
 export function SaveAIResponseResult(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SaveAIResponseResult'](arg1, arg2, arg3, arg4, arg5, arg6);
 }
@@ -302,16 +306,12 @@ export function SendMarketSummaryEmailNow(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SendMarketSummaryEmailNow'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function RunMarketSummaryHumanizeCompatFixNow() {
-  return window['go']['main']['App']['RunMarketSummaryHumanizeCompatFixNow']();
+export function SendYieldEmailTestMessage() {
+  return window['go']['main']['App']['SendYieldEmailTestMessage']();
 }
 
 export function SendYieldEmailXLSXNow() {
   return window['go']['main']['App']['SendYieldEmailXLSXNow']();
-}
-
-export function SendYieldEmailTestMessage() {
-  return window['go']['main']['App']['SendYieldEmailTestMessage']();
 }
 
 export function SetAlarmChangePercent(arg1, arg2, arg3) {

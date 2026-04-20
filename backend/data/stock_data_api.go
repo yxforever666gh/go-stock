@@ -14,8 +14,8 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"io"
-	"io/ioutil"
 	url2 "net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -270,7 +270,9 @@ func (receiver StockDataApi) GetStockBaseInfo() {
 		SetResult(res).
 		Post(tushareApiUrl)
 	//logger.SugaredLogger.Infof("GetStockBaseInfo %s", string(resp.Body()))
-	ioutil.WriteFile("stock_basic.json", resp.Body(), 0666)
+	if err := os.WriteFile("stock_basic.json", resp.Body(), 0666); err != nil {
+		logger.SugaredLogger.Warnf("write stock_basic.json failed: %v", err)
+	}
 	//logger.SugaredLogger.Infof("GetStockBaseInfo %+v", res)
 	if err != nil {
 		logger.SugaredLogger.Error(err.Error())
@@ -663,9 +665,8 @@ func ParseTxStockData(data string) (*StockInfo, error) {
 		return nil, ErrInvalidDataFormat
 	}
 	var result map[string]string
-	var err error
 	if strutil.ContainsAny(datas[0], []string{"v_r_hk", "v_hk", "v_sz", "v_sh"}) {
-		result, err = ParseTxHKStockData(datas)
+		result, _ = ParseTxHKStockData(datas)
 	}
 
 	//logger.SugaredLogger.Infof("股票数据解析完成: %v", result)
@@ -798,15 +799,14 @@ func ParseFullSingleStockData(data string) (*StockInfo, error) {
 		return nil, ErrInvalidDataFormat
 	}
 	var result map[string]string
-	var err error
 	if strutil.ContainsAny(datas[0], []string{"hq_str_sz", "hq_str_sh", "hq_str_bj", "hq_str_sb"}) {
-		result, err = ParseSHSZStockData(datas)
+		result, _ = ParseSHSZStockData(datas)
 	}
 	if strutil.ContainsAny(datas[0], []string{"hq_str_hk"}) {
-		result, err = ParseHKStockData(datas)
+		result, _ = ParseHKStockData(datas)
 	}
 	if strutil.ContainsAny(datas[0], []string{"hq_str_gb"}) {
-		result, err = ParseUSStockData(datas)
+		result, _ = ParseUSStockData(datas)
 	}
 
 	//logger.SugaredLogger.Infof("股票数据解析完成: %v", result)
@@ -1050,7 +1050,8 @@ func GetRealTimeStockPriceInfo(ctx context.Context, stockCode string) (price, pr
 			priceTime := ""
 			document, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
 			if err != nil {
-				//logger.SugaredLogger.Errorf("GetRealTimeStockPriceInfo error: %v", err)
+				logger.SugaredLogger.Debugf("GetRealTimeStockPriceInfo parse html failed: %v", err)
+				return price, priceTime
 			}
 			document.Find("div.zxj").Each(func(i int, selection *goquery.Selection) {
 				price = selection.Text()
@@ -1359,7 +1360,10 @@ func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]Minut
 		return minuteDatas, date
 	}
 	//logger.SugaredLogger.Infof("resp:%s", resp.Body())
-	json.Unmarshal(resp.Body(), &res)
+	if err := json.Unmarshal(resp.Body(), &res); err != nil {
+		logger.SugaredLogger.Errorf("GetStockMinutePriceData json.Unmarshal err:%v", err)
+		return minuteDatas, date
+	}
 	code, _ := convertor.ToInt(res["code"])
 	if res["data"] != nil && code == 0 {
 		data := res["data"].(map[string]interface{})
@@ -1429,7 +1433,10 @@ func (receiver StockDataApi) GetHK_KLineData(stockCode string, kLineType string,
 		return K
 	}
 	//logger.SugaredLogger.Infof("resp:%s", resp.Body())
-	json.Unmarshal(resp.Body(), &res)
+	if err := json.Unmarshal(resp.Body(), &res); err != nil {
+		logger.SugaredLogger.Errorf("GetKLineData json.Unmarshal err:%v", err)
+		return K
+	}
 	code, _ := convertor.ToInt(res["code"])
 	if code != 0 {
 		return K
@@ -1515,13 +1522,20 @@ func (receiver StockDataApi) getDCStockInfo(market string, page, pageSize int) {
 	body := string(resp.Body())
 	logger.SugaredLogger.Infof("resp:%s", body)
 	vm := otto.New()
-	vm.Run("function data(res){return res};")
+	if _, err := vm.Run("function data(res){return res};"); err != nil {
+		logger.SugaredLogger.Errorf("vm.Run init error:%v", err.Error())
+		return
+	}
 	val, err := vm.Run(body)
 	if err != nil {
 		logger.SugaredLogger.Errorf("vm.Run error:%v", err.Error())
 	}
 	value, _ := val.Object().Value().Export()
 	marshal, err := json.Marshal(value)
+	if err != nil {
+		logger.SugaredLogger.Errorf("json.Marshal error:%v", err.Error())
+		return
+	}
 	data := make(map[string]any)
 	err = json.Unmarshal(marshal, &data)
 	if err != nil {
@@ -1641,12 +1655,13 @@ func (receiver StockDataApi) GetHKStockInfo(pageSize int) {
 	}
 	js := "var " + string(resp.Body())
 	vm := otto.New()
-	_, err = vm.Run(js)
-	_, err = vm.Run("var data = JSON.stringify(list_data);")
-	if err != nil {
+	if _, err = vm.Run(js); err != nil {
 		return
 	}
-	value, err := vm.Get("data")
+	if _, err = vm.Run("var data = JSON.stringify(list_data);"); err != nil {
+		return
+	}
+	value, _ := vm.Get("data")
 	data := make(map[string]any)
 	err = json.Unmarshal([]byte(value.String()), &data)
 	if err != nil {
@@ -1672,12 +1687,13 @@ func (receiver StockDataApi) GetHKStockInfo(pageSize int) {
 				break
 			}
 			js = "var " + string(resp.Body())
-			_, err = vm.Run(js)
-			_, err = vm.Run("var data = JSON.stringify(list_data);")
-			if err != nil {
+			if _, err = vm.Run(js); err != nil {
 				return
 			}
-			value, err = vm.Get("data")
+			if _, err = vm.Run("var data = JSON.stringify(list_data);"); err != nil {
+				return
+			}
+			value, _ = vm.Get("data")
 			data = make(map[string]any)
 			err = json.Unmarshal([]byte(value.String()), &data)
 			if err != nil {
@@ -1729,7 +1745,10 @@ func (receiver StockDataApi) GetCommonKLineData(stockCode string, kLineType stri
 		return K
 	}
 	logger.SugaredLogger.Infof("resp:%s", resp.Body())
-	json.Unmarshal(resp.Body(), &res)
+	if err := json.Unmarshal(resp.Body(), &res); err != nil {
+		logger.SugaredLogger.Errorf("GetCommonKLineData json.Unmarshal err:%v", err)
+		return K
+	}
 	code, _ := convertor.ToInt(res["code"])
 	if code != 0 {
 		return K
@@ -1782,7 +1801,10 @@ func (receiver StockDataApi) GetStockMoneyData() models.StockMoneyDataResp {
 	body := string(resp.Body())
 	logger.SugaredLogger.Infof("resp:%s", body)
 	vm := otto.New()
-	vm.Run("function data(res){return res};")
+	if _, err := vm.Run("function data(res){return res};"); err != nil {
+		logger.SugaredLogger.Errorf("vm.Run init error:%v", err.Error())
+		return models.StockMoneyDataResp{}
+	}
 	val, err := vm.Run(body)
 	if err != nil {
 		logger.SugaredLogger.Errorf("err:%s", err.Error())

@@ -8,7 +8,9 @@ import (
 func TestCrawlFundBasic(t *testing.T) {
 	requireIntegration(t)
 	db.Init("../../data/stock.db")
-	db.Dao.AutoMigrate(&FundBasic{})
+	if err := db.Dao.AutoMigrate(&FundBasic{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
 	api := NewFundApi()
 
 	//api.CrawlFundBasic("510630")

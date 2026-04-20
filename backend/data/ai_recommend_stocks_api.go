@@ -2,13 +2,11 @@
 package data
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
-	appconfig "go-stock/internal/config"
 	"math"
 	"regexp"
 	"sort"
@@ -62,25 +60,25 @@ type yieldDailyOverviewPriceSeries struct {
 }
 
 type benchmarkSummaryResult struct {
-	Code                     string
-	Name                     string
-	Rate                     float64
-	RateText                 string
-	ExcessYieldRate          float64
-	ExcessYieldRateText      string
-	StrategyXirr             float64
-	StrategyXirrText         string
-	BenchmarkXirr            float64
-	BenchmarkXirrText        string
-	ExcessXirr               float64
-	ExcessXirrText           string
-	MaxDrawdown              float64
-	MaxDrawdownText          string
-	WinRateVsBenchmark       float64
-	WinRateVsBenchmarkText   string
-	MedianExcessYieldRate    float64
+	Code                      string
+	Name                      string
+	Rate                      float64
+	RateText                  string
+	ExcessYieldRate           float64
+	ExcessYieldRateText       string
+	StrategyXirr              float64
+	StrategyXirrText          string
+	BenchmarkXirr             float64
+	BenchmarkXirrText         string
+	ExcessXirr                float64
+	ExcessXirrText            string
+	MaxDrawdown               float64
+	MaxDrawdownText           string
+	WinRateVsBenchmark        float64
+	WinRateVsBenchmarkText    string
+	MedianExcessYieldRate     float64
 	MedianExcessYieldRateText string
-	ItemRateByRecommendID    map[uint]float64
+	ItemRateByRecommendID     map[uint]float64
 }
 
 type strategySummaryResult struct {
@@ -91,15 +89,15 @@ type strategySummaryResult struct {
 }
 
 type benchmarkDailySeries struct {
-	Code                string
-	Name                string
-	CloseByDay          map[string]float64
-	ValueByDay          map[string]float64
+	Code                  string
+	Name                  string
+	CloseByDay            map[string]float64
+	ValueByDay            map[string]float64
 	CumulativeAmountByDay map[string]float64
-	DailyAmountByDay    map[string]float64
-	CumulativeRateByDay map[string]float64
-	DailyRateByDay      map[string]float64
-	NavByDay            map[string]float64
+	DailyAmountByDay      map[string]float64
+	CumulativeRateByDay   map[string]float64
+	DailyRateByDay        map[string]float64
+	NavByDay              map[string]float64
 }
 
 type benchmarkCashflowPosition struct {
@@ -227,450 +225,16 @@ func shouldBypassRecommendKeywordInterception(dataTime *time.Time) bool {
 	return shouldBypassRecommendKeywordInterceptionAt(*dataTime)
 }
 
-func normalizeAiRecommendYieldMode(mode string) string {
-	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case aiRecommendYieldModeStrict:
-		return aiRecommendYieldModeStrict
-	default:
-		return aiRecommendYieldModeStrict
-	}
-}
-
-func resolveAiRecommendYieldMode(query *models.AiRecommendStocksQuery) string {
-	defaultMode := normalizeAiRecommendYieldMode(appconfig.Load().Yield.DefaultMode)
-	if defaultMode == "" {
-		defaultMode = aiRecommendYieldModeStrict
-	}
-	if query == nil {
-		return defaultMode
-	}
-	mode := normalizeAiRecommendYieldMode(query.YieldMode)
-	if strings.TrimSpace(query.YieldMode) == "" {
-		mode = defaultMode
-	}
-	query.YieldMode = mode
-	return mode
-}
-
-var genericRecommendReasonTexts = map[string]struct{}{
-	"推荐":         {},
-	"看好":         {},
-	"建议关注":       {},
-	"市场资讯AI总结推荐": {},
-}
-
-const defaultAiRecommendRemarks = "执行前确认量价、板块联动、仓位和风险承受能力"
-
-func firstNumericText(text string) string {
-	return strings.TrimSpace(priceNumberRegexp.FindString(strings.TrimSpace(text)))
-}
-
-var evidenceTypeAliasMap = map[string]string{
-	"市场资讯":     "市场资讯",
-	"个股新闻":     "个股新闻",
-	"行业研报":     "行业研报",
-	"财报":       "财报/财务",
-	"财报/财务":    "财报/财务",
-	"财务":       "财报/财务",
-	"互动易":      "互动易",
-	"技术/资金/形态": "技术/资金/形态",
-	"技术面":      "技术/资金/形态",
-	"资金面":      "技术/资金/形态",
-	"形态":       "技术/资金/形态",
-	"一级披露":     "一级披露",
-	"原始披露":     "一级披露",
-	"公告":       "一级披露",
-	"资金结构":     "资金结构",
-	"股东/筹码":    "股东/筹码",
-	"股东筹码":     "股东/筹码",
-	"产业高频":     "产业高频",
-	"高频指标":     "产业高频",
-	"海外风险":     "海外风险",
-}
-
-var evidencePositiveKeywords = []string{"回购", "增持", "预增", "中标", "突破", "放量", "改善", "增长", "合作", "投产", "获批", "上调", "扩产", "景气"}
-var evidenceNegativeKeywords = []string{"减持", "解禁", "问询", "监管", "立案", "亏损", "下滑", "不及预期", "低于预期", "跌破", "处罚", "终止", "质押", "风险", "波动", "走弱"}
-
-const (
-	recommendExecutionImmediate    = "immediate"
-	recommendExecutionConditional  = "conditional"
-	recommendExecutionAnalysisOnly = "analysis_only"
-)
-
-func normalizeAiRecommendStockForSave(recommend *models.AiRecommendStocks) error {
-	if recommend == nil {
-		return errors.New("推荐记录不能为空")
-	}
-
-	normalizeAiRecommendStockBaseFields(recommend)
-	signalDrivenMode, structuredMode := normalizeAiRecommendStockModes(recommend)
-	normalizeRecommendExecutionFields(recommend)
-	repairRecommendBuyRangeFromSignals(recommend)
-	fillSignalDrivenRecommendCompat(recommend, signalDrivenMode, structuredMode)
-	finalizeAiRecommendStockDefaults(recommend)
-	applyAiRecommendStockTimeDefaults(recommend)
-	if err := normalizeMarketSummaryExecutionDataForSave(recommend); err != nil {
-		return err
-	}
-	if isAnalysisOnlyRecommend(recommend) {
-		recommend.ExecutionState = recommendExecutionAnalysisOnly
-		recommend.RecommendCategory = ""
-		return validateAiRecommendStockForSave(recommend, 0, 0, 0)
-	}
-
-	buyMin, buyMax, stopProfitMin, stopLossValue, err := validateAndNormalizeAiRecommendPrices(recommend)
-	if err != nil {
-		return err
-	}
-	applyAiRecommendStockPriceFallbacks(recommend, buyMin)
-	if err := validateMarketSummaryRecommendForSave(recommend); err != nil {
-		return err
-	}
-	if err := validateAiRecommendStockForSave(recommend, buyMin, buyMax, stopLossValue); err != nil {
-		return err
-	}
-	if err := normalizeActivationRuleForSave(recommend); err != nil {
-		return err
-	}
-	if stopProfitMin <= buyMin {
-		return errors.New("建议止盈区间必须高于建议买入区间")
-	}
-	if stopLossValue >= buyMax {
-		return errors.New("建议止损价必须低于建议买入区间")
-	}
-	return nil
-}
-
-func normalizeAiRecommendStockBaseFields(recommend *models.AiRecommendStocks) {
-	recommend.ProviderName = strings.TrimSpace(recommend.ProviderName)
-	recommend.ModelName = strings.TrimSpace(recommend.ModelName)
-	if recommend.ProviderName == "" && recommend.ModelName != "" {
-		recommend.ProviderName = strings.TrimSpace(DetectAIProviderName(&AIConfig{ModelName: recommend.ModelName}))
-	}
-	recommend.StockCode = normalizeRecommendStockCode(recommend.StockCode)
-	recommend.StockName = strings.TrimSpace(recommend.StockName)
-	recommend.BkCode = strings.TrimSpace(strings.ToUpper(recommend.BkCode))
-	recommend.BkName = strings.TrimSpace(recommend.BkName)
-	recommend.StockPrice = firstNumericText(recommend.StockPrice)
-	recommend.StockCurrentPrice = firstNumericText(recommend.StockCurrentPrice)
-	recommend.StockCurrentPriceTime = strings.TrimSpace(recommend.StockCurrentPriceTime)
-	recommend.StockClosePrice = firstNumericText(recommend.StockClosePrice)
-	recommend.StockPrePrice = firstNumericText(recommend.StockPrePrice)
-	recommend.RecommendReason = normalizeRecommendText(recommend.RecommendReason)
-	recommend.RiskRemarks = normalizeRecommendText(recommend.RiskRemarks)
-	recommend.Remarks = normalizeRecommendText(recommend.Remarks)
-	recommend.ExecutionState = normalizeRecommendExecutionState(recommend.ExecutionState)
-	recommend.BuySignal = normalizeRecommendText(recommend.BuySignal)
-	recommend.BuySignalDetail = normalizeRecommendText(recommend.BuySignalDetail)
-	recommend.SellSignal = normalizeRecommendText(recommend.SellSignal)
-	recommend.SellSignalDetail = normalizeRecommendText(recommend.SellSignalDetail)
-	recommend.InvalidSignal = normalizeRecommendText(recommend.InvalidSignal)
-	recommend.RecommendCategory = normalizeRecommendCategory(recommend.RecommendCategory)
-	recommend.CoreCatalyst = normalizeRecommendText(recommend.CoreCatalyst)
-	recommend.KeyEvidence = normalizeRecommendText(recommend.KeyEvidence)
-	recommend.EvidenceSources = strings.TrimSpace(recommend.EvidenceSources)
-	recommend.InvalidCondition = normalizeRecommendText(recommend.InvalidCondition)
-	recommend.ObservePrice = firstNumericText(recommend.ObservePrice)
-	recommend.FocusPrice = strings.TrimSpace(recommend.FocusPrice)
-	recommend.ExpectedCycle = strings.TrimSpace(recommend.ExpectedCycle)
-	recommend.RecommendStatus = normalizeRecommendStatus(recommend.RecommendStatus)
-	recommend.SummaryVersion = strings.TrimSpace(recommend.SummaryVersion)
-	recommend.ActivationRuleJSON = strings.TrimSpace(recommend.ActivationRuleJSON)
-	recommend.ActivationRuleVersion = strings.TrimSpace(recommend.ActivationRuleVersion)
-	recommend.ActivationRuleSource = strings.TrimSpace(recommend.ActivationRuleSource)
-	recommend.ActivationStatus = strings.TrimSpace(recommend.ActivationStatus)
-	recommend.ActivationInvalidReason = normalizeRecommendText(recommend.ActivationInvalidReason)
-	recommend.EventStrength = clampConfidenceScore(recommend.EventStrength)
-	recommend.CapitalConfirmation = clampConfidenceScore(recommend.CapitalConfirmation)
-	recommend.FundamentalFit = clampConfidenceScore(recommend.FundamentalFit)
-	recommend.TechnicalFit = clampConfidenceScore(recommend.TechnicalFit)
-	if recommend.SummaryVersion == "" {
-		recommend.SummaryVersion = defaultAiRecommendSummaryVersion
-	}
-}
-
-func normalizeAiRecommendStockModes(recommend *models.AiRecommendStocks) (bool, bool) {
-	signalDrivenMode := hasSignalDrivenRecommend(recommend)
-	mergeStructuredRecommendCompatFields(recommend)
-	normalizeRecommendEvidenceSources(recommend)
-	structuredMode := hasStructuredRecommendPayload(recommend)
-	if !signalDrivenMode {
-		if recommend.RecommendCategory == "" {
-			recommend.RecommendCategory = inferRecommendCategory(recommend)
-		}
-		if recommend.RecommendCategory == "" {
-			recommend.RecommendCategory = recommendExecutionConditional
-		}
-		if recommend.RecommendStatus == "" {
-			switch recommend.RecommendCategory {
-			case "avoid":
-				recommend.RecommendStatus = "avoid"
-			default:
-				recommend.RecommendStatus = "valid"
-			}
-		}
-	}
-	if structuredMode {
-		applyStructuredRecommendRules(recommend)
-	}
-	applyRecommendTimingRules(recommend)
-	return signalDrivenMode, structuredMode
-}
-
-func finalizeAiRecommendStockDefaults(recommend *models.AiRecommendStocks) {
-	if recommend.Remarks == "" {
-		recommend.Remarks = buildDefaultRemarks(recommend)
-	}
-}
-
-func validateAndNormalizeAiRecommendPrices(recommend *models.AiRecommendStocks) (float64, float64, float64, float64, error) {
-	buyText, buyMin, buyMax := normalizePriceRangeText(recommend.RecommendBuyPrice, recommend.RecommendBuyPriceMin, recommend.RecommendBuyPriceMax)
-	if buyMin <= 0 || buyMax <= 0 {
-		return 0, 0, 0, 0, errors.New("建议买入区间不能为空")
-	}
-	recommend.RecommendBuyPrice = buyText
-	recommend.RecommendBuyPriceMin = buyMin
-	recommend.RecommendBuyPriceMax = buyMax
-
-	stopProfitText, stopProfitMin, stopProfitMax := normalizePriceRangeText(recommend.RecommendStopProfitPrice, recommend.RecommendStopProfitPriceMin, recommend.RecommendStopProfitPriceMax)
-	if stopProfitMin <= 0 || stopProfitMax <= 0 {
-		return 0, 0, 0, 0, errors.New("建议止盈区间不能为空")
-	}
-	recommend.RecommendStopProfitPrice = stopProfitText
-	recommend.RecommendStopProfitPriceMin = stopProfitMin
-	recommend.RecommendStopProfitPriceMax = stopProfitMax
-
-	stopLossText, stopLossValue := normalizeSinglePriceText(recommend.RecommendStopLossPrice)
-	if stopLossValue <= 0 {
-		return 0, 0, 0, 0, errors.New("建议止损价不能为空")
-	}
-	recommend.RecommendStopLossPrice = stopLossText
-	return buyMin, buyMax, stopProfitMin, stopLossValue, nil
-}
-
-func applyAiRecommendStockPriceFallbacks(recommend *models.AiRecommendStocks, buyMin float64) {
-	if recommend.StockPrice == "" {
-		switch {
-		case recommend.ObservePrice != "":
-			recommend.StockPrice = recommend.ObservePrice
-		case recommend.StockCurrentPrice != "":
-			recommend.StockPrice = recommend.StockCurrentPrice
-		case recommend.StockClosePrice != "":
-			recommend.StockPrice = recommend.StockClosePrice
-		default:
-			recommend.StockPrice = formatRecommendPrice(buyMin)
-		}
-	}
-	if recommend.ObservePrice == "" {
-		recommend.ObservePrice = recommend.StockPrice
-	}
-	if recommend.StockCurrentPrice == "" {
-		recommend.StockCurrentPrice = recommend.StockPrice
-	}
-	if recommend.StockClosePrice == "" {
-		recommend.StockClosePrice = recommend.StockPrice
-	}
-	if recommend.StockPrePrice == "" {
-		recommend.StockPrePrice = recommend.StockPrice
-	}
-}
-
-func applyAiRecommendStockTimeDefaults(recommend *models.AiRecommendStocks) {
-	if recommend.StockCurrentPriceTime == "" {
-		if recommend.DataTime != nil && !recommend.DataTime.IsZero() {
-			recommend.StockCurrentPriceTime = recommend.DataTime.Format(time.DateTime)
-		} else {
-			recommend.StockCurrentPriceTime = time.Now().Format(time.DateTime)
-		}
-	}
-	if recommend.DataTime == nil || recommend.DataTime.IsZero() {
-		now := time.Now()
-		recommend.DataTime = &now
-	}
-}
-
-func validateAiRecommendStockForSave(recommend *models.AiRecommendStocks, buyMin, buyMax, stopLossValue float64) error {
-	_ = buyMin
-	_ = buyMax
-	_ = stopLossValue
-	if recommend.StockCode == "" {
-		return errors.New("股票代码不能为空")
-	}
-	if recommend.StockName == "" {
-		return errors.New("股票名称不能为空")
-	}
-	if recommend.BkName == "" {
-		return errors.New("所属方向/板块不能为空")
-	}
-	if !hasEnoughRecommendReason(recommend.RecommendReason) {
-		return errors.New("推荐理由过短或缺少有效逻辑")
-	}
-	if len([]rune(recommend.RiskRemarks)) < 6 {
-		return errors.New("风险提示不能为空，且至少包含一条有效风险")
-	}
-	if isAnalysisOnlyRecommend(recommend) {
-		return nil
-	}
-	if err := validateSignalDrivenRecommend(recommend); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (s *AiRecommendStocksService) CreateAiRecommendStocks(recommend *models.AiRecommendStocks) error {
-	if err := normalizeAiRecommendStockForSave(recommend); err != nil {
-		return err
-	}
-	resultErr := db.Dao.Transaction(func(tx *gorm.DB) error {
-		if err := validateRecommendDailyUniqueness(tx, []*models.AiRecommendStocks{recommend}); err != nil {
-			return err
-		}
-		return tx.Create(recommend).Error
-	})
-	if resultErr == nil {
-		scopeCodes := make([]string, 0, 1)
-		if recommend != nil {
-			code := strings.TrimSpace(recommend.StockCode)
-			if code != "" {
-				scopeCodes = append(scopeCodes, code)
-			}
-		}
-		_ = markAiRecommendYieldDirtyCodes(scopeCodes, "新增推荐后等待严格模式下载/回算", aiRecommendYieldModeStrict)
-		requestAiRecommendYieldRecalcWithScope(false, "recommend_created", scopeCodes)
-	}
-	return resultErr
-}
-
-func (s *AiRecommendStocksService) BatchCreateAiRecommendStocks(recommends []*models.AiRecommendStocks) error {
-	normalized := make([]*models.AiRecommendStocks, 0, len(recommends))
-	for idx, item := range recommends {
-		if item == nil {
-			continue
-		}
-		if err := normalizeAiRecommendStockForSave(item); err != nil {
-			return fmt.Errorf("第%d条推荐记录不完整: %w", idx+1, err)
-		}
-		normalized = append(normalized, item)
-	}
-	if len(normalized) == 0 {
-		return errors.New("没有可保存的推荐记录")
-	}
-	resultErr := db.Dao.Transaction(func(tx *gorm.DB) error {
-		if err := validateRecommendDailyUniqueness(tx, normalized); err != nil {
-			return err
-		}
-		return tx.Create(normalized).Error
-	})
-	if resultErr == nil {
-		scopeCodes := make([]string, 0, len(normalized))
-		for _, item := range normalized {
-			if item == nil {
-				continue
-			}
-			code := strings.TrimSpace(item.StockCode)
-			if code == "" {
-				continue
-			}
-			scopeCodes = append(scopeCodes, code)
-		}
-		_ = markAiRecommendYieldDirtyCodes(scopeCodes, "批量新增推荐后等待严格模式下载/回算", aiRecommendYieldModeStrict)
-		requestAiRecommendYieldRecalcWithScope(false, "recommend_batch_created", scopeCodes)
-	}
-	return resultErr
-}
-
-type recommendDailyKey struct {
-	StockCode string
-	DayText   string
-}
-
-func validateRecommendDailyUniqueness(tx *gorm.DB, recommends []*models.AiRecommendStocks) error {
-	if len(recommends) == 0 {
-		return nil
-	}
-	if tx == nil {
-		tx = db.Dao
-	}
-
-	seen := make(map[recommendDailyKey]*models.AiRecommendStocks, len(recommends))
-	for _, recommend := range recommends {
-		if recommend == nil {
-			continue
-		}
-		dayStart, dayEnd, dayText, ok := recommendDayBounds(recommend)
-		if !ok {
-			continue
-		}
-		code := normalizeRecommendStockCode(recommend.StockCode)
-		if code == "" {
-			continue
-		}
-		key := recommendDailyKey{StockCode: code, DayText: dayText}
-		if existing := seen[key]; existing != nil {
-			return duplicateRecommendDailyError(recommend, dayText, true)
-		}
-		seen[key] = recommend
-
-		query := tx.Model(&models.AiRecommendStocks{}).
-			Where("stock_code = ?", code).
-			Where("COALESCE(data_time, created_at) BETWEEN ? AND ?", dayStart, dayEnd)
-		if recommend.ID != 0 {
-			query = query.Where("id <> ?", recommend.ID)
-		}
-		var count int64
-		if err := query.Count(&count).Error; err != nil {
-			return err
-		}
-		if count > 0 {
-			return duplicateRecommendDailyError(recommend, dayText, false)
-		}
-	}
-	return nil
-}
-
-func recommendDayBounds(recommend *models.AiRecommendStocks) (time.Time, time.Time, string, bool) {
-	if recommend == nil {
-		return time.Time{}, time.Time{}, "", false
-	}
-	recordTime := time.Time{}
-	if recommend.DataTime != nil && !recommend.DataTime.IsZero() {
-		recordTime = recommend.DataTime.In(cnLocation())
-	} else if !recommend.CreatedAt.IsZero() {
-		recordTime = recommend.CreatedAt.In(cnLocation())
-	}
-	if recordTime.IsZero() {
-		return time.Time{}, time.Time{}, "", false
-	}
-	dayStart := time.Date(recordTime.Year(), recordTime.Month(), recordTime.Day(), 0, 0, 0, 0, cnLocation())
-	dayEnd := dayStart.Add(24*time.Hour - time.Nanosecond)
-	return dayStart, dayEnd, dayStart.Format("2006-01-02"), true
-}
-
-func duplicateRecommendDailyError(recommend *models.AiRecommendStocks, dayText string, inBatch bool) error {
-	code := ""
-	name := ""
-	if recommend != nil {
-		code = normalizeRecommendStockCode(recommend.StockCode)
-		name = strings.TrimSpace(recommend.StockName)
-	}
-	label := strings.TrimSpace(strings.TrimSpace(name) + " " + strings.TrimSpace(code))
-	if label == "" {
-		label = code
-	}
-	if label == "" {
-		label = "该股票"
-	}
-	if inBatch {
-		return fmt.Errorf("硬性拦截：%s 在 %s 的批量推荐中重复出现，同一天不能同时买入同一只股票", label, dayText)
-	}
-	return fmt.Errorf("硬性拦截：%s 在 %s 已有推荐记录，同一天不能同时买入同一只股票", label, dayText)
-}
-
 // GetAiRecommendStocksList 分页查询AI推荐股票记录
 func (s *AiRecommendStocksService) GetAiRecommendStocksList(query *models.AiRecommendStocksQuery) (*models.AiRecommendStocksPageData, error) {
+	if query == nil {
+		query = &models.AiRecommendStocksQuery{}
+	}
+	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortAll)
+
 	var rawList []models.AiRecommendStocks
 
-	q := db.Dao.Model(&models.AiRecommendStocks{})
+	q := applyStrategyCohortFilter(db.Dao.Model(&models.AiRecommendStocks{}), query.StrategyCohort)
 	loc := cnLocation()
 
 	// 构建查询条件
@@ -783,11 +347,12 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksList(query *models.AiReco
 	}
 
 	return &models.AiRecommendStocksPageData{
-		List:       pageList,
-		Total:      total,
-		Page:       page,
-		PageSize:   pageSize,
-		TotalPages: totalPages,
+		List:           pageList,
+		Total:          total,
+		Page:           page,
+		PageSize:       pageSize,
+		TotalPages:     totalPages,
+		StrategyCohort: query.StrategyCohort,
 	}, nil
 }
 
@@ -966,6 +531,11 @@ func triggerYieldPendingIntradayRecalcIfStale(
 
 // GetAiRecommendStocksYieldList 聚合查询AI推荐股票收益率
 func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.AiRecommendStocksQuery) (*models.AiRecommendStocksYieldPageData, error) {
+	if query == nil {
+		query = &models.AiRecommendStocksQuery{}
+	}
+	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
+
 	EnsureDiemengSelfCheckAsync("yield_list")
 	if err := ensureYieldMetaSchema(); err != nil {
 		return nil, err
@@ -1119,6 +689,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			PageSize:                  pageSize,
 			TotalPages:                0,
 			CalcMode:                  yieldMode,
+			StrategyCohort:            query.StrategyCohort,
 			TotalYieldRate:            0,
 			TotalYieldRateText:        "--",
 			BenchmarkCode:             defaultBenchmarkModelCode,
@@ -1205,6 +776,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	latestPriceMap, latestPriceTimeMap := loadCurrentPriceSnapshotForRecommendRecords(records)
 	applyLatestCurrentPriceSnapshot(items, latestPriceMap, latestPriceTimeMap)
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
+	diagnostics := calculateYieldDiagnosticSummary(records, items)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
 	benchmarkSummary := calculateBenchmarkSummaryByItems(items)
@@ -1231,53 +803,65 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	}
 
 	return &models.AiRecommendStocksYieldPageData{
-		List:                      pageItems,
-		Total:                     total,
-		Page:                      page,
-		PageSize:                  pageSize,
-		TotalPages:                totalPages,
-		CalcMode:                  aiRecommendYieldModeStrict,
-		TotalYieldRate:            totalYieldRate,
-		TotalYieldRateText:        totalYieldRateText,
-		BenchmarkCode:             benchmarkSummary.Code,
-		BenchmarkName:             benchmarkSummary.Name,
-		BenchmarkRate:             benchmarkSummary.Rate,
-		BenchmarkRateText:         benchmarkSummary.RateText,
-		ExcessYieldRate:           benchmarkSummary.ExcessYieldRate,
-		ExcessYieldRateText:       benchmarkSummary.ExcessYieldRateText,
-		StrategyXirr:              benchmarkSummary.StrategyXirr,
-		StrategyXirrText:          benchmarkSummary.StrategyXirrText,
-		BenchmarkXirr:             benchmarkSummary.BenchmarkXirr,
-		BenchmarkXirrText:         benchmarkSummary.BenchmarkXirrText,
-		ExcessXirr:                benchmarkSummary.ExcessXirr,
-		ExcessXirrText:            benchmarkSummary.ExcessXirrText,
-		MaxDrawdown:               benchmarkSummary.MaxDrawdown,
-		MaxDrawdownText:           benchmarkSummary.MaxDrawdownText,
-		WinRateVsBenchmark:        benchmarkSummary.WinRateVsBenchmark,
-		WinRateVsBenchmarkText:    benchmarkSummary.WinRateVsBenchmarkText,
-		MedianExcessYieldRate:     benchmarkSummary.MedianExcessYieldRate,
-		MedianExcessYieldRateText: benchmarkSummary.MedianExcessYieldRateText,
-		DataAsOf:                  dataAsOf,
-		RecalcInProgress:          recalcInProgress,
-		RecalcProgress:            recalcProgress,
-		MinuteDownloadDone:        minuteDone,
-		MinuteDownloadTotal:       minuteTotal,
-		MinuteDownloadPending:     minutePending,
-		MinuteDownloadUncoverable: minuteUncoverable,
-		ManualCooldownUntil:       manualCooldownUntil,
-		ManualCooldownRemainSec:   manualCooldownRemainSec,
-		LastManualStartedAt:       lastManualStartedAt,
-		LastManualFinishedAt:      lastManualFinishedAt,
-		LastManualScopeCount:      lastManualScopeCount,
-		LastManualPrefetchMs:      lastManualPrefetchMs,
-		LastManualRecalcMs:        lastManualRecalcMs,
-		LastManualTotalMs:         lastManualTotalMs,
-		LastManualSqliteBusyCount: lastManualSqliteBusyCount,
-		LastManualProviderSummary: lastManualProviderSummary,
-		LastManualAuditReady:      lastManualAuditReady,
-		DiemengHealthStatus:       diemengHealthStatus,
-		DiemengHealthSummary:      diemengHealthSummary,
-		DiemengHealthCheckedAt:    diemengHealthCheckedAt,
+		List:                       pageItems,
+		Total:                      total,
+		Page:                       page,
+		PageSize:                   pageSize,
+		TotalPages:                 totalPages,
+		CalcMode:                   aiRecommendYieldModeStrict,
+		StrategyCohort:             query.StrategyCohort,
+		TotalYieldRate:             totalYieldRate,
+		TotalYieldRateText:         totalYieldRateText,
+		BenchmarkCode:              benchmarkSummary.Code,
+		BenchmarkName:              benchmarkSummary.Name,
+		BenchmarkRate:              benchmarkSummary.Rate,
+		BenchmarkRateText:          benchmarkSummary.RateText,
+		ExcessYieldRate:            benchmarkSummary.ExcessYieldRate,
+		ExcessYieldRateText:        benchmarkSummary.ExcessYieldRateText,
+		StrategyXirr:               benchmarkSummary.StrategyXirr,
+		StrategyXirrText:           benchmarkSummary.StrategyXirrText,
+		BenchmarkXirr:              benchmarkSummary.BenchmarkXirr,
+		BenchmarkXirrText:          benchmarkSummary.BenchmarkXirrText,
+		ExcessXirr:                 benchmarkSummary.ExcessXirr,
+		ExcessXirrText:             benchmarkSummary.ExcessXirrText,
+		MaxDrawdown:                benchmarkSummary.MaxDrawdown,
+		MaxDrawdownText:            benchmarkSummary.MaxDrawdownText,
+		WinRateVsBenchmark:         benchmarkSummary.WinRateVsBenchmark,
+		WinRateVsBenchmarkText:     benchmarkSummary.WinRateVsBenchmarkText,
+		MedianExcessYieldRate:      benchmarkSummary.MedianExcessYieldRate,
+		MedianExcessYieldRateText:  benchmarkSummary.MedianExcessYieldRateText,
+		SameDayActivationRate:      diagnostics.SameDayActivationRate,
+		SameDayActivationRateText:  diagnostics.SameDayActivationRateText,
+		StaleActivationRate:        diagnostics.StaleActivationRate,
+		StaleActivationRateText:    diagnostics.StaleActivationRateText,
+		StructuredRuleCoverage:     diagnostics.StructuredRuleCoverage,
+		StructuredRuleCoverageText: diagnostics.StructuredRuleCoverageText,
+		AnalysisOnlyRate:           diagnostics.AnalysisOnlyRate,
+		AnalysisOnlyRateText:       diagnostics.AnalysisOnlyRateText,
+		StopLossCount:              diagnostics.StopLossCount,
+		TakeProfitCount:            diagnostics.TakeProfitCount,
+		OpenCount:                  diagnostics.OpenCount,
+		DataAsOf:                   dataAsOf,
+		RecalcInProgress:           recalcInProgress,
+		RecalcProgress:             recalcProgress,
+		MinuteDownloadDone:         minuteDone,
+		MinuteDownloadTotal:        minuteTotal,
+		MinuteDownloadPending:      minutePending,
+		MinuteDownloadUncoverable:  minuteUncoverable,
+		ManualCooldownUntil:        manualCooldownUntil,
+		ManualCooldownRemainSec:    manualCooldownRemainSec,
+		LastManualStartedAt:        lastManualStartedAt,
+		LastManualFinishedAt:       lastManualFinishedAt,
+		LastManualScopeCount:       lastManualScopeCount,
+		LastManualPrefetchMs:       lastManualPrefetchMs,
+		LastManualRecalcMs:         lastManualRecalcMs,
+		LastManualTotalMs:          lastManualTotalMs,
+		LastManualSqliteBusyCount:  lastManualSqliteBusyCount,
+		LastManualProviderSummary:  lastManualProviderSummary,
+		LastManualAuditReady:       lastManualAuditReady,
+		DiemengHealthStatus:        diemengHealthStatus,
+		DiemengHealthSummary:       diemengHealthSummary,
+		DiemengHealthCheckedAt:     diemengHealthCheckedAt,
 	}, nil
 }
 
@@ -1424,949 +1008,6 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldMinuteChart(recommendID ui
 
 	chart.Message = strings.Join(messages, "；")
 	return chart, nil
-}
-
-func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview() (*models.AiRecommendYieldDailyOverviewData, error) {
-	signature, err := buildYieldDailyOverviewSignature()
-	if err != nil {
-		return nil, err
-	}
-	if cached, ok := loadYieldDailyOverviewCache(signature); ok {
-		return cached, nil
-	}
-
-	result, err := s.buildYieldDailyOverview()
-	if err != nil {
-		return nil, err
-	}
-	storeYieldDailyOverviewCache(signature, result)
-	return cloneYieldDailyOverviewData(result), nil
-}
-
-func (s *AiRecommendStocksService) buildYieldDailyOverview() (*models.AiRecommendYieldDailyOverviewData, error) {
-	loc := cnLocation()
-	now := timeNow().In(loc)
-	expectedTradeDate := resolveExpectedYieldTradeDate(now)
-	latestTradeDate := expectedTradeDate
-	meta := models.AiRecommendYieldMeta{}
-	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err == nil {
-		if t, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
-			latestTradeDate = t
-		}
-	}
-	if expectedTradeDate.After(latestTradeDate) {
-		latestTradeDate = expectedTradeDate
-	}
-	latestTradeDate = time.Date(latestTradeDate.Year(), latestTradeDate.Month(), latestTradeDate.Day(), 0, 0, 0, 0, loc)
-	coverableStart := minuteCoverableStartMinute(latestTradeDate)
-
-	records, err := listAiRecommendStocksForYield(nil, coverableStart)
-	if err != nil {
-		return nil, err
-	}
-	records = collapseRecommendRecordsSameDayByCode(records)
-
-	result := &models.AiRecommendYieldDailyOverviewData{
-		CalcMode:         aiRecommendYieldModeStrict,
-		BenchmarkCode:    defaultBenchmarkModelCode,
-		BenchmarkName:    defaultBenchmarkName,
-		TotalRecordCount: len(records),
-		Warnings:         []string{},
-		Points:           []models.AiRecommendYieldDailyOverviewPoint{},
-	}
-	if len(records) == 0 {
-		result.Warnings = append(result.Warnings, "当前没有可用于统计的推荐记录")
-		return result, nil
-	}
-
-	recordStateMap, err := loadYieldRecordStateMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
-	}
-	stateMap, err := loadYieldStateMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
-	}
-	overrideMap, err := loadYieldOverrideMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
-	}
-	dirtyMap, err := loadDirtyAiRecommendYieldCodeSet(aiRecommendYieldModeStrict)
-	if err != nil {
-		return nil, err
-	}
-
-	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyMap, nil)
-	entries := make([]yieldDailyOverviewEntry, 0, len(items))
-	inactiveSkipped := 0
-	for _, item := range items {
-		entry, ok := buildYieldDailyOverviewEntry(item)
-		if !ok {
-			inactiveSkipped += 1
-			continue
-		}
-		entries = append(entries, entry)
-	}
-	if inactiveSkipped > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("已跳过 %d 条未激活或不可执行记录", inactiveSkipped))
-	}
-	if len(entries) == 0 {
-		result.SkippedRecordCount = result.TotalRecordCount
-		result.Warnings = append(result.Warnings, "当前没有可用于绘图的已激活严格记录")
-		return result, nil
-	}
-
-	startDay, endDay, ok := resolveYieldDailyOverviewWindow(entries)
-	if !ok {
-		result.SkippedRecordCount = result.TotalRecordCount
-		result.Warnings = append(result.Warnings, "无法确定全库收益走势的起止时间")
-		return result, nil
-	}
-
-	tradingDays, benchmarkSeries, err := loadYieldDailyOverviewTradingDays(startDay, endDay)
-	if err != nil {
-		return nil, err
-	}
-	if len(tradingDays) == 0 {
-		result.SkippedRecordCount = result.TotalRecordCount
-		result.Warnings = append(result.Warnings, "当前窗口没有可用交易日，无法生成收益走势")
-		return result, nil
-	}
-
-	priceSeriesMap, missingCodes, err := loadYieldDailyOverviewPriceSeries(entries, tradingDays)
-	if err != nil {
-		return nil, err
-	}
-
-	filteredEntries := make([]yieldDailyOverviewEntry, 0, len(entries))
-	for _, entry := range entries {
-		if _, ok := priceSeriesMap[entry.StockCode]; !ok {
-			continue
-		}
-		filteredEntries = append(filteredEntries, entry)
-	}
-	if len(missingCodes) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 只股票缺少日线数据，已从全库走势中跳过：%s", len(missingCodes), strings.Join(missingCodes, "、")))
-	}
-	if len(filteredEntries) == 0 {
-		result.SkippedRecordCount = result.TotalRecordCount
-		result.Warnings = append(result.Warnings, "全部候选股票都缺少可用日线数据")
-		return result, nil
-	}
-
-	points := buildYieldDailyOverviewPoints(filteredEntries, tradingDays, priceSeriesMap, benchmarkSeries)
-	if len(points) == 0 {
-		result.SkippedRecordCount = result.TotalRecordCount
-		result.Warnings = append(result.Warnings, "未能生成有效的按交易日收益点位")
-		return result, nil
-	}
-
-	result.RangeStart = points[0].TradeDate
-	result.RangeEnd = points[len(points)-1].TradeDate
-	result.DataAsOf = resolveYieldDailyOverviewDataAsOf(filteredEntries, result.RangeEnd)
-	result.IncludedRecordCount = len(filteredEntries)
-	result.SkippedRecordCount = result.TotalRecordCount - result.IncludedRecordCount
-	result.Points = points
-	return result, nil
-}
-
-func buildYieldDailyOverviewSignature() (string, error) {
-	type tableStamp struct {
-		Count int64
-		MaxAt time.Time
-	}
-
-	loadStamp := func(model any) (tableStamp, error) {
-		stamp := tableStamp{}
-		if err := db.Dao.Model(model).Count(&stamp.Count).Error; err != nil {
-			return stamp, err
-		}
-		var maxAtRaw sql.NullString
-		if err := db.Dao.Model(model).Select("MAX(updated_at)").Scan(&maxAtRaw).Error; err != nil {
-			return stamp, err
-		}
-		if ts, ok := parseYieldDailyOverviewTimestamp(maxAtRaw.String); ok {
-			stamp.MaxAt = ts
-		}
-		return stamp, nil
-	}
-
-	recordStamp, err := loadStamp(&models.AiRecommendYieldRecordState{})
-	if err != nil {
-		return "", err
-	}
-	recommendStamp, err := loadStamp(&models.AiRecommendStocks{})
-	if err != nil {
-		return "", err
-	}
-	overrideStamp, err := loadStamp(&models.AiRecommendYieldOverride{})
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf(
-		"record:%d:%d|recommend:%d:%d|override:%d:%d",
-		recordStamp.Count,
-		recordStamp.MaxAt.UnixNano(),
-		recommendStamp.Count,
-		recommendStamp.MaxAt.UnixNano(),
-		overrideStamp.Count,
-		overrideStamp.MaxAt.UnixNano(),
-	), nil
-}
-
-func loadYieldDailyOverviewCache(signature string) (*models.AiRecommendYieldDailyOverviewData, bool) {
-	aiRecommendYieldDailyOverviewCache.mu.RLock()
-	defer aiRecommendYieldDailyOverviewCache.mu.RUnlock()
-	if aiRecommendYieldDailyOverviewCache.signature != signature || aiRecommendYieldDailyOverviewCache.data == nil {
-		return nil, false
-	}
-	return cloneYieldDailyOverviewData(aiRecommendYieldDailyOverviewCache.data), true
-}
-
-func storeYieldDailyOverviewCache(signature string, data *models.AiRecommendYieldDailyOverviewData) {
-	aiRecommendYieldDailyOverviewCache.mu.Lock()
-	defer aiRecommendYieldDailyOverviewCache.mu.Unlock()
-	aiRecommendYieldDailyOverviewCache.signature = signature
-	aiRecommendYieldDailyOverviewCache.data = cloneYieldDailyOverviewData(data)
-}
-
-func cloneYieldDailyOverviewData(data *models.AiRecommendYieldDailyOverviewData) *models.AiRecommendYieldDailyOverviewData {
-	if data == nil {
-		return nil
-	}
-	cloned := *data
-	if data.Warnings != nil {
-		cloned.Warnings = append([]string(nil), data.Warnings...)
-	}
-	if data.Points != nil {
-		cloned.Points = append([]models.AiRecommendYieldDailyOverviewPoint(nil), data.Points...)
-	}
-	return &cloned
-}
-
-func buildYieldDailyOverviewEntry(item models.AiRecommendStocksYieldItem) (yieldDailyOverviewEntry, bool) {
-	if strings.TrimSpace(item.BacktestEligibility) != "" && strings.TrimSpace(item.BacktestEligibility) != recommendBacktestEligible {
-		return yieldDailyOverviewEntry{}, false
-	}
-	if strings.TrimSpace(item.ActivationStatus) != "activated" {
-		return yieldDailyOverviewEntry{}, false
-	}
-	if item.BuyAmount <= 0 {
-		return yieldDailyOverviewEntry{}, false
-	}
-
-	buyTime, ok := resolveYieldDailyOverviewBuyTime(item)
-	if !ok {
-		return yieldDailyOverviewEntry{}, false
-	}
-	market := resolveTradingMarket(item.StockCode)
-	buyCost := calcBuyTradeCost(item.BuyAmount, market)
-	if buyCost.NetAmount <= 0 {
-		return yieldDailyOverviewEntry{}, false
-	}
-
-	entry := yieldDailyOverviewEntry{
-		RecommendID:      item.RecommendID,
-		StockCode:        normalizeRecommendStockCode(item.StockCode),
-		StockName:        strings.TrimSpace(item.StockName),
-		BuyTime:          buyTime,
-		BuyDay:           normalizeYieldOverviewTradeDay(buyTime),
-		BuyAmount:        round2(item.BuyAmount),
-		CurrentPrice:     round2(item.CurrentPrice),
-		BuyCostNet:       round2(buyCost.NetAmount),
-		CurrentPriceTime: strings.TrimSpace(item.CurrentPriceTime),
-		SellTime:         strings.TrimSpace(item.SellTime),
-	}
-
-	if item.SellAmount != nil && *item.SellAmount > 0 {
-		entry.SellAmount = round2(*item.SellAmount)
-		entry.HasSellAmount = true
-		sellNet := calcSellTradeCost(item.BuyAmount, *item.SellAmount, market)
-		entry.RealizedValueNet = round2(sellNet.NetAmount)
-		if sellTime, ok := parseYieldOverviewDisplayTime(item.SellTime); ok {
-			entry.SellDay = normalizeYieldOverviewTradeDay(sellTime)
-		}
-	}
-	if currentTime, ok := parseYieldOverviewDisplayTime(item.CurrentPriceTime); ok {
-		entry.CurrentDay = normalizeYieldOverviewTradeDay(currentTime)
-	}
-	if entry.CurrentDay.IsZero() {
-		entry.CurrentDay = normalizeYieldOverviewTradeDay(timeNow().In(cnLocation()))
-	}
-	if !entry.HasSellAmount && entry.CurrentPrice <= 0 {
-		entry.CurrentPrice = entry.BuyAmount
-	}
-	if !entry.SellDay.IsZero() && entry.SellDay.Before(entry.BuyDay) {
-		return yieldDailyOverviewEntry{}, false
-	}
-	if entry.StockCode == "" {
-		return yieldDailyOverviewEntry{}, false
-	}
-	return entry, true
-}
-
-func resolveYieldDailyOverviewBuyTime(item models.AiRecommendStocksYieldItem) (time.Time, bool) {
-	if buyTime, ok := parseYieldOverviewDisplayTime(item.BuyTime); ok {
-		return buyTime, true
-	}
-	if buyTime, ok := parseYieldOverviewDisplayTime(item.ActivationTime); ok {
-		return buyTime, true
-	}
-	return parseYieldOverviewDisplayTime(item.SignalTime)
-}
-
-func resolveYieldDailyOverviewWindow(entries []yieldDailyOverviewEntry) (time.Time, time.Time, bool) {
-	if len(entries) == 0 {
-		return time.Time{}, time.Time{}, false
-	}
-	var startDay time.Time
-	var endDay time.Time
-	for _, entry := range entries {
-		if startDay.IsZero() || entry.BuyDay.Before(startDay) {
-			startDay = entry.BuyDay
-		}
-		candidate := entry.CurrentDay
-		if entry.HasSellAmount && !entry.SellDay.IsZero() {
-			candidate = entry.SellDay
-		}
-		if candidate.IsZero() {
-			candidate = entry.BuyDay
-		}
-		if endDay.IsZero() || candidate.After(endDay) {
-			endDay = candidate
-		}
-	}
-	if startDay.IsZero() || endDay.IsZero() || endDay.Before(startDay) {
-		return time.Time{}, time.Time{}, false
-	}
-	return startDay, endDay, true
-}
-
-func loadYieldDailyOverviewTradingDays(startDay, endDay time.Time) ([]time.Time, *yieldDailyOverviewPriceSeries, error) {
-	klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
-	kLines := NewStockDataApi().GetKLineData(defaultBenchmarkCode, "240", klineDays)
-	if kLines == nil || len(*kLines) == 0 {
-		return nil, nil, errors.New("读取沪深300日线失败")
-	}
-
-	loc := cnLocation()
-	days := make([]time.Time, 0, len(*kLines))
-	rawCloseByDay := make(map[string]float64, len(*kLines))
-	for _, line := range *kLines {
-		day, ok := parseYieldOverviewTradeDay(line.Day)
-		if !ok || day.Before(startDay) || day.After(endDay) {
-			continue
-		}
-		days = append(days, day)
-		closePrice, err := strconv.ParseFloat(strings.TrimSpace(line.Close), 64)
-		if err == nil && closePrice > 0 {
-			rawCloseByDay[day.Format("2006-01-02")] = round2(closePrice)
-		}
-	}
-	if len(days) == 0 {
-		return nil, nil, nil
-	}
-
-	lastDay := days[len(days)-1]
-	if endDay.After(lastDay) && endDay.Weekday() != time.Saturday && endDay.Weekday() != time.Sunday {
-		endCandidate := time.Date(endDay.In(loc).Year(), endDay.In(loc).Month(), endDay.In(loc).Day(), 0, 0, 0, 0, loc)
-		if endCandidate.After(lastDay) {
-			days = append(days, endCandidate)
-		}
-	}
-	closeByDay := make(map[string]float64, len(days))
-	lastClose := 0.0
-	for _, day := range days {
-		key := day.Format("2006-01-02")
-		if closePrice, ok := rawCloseByDay[key]; ok && closePrice > 0 {
-			lastClose = closePrice
-		}
-		if lastClose > 0 {
-			closeByDay[key] = round2(lastClose)
-		}
-	}
-	return days, &yieldDailyOverviewPriceSeries{
-		Code:       defaultBenchmarkModelCode,
-		CloseByDay: closeByDay,
-	}, nil
-}
-
-func loadYieldDailyOverviewPriceSeries(
-	entries []yieldDailyOverviewEntry,
-	tradingDays []time.Time,
-) (map[string]*yieldDailyOverviewPriceSeries, []string, error) {
-	codeSet := make(map[string]struct{}, len(entries))
-	codes := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		if entry.StockCode == "" {
-			continue
-		}
-		if _, exists := codeSet[entry.StockCode]; exists {
-			continue
-		}
-		codeSet[entry.StockCode] = struct{}{}
-		codes = append(codes, entry.StockCode)
-	}
-	sort.Strings(codes)
-
-	priceSeriesMap := make(map[string]*yieldDailyOverviewPriceSeries, len(codes))
-	missingCodes := make([]string, 0)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-	errCh := make(chan error, 1)
-	sem := make(chan struct{}, 6)
-	startDay := tradingDays[0]
-	endDay := tradingDays[len(tradingDays)-1]
-
-	for _, code := range codes {
-		wg.Add(1)
-		go func(stockCode string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-
-			series, err := loadYieldDailyOverviewPriceSeriesByCode(stockCode, startDay, endDay, tradingDays)
-			if err != nil {
-				select {
-				case errCh <- err:
-				default:
-				}
-				return
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if series == nil {
-				missingCodes = append(missingCodes, stockCode)
-				return
-			}
-			priceSeriesMap[stockCode] = series
-		}(code)
-	}
-	wg.Wait()
-
-	select {
-	case err := <-errCh:
-		return nil, nil, err
-	default:
-	}
-
-	sort.Strings(missingCodes)
-	return priceSeriesMap, missingCodes, nil
-}
-
-func loadYieldDailyOverviewPriceSeriesByCode(
-	stockCode string,
-	startDay time.Time,
-	endDay time.Time,
-	tradingDays []time.Time,
-) (*yieldDailyOverviewPriceSeries, error) {
-	quoteCode := toQuoteCode(stockCode)
-	if quoteCode == "" {
-		return nil, nil
-	}
-
-	klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
-	kLines := NewStockDataApi().GetKLineData(quoteCode, "240", klineDays)
-	if kLines == nil || len(*kLines) == 0 {
-		return nil, nil
-	}
-
-	rawCloseByDay := make(map[string]float64, len(*kLines))
-	for _, line := range *kLines {
-		day, ok := parseYieldOverviewTradeDay(line.Day)
-		if !ok || day.Before(startDay) || day.After(endDay) {
-			continue
-		}
-		closePrice, err := strconv.ParseFloat(strings.TrimSpace(line.Close), 64)
-		if err != nil || closePrice <= 0 {
-			continue
-		}
-		rawCloseByDay[day.Format("2006-01-02")] = round2(closePrice)
-	}
-	if len(rawCloseByDay) == 0 {
-		return nil, nil
-	}
-
-	closeByDay := make(map[string]float64, len(tradingDays))
-	lastClose := 0.0
-	for _, day := range tradingDays {
-		key := day.Format("2006-01-02")
-		if closePrice, ok := rawCloseByDay[key]; ok && closePrice > 0 {
-			lastClose = closePrice
-		}
-		if lastClose > 0 {
-			closeByDay[key] = round2(lastClose)
-		}
-	}
-	if len(closeByDay) == 0 {
-		return nil, nil
-	}
-	return &yieldDailyOverviewPriceSeries{
-		Code:       stockCode,
-		CloseByDay: closeByDay,
-	}, nil
-}
-
-func buildYieldDailyOverviewPoints(
-	entries []yieldDailyOverviewEntry,
-	tradingDays []time.Time,
-	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
-	benchmarkSeries *yieldDailyOverviewPriceSeries,
-) []models.AiRecommendYieldDailyOverviewPoint {
-	var benchmarkMatchedSeries *benchmarkDailySeries
-	if benchmarkSeries != nil {
-		if series, _, _, _, _, _, _, _, ok := calculateCashflowMatchedBenchmark(entries, tradingDays, benchmarkSeries); ok {
-			benchmarkMatchedSeries = series
-		}
-	}
-	points := make([]models.AiRecommendYieldDailyOverviewPoint, 0, len(tradingDays))
-	prevCumulativeAmount := 0.0
-	strategyNav := 1.0
-	for _, tradeDay := range tradingDays {
-		tradeDate := tradeDay.Format("2006-01-02")
-		costBasisNet := 0.0
-		dailyHoldingCostNet := 0.0
-		cumulativeAmount := 0.0
-		holdingCount := 0
-		for _, entry := range entries {
-			if tradeDay.Before(entry.BuyDay) {
-				continue
-			}
-			series := priceSeriesMap[entry.StockCode]
-			if series == nil {
-				continue
-			}
-			valueNet, holding, ok := resolveYieldDailyOverviewNetValue(entry, tradeDate, tradeDay, series)
-			if !ok {
-				continue
-			}
-			costBasisNet += entry.BuyCostNet
-			cumulativeAmount += valueNet - entry.BuyCostNet
-			if shouldIncludeYieldDailyOverviewEntryInDailyCost(entry, tradeDay) {
-				dailyHoldingCostNet += entry.BuyCostNet
-			}
-			if holding {
-				holdingCount += 1
-			}
-		}
-
-		dailyAmount := cumulativeAmount - prevCumulativeAmount
-		cumulativeYieldRate := 0.0
-		dailyYieldRate := 0.0
-		if costBasisNet > 0 {
-			cumulativeYieldRate = round2(cumulativeAmount / costBasisNet * 100)
-		}
-		if dailyHoldingCostNet > 0 {
-			dailyYieldRate = round2(dailyAmount / dailyHoldingCostNet * 100)
-			strategyNav = round4(strategyNav * (1 + dailyYieldRate/100))
-		}
-		benchmarkClose := 0.0
-		benchmarkCumulativeAmount := 0.0
-		benchmarkDailyAmount := 0.0
-		benchmarkCumulativeRate := 0.0
-		benchmarkDailyRate := 0.0
-		benchmarkNav := 1.0
-		if benchmarkMatchedSeries != nil {
-			benchmarkClose = round2(benchmarkSeries.CloseByDay[tradeDate])
-			benchmarkCumulativeAmount = round2(benchmarkMatchedSeries.CumulativeAmountByDay[tradeDate])
-			benchmarkDailyAmount = round2(benchmarkMatchedSeries.DailyAmountByDay[tradeDate])
-			benchmarkCumulativeRate = round2(benchmarkMatchedSeries.CumulativeRateByDay[tradeDate])
-			benchmarkDailyRate = round2(benchmarkMatchedSeries.DailyRateByDay[tradeDate])
-			benchmarkNav = round4(benchmarkMatchedSeries.NavByDay[tradeDate])
-		}
-		excessCumulativeAmount := round2(cumulativeAmount - benchmarkCumulativeAmount)
-		excessDailyAmount := round2(dailyAmount - benchmarkDailyAmount)
-		excessCumulativeRate := round2(cumulativeYieldRate - benchmarkCumulativeRate)
-		excessDailyRate := round2(dailyYieldRate - benchmarkDailyRate)
-		points = append(points, models.AiRecommendYieldDailyOverviewPoint{
-			TradeDate:                      tradeDate,
-			CostBasisNet:                   round2(costBasisNet),
-			DailyHoldingCostNet:            round2(dailyHoldingCostNet),
-			HoldingCount:                   holdingCount,
-			CumulativeAmountChange:         round2(cumulativeAmount),
-			CumulativeYieldRate:            cumulativeYieldRate,
-			DailyAmountChange:              round2(dailyAmount),
-			DailyYieldRate:                 dailyYieldRate,
-			BenchmarkClose:                 benchmarkClose,
-			BenchmarkCumulativeAmountChange: benchmarkCumulativeAmount,
-			BenchmarkDailyAmountChange:     benchmarkDailyAmount,
-			BenchmarkCumulativeRate:        benchmarkCumulativeRate,
-			BenchmarkDailyRate:             benchmarkDailyRate,
-			ExcessCumulativeAmountChange:   excessCumulativeAmount,
-			ExcessDailyAmountChange:        excessDailyAmount,
-			ExcessCumulativeRate:           excessCumulativeRate,
-			ExcessDailyRate:                excessDailyRate,
-			StrategyNav:                    round4(strategyNav),
-			BenchmarkNav:                   benchmarkNav,
-		})
-		prevCumulativeAmount = cumulativeAmount
-	}
-	return points
-}
-
-func shouldIncludeYieldDailyOverviewEntryInDailyCost(entry yieldDailyOverviewEntry, tradeDay time.Time) bool {
-	if tradeDay.Before(entry.BuyDay) {
-		return false
-	}
-	if !entry.SellDay.IsZero() && entry.SellDay.Before(tradeDay) {
-		return false
-	}
-	return entry.BuyCostNet > 0
-}
-
-func resolveYieldDailyOverviewNetValue(
-	entry yieldDailyOverviewEntry,
-	tradeDate string,
-	tradeDay time.Time,
-	series *yieldDailyOverviewPriceSeries,
-) (float64, bool, bool) {
-	if entry.HasSellAmount && !entry.SellDay.IsZero() && !tradeDay.Before(entry.SellDay) {
-		return entry.RealizedValueNet, false, entry.RealizedValueNet > 0
-	}
-
-	price := 0.0
-	if !entry.CurrentDay.IsZero() && tradeDay.Equal(entry.CurrentDay) && entry.CurrentPrice > 0 {
-		price = entry.CurrentPrice
-	}
-	if price <= 0 {
-		price = series.CloseByDay[tradeDate]
-	}
-	if price <= 0 {
-		price = entry.BuyAmount
-	}
-	sellNet := calcSellTradeCost(entry.BuyAmount, price, resolveTradingMarket(entry.StockCode))
-	if sellNet.NetAmount <= 0 {
-		return 0, false, false
-	}
-	holding := entry.SellDay.IsZero() || tradeDay.Before(entry.SellDay)
-	return round2(sellNet.NetAmount), holding, true
-}
-
-func resolveYieldDailyOverviewDataAsOf(entries []yieldDailyOverviewEntry, rangeEnd string) string {
-	var latest time.Time
-	for _, entry := range entries {
-		if ts, ok := parseYieldOverviewDisplayTime(entry.CurrentPriceTime); ok && ts.After(latest) {
-			latest = ts
-		}
-		if ts, ok := parseYieldOverviewDisplayTime(entry.SellTime); ok && ts.After(latest) {
-			latest = ts
-		}
-	}
-	if !latest.IsZero() {
-		return latest.In(cnLocation()).Format("2006-01-02 15:04:05")
-	}
-	if strings.TrimSpace(rangeEnd) == "" {
-		return ""
-	}
-	return strings.TrimSpace(rangeEnd) + " 15:00:00"
-}
-
-func estimateYieldDailyOverviewKlineDays(startDay, endDay time.Time) int64 {
-	if startDay.IsZero() || endDay.IsZero() || endDay.Before(startDay) {
-		return 90
-	}
-	diffDays := int(endDay.Sub(startDay).Hours()/24) + 1
-	if diffDays < 30 {
-		diffDays = 30
-	}
-	return int64(diffDays + 20)
-}
-
-func parseYieldOverviewDisplayTime(raw string) (time.Time, bool) {
-	return parseYieldReplayTime(raw)
-}
-
-func parseYieldOverviewTradeDay(raw string) (time.Time, bool) {
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return time.Time{}, false
-	}
-	t, err := time.ParseInLocation("2006-01-02", text, cnLocation())
-	if err != nil {
-		return time.Time{}, false
-	}
-	return normalizeYieldOverviewTradeDay(t), true
-}
-
-func parseYieldDailyOverviewTimestamp(raw string) (time.Time, bool) {
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return time.Time{}, false
-	}
-	layouts := []string{
-		time.RFC3339Nano,
-		"2006-01-02 15:04:05.999999999-07:00",
-		"2006-01-02 15:04:05.999999999Z07:00",
-		"2006-01-02 15:04:05.999999999",
-		"2006-01-02 15:04:05",
-	}
-	for _, layout := range layouts {
-		if ts, err := time.Parse(layout, text); err == nil {
-			return ts, true
-		}
-		if ts, err := time.ParseInLocation(layout, text, cnLocation()); err == nil {
-			return ts, true
-		}
-	}
-	return time.Time{}, false
-}
-
-func normalizeYieldOverviewTradeDay(ts time.Time) time.Time {
-	loc := cnLocation()
-	at := ts.In(loc)
-	return time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, loc)
-}
-
-func resolveYieldReplaySignalTime(rec models.AiRecommendStocks, state *models.AiRecommendYieldRecordState) time.Time {
-	if state != nil && state.SignalTime != nil && !state.SignalTime.IsZero() {
-		return state.SignalTime.In(cnLocation())
-	}
-	return recommendRecordTime(rec)
-}
-
-func resolveYieldReplayRangeEnd(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) (time.Time, string) {
-	if state != nil && state.SellTime != nil && !state.SellTime.IsZero() {
-		return state.SellTime.In(cnLocation()), ""
-	}
-	if sellAt, ok := parseYieldReplayTime(item.SellTime); ok {
-		return sellAt, ""
-	}
-
-	positionStatus := strings.TrimSpace(item.PositionStatus)
-	sellTimeText := strings.TrimSpace(item.SellTime)
-	if positionStatus == "持有" || sellTimeText == "持有" {
-		if currentAt, ok := resolveYieldReplayCurrentTime(item, state); ok {
-			return currentAt, ""
-		}
-		if state != nil && state.LastMinuteTs != nil && !state.LastMinuteTs.IsZero() {
-			return state.LastMinuteTs.In(cnLocation()), ""
-		}
-		return time.Time{}, "当前仍在持有，但缺少 currentPriceTime/LastMinuteTs，无法确定回放终点"
-	}
-
-	if currentAt, ok := resolveYieldReplayCurrentTime(item, state); ok && strings.TrimSpace(item.ActivationStatus) == "activated" {
-		return currentAt, ""
-	}
-
-	return time.Time{}, "该记录未形成可回放终点"
-}
-
-func isYieldReplayHolding(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) bool {
-	if state != nil {
-		if strings.TrimSpace(state.PositionStatus) == "持有" && (state.SellTime == nil || state.SellTime.IsZero()) {
-			return true
-		}
-	}
-	positionStatus := strings.TrimSpace(item.PositionStatus)
-	sellTimeText := strings.TrimSpace(item.SellTime)
-	return positionStatus == "持有" || sellTimeText == "持有"
-}
-
-func resolveYieldReplayCurrentTime(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) (time.Time, bool) {
-	if state != nil {
-		if currentAt, ok := parseYieldReplayTime(state.CurrentPriceTime); ok {
-			return normalizeMinuteCoverageEnd(currentAt), true
-		}
-	}
-	if currentAt, ok := parseYieldReplayTime(item.CurrentPriceTime); ok {
-		return normalizeMinuteCoverageEnd(currentAt), true
-	}
-	return time.Time{}, false
-}
-
-func parseYieldReplayTime(raw string) (time.Time, bool) {
-	text := strings.TrimSpace(raw)
-	if text == "" || text == "持有" || text == "待激活" || text == "已跳过" || text == "未纳入回测" || text == "无法回算" {
-		return time.Time{}, false
-	}
-	t, err := parseDateTimeWithFallback(normalizeDateTime(text))
-	if err != nil {
-		return time.Time{}, false
-	}
-	return t.In(cnLocation()), true
-}
-
-func buildYieldReplayBars(bars []minuteBar) []models.AiRecommendYieldMinuteBarDTO {
-	result := make([]models.AiRecommendYieldMinuteBarDTO, 0, len(bars))
-	for _, bar := range bars {
-		result = append(result, models.AiRecommendYieldMinuteBarDTO{
-			TradeTime: formatYieldDisplayTime(bar.TradeTime),
-			Open:      round2(bar.Open),
-			High:      round2(bar.High),
-			Low:       round2(bar.Low),
-			Close:     round2(bar.Close),
-			Volume:    bar.Volume,
-			Amount:    bar.Amount,
-		})
-	}
-	return result
-}
-
-func buildYieldReplayMarkers(
-	bars []minuteBar,
-	signalAt time.Time,
-	item models.AiRecommendStocksYieldItem,
-	state *models.AiRecommendYieldRecordState,
-) ([]models.AiRecommendYieldChartMarker, string, []string) {
-	markers := make([]models.AiRecommendYieldChartMarker, 0, 4)
-	messages := make([]string, 0, 4)
-	status := "ready"
-
-	appendMarker := func(markerType, label string, target time.Time, price float64) {
-		if target.IsZero() {
-			return
-		}
-		marker, ok, exact := locateYieldReplayMarker(bars, markerType, label, target, price)
-		if !ok {
-			if markerType != "signal" {
-				status = "partial"
-			}
-			appendYieldReplayMessage(&messages, label+"点未在分钟线中定位到")
-			return
-		}
-		if !exact {
-			if msg := buildYieldReplayMarkerApproxMessage(markerType, label, marker.Time); msg != "" {
-				appendYieldReplayMessage(&messages, msg)
-			}
-		}
-		markers = append(markers, marker)
-	}
-
-	appendMarker("signal", "信号", signalAt, 0)
-
-	if buyAt, ok := resolveYieldReplayBuyTime(item, state); ok {
-		appendMarker("buy", "买入", buyAt, resolveYieldReplayBuyPrice(item, state))
-	}
-
-	if sellAt, ok := resolveYieldReplaySellTime(item, state); ok {
-		appendMarker("sell", "卖出", sellAt, resolveYieldReplaySellPrice(item, state))
-	} else if currentAt, ok := resolveYieldReplayCurrentTime(item, state); ok && (strings.TrimSpace(item.PositionStatus) == "持有" || strings.TrimSpace(item.SellTime) == "持有") {
-		appendMarker("current", "当前", currentAt, resolveYieldReplayCurrentPrice(item, state))
-	}
-
-	return markers, status, messages
-}
-
-func resolveYieldReplayBuyTime(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) (time.Time, bool) {
-	if state != nil && state.BuyTime != nil && !state.BuyTime.IsZero() {
-		return state.BuyTime.In(cnLocation()), true
-	}
-	return parseYieldReplayTime(item.BuyTime)
-}
-
-func resolveYieldReplayBuyPrice(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) float64 {
-	if state != nil && state.BuyAmount > 0 {
-		return round2(state.BuyAmount)
-	}
-	if item.BuyAmount > 0 {
-		return round2(item.BuyAmount)
-	}
-	return 0
-}
-
-func resolveYieldReplaySellTime(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) (time.Time, bool) {
-	if state != nil && state.SellTime != nil && !state.SellTime.IsZero() {
-		return state.SellTime.In(cnLocation()), true
-	}
-	return parseYieldReplayTime(item.SellTime)
-}
-
-func resolveYieldReplaySellPrice(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) float64 {
-	if state != nil && state.RealizedSellAmount != nil && *state.RealizedSellAmount > 0 {
-		return round2(*state.RealizedSellAmount)
-	}
-	if item.SellAmount != nil && *item.SellAmount > 0 {
-		return round2(*item.SellAmount)
-	}
-	return 0
-}
-
-func resolveYieldReplayCurrentPrice(item models.AiRecommendStocksYieldItem, state *models.AiRecommendYieldRecordState) float64 {
-	if state != nil && state.CurrentPrice > 0 {
-		return round2(state.CurrentPrice)
-	}
-	if item.CurrentPrice > 0 {
-		return round2(item.CurrentPrice)
-	}
-	return 0
-}
-
-func locateYieldReplayMarker(bars []minuteBar, markerType, label string, target time.Time, preferredPrice float64) (models.AiRecommendYieldChartMarker, bool, bool) {
-	if len(bars) == 0 || target.IsZero() {
-		return models.AiRecommendYieldChartMarker{}, false, false
-	}
-	target = normalizeMinuteTime(target.In(cnLocation()))
-	for _, bar := range bars {
-		barTime := normalizeMinuteTime(bar.TradeTime.In(cnLocation()))
-		if barTime.Before(target) {
-			continue
-		}
-		price := round2(bar.Close)
-		if preferredPrice > 0 {
-			price = round2(preferredPrice)
-		}
-		return models.AiRecommendYieldChartMarker{
-			Type:   markerType,
-			Time:   formatYieldDisplayTime(bar.TradeTime),
-			Price:  price,
-			Label:  label,
-			Status: yieldReplayMarkerLocateStatus(barTime.Equal(target)),
-		}, true, barTime.Equal(target)
-	}
-	return models.AiRecommendYieldChartMarker{}, false, false
-}
-
-func yieldReplayMarkerLocateStatus(exact bool) string {
-	if exact {
-		return "exact"
-	}
-	return "approximated"
-}
-
-func buildYieldReplayMarkerApproxMessage(markerType, label, resolvedTime string) string {
-	if markerType == "signal" {
-		return ""
-	}
-	timeText := strings.TrimSpace(resolvedTime)
-	if timeText == "" {
-		return label + "点不在交易分钟，已顺延到下一根可用分钟线显示"
-	}
-	return fmt.Sprintf("%s点不在交易分钟，已对齐到 %s 显示", label, timeText)
-}
-
-func appendYieldReplayMessage(messages *[]string, raw string) {
-	text := strings.TrimSpace(raw)
-	if text == "" {
-		return
-	}
-	for _, msg := range *messages {
-		if msg == text {
-			return
-		}
-	}
-	*messages = append(*messages, text)
-}
-
-func replayChartStatusHint(dataStatus, dataStatusReason string) string {
-	status := strings.TrimSpace(dataStatus)
-	reason := strings.TrimSpace(dataStatusReason)
-	switch status {
-	case "待覆盖":
-		if reason != "" {
-			return reason
-		}
-		return "分钟线尚未完全覆盖该时间段"
-	case "不可覆盖", "无法判定":
-		if reason != "" {
-			return reason
-		}
-		return "当前分钟线无法完整覆盖该时间段"
-	default:
-		if status != "" && status != "正常" && status != "已跳过" && status != "未结构化" && reason != "" {
-			return reason
-		}
-	}
-	return ""
 }
 
 type minuteCoverageStats struct {
@@ -2919,6 +1560,7 @@ func normalizeMinuteCoverageEnd(t time.Time) time.Time {
 func listAiRecommendStocksForYield(query *models.AiRecommendStocksQuery, coverableStartMinute time.Time) ([]models.AiRecommendStocks, error) {
 	q := db.Dao.Model(&models.AiRecommendStocks{})
 	if query != nil {
+		q = applyStrategyCohortFilter(q, query.StrategyCohort)
 		if query.StockCode != "" {
 			q = q.Where("stock_code LIKE ?", "%"+query.StockCode+"%")
 		}
@@ -3971,15 +2613,15 @@ func calculateBenchmarkSummaryByItemsCore(items []models.AiRecommendStocksYieldI
 
 func defaultBenchmarkSummaryResult() benchmarkSummaryResult {
 	return benchmarkSummaryResult{
-		Code:                     defaultBenchmarkModelCode,
-		Name:                     defaultBenchmarkName,
-		RateText:                 "--",
-		ExcessYieldRateText:      "--",
-		StrategyXirrText:         "--",
-		BenchmarkXirrText:        "--",
-		ExcessXirrText:           "--",
-		MaxDrawdownText:          "--",
-		WinRateVsBenchmarkText:   "--",
+		Code:                      defaultBenchmarkModelCode,
+		Name:                      defaultBenchmarkName,
+		RateText:                  "--",
+		ExcessYieldRateText:       "--",
+		StrategyXirrText:          "--",
+		BenchmarkXirrText:         "--",
+		ExcessXirrText:            "--",
+		MaxDrawdownText:           "--",
+		WinRateVsBenchmarkText:    "--",
 		MedianExcessYieldRateText: "--",
 	}
 }
@@ -4665,7 +3307,6 @@ func calculateXirr(cashflows []xirrCashflow) (float64, bool) {
 		}
 		if lowValue*value < 0 {
 			high = mid
-			highValue = value
 		} else {
 			low = mid
 			lowValue = value
@@ -5013,6 +3654,10 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 	coverableStartMinute time.Time,
 ) (*models.AiRecommendStocksYieldPageData, error) {
 	_ = coverableStartMinute
+	strategyCohort := normalizeStrategyCohort("", strategyCohortCurrent)
+	if query != nil {
+		strategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
+	}
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
 	meta := models.AiRecommendYieldMeta{}
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -5024,37 +3669,38 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 	}
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
 	records = collapseRecommendRecordsSameDayByCode(records)
-		if len(records) == 0 {
-			stats := computeMinuteDownloadCoverageStats(nil)
-			return &models.AiRecommendStocksYieldPageData{
-				List:                      []models.AiRecommendStocksYieldItem{},
-				Total:                     0,
+	if len(records) == 0 {
+		stats := computeMinuteDownloadCoverageStats(nil)
+		return &models.AiRecommendStocksYieldPageData{
+			List:                      []models.AiRecommendStocksYieldItem{},
+			Total:                     0,
 			Page:                      page,
 			PageSize:                  pageSize,
-				TotalPages:                0,
-				TotalYieldRate:            0,
-				TotalYieldRateText:        "--",
-				BenchmarkCode:             defaultBenchmarkModelCode,
-				BenchmarkName:             defaultBenchmarkName,
-				BenchmarkRate:             0,
-				BenchmarkRateText:         "--",
-				ExcessYieldRate:           0,
-				ExcessYieldRateText:       "--",
-				StrategyXirr:              0,
-				StrategyXirrText:          "--",
-				BenchmarkXirr:             0,
-				BenchmarkXirrText:         "--",
-				ExcessXirr:                0,
-				ExcessXirrText:            "--",
-				MaxDrawdown:               0,
-				MaxDrawdownText:           "--",
-				WinRateVsBenchmark:        0,
-				WinRateVsBenchmarkText:    "--",
-				MedianExcessYieldRate:     0,
-				MedianExcessYieldRateText: "--",
-				DataAsOf:                  dataAsOf,
-				RecalcInProgress:          recalcInProgress,
-				RecalcProgress:            recalcProgress,
+			TotalPages:                0,
+			StrategyCohort:            strategyCohort,
+			TotalYieldRate:            0,
+			TotalYieldRateText:        "--",
+			BenchmarkCode:             defaultBenchmarkModelCode,
+			BenchmarkName:             defaultBenchmarkName,
+			BenchmarkRate:             0,
+			BenchmarkRateText:         "--",
+			ExcessYieldRate:           0,
+			ExcessYieldRateText:       "--",
+			StrategyXirr:              0,
+			StrategyXirrText:          "--",
+			BenchmarkXirr:             0,
+			BenchmarkXirrText:         "--",
+			ExcessXirr:                0,
+			ExcessXirrText:            "--",
+			MaxDrawdown:               0,
+			MaxDrawdownText:           "--",
+			WinRateVsBenchmark:        0,
+			WinRateVsBenchmarkText:    "--",
+			MedianExcessYieldRate:     0,
+			MedianExcessYieldRateText: "--",
+			DataAsOf:                  dataAsOf,
+			RecalcInProgress:          recalcInProgress,
+			RecalcProgress:            recalcProgress,
 			MinuteDownloadDone:        stats.Done,
 			MinuteDownloadTotal:       stats.Total,
 			MinuteDownloadPending:     stats.Pending,
@@ -5100,6 +3746,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		resultItems = append(resultItems, item)
 	}
 	applyRecommendRepeatCountByCodeMap(resultItems, rawRepeatCountMap)
+	diagnostics := calculateYieldDiagnosticSummary(records, resultItems)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(resultItems)
 	benchmarkSummary := calculateBenchmarkSummaryByItems(resultItems)
@@ -5120,52 +3767,139 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 
 	stats := computeMinuteDownloadCoverageStats(nil)
 	return &models.AiRecommendStocksYieldPageData{
-		List:                      resultItems[offset:end],
-		Total:                     total,
-		Page:                      page,
-		PageSize:                  pageSize,
-		TotalPages:                totalPages,
-		TotalYieldRate:            totalYieldRate,
-		TotalYieldRateText:        totalYieldRateText,
-		BenchmarkCode:             benchmarkSummary.Code,
-		BenchmarkName:             benchmarkSummary.Name,
-		BenchmarkRate:             benchmarkSummary.Rate,
-		BenchmarkRateText:         benchmarkSummary.RateText,
-		ExcessYieldRate:           benchmarkSummary.ExcessYieldRate,
-		ExcessYieldRateText:       benchmarkSummary.ExcessYieldRateText,
-		StrategyXirr:              benchmarkSummary.StrategyXirr,
-		StrategyXirrText:          benchmarkSummary.StrategyXirrText,
-		BenchmarkXirr:             benchmarkSummary.BenchmarkXirr,
-		BenchmarkXirrText:         benchmarkSummary.BenchmarkXirrText,
-		ExcessXirr:                benchmarkSummary.ExcessXirr,
-		ExcessXirrText:            benchmarkSummary.ExcessXirrText,
-		MaxDrawdown:               benchmarkSummary.MaxDrawdown,
-		MaxDrawdownText:           benchmarkSummary.MaxDrawdownText,
-		WinRateVsBenchmark:        benchmarkSummary.WinRateVsBenchmark,
-		WinRateVsBenchmarkText:    benchmarkSummary.WinRateVsBenchmarkText,
-		MedianExcessYieldRate:     benchmarkSummary.MedianExcessYieldRate,
-		MedianExcessYieldRateText: benchmarkSummary.MedianExcessYieldRateText,
-		DataAsOf:                  dataAsOf,
-		RecalcInProgress:          true,
-		RecalcProgress:            recalcProgress,
-		MinuteDownloadDone:        stats.Done,
-		MinuteDownloadTotal:       stats.Total,
-		MinuteDownloadPending:     stats.Pending,
-		MinuteDownloadUncoverable: stats.Uncoverable,
-		ManualCooldownUntil:       manualCooldownUntil,
-		ManualCooldownRemainSec:   manualCooldownRemainSec,
-		LastManualStartedAt:       formatOptionalYieldMetaTime(meta.LastManualDownloadAt),
-		LastManualFinishedAt:      formatOptionalYieldMetaTime(meta.LastManualFinishedAt),
-		LastManualScopeCount:      meta.LastManualScopeCount,
-		LastManualPrefetchMs:      meta.LastManualPrefetchMs,
-		LastManualRecalcMs:        meta.LastManualRecalcMs,
-		LastManualTotalMs:         meta.LastManualTotalMs,
-		LastManualSqliteBusyCount: meta.LastManualSqliteBusyCount,
-		LastManualProviderSummary: strings.TrimSpace(meta.LastManualProviderSummary),
-		DiemengHealthStatus:       diemengHealthStatus,
-		DiemengHealthSummary:      diemengHealthSummary,
-		DiemengHealthCheckedAt:    diemengHealthCheckedAt,
+		List:                       resultItems[offset:end],
+		Total:                      total,
+		Page:                       page,
+		PageSize:                   pageSize,
+		TotalPages:                 totalPages,
+		StrategyCohort:             strategyCohort,
+		TotalYieldRate:             totalYieldRate,
+		TotalYieldRateText:         totalYieldRateText,
+		BenchmarkCode:              benchmarkSummary.Code,
+		BenchmarkName:              benchmarkSummary.Name,
+		BenchmarkRate:              benchmarkSummary.Rate,
+		BenchmarkRateText:          benchmarkSummary.RateText,
+		ExcessYieldRate:            benchmarkSummary.ExcessYieldRate,
+		ExcessYieldRateText:        benchmarkSummary.ExcessYieldRateText,
+		StrategyXirr:               benchmarkSummary.StrategyXirr,
+		StrategyXirrText:           benchmarkSummary.StrategyXirrText,
+		BenchmarkXirr:              benchmarkSummary.BenchmarkXirr,
+		BenchmarkXirrText:          benchmarkSummary.BenchmarkXirrText,
+		ExcessXirr:                 benchmarkSummary.ExcessXirr,
+		ExcessXirrText:             benchmarkSummary.ExcessXirrText,
+		MaxDrawdown:                benchmarkSummary.MaxDrawdown,
+		MaxDrawdownText:            benchmarkSummary.MaxDrawdownText,
+		WinRateVsBenchmark:         benchmarkSummary.WinRateVsBenchmark,
+		WinRateVsBenchmarkText:     benchmarkSummary.WinRateVsBenchmarkText,
+		MedianExcessYieldRate:      benchmarkSummary.MedianExcessYieldRate,
+		MedianExcessYieldRateText:  benchmarkSummary.MedianExcessYieldRateText,
+		SameDayActivationRate:      diagnostics.SameDayActivationRate,
+		SameDayActivationRateText:  diagnostics.SameDayActivationRateText,
+		StaleActivationRate:        diagnostics.StaleActivationRate,
+		StaleActivationRateText:    diagnostics.StaleActivationRateText,
+		StructuredRuleCoverage:     diagnostics.StructuredRuleCoverage,
+		StructuredRuleCoverageText: diagnostics.StructuredRuleCoverageText,
+		AnalysisOnlyRate:           diagnostics.AnalysisOnlyRate,
+		AnalysisOnlyRateText:       diagnostics.AnalysisOnlyRateText,
+		StopLossCount:              diagnostics.StopLossCount,
+		TakeProfitCount:            diagnostics.TakeProfitCount,
+		OpenCount:                  diagnostics.OpenCount,
+		DataAsOf:                   dataAsOf,
+		RecalcInProgress:           true,
+		RecalcProgress:             recalcProgress,
+		MinuteDownloadDone:         stats.Done,
+		MinuteDownloadTotal:        stats.Total,
+		MinuteDownloadPending:      stats.Pending,
+		MinuteDownloadUncoverable:  stats.Uncoverable,
+		ManualCooldownUntil:        manualCooldownUntil,
+		ManualCooldownRemainSec:    manualCooldownRemainSec,
+		LastManualStartedAt:        formatOptionalYieldMetaTime(meta.LastManualDownloadAt),
+		LastManualFinishedAt:       formatOptionalYieldMetaTime(meta.LastManualFinishedAt),
+		LastManualScopeCount:       meta.LastManualScopeCount,
+		LastManualPrefetchMs:       meta.LastManualPrefetchMs,
+		LastManualRecalcMs:         meta.LastManualRecalcMs,
+		LastManualTotalMs:          meta.LastManualTotalMs,
+		LastManualSqliteBusyCount:  meta.LastManualSqliteBusyCount,
+		LastManualProviderSummary:  strings.TrimSpace(meta.LastManualProviderSummary),
+		DiemengHealthStatus:        diemengHealthStatus,
+		DiemengHealthSummary:       diemengHealthSummary,
+		DiemengHealthCheckedAt:     diemengHealthCheckedAt,
 	}, nil
+}
+
+type yieldDiagnosticSummary struct {
+	SameDayActivationRate      float64
+	SameDayActivationRateText  string
+	StaleActivationRate        float64
+	StaleActivationRateText    string
+	StructuredRuleCoverage     float64
+	StructuredRuleCoverageText string
+	AnalysisOnlyRate           float64
+	AnalysisOnlyRateText       string
+	StopLossCount              int
+	TakeProfitCount            int
+	OpenCount                  int
+}
+
+func calculateYieldDiagnosticSummary(records []models.AiRecommendStocks, items []models.AiRecommendStocksYieldItem) yieldDiagnosticSummary {
+	result := yieldDiagnosticSummary{
+		SameDayActivationRateText:  "--",
+		StaleActivationRateText:    "--",
+		StructuredRuleCoverageText: "--",
+		AnalysisOnlyRateText:       "--",
+	}
+	if len(records) > 0 {
+		structuredCount := 0
+		analysisOnlyCount := 0
+		for idx := range records {
+			if strings.TrimSpace(records[idx].ActivationRuleJSON) != "" {
+				structuredCount++
+			}
+			if isAnalysisOnlyRecommend(&records[idx]) {
+				analysisOnlyCount++
+			}
+		}
+		result.StructuredRuleCoverage = round2(float64(structuredCount) * 100 / float64(len(records)))
+		result.StructuredRuleCoverageText = formatSignedPercent(result.StructuredRuleCoverage)
+		result.AnalysisOnlyRate = round2(float64(analysisOnlyCount) * 100 / float64(len(records)))
+		result.AnalysisOnlyRateText = formatSignedPercent(result.AnalysisOnlyRate)
+	}
+
+	activatedCount := 0
+	sameDayCount := 0
+	for _, item := range items {
+		if strings.TrimSpace(item.ActivationStatus) != "activated" {
+			continue
+		}
+		activatedCount++
+		switch strings.TrimSpace(item.PositionStatus) {
+		case "已止损":
+			result.StopLossCount++
+		case "已止盈":
+			result.TakeProfitCount++
+		default:
+			result.OpenCount++
+		}
+
+		signalRaw := strings.TrimSpace(firstNonEmptyText(item.SignalTime, item.RecommendTime))
+		activationRaw := strings.TrimSpace(item.ActivationTime)
+		if signalRaw == "" || activationRaw == "" {
+			continue
+		}
+		signalTime, signalErr := parseDateTimeWithFallback(normalizeDateTime(signalRaw))
+		activationTime, activationErr := parseDateTimeWithFallback(normalizeDateTime(activationRaw))
+		if signalErr == nil && activationErr == nil && isSameCNTradeDate(signalTime, activationTime) {
+			sameDayCount++
+		}
+	}
+	if activatedCount > 0 {
+		result.SameDayActivationRate = round2(float64(sameDayCount) * 100 / float64(activatedCount))
+		result.SameDayActivationRateText = formatSignedPercent(result.SameDayActivationRate)
+		result.StaleActivationRate = round2(float64(activatedCount-sameDayCount) * 100 / float64(activatedCount))
+		result.StaleActivationRateText = formatSignedPercent(result.StaleActivationRate)
+	}
+
+	return result
 }
 
 func (s *AiRecommendStocksService) buildFastYieldPage(
@@ -5185,6 +3919,10 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
 	rawRepeatCountMap map[string]int,
 ) (*models.AiRecommendStocksYieldPageData, error) {
+	strategyCohort := normalizeStrategyCohort("", strategyCohortCurrent)
+	if query != nil {
+		strategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
+	}
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
 	meta := models.AiRecommendYieldMeta{}
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -5209,6 +3947,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		items = append(items, item)
 	}
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
+	diagnostics := calculateYieldDiagnosticSummary(records, items)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
 	benchmarkSummary := calculateBenchmarkSummaryByItems(items)
@@ -5227,52 +3966,64 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 	}
 
 	return &models.AiRecommendStocksYieldPageData{
-		List:                      items[offset:end],
-		Total:                     total,
-		Page:                      page,
-		PageSize:                  pageSize,
-		TotalPages:                totalPages,
-		CalcMode:                  aiRecommendYieldModeFast,
-		TotalYieldRate:            totalYieldRate,
-		TotalYieldRateText:        totalYieldRateText,
-		BenchmarkCode:             benchmarkSummary.Code,
-		BenchmarkName:             benchmarkSummary.Name,
-		BenchmarkRate:             benchmarkSummary.Rate,
-		BenchmarkRateText:         benchmarkSummary.RateText,
-		ExcessYieldRate:           benchmarkSummary.ExcessYieldRate,
-		ExcessYieldRateText:       benchmarkSummary.ExcessYieldRateText,
-		StrategyXirr:              benchmarkSummary.StrategyXirr,
-		StrategyXirrText:          benchmarkSummary.StrategyXirrText,
-		BenchmarkXirr:             benchmarkSummary.BenchmarkXirr,
-		BenchmarkXirrText:         benchmarkSummary.BenchmarkXirrText,
-		ExcessXirr:                benchmarkSummary.ExcessXirr,
-		ExcessXirrText:            benchmarkSummary.ExcessXirrText,
-		MaxDrawdown:               benchmarkSummary.MaxDrawdown,
-		MaxDrawdownText:           benchmarkSummary.MaxDrawdownText,
-		WinRateVsBenchmark:        benchmarkSummary.WinRateVsBenchmark,
-		WinRateVsBenchmarkText:    benchmarkSummary.WinRateVsBenchmarkText,
-		MedianExcessYieldRate:     benchmarkSummary.MedianExcessYieldRate,
-		MedianExcessYieldRateText: benchmarkSummary.MedianExcessYieldRateText,
-		DataAsOf:                  dataAsOf,
-		RecalcInProgress:          recalcInProgress,
-		RecalcProgress:            recalcProgress,
-		MinuteDownloadDone:        minuteDone,
-		MinuteDownloadTotal:       minuteTotal,
-		MinuteDownloadPending:     minutePending,
-		MinuteDownloadUncoverable: minuteUncoverable,
-		ManualCooldownUntil:       manualCooldownUntil,
-		ManualCooldownRemainSec:   manualCooldownRemainSec,
-		LastManualStartedAt:       formatOptionalYieldMetaTime(meta.LastManualDownloadAt),
-		LastManualFinishedAt:      formatOptionalYieldMetaTime(meta.LastManualFinishedAt),
-		LastManualScopeCount:      meta.LastManualScopeCount,
-		LastManualPrefetchMs:      meta.LastManualPrefetchMs,
-		LastManualRecalcMs:        meta.LastManualRecalcMs,
-		LastManualTotalMs:         meta.LastManualTotalMs,
-		LastManualSqliteBusyCount: meta.LastManualSqliteBusyCount,
-		LastManualProviderSummary: strings.TrimSpace(meta.LastManualProviderSummary),
-		DiemengHealthStatus:       diemengHealthStatus,
-		DiemengHealthSummary:      diemengHealthSummary,
-		DiemengHealthCheckedAt:    diemengHealthCheckedAt,
+		List:                       items[offset:end],
+		Total:                      total,
+		Page:                       page,
+		PageSize:                   pageSize,
+		TotalPages:                 totalPages,
+		CalcMode:                   aiRecommendYieldModeFast,
+		StrategyCohort:             strategyCohort,
+		TotalYieldRate:             totalYieldRate,
+		TotalYieldRateText:         totalYieldRateText,
+		BenchmarkCode:              benchmarkSummary.Code,
+		BenchmarkName:              benchmarkSummary.Name,
+		BenchmarkRate:              benchmarkSummary.Rate,
+		BenchmarkRateText:          benchmarkSummary.RateText,
+		ExcessYieldRate:            benchmarkSummary.ExcessYieldRate,
+		ExcessYieldRateText:        benchmarkSummary.ExcessYieldRateText,
+		StrategyXirr:               benchmarkSummary.StrategyXirr,
+		StrategyXirrText:           benchmarkSummary.StrategyXirrText,
+		BenchmarkXirr:              benchmarkSummary.BenchmarkXirr,
+		BenchmarkXirrText:          benchmarkSummary.BenchmarkXirrText,
+		ExcessXirr:                 benchmarkSummary.ExcessXirr,
+		ExcessXirrText:             benchmarkSummary.ExcessXirrText,
+		MaxDrawdown:                benchmarkSummary.MaxDrawdown,
+		MaxDrawdownText:            benchmarkSummary.MaxDrawdownText,
+		WinRateVsBenchmark:         benchmarkSummary.WinRateVsBenchmark,
+		WinRateVsBenchmarkText:     benchmarkSummary.WinRateVsBenchmarkText,
+		MedianExcessYieldRate:      benchmarkSummary.MedianExcessYieldRate,
+		MedianExcessYieldRateText:  benchmarkSummary.MedianExcessYieldRateText,
+		SameDayActivationRate:      diagnostics.SameDayActivationRate,
+		SameDayActivationRateText:  diagnostics.SameDayActivationRateText,
+		StaleActivationRate:        diagnostics.StaleActivationRate,
+		StaleActivationRateText:    diagnostics.StaleActivationRateText,
+		StructuredRuleCoverage:     diagnostics.StructuredRuleCoverage,
+		StructuredRuleCoverageText: diagnostics.StructuredRuleCoverageText,
+		AnalysisOnlyRate:           diagnostics.AnalysisOnlyRate,
+		AnalysisOnlyRateText:       diagnostics.AnalysisOnlyRateText,
+		StopLossCount:              diagnostics.StopLossCount,
+		TakeProfitCount:            diagnostics.TakeProfitCount,
+		OpenCount:                  diagnostics.OpenCount,
+		DataAsOf:                   dataAsOf,
+		RecalcInProgress:           recalcInProgress,
+		RecalcProgress:             recalcProgress,
+		MinuteDownloadDone:         minuteDone,
+		MinuteDownloadTotal:        minuteTotal,
+		MinuteDownloadPending:      minutePending,
+		MinuteDownloadUncoverable:  minuteUncoverable,
+		ManualCooldownUntil:        manualCooldownUntil,
+		ManualCooldownRemainSec:    manualCooldownRemainSec,
+		LastManualStartedAt:        formatOptionalYieldMetaTime(meta.LastManualDownloadAt),
+		LastManualFinishedAt:       formatOptionalYieldMetaTime(meta.LastManualFinishedAt),
+		LastManualScopeCount:       meta.LastManualScopeCount,
+		LastManualPrefetchMs:       meta.LastManualPrefetchMs,
+		LastManualRecalcMs:         meta.LastManualRecalcMs,
+		LastManualTotalMs:          meta.LastManualTotalMs,
+		LastManualSqliteBusyCount:  meta.LastManualSqliteBusyCount,
+		LastManualProviderSummary:  strings.TrimSpace(meta.LastManualProviderSummary),
+		DiemengHealthStatus:        diemengHealthStatus,
+		DiemengHealthSummary:       diemengHealthSummary,
+		DiemengHealthCheckedAt:     diemengHealthCheckedAt,
 	}, nil
 }
 
@@ -5557,220 +4308,6 @@ func matchYieldKeywordFilter(query *models.AiRecommendStocksQuery, aggr *aiRecom
 		}
 	}
 	return true
-}
-
-func fillSignalDrivenRecommendCompat(recommend *models.AiRecommendStocks, signalDrivenMode bool, structuredMode bool) {
-	if recommend == nil || !signalDrivenMode {
-		return
-	}
-	if buySignal := normalizeRecommendText(recommend.BuySignal); buySignal != "" &&
-		!hasRequiredStructuredPlanSection(buySignal, []string{"价格触发：", "量能触发："}) {
-		if strings.TrimSpace(recommend.RecommendReason) == "" && strings.TrimSpace(recommend.BuySignalDetail) == "" {
-			recommend.BuySignalDetail = buySignal
-		}
-		recommend.BuySignal = ""
-	}
-	if recommend.InvalidSignal == "" {
-		recommend.InvalidSignal = firstNonEmptyText(recommend.InvalidCondition, recommend.InvalidSignal)
-	}
-	if invalidSignal := normalizeRecommendText(recommend.InvalidSignal); invalidSignal != "" &&
-		!hasRequiredStructuredPlanSection(invalidSignal, []string{"时间失效：", "价格失效："}) {
-		if strings.TrimSpace(recommend.InvalidCondition) == "" {
-			recommend.InvalidCondition = invalidSignal
-		}
-		recommend.InvalidSignal = ""
-	}
-	if recommend.ExecutionState == "" {
-		recommend.ExecutionState = inferExecutionStateFromSignals(recommend.BuySignal, recommend.BuySignalDetail)
-	}
-	recommend.ExecutionState = recommendExecutionConditional
-	if recommend.RecommendCategory != "avoid" {
-		recommend.RecommendCategory = recommendExecutionConditional
-	}
-	if recommend.BuySignal == "" {
-		recommend.BuySignal = buildCompatBuySignal(recommend.ExecutionState, recommend.RecommendBuyPrice)
-	}
-	if recommend.SellSignal == "" {
-		recommend.SellSignal = buildCompatSellSignal(recommend.RecommendStopProfitPrice, recommend.RecommendStopLossPrice)
-	}
-	if recommend.InvalidSignal == "" {
-		recommend.InvalidSignal = buildCompatInvalidSignal(recommend.RecommendStopLossPrice)
-	}
-	if recommend.BuySignalDetail == "" {
-		recommend.BuySignalDetail = buildCompatBuySignalDetail(recommend.Remarks, shouldBypassRecommendKeywordInterception(recommend.DataTime))
-	}
-	if recommend.SellSignalDetail == "" {
-		recommend.SellSignalDetail = buildCompatSellSignalDetail(recommend.Remarks, shouldBypassRecommendKeywordInterception(recommend.DataTime))
-	}
-	if !structuredMode && hasSignalDrivenRecommend(recommend) {
-		recommend.RecommendCategory = ""
-		recommend.RecommendStatus = ""
-		recommend.FocusPrice = ""
-	}
-}
-
-func inferExecutionStateFromSignals(buySignal, buyDetail string) string {
-	text := normalizeRecommendText(strings.TrimSpace(buySignal + "\n" + buyDetail))
-	if text == "" {
-		return ""
-	}
-	return recommendExecutionConditional
-}
-
-func buildCompatBuySignal(executionState string, buyRange string) string {
-	rangeText := strings.TrimSpace(buyRange)
-	if rangeText == "" {
-		rangeText = "主买入区"
-	}
-	return "价格触发：未来3-5个交易日内股价进入" + rangeText + "主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.0倍"
-}
-
-func buildCompatBuySignalDetail(remarks string, bypassKeywordInterception bool) string {
-	lines := strings.Split(normalizeRecommendText(remarks), "\n")
-	matched := make([]string, 0, len(lines))
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if recommendActionKeywordRegexp.MatchString(line) {
-			if !bypassKeywordInterception {
-				if phrase := findAmbiguousTriggerPhrase(line); phrase != "" && !quantifiedThresholdRegexp.MatchString(line) {
-					continue
-				}
-			}
-			if !bypassKeywordInterception && hasVolumeSignal(line) && !hasCompleteVolumeContext(line) {
-				continue
-			}
-			matched = append(matched, line)
-		}
-	}
-	return strings.Join(matched, "\n")
-}
-
-func buildCompatSellSignal(stopProfit, stopLoss string) string {
-	profit := strings.TrimSpace(stopProfit)
-	loss := strings.TrimSpace(stopLoss)
-	switch {
-	case profit != "" && loss != "":
-		return "触及" + profit + "止盈区间卖出；若跌破" + loss + "止损位立即止损"
-	case profit != "":
-		return "触及" + profit + "止盈区间卖出"
-	case loss != "":
-		return "跌破" + loss + "止损位立即止损"
-	default:
-		return ""
-	}
-}
-
-func buildCompatSellSignalDetail(remarks string, bypassKeywordInterception bool) string {
-	return buildCompatBuySignalDetail(remarks, bypassKeywordInterception)
-}
-
-func buildCompatInvalidSignal(stopLoss string) string {
-	stopLoss = strings.TrimSpace(stopLoss)
-	if stopLoss == "" {
-		return ""
-	}
-	return "时间失效：未来5个交易日内仍未触发主买入区；价格失效：任一5分钟收盘价跌破" + stopLoss
-}
-
-func validateSignalDrivenRecommend(recommend *models.AiRecommendStocks) error {
-	if recommend == nil || !hasSignalDrivenRecommend(recommend) {
-		return nil
-	}
-	if recommend.ExecutionState != recommendExecutionConditional {
-		return errors.New("执行状态只能是 conditional/等待激活")
-	}
-	if strings.TrimSpace(recommend.BuySignal) == "" {
-		return errors.New("买入信号不能为空")
-	}
-	if strings.TrimSpace(recommend.SellSignal) == "" {
-		return errors.New("卖出信号不能为空")
-	}
-	if strings.TrimSpace(recommend.InvalidSignal) == "" {
-		return errors.New("失效信号不能为空")
-	}
-	buyCombined := normalizeRecommendText(strings.TrimSpace(recommend.BuySignal + "\n" + recommend.BuySignalDetail))
-	sellCombined := normalizeRecommendText(strings.TrimSpace(recommend.SellSignal + "\n" + recommend.SellSignalDetail))
-	invalidCombined := normalizeRecommendText(strings.TrimSpace(recommend.InvalidSignal + "\n" + recommend.InvalidCondition))
-	if !containsConditionalCue(buyCombined) {
-		return errors.New("条件触发型记录的买入信号必须明确说明触发条件")
-	}
-	if !hasRequiredStructuredPlanSection(buyCombined, []string{"价格触发：", "量能触发："}) {
-		return errors.New("买入信号必须严格包含“价格触发 / 量能触发”两段")
-	}
-	if !hasRequiredStructuredPlanSection(invalidCombined, []string{"时间失效：", "价格失效："}) {
-		return errors.New("失效信号必须严格包含“时间失效 / 价格失效”两段")
-	}
-	if hasVolumeSignal(buyCombined) && !hasCompleteVolumeContext(buyCombined) {
-		return errors.New("买入信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
-	}
-	if hasVolumeSignal(sellCombined) && !hasCompleteVolumeContext(sellCombined) {
-		return errors.New("卖出信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
-	}
-	if hasVolumeSignal(invalidCombined) && !hasCompleteVolumeContext(invalidCombined) {
-		return errors.New("失效信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
-	}
-	if !shouldBypassRecommendKeywordInterception(recommend.DataTime) {
-		if phrase := findAmbiguousTriggerPhrase(buyCombined); phrase != "" {
-			return fmt.Errorf("买入信号包含未量化表述“%s”，必须改成可机械执行的阈值条件", phrase)
-		}
-		if phrase := findAmbiguousTriggerPhrase(invalidCombined); phrase != "" {
-			return fmt.Errorf("失效信号包含未量化表述“%s”，必须改成可机械执行的阈值条件", phrase)
-		}
-	}
-	return nil
-}
-
-func containsConditionalCue(text string) bool {
-	keywords := []string{"若", "如果", "当", "等待", "触发", "进入", "回到", "站上", "站稳", "突破", "回踩", "确认后", "不破", "放量", "缩量", "承接", "企稳", "跌破"}
-	return containsAnyKeyword(text, keywords)
-}
-
-func containsImmediateCue(text string) bool {
-	keywords := []string{"当前可执行", "当前可买", "当前已满足", "立即买入", "可直接买入", "可直接执行", "现价可买", "现在可买"}
-	return containsAnyKeyword(text, keywords)
-}
-
-func hasVolumeSignal(text string) bool {
-	keywords := []string{"放量", "缩量", "量能", "成交量", "量比"}
-	return containsAnyKeyword(text, keywords)
-}
-
-func hasCompleteVolumeContext(text string) bool {
-	anchorPattern := regexp.MustCompile(`\d+(?:\.\d+)?(?:\s*-\s*\d+(?:\.\d+)?)?`)
-	hasAnchor := anchorPattern.MatchString(text) || containsAnyKeyword(text, []string{"买入区", "压力线", "支撑线", "前高", "前低", "昨高", "昨低", "均线"})
-	hasBaseline := containsAnyKeyword(text, []string{"均量", "量比", "倍", "前5", "前10", "近5", "近10", "较昨日", "较前一日", "对比"})
-	hasCycle := containsAnyKeyword(text, []string{"1分钟", "5分钟", "15分钟", "30分钟", "60分钟", "日线", "周线", "小时"})
-	hasThreshold := quantifiedThresholdRegexp.MatchString(text)
-	return hasAnchor && hasBaseline && hasCycle && hasThreshold
-}
-
-func hasRequiredStructuredPlanSection(text string, prefixes []string) bool {
-	normalized := normalizeRecommendText(text)
-	if normalized == "" {
-		return false
-	}
-	for _, prefix := range prefixes {
-		if !strings.Contains(normalized, prefix) {
-			return false
-		}
-	}
-	return true
-}
-
-func findAmbiguousTriggerPhrase(text string) string {
-	normalized := normalizeRecommendText(text)
-	if normalized == "" {
-		return ""
-	}
-	for _, phrase := range ambiguousTriggerPhraseList {
-		if strings.Contains(normalized, phrase) {
-			return phrase
-		}
-	}
-	return ""
 }
 
 func matchYieldDateFilter(query *models.AiRecommendStocksQuery, buyTime time.Time) bool {

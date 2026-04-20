@@ -237,7 +237,9 @@ func TestUS(t *testing.T) {
 	crawlerAPI = crawlerAPI.NewCrawler(ctx, crawlerBaseInfo)
 
 	tick := &Tick{}
-	json.Unmarshal(bytes, &tick)
+	if err := json.Unmarshal(bytes, &tick); err != nil {
+		t.Fatalf("unmarshal tick failed: %v", err)
+	}
 	for i, datum := range tick.Data {
 		logger.SugaredLogger.Infof("datum: %d, %+v", i, datum)
 		name := ""

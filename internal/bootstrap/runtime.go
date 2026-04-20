@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"go-stock/backend/data"
 	"go-stock/backend/db"
+	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
 	"go-stock/internal/service"
@@ -66,38 +67,42 @@ func EnsureRuntimeDirs(cfg appconfig.AppConfig) {
 }
 
 func AutoMigrate() {
-	db.Dao.AutoMigrate(&data.StockInfo{})
-	db.Dao.AutoMigrate(&data.StockBasic{})
-	db.Dao.AutoMigrate(&data.FollowedStock{})
-	db.Dao.AutoMigrate(&data.IndexBasic{})
-	db.Dao.AutoMigrate(&data.Settings{})
-	db.Dao.AutoMigrate(&models.AIResponseResult{})
-	db.Dao.AutoMigrate(&models.AgentChatSession{})
-	db.Dao.AutoMigrate(&models.AgentChatMessage{})
-	db.Dao.AutoMigrate(&models.StockInfoHK{})
-	db.Dao.AutoMigrate(&models.StockInfoUS{})
-	db.Dao.AutoMigrate(&data.FollowedFund{})
-	db.Dao.AutoMigrate(&data.FundBasic{})
-	db.Dao.AutoMigrate(&models.PromptTemplate{})
-	db.Dao.AutoMigrate(&data.Group{})
-	db.Dao.AutoMigrate(&data.GroupStock{})
-	db.Dao.AutoMigrate(&models.Tags{})
-	db.Dao.AutoMigrate(&models.Telegraph{})
-	db.Dao.AutoMigrate(&models.TelegraphTags{})
-	db.Dao.AutoMigrate(&models.LongTigerRankData{})
-	db.Dao.AutoMigrate(&data.AIConfig{})
-	db.Dao.AutoMigrate(&models.BKDict{})
-	db.Dao.AutoMigrate(&models.WordAnalyze{})
-	db.Dao.AutoMigrate(&models.SentimentResultAnalyze{})
-	db.Dao.AutoMigrate(&models.AiRecommendStocks{})
-	db.Dao.AutoMigrate(&models.AiRecommendOpeningReview{})
-	db.Dao.AutoMigrate(&models.AiRecommendYieldState{})
-	db.Dao.AutoMigrate(&models.AiRecommendYieldOverride{})
-	db.Dao.AutoMigrate(&models.AiRecommendYieldRecordState{})
-	db.Dao.AutoMigrate(&models.AiRecommendYieldMeta{})
-	db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{})
-	db.Dao.AutoMigrate(&models.CronTaskRun{})
-	db.Dao.AutoMigrate(&models.EmailSendLog{})
+	if err := db.Dao.AutoMigrate(
+		&data.StockInfo{},
+		&data.StockBasic{},
+		&data.FollowedStock{},
+		&data.IndexBasic{},
+		&data.Settings{},
+		&models.AIResponseResult{},
+		&models.AgentChatSession{},
+		&models.AgentChatMessage{},
+		&models.StockInfoHK{},
+		&models.StockInfoUS{},
+		&data.FollowedFund{},
+		&data.FundBasic{},
+		&models.PromptTemplate{},
+		&data.Group{},
+		&data.GroupStock{},
+		&models.Tags{},
+		&models.Telegraph{},
+		&models.TelegraphTags{},
+		&models.LongTigerRankData{},
+		&data.AIConfig{},
+		&models.BKDict{},
+		&models.WordAnalyze{},
+		&models.SentimentResultAnalyze{},
+		&models.AiRecommendStocks{},
+		&models.AiRecommendOpeningReview{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldOverride{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.CronTaskRun{},
+		&models.EmailSendLog{},
+	); err != nil {
+		logger.SugaredLogger.Errorf("auto migrate failed: %v", err)
+	}
 }
 
 func checkDir(dir string) {

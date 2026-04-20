@@ -15,9 +15,63 @@ import (
 	"github.com/duke-git/lancet/v2/mathutil"
 	"github.com/duke-git/lancet/v2/random"
 	"github.com/tidwall/gjson"
+	"gorm.io/gorm"
 )
 
 const marketSummaryPhase3Version = "phase3-v3"
+const marketSummaryPhase4Version = "phase3-v4"
+const marketSummaryCurrentVersion = marketSummaryPhase4Version
+
+const (
+	strategyCohortCurrent = "current"
+	strategyCohortAll     = "all"
+	strategyCohortLegacy  = "legacy"
+)
+
+func normalizeStrategyCohort(raw string, defaultCohort string) string {
+	text := strings.ToLower(strings.TrimSpace(raw))
+	switch text {
+	case "":
+		if strings.TrimSpace(defaultCohort) == "" {
+			return strategyCohortAll
+		}
+		return normalizeStrategyCohort(defaultCohort, "")
+	case strategyCohortCurrent, strategyCohortAll, strategyCohortLegacy:
+		return text
+	case strings.ToLower(marketSummaryPhase3Version):
+		return marketSummaryPhase3Version
+	case strings.ToLower(marketSummaryPhase4Version):
+		return marketSummaryPhase4Version
+	default:
+		if strings.TrimSpace(defaultCohort) == "" {
+			return strategyCohortAll
+		}
+		return normalizeStrategyCohort(defaultCohort, "")
+	}
+}
+
+func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
+	if q == nil {
+		return nil
+	}
+	switch normalizeStrategyCohort(cohort, strategyCohortAll) {
+	case strategyCohortCurrent:
+		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
+	case strategyCohortLegacy:
+		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version <> ?)", marketSummaryCurrentVersion)
+	case marketSummaryPhase3Version, marketSummaryPhase4Version:
+		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
+	default:
+		return q
+	}
+}
+
+func isCurrentStrategyCohortRecord(rec *models.AiRecommendStocks) bool {
+	if rec == nil {
+		return false
+	}
+	return strings.TrimSpace(rec.SummaryVersion) == marketSummaryCurrentVersion
+}
 
 type marketSummaryRouteBudget struct {
 	TotalCallLimit         int `json:"totalCallLimit"`
@@ -219,7 +273,7 @@ func defaultMarketSummaryRouteBudget() marketSummaryRouteBudget {
 
 func newMarketSummaryRouteLog() *marketSummaryRouteLog {
 	return &marketSummaryRouteLog{
-		Version:          marketSummaryPhase3Version,
+		Version:          marketSummaryCurrentVersion,
 		StartedAt:        time.Now().Format(time.DateTime),
 		Budget:           defaultMarketSummaryRouteBudget(),
 		PerCategoryCalls: map[string]int{},
@@ -368,7 +422,7 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 		messages := buildPhase3FinalMessages(sysPrompt, displayQuestion, discoveryInput, discoveryResult, verifiedCandidates, excludedTodayStocks, discoveryInput.SkippedReviews, logState)
 		logState.addCall("generate_model")
 		emitSummaryToolStatus(ch, "phase3.generate", "running", nil, 0)
-		AskAi(o, nil, messages, ch, displayQuestion, think)
+		AskAi(o, messages, ch, displayQuestion, think)
 		emitSummaryToolStatus(ch, "phase3.generate", "success", nil, 0)
 		logState.finish()
 		logger.SugaredLogger.Infof("market summary phase3 route completed: %s", mustJSON(logState))
@@ -1777,8 +1831,6 @@ func anyToString(v any) string {
 		return strconv.FormatUint(uint64(val), 10)
 	case uint64:
 		return strconv.FormatUint(val, 10)
-	case json.Number:
-		return val.String()
 	default:
 		return strings.TrimSpace(fmt.Sprint(v))
 	}

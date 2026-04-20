@@ -334,10 +334,8 @@ func evaluatePendingOpeningReview(rec models.AiRecommendStocks, tradeDay time.Ti
 	}
 
 	action := openingReviewActionObserveOnly
-	reason := "开盘后仍需等待 09:40 后的量价确认，原计划保留但不提前激活。"
-	if openPrice <= 0 {
-		reason = "未拿到可靠开盘价/分钟线，无法做出更强结论，原计划暂保留。"
-	} else {
+	reason := "未拿到可靠开盘价/分钟线，无法做出更强结论，原计划暂保留。"
+	if openPrice > 0 {
 		maxChase := resolveRecommendOpeningMaxChasePrice(&rec, buyMax)
 		switch {
 		case stopLoss > 0 && openPrice <= stopLoss:

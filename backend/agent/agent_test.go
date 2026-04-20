@@ -95,5 +95,7 @@ func TestAgent(t *testing.T) {
 		md.WriteString(message.String())
 	}
 	logger.SugaredLogger.Info(md.String())
-	fileutil.WriteStringToFile("../../data/result.md", md.String(), false)
+	if err := fileutil.WriteStringToFile("../../data/result.md", md.String(), false); err != nil {
+		t.Fatalf("write result.md failed: %v", err)
+	}
 }

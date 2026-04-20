@@ -956,6 +956,15 @@ func TestNormalizeAiRecommendStockForSaveMarksControversialOnConflict(t *testing
 }
 
 func TestCreateAiRecommendStocksRejectsSameDayDuplicateStock(t *testing.T) {
+	prevMarkDirty := markAiRecommendYieldDirtyCodesForMutationFn
+	prevRequestRecalc := requestAiRecommendYieldScopedRecalcForMutationFn
+	markAiRecommendYieldDirtyCodesForMutationFn = func([]string, string, string) error { return nil }
+	requestAiRecommendYieldScopedRecalcForMutationFn = func(bool, string, []string) {}
+	t.Cleanup(func() {
+		markAiRecommendYieldDirtyCodesForMutationFn = prevMarkDirty
+		requestAiRecommendYieldScopedRecalcForMutationFn = prevRequestRecalc
+	})
+
 	db.Init(filepath.Join(t.TempDir(), "ai-recommend-daily-duplicate.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
@@ -996,6 +1005,15 @@ func TestCreateAiRecommendStocksRejectsSameDayDuplicateStock(t *testing.T) {
 }
 
 func TestBatchCreateAiRecommendStocksRejectsSameDayDuplicateStockInBatch(t *testing.T) {
+	prevMarkDirty := markAiRecommendYieldDirtyCodesForMutationFn
+	prevRequestRecalc := requestAiRecommendYieldScopedRecalcForMutationFn
+	markAiRecommendYieldDirtyCodesForMutationFn = func([]string, string, string) error { return nil }
+	requestAiRecommendYieldScopedRecalcForMutationFn = func(bool, string, []string) {}
+	t.Cleanup(func() {
+		markAiRecommendYieldDirtyCodesForMutationFn = prevMarkDirty
+		requestAiRecommendYieldScopedRecalcForMutationFn = prevRequestRecalc
+	})
+
 	db.Init(filepath.Join(t.TempDir(), "ai-recommend-batch-duplicate.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)

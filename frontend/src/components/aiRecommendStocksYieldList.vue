@@ -14,6 +14,14 @@ import { useSharedResearchDateRange } from "../composables/useSharedResearchDate
 const message = useMessage()
 const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
 const rangeReadyRef = ref(false)
+const strategyCohortRef = ref('current')
+const strategyCohortOptions = [
+  { label: 'Current / phase3-v4', value: 'current' },
+  { label: 'Phase3-v4', value: 'phase3-v4' },
+  { label: 'Phase3-v3', value: 'phase3-v3' },
+  { label: 'Legacy', value: 'legacy' },
+  { label: 'All', value: 'all' }
+]
 
 const tableOverflowTooltip = {
   style: {
@@ -491,7 +499,8 @@ function query({
                  pageSize = 100,
                  keyword = "",
                  startDate = "",
-                 endDate = ""
+                 endDate = "",
+                 strategyCohort = "current"
                }) {
   return new Promise((resolve) => {
     GetAiRecommendStocksYieldList({
@@ -503,7 +512,8 @@ function query({
       "bkName": keyword,
       "startDate": startDate,
       "endDate": endDate,
-      "yieldMode": "strict"
+      "yieldMode": "strict",
+      "strategyCohort": strategyCohort
     }).then((res) => {
       resolve({
         pageCount: res.totalPages,
@@ -559,7 +569,8 @@ function fetchYieldList(page, options = {}) {
     pageSize: paginationReactive.pageSize,
     keyword: paginationReactive.keyword,
     startDate,
-    endDate
+    endDate,
+    strategyCohort: strategyCohortRef.value
   }).then((data) => {
     dataRef.value = data.data
     strictPendingCountRef.value = countStrictPendingRows(data.data)
@@ -609,6 +620,19 @@ watch(researchDateRangeKey, async (nextKey, prevKey) => {
   loadingRef.value = true
   await fetchYieldList(1)
 })
+
+watch(strategyCohortRef, async (nextValue, prevValue) => {
+  if (!rangeReadyRef.value || !prevValue || nextValue === prevValue) {
+    return
+  }
+  loadingRef.value = true
+  await fetchYieldList(1)
+})
+
+function strategyCohortLabel() {
+  const matched = strategyCohortOptions.find((item) => item.value === strategyCohortRef.value)
+  return matched?.label || strategyCohortRef.value || '--'
+}
 
 function handlePageChange(currentPage) {
   if (loadingRef.value) {
@@ -1293,6 +1317,11 @@ function replayMarkerSummaryText() {
     <n-date-picker v-model:value="startDateModel" type="date" style="width: 22%" />
     <n-input value="至" readonly style="width: 8%; text-align: center;" />
     <n-date-picker v-model:value="endDateModel" type="date" style="width: 22%" />
+    <n-select
+        v-model:value="strategyCohortRef"
+        :options="strategyCohortOptions"
+        style="width: 20%"
+    />
     <n-input clearable placeholder="输入关键词搜索" v-model:value="paginationReactive.keyword"/>
     <n-button type="primary" ghost @click="handleSearch" @input="handleSearch">
       搜索
@@ -1316,6 +1345,10 @@ function replayMarkerSummaryText() {
     </n-button>
   </n-input-group>
   <div style="margin-top: 8px;">
+    <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
+    <n-text depth="3" style="margin-left: 12px;">current 默认只看 phase3-v4；它强调同日新鲜信号，不再把旧观察信号混进收益统计。</n-text>
+  </div>
+  <div style="margin-top: 6px;">
     <n-text depth="3">当前口径：严格回算</n-text>
     <n-text depth="3" style="margin-left: 12px;">待回算：{{ strictPendingCountRef }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">strict 只读取已落库的严格快照；待回算股票需要先下载分钟线并等待后台刷新。</n-text>

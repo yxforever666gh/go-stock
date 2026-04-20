@@ -45,9 +45,11 @@ func (a *App) registerRealtimeRuntime(config *data.SettingConfig) {
 		if interval <= 0 {
 			interval = 1
 		}
-		a.cron.AddFunc(fmt.Sprintf("@every %ds", interval+60), func() {
+		if _, err := a.cron.AddFunc(fmt.Sprintf("@every %ds", interval+60), func() {
 			data.NewsAnalyze("", true)
-		})
+		}); err != nil {
+			logger.SugaredLogger.Errorf("注册 NewsAnalyze 定时任务失败: %v", err)
+		}
 
 		a.registerCronTask("MonitorStockPrices", fmt.Sprintf("@every %ds", interval), func() {
 			MonitorStockPrices(a)
@@ -130,15 +132,19 @@ func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
 		}
 		go a.CheckStockBaseInfo(a.ctx)
 
-		a.cron.AddFunc("0 0 2 * * *", func() {
+		if _, err := a.cron.AddFunc("0 0 2 * * *", func() {
 			logger.SugaredLogger.Errorf("Checking for updates...")
 			a.CheckStockBaseInfo(a.ctx)
-		})
+		}); err != nil {
+			logger.SugaredLogger.Errorf("注册 CheckStockBaseInfo 定时任务失败: %v", err)
+		}
 		if appconfig.Load().Update.SelfUpdateEnabled && config.CheckUpdate {
-			a.cron.AddFunc("30 05 8,12,20 * * *", func() {
+			if _, err := a.cron.AddFunc("30 05 8,12,20 * * *", func() {
 				logger.SugaredLogger.Errorf("Checking for updates...")
 				a.CheckUpdate(0)
-			})
+			}); err != nil {
+				logger.SugaredLogger.Errorf("注册 CheckUpdate 定时任务失败: %v", err)
+			}
 		}
 	}()
 }

@@ -264,7 +264,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.2.7：研究中心新增“收益率统计”独立栏目，集中展示股票收益率、沪深300 现金流匹配基准、超额收益、XIRR、回撤与全库收益走势可视化，便于判断策略是否真正跑赢基准。"
+		content = "1.2.8：市场页分栏进一步拆开，收益率统计补齐独立的按交易日概览链路，运行时任务与发布工程同步收口，后续维护市场栏目和 strict 收益率链路更稳定。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

@@ -309,7 +309,7 @@ func (a *App) runScheduledSummaryStockNews() {
 	res := a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
 
 	status := "failed"
-	errMsg := summarizeSummaryRunError(res)
+	errMsg := ""
 	if strings.TrimSpace(res.text) != "" {
 		status = "success"
 		errMsg = ""

@@ -1,13 +1,13 @@
 <script setup>
-import { nextTick, onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import ResearchReport from "./researchReport.vue";
-import AiRecommendStocksList from "./aiRecommendStocksList.vue";
-import AiRecommendStocksYieldList from "./aiRecommendStocksYieldList.vue";
-import AiRecommendYieldStats from "./aiRecommendYieldStats.vue";
+import { defineAsyncComponent, nextTick, onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EventsOff, EventsOn } from "../../wailsjs/runtime";
 import { useRoute, useRouter } from 'vue-router'
 
 const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order'
+const AiRecommendStocksYieldList = defineAsyncComponent(() => import('./aiRecommendStocksYieldList.vue'))
+const AiRecommendYieldStats = defineAsyncComponent(() => import('./aiRecommendYieldStats.vue'))
+const ResearchReport = defineAsyncComponent(() => import('./researchReport.vue'))
+const AiRecommendStocksList = defineAsyncComponent(() => import('./aiRecommendStocksList.vue'))
 const defaultTabs = [
   { name: "股票收益率", component: AiRecommendStocksYieldList },
   { name: "收益率统计", component: AiRecommendYieldStats },
@@ -22,6 +22,18 @@ const router = useRouter()
 const cardRef = ref(null)
 const dragSourceName = ref("")
 const dragTargetName = ref("")
+const visitedTabs = ref([])
+
+function markTabVisited(name) {
+  if (!name || visitedTabs.value.includes(name)) {
+    return
+  }
+  visitedTabs.value = [...visitedTabs.value, name]
+}
+
+function shouldRenderTab(name) {
+  return visitedTabs.value.includes(name)
+}
 
 function loadSavedTabOrder() {
   const savedOrderText = window.localStorage.getItem(TAB_ORDER_STORAGE_KEY)
@@ -57,6 +69,7 @@ function persistTabOrder() {
 function updateTab(name) {
   if (tabs.value.some((tab) => tab.name === name)) {
     nowTab.value = name
+    markTabVisited(name)
     if (String(route.query.name || "") !== name) {
       router.replace({
         name: 'research',
@@ -186,6 +199,7 @@ onBeforeMount(() => {
   if (tabs.value.some((tab) => tab.name === tabName)) {
     nowTab.value = tabName
   }
+  markTabVisited(nowTab.value)
 })
 
 onMounted(() => {
@@ -215,7 +229,7 @@ onBeforeUnmount(() => {
           :name="tab.name"
           :tab="tab.name"
       >
-        <component :is="tab.component"/>
+        <component v-if="shouldRenderTab(tab.name)" :is="tab.component"/>
       </n-tab-pane>
     </n-tabs>
   </n-card>

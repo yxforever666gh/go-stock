@@ -55,10 +55,11 @@ func normalizeRecommendExecutionFields(recommend *models.AiRecommendStocks) {
 			return formatRecommendPrice(value), value, value
 		}
 
-		normText, normMin, normMax := normalizePriceRangeText(text, minVal, maxVal)
+		_, normMin, normMax := normalizePriceRangeText(text, minVal, maxVal)
 		if normMin <= 0 || normMax <= 0 {
 			return "", 0, 0
 		}
+		normText := ""
 		if normMin == normMax {
 			normText = formatRecommendPrice(normMin)
 		} else {
@@ -314,7 +315,7 @@ func shouldUseStrictBacktestEligibility(recommend *models.AiRecommendStocks) boo
 	switch version {
 	case "", "phase1-v1", defaultAiRecommendSummaryVersion, "phase3-v2":
 		return false
-	case marketSummaryPhase3Version:
+	case marketSummaryPhase3Version, marketSummaryPhase4Version:
 		return true
 	default:
 		return false
@@ -1278,7 +1279,12 @@ func shouldApplyTimeAwareRecommendRules(recommend *models.AiRecommendStocks) boo
 	if hasSignalDrivenRecommend(recommend) {
 		return true
 	}
-	return strings.TrimSpace(recommend.SummaryVersion) == marketSummaryPhase3Version
+	switch strings.TrimSpace(recommend.SummaryVersion) {
+	case marketSummaryPhase3Version, marketSummaryPhase4Version:
+		return true
+	default:
+		return false
+	}
 }
 
 func isCNContinuousTradingSession(now time.Time) bool {

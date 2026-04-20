@@ -7,7 +7,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/util"
-	"io/ioutil"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -140,11 +140,8 @@ func TestGetHKStockInfo(t *testing.T) {
 
 func TestParseTxStockData(t *testing.T) {
 	requireIntegration(t)
-	str := "v_r_hk09660=\"100~地平线机器人-W~09660~6.340~5.690~5.800~210980204.0~0~0~6.340~0~0~0~0~0~0~0~0~0~6.340~0~0~0~0~0~0~0~0~0~210980204.0~2025/04/29\n14:14:52~0.650~11.42~6.450~5.710~6.340~210980204.0~1295585259.040~0~33.03~~0~0~13.01~702.2123~836.8986~HORIZONROBOT-W~0.00~10.380~3.320~1.00~-53.74~0~0~0~0~0~33.03~6.50~1.90~600~76.11~19.85~GP~19.70~11.51~0.63~-17.23~46.76~13200293682.00~11075904412.00~33.03~0.000~6.141~58.90~HKD~1~30\";"
-	//str = "v_sz002241=\"51~歌尔股份~002241~22.26~22.27~0.00~0~0~0~22.26~1004~0.00~0~0.00~0~0.00~0~0.00~0~22.26~1004~0.00~558~0.00~0~0.00~0~0.00~0~~20250509092233~-0.01~-0.04~0.00~0.00~22.26/0/0~0~0~0.00~28.21~~0.00~0.00~0.00~686.46~777.09~2.31~24.50~20.04~0.00~-558~0.00~41.44~29.16~~~1.24~0.0000~0.0000~0~\n~GP-A~-13.75~6.76~1.09~8.18~3.39~30.63~15.70~6.87~17.47~-23.95~3083811231~3490989083~-21.75~12.02~3083811231~~~39.36~-0.04~~CNY~0~~0.00~0\";"
-	str = "v_sz002241=\"51~歌尔股份~002241~21.92~22.27~22.14~109872~40211~69642~21.91~25~21.90~961~21.89~257~21.88~748~21.87~665~21.92~86~21.93~168~21.94~556~21.95~171~21.96~85~~20250509094209~-0.35~-1.57~22.16~21.84~21.92/109872/241183171~109872~24118~0.36~27.78~~22.16~21.84~1.44~675.97~765.22~2.27~24.50~20.04~2.57~1590~21.95~40.80~28.71~~~1.24~24118.3171~0.0000~0~\n~GP-A~-15.07~5.13~1.11~8.18~3.39~30.63~15.70~5.23~15.67~-25.11~3083811231~3490989083~42.72~10.31~3083811231~~~37.23~0.18~~CNY~0~~21.85~1952\";"
-	//str = "v_r_hk09660=\"100~地平线机器人-W~09660~6.860~7.000~7.010~21157200.0~0~0~6.860~0~0~0~0~0~0~0~0~0~6.860~0~0~0~0~0~0~0~0~0~21157200.0~2025/05/09\n09:43:13~-0.140~-2.00~7.030~6.730~6.860~21157200.0~144331073.000~0~35.74~~0~0~4.29~759.8070~905.5401~HORIZONROBOT-W~0.00~10.380~3.320~2.93~11.10~0~0~0~0~0~35.74~7.04~0.19~600~90.56~4.73~GP~19.70~11.51~17.26~48.48~13.58~13200293682.00~11075904412.00~35.74~0.000~6.822~71.93~HKD~1~30\";"
-	info, _ := ParseTxStockData(str)
+	input := "v_sz002241=\"51~歌尔股份~002241~21.92~22.27~22.14~109872~40211~69642~21.91~25~21.90~961~21.89~257~21.88~748~21.87~665~21.92~86~21.93~168~21.94~556~21.95~171~21.96~85~~20250509094209~-0.35~-1.57~22.16~21.84~21.92/109872/241183171~109872~24118~0.36~27.78~~22.16~21.84~1.44~675.97~765.22~2.27~24.50~20.04~2.57~1590~21.95~40.80~28.71~~~1.24~24118.3171~0.0000~0~\n~GP-A~-15.07~5.13~1.11~8.18~3.39~30.63~15.70~5.23~15.67~-25.11~3083811231~3490989083~42.72~10.31~3083811231~~~37.23~0.18~~CNY~0~~21.85~1952\";"
+	info, _ := ParseTxStockData(input)
 	logger.SugaredLogger.Infof("%+#v", info)
 }
 
@@ -234,13 +231,15 @@ func getSinaCode(code string) string {
 
 func TestReadFile(t *testing.T) {
 	requireIntegration(t)
-	file, err := ioutil.ReadFile("../../stock_basic.json")
+	file, err := os.ReadFile("../../stock_basic.json")
 	if err != nil {
 		t.Log(err)
 		return
 	}
 	res := &TushareStockBasicResponse{}
-	json.Unmarshal(file, res)
+	if err := json.Unmarshal(file, res); err != nil {
+		t.Fatalf("unmarshal stock_basic.json failed: %v", err)
+	}
 	db.Init("../../data/stock.db")
 	//[EXCHANGE IS_HS NAME INDUSTRY LIST_STATUS ACT_NAME ID CURR_TYPE AREA LIST_DATE DELIST_DATE ACT_ENT_TYPE TS_CODE SYMBOL CN_SPELL ASSET_CLASS ACT_TYPE CREATE_TIME CREATE_BY UPDATE_TIME FULLNAME ENNAME UPDATE_BY]
 	for _, item := range res.Data.Items {
@@ -289,10 +288,16 @@ func TestName(t *testing.T) {
 	db.Init("../../data/stock.db")
 
 	stockBasics := &[]StockBasic{}
-	resty.New().SetProxy("").R().
+	resp, err := resty.New().SetProxy("").R().
 		SetHeader("user", "go-stock").
 		SetResult(stockBasics).
 		Get("http://8.134.249.145:18080/go-stock/stock_basic.json")
+	if err != nil {
+		t.Fatalf("fetch stock basics failed: %v", err)
+	}
+	if resp.IsError() {
+		t.Fatalf("unexpected status code: %d", resp.StatusCode())
+	}
 
 	logger.SugaredLogger.Infof("%+v", stockBasics)
 	//db.Dao.Unscoped().Model(&StockBasic{}).Where("1=1").Delete(&StockBasic{})

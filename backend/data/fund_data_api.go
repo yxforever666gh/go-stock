@@ -131,7 +131,7 @@ func (f *FundApi) CrawlFundBasic(fundCode string) (*FundBasic, error) {
 		//logger.SugaredLogger.Infof("基金信息:%+v", text)
 		defer func() {
 			if r := recover(); r != nil {
-				//logger.SugaredLogger.Errorf("panic: %v", r)
+				logger.SugaredLogger.Debugf("parse fund info panic recovered: %v", r)
 			}
 		}()
 		splitEx := strutil.SplitEx(text, "：", true)
@@ -164,7 +164,7 @@ func (f *FundApi) CrawlFundBasic(fundCode string) (*FundBasic, error) {
 		//logger.SugaredLogger.Infof("净值涨跌幅信息:%+v", text)
 		defer func() {
 			if r := recover(); r != nil {
-				//logger.SugaredLogger.Errorf("panic: %v", r)
+				logger.SugaredLogger.Debugf("parse fund day metric panic recovered: %v", r)
 			}
 		}()
 		splitEx := strutil.SplitAndTrim(text, "：", "%")
@@ -275,7 +275,7 @@ func (f *FundApi) UnFollowFund(fundCode string) string {
 func (f *FundApi) AllFund() {
 	defer func() {
 		if r := recover(); r != nil {
-			//logger.SugaredLogger.Errorf("AllFund panic: %v", r)
+			logger.SugaredLogger.Debugf("AllFund panic recovered: %v", r)
 		}
 	}()
 
@@ -289,6 +289,9 @@ func (f *FundApi) AllFund() {
 	htmlContent := GB18030ToUTF8(response.Body())
 
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
+	if err != nil {
+		return
+	}
 	cnt := 0
 	doc.Find("ul.num_right li").Each(func(i int, s *goquery.Selection) {
 		text := strutil.SplitEx(s.Text(), "|", true)

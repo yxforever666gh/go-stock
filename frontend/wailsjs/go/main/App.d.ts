@@ -60,7 +60,7 @@ export function GetAiRecommendStocksList(arg1:models.AiRecommendStocksQuery):Pro
 
 export function GetAiRecommendStocksYieldList(arg1:models.AiRecommendStocksQuery):Promise<models.AiRecommendStocksYieldPageData>;
 
-export function GetAiRecommendYieldDailyOverview():Promise<models.AiRecommendYieldDailyOverviewData>;
+export function GetAiRecommendYieldDailyOverview(arg1:models.AiRecommendStocksQuery):Promise<models.AiRecommendYieldDailyOverviewData>;
 
 export function GetAiRecommendYieldErrorLogs(arg1:number):Promise<Array<Record<string, string>>>;
 
@@ -136,6 +136,8 @@ export function RemoveStockGroup(arg1:string,arg2:string,arg3:number):Promise<st
 
 export function ResetAgentSession(arg1:string):Promise<void>;
 
+export function RunMarketSummaryHumanizeCompatFixNow():Promise<string>;
+
 export function SaveAIResponseResult(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:number):Promise<void>;
 
 export function SaveAsMarkdown(arg1:string,arg2:string):Promise<string>;
@@ -154,11 +156,9 @@ export function SendLatestAIAnalysisReportNow():Promise<string>;
 
 export function SendMarketSummaryEmailNow(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string):Promise<string>;
 
-export function RunMarketSummaryHumanizeCompatFixNow():Promise<string>;
+export function SendYieldEmailTestMessage():Promise<string>;
 
 export function SendYieldEmailXLSXNow():Promise<string>;
-
-export function SendYieldEmailTestMessage():Promise<string>;
 
 export function SetAlarmChangePercent(arg1:number,arg2:number,arg3:string):Promise<string>;
 

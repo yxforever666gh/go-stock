@@ -28,7 +28,9 @@ type StockInfoData struct {
 
 func TestStockInfoHK(t *testing.T) {
 	db.Init("../../data/stock.db")
-	db.Dao.AutoMigrate(&StockInfoHK{})
+	if err := db.Dao.AutoMigrate(&StockInfoHK{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
 	bs, _ := os.ReadFile("../../build/hk.json")
 	v := &StockInfoHKResp{}
 	err := json.Unmarshal(bs, v)

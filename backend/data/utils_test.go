@@ -43,5 +43,7 @@ func TestReplaceSensitiveWords(t *testing.T) {
 	txt2 := ReplaceSensitiveWords(txt)
 	logger.SugaredLogger.Infof("ReplaceSensitiveWords(%s)", txt2)
 
-	os.WriteFile("words.txt", []byte(slice.Join(SensitiveWords, "\n")), 0644)
+	if err := os.WriteFile("words.txt", []byte(slice.Join(SensitiveWords, "\n")), 0644); err != nil {
+		t.Fatalf("write words.txt failed: %v", err)
+	}
 }

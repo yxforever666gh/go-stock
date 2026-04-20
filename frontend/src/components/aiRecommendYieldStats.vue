@@ -9,6 +9,7 @@ const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRang
 const loadingRef = ref(true)
 const overviewLoadingRef = ref(true)
 const rangeReadyRef = ref(false)
+const strategyCohortRef = ref('current')
 
 const totalYieldRateRef = ref(0)
 const totalYieldRateTextRef = ref('--')
@@ -31,9 +32,45 @@ const medianExcessYieldRateRef = ref(0)
 const medianExcessYieldRateTextRef = ref('--')
 const dataAsOfRef = ref('')
 const summaryRecordCountRef = ref(0)
+const sameDayActivationRateRef = ref(0)
+const sameDayActivationRateTextRef = ref('--')
+const staleActivationRateRef = ref(0)
+const staleActivationRateTextRef = ref('--')
+const structuredRuleCoverageRef = ref(0)
+const structuredRuleCoverageTextRef = ref('--')
+const analysisOnlyRateRef = ref(0)
+const analysisOnlyRateTextRef = ref('--')
+const stopLossCountRef = ref(0)
+const takeProfitCountRef = ref(0)
+const openCountRef = ref(0)
 
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
+const strategyCohortOptions = [
+  { label: 'Current / phase3-v4', value: 'current' },
+  { label: 'Phase3-v4', value: 'phase3-v4' },
+  { label: 'Phase3-v3', value: 'phase3-v3' },
+  { label: 'Legacy', value: 'legacy' },
+  { label: 'All', value: 'all' }
+]
+
+const strategyCohortLabelRef = computed(() => {
+  const matched = strategyCohortOptions.find((item) => item.value === strategyCohortRef.value)
+  return matched?.label || strategyCohortRef.value || '--'
+})
+
+const metricHelpTexts = computed(() => ({
+  totalYield: '这是整套策略最后一共赚了多少，已经按统一交易成本口径合并计算。看它可以快速判断这套策略整体有没有挣钱，但不要只盯这一个数。',
+  benchmark: `${benchmarkNameRef.value} 会按策略真实的买卖时间和资金进出来同步匹配。它回答的是：如果同样的钱、在同样的时点去买基准，而不是买这套策略，最后会怎样。`,
+  excessYield: '这是策略收益率减去基准收益率后的差值。大于 0 说明整体跑赢了基准，小于 0 说明这套策略还不如按同样节奏去买基准。',
+  maxDrawdown: '这是净值从某个高点往后回落时，最深曾经跌了多少。它回答的是这套策略最难熬的时候有多痛，通常越接近 0 越稳。',
+  strategyXirr: '这是把每次真实买入、卖出的时间点都算进去后，折算出来的年化收益率。它更适合看分批买入、分批卖出的策略，不会把资金使用时点忽略掉。',
+  benchmarkXirr: `这是按和策略相同的资金进出时间去买 ${benchmarkNameRef.value} 后，折算出来的年化收益率。它回答的是：同样的出手节奏，如果改买基准，资金效率会怎样。`,
+  excessXirr: '这是策略 XIRR 减去基准 XIRR。它更适合判断分批买入策略有没有真正跑赢基准，因为它把时间和资金效率也一起算进去了。',
+  winRateVsBenchmark: '这是所有纳入统计的推荐里，最终收益跑赢对应基准的占比。它主要看稳定性，而不是只靠少数几次大赚把总收益抬上去。',
+  medianExcessYield: '这是把每条记录的超额收益率排好序后，取正中间那个值。它比平均值更不容易被极端大赚或大亏样本带偏，更适合看多数样本的真实水平。',
+  dataAsOf: '这是当前页面这批统计结果最近一次完成刷新或回算的时间。时间越旧，说明这里的收益数据越可能不是最新状态。'
+}))
 
 const startDateModel = computed({
   get() {
@@ -86,6 +123,13 @@ watch(researchDateRangeKey, async (nextKey, prevKey) => {
   await loadSummary()
 })
 
+watch(strategyCohortRef, async (nextValue, prevValue) => {
+  if (!rangeReadyRef.value || !prevValue || nextValue === prevValue) {
+    return
+  }
+  await Promise.all([loadSummary(), loadDailyOverview()])
+})
+
 function normalizePickerDate(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -126,7 +170,8 @@ async function loadSummary() {
       bkName: '',
       startDate,
       endDate,
-      yieldMode: 'strict'
+      yieldMode: 'strict',
+      strategyCohort: strategyCohortRef.value
     })
     totalYieldRateRef.value = Number(result?.totalYieldRate || 0)
     totalYieldRateTextRef.value = result?.totalYieldRateText || '--'
@@ -149,6 +194,17 @@ async function loadSummary() {
     medianExcessYieldRateTextRef.value = result?.medianExcessYieldRateText || '--'
     dataAsOfRef.value = result?.dataAsOf || ''
     summaryRecordCountRef.value = Number(result?.total || 0)
+    sameDayActivationRateRef.value = Number(result?.sameDayActivationRate || 0)
+    sameDayActivationRateTextRef.value = result?.sameDayActivationRateText || '--'
+    staleActivationRateRef.value = Number(result?.staleActivationRate || 0)
+    staleActivationRateTextRef.value = result?.staleActivationRateText || '--'
+    structuredRuleCoverageRef.value = Number(result?.structuredRuleCoverage || 0)
+    structuredRuleCoverageTextRef.value = result?.structuredRuleCoverageText || '--'
+    analysisOnlyRateRef.value = Number(result?.analysisOnlyRate || 0)
+    analysisOnlyRateTextRef.value = result?.analysisOnlyRateText || '--'
+    stopLossCountRef.value = Number(result?.stopLossCount || 0)
+    takeProfitCountRef.value = Number(result?.takeProfitCount || 0)
+    openCountRef.value = Number(result?.openCount || 0)
   } catch (error) {
     console.error('loadSummary failed', error)
   } finally {
@@ -159,7 +215,9 @@ async function loadSummary() {
 async function loadDailyOverview() {
   overviewLoadingRef.value = true
   try {
-    const result = await GetAiRecommendYieldDailyOverview()
+    const result = await GetAiRecommendYieldDailyOverview({
+      strategyCohort: strategyCohortRef.value
+    })
     dailyOverviewDataRef.value = result || {
       calcMode: 'strict',
       warnings: ['读取全库收益走势失败，请稍后重试'],
@@ -239,6 +297,16 @@ function drawdownTextType() {
   return 'default'
 }
 
+function inverseMetricTextType(value, text) {
+  if (text === '--') {
+    return 'default'
+  }
+  if (Number(value) > 0) {
+    return 'success'
+  }
+  return 'default'
+}
+
 function dailyOverviewSummaryText() {
   const data = dailyOverviewDataRef.value
   if (!data) {
@@ -271,9 +339,6 @@ function dailyOverviewWarningText() {
   return warnings.join('；')
 }
 
-function benchmarkTooltipText() {
-  return `${benchmarkNameRef.value} 会按策略真实买入/卖出现金流去匹配同口径的基准收益，避免把一次性满仓指数涨跌拿来和分批买入策略硬比。`
-}
 </script>
 
 <template>
@@ -284,6 +349,11 @@ function benchmarkTooltipText() {
           <n-date-picker v-model:value="startDateModel" type="date" style="width: 22%" />
           <n-input value="至" readonly style="width: 8%; text-align: center;" />
           <n-date-picker v-model:value="endDateModel" type="date" style="width: 22%" />
+          <n-select
+            v-model:value="strategyCohortRef"
+            :options="strategyCohortOptions"
+            style="width: 22%"
+          />
           <n-button type="primary" ghost :loading="loadingRef" @click="loadSummary">
             刷新统计
           </n-button>
@@ -291,6 +361,9 @@ function benchmarkTooltipText() {
             刷新全库走势
           </n-button>
         </n-input-group>
+        <div class="yield-stats-toolbar-hint">
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。收益统计默认看 current，也就是 phase3-v4 这批同日新鲜信号。</n-text>
+        </div>
         <div class="yield-stats-toolbar-hint">
           <n-text depth="3">当前页专注收益率统计与可视化；个股明细、分钟回放和手动补算仍保留在“股票收益率”栏目。</n-text>
         </div>
@@ -301,9 +374,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">策略收益率</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">策略收益率</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              当前纳入统计的可执行推荐，按统一交易成本口径汇总后的总净收益率。它回答的是整套策略最终赚了多少。
+              {{ metricHelpTexts.totalYield }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="totalYieldTextType()">{{ totalYieldRateTextRef }}</n-text>
@@ -315,9 +391,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">{{ benchmarkNameRef }}</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">{{ benchmarkNameRef }}</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              {{ benchmarkTooltipText() }}
+              {{ metricHelpTexts.benchmark }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="benchmarkTextType()">{{ benchmarkRateTextRef }}</n-text>
@@ -329,9 +408,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">超额收益率</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">超额收益率</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              策略收益率减去基准收益率后的差值。大于 0 代表整体跑赢基准，小于 0 代表没有跑赢。
+              {{ metricHelpTexts.excessYield }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="excessYieldTextType()">{{ excessYieldRateTextRef }}</n-text>
@@ -343,9 +425,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">最大回撤</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">最大回撤</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              从任一阶段高点往后看，净值曾经最大跌回去多少。它衡量的是“最难熬的时候有多痛”，越接近 0 通常越稳。
+              {{ metricHelpTexts.maxDrawdown }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="drawdownTextType()">{{ maxDrawdownTextRef }}</n-text>
@@ -357,9 +442,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">策略 XIRR</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">策略 XIRR</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              把每次真实买入、卖出发生的时间点都算进去后，折算出来的年化收益率。适合衡量分批进出、现金流不规则的策略表现。
+              {{ metricHelpTexts.strategyXirr }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(strategyXirrRef, strategyXirrTextRef)">{{ strategyXirrTextRef }}</n-text>
@@ -371,9 +459,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">基准 XIRR</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">基准 XIRR</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              用和策略同样的现金流时点去买入并持有基准指数，再折算出的年化收益率。它回答的是“如果同样的钱拿去买基准会怎样”。
+              {{ metricHelpTexts.benchmarkXirr }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(benchmarkXirrRef, benchmarkXirrTextRef)">{{ benchmarkXirrTextRef }}</n-text>
@@ -385,9 +476,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">超额 XIRR</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">超额 XIRR</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              策略 XIRR 减去基准 XIRR。它比普通超额收益率更适合看分批买入、持仓时长不一致时，策略是否真的在资金效率上跑赢基准。
+              {{ metricHelpTexts.excessXirr }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(excessXirrRef, excessXirrTextRef)">{{ excessXirrTextRef }}</n-text>
@@ -399,9 +493,12 @@ function benchmarkTooltipText() {
           <n-card size="small" class="metric-card">
             <n-tooltip trigger="hover">
               <template #trigger>
-                <div class="metric-label metric-label-help">跑赢基准占比</div>
+                <div class="metric-label-trigger metric-label-help">
+                  <span class="metric-label">跑赢基准占比</span>
+                  <span class="metric-help-chip">查看说明</span>
+                </div>
               </template>
-              纳入统计的记录里，有多少比例的单笔推荐最终收益高于对应基准收益。它看的是稳定性，而不只是少数大赚样本。
+              {{ metricHelpTexts.winRateVsBenchmark }}
             </n-tooltip>
             <div class="metric-value">
               <n-text :type="metricTextType(winRateVsBenchmarkRef, winRateVsBenchmarkTextRef)">{{ winRateVsBenchmarkTextRef }}</n-text>
@@ -417,9 +514,12 @@ function benchmarkTooltipText() {
             <div class="detail-row">
               <n-tooltip trigger="hover">
                 <template #trigger>
-                  <span class="detail-label detail-label-help">超额收益中位数</span>
+                  <span class="detail-label-trigger detail-label-help">
+                    <span class="detail-label">超额收益中位数</span>
+                    <span class="metric-help-chip metric-help-chip-inline">查看说明</span>
+                  </span>
                 </template>
-                把每条记录的超额收益率从小到大排序后，取中间那个值。它比平均值更不容易被极端大赚或大亏样本带偏。
+                {{ metricHelpTexts.medianExcessYield }}
               </n-tooltip>
               <n-text :type="metricTextType(medianExcessYieldRateRef, medianExcessYieldRateTextRef)">
                 {{ medianExcessYieldRateTextRef }}
@@ -428,9 +528,12 @@ function benchmarkTooltipText() {
             <div class="detail-row">
               <n-tooltip trigger="hover">
                 <template #trigger>
-                  <span class="detail-label detail-label-help">数据时间</span>
+                  <span class="detail-label-trigger detail-label-help">
+                    <span class="detail-label">数据时间</span>
+                    <span class="metric-help-chip metric-help-chip-inline">查看说明</span>
+                  </span>
                 </template>
-                当前统计结果最近一次完成刷新或回算的时间。若它较旧，说明页面里的收益率不一定是最新状态。
+                {{ metricHelpTexts.dataAsOf }}
               </n-tooltip>
               <n-text depth="3">{{ dataAsOfRef || '--' }}</n-text>
             </div>
@@ -458,11 +561,61 @@ function benchmarkTooltipText() {
         </n-grid-item>
       </n-grid>
 
+      <n-grid x-gap="12" y-gap="12" cols="1 s:1 m:2" responsive="screen">
+        <n-grid-item>
+          <n-card size="small" title="信号质量诊断">
+            <div class="detail-row">
+              <span class="detail-label">同日激活率</span>
+              <n-text :type="metricTextType(sameDayActivationRateRef, sameDayActivationRateTextRef)">
+                {{ sameDayActivationRateTextRef }}
+              </n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">隔日旧信号激活率</span>
+              <n-text :type="inverseMetricTextType(staleActivationRateRef, staleActivationRateTextRef)">
+                {{ staleActivationRateTextRef }}
+              </n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">结构化规则覆盖率</span>
+              <n-text :type="metricTextType(structuredRuleCoverageRef, structuredRuleCoverageTextRef)">
+                {{ structuredRuleCoverageTextRef }}
+              </n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">仅分析占比</span>
+              <n-text depth="3">{{ analysisOnlyRateTextRef }}</n-text>
+            </div>
+          </n-card>
+        </n-grid-item>
+        <n-grid-item>
+          <n-card size="small" title="结果结构">
+            <div class="detail-row">
+              <span class="detail-label">止损触发数</span>
+              <n-text depth="3">{{ stopLossCountRef }}</n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">止盈触发数</span>
+              <n-text depth="3">{{ takeProfitCountRef }}</n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">仍在持仓数</span>
+              <n-text depth="3">{{ openCountRef }}</n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">解读重点</span>
+              <n-text depth="3">同日激活率越高越说明信号新鲜；隔日旧信号激活率越低越符合 phase3-v4 的 same-day 约束。</n-text>
+            </div>
+          </n-card>
+        </n-grid-item>
+      </n-grid>
+
       <n-card size="small" title="全库收益走势">
         <template #header-extra>
           <n-text depth="3">{{ dailyOverviewSummaryText() }}</n-text>
         </template>
         <div class="chart-meta-row">
+          <n-text depth="3">分层：{{ strategyCohortLabelRef }}</n-text>
           <n-text depth="3">范围：{{ dailyOverviewRangeText() }}</n-text>
           <n-text depth="3">数据时间：{{ dailyOverviewDataRef?.dataAsOf || '--' }}</n-text>
           <n-text depth="3">口径：{{ dailyOverviewDataRef?.calcMode || 'strict' }}</n-text>
@@ -519,11 +672,56 @@ function benchmarkTooltipText() {
   line-height: 1.5;
 }
 
+.metric-label-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(148, 163, 184, 0.08);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.detail-label-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.08);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
 .metric-label-help,
 .detail-label-help {
   cursor: help;
-  text-decoration: underline dotted rgba(100, 116, 139, 0.6);
-  text-underline-offset: 3px;
+}
+
+.metric-label-help:hover,
+.detail-label-help:hover {
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.metric-help-chip {
+  flex-shrink: 0;
+  color: #2563eb;
+  font-size: 11px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.12);
+}
+
+.metric-help-chip-inline {
+  padding: 3px 7px;
+}
+
+.metric-label-trigger .metric-label,
+.detail-label-trigger .detail-label {
+  min-width: 0;
 }
 
 .metric-value {
@@ -544,8 +742,6 @@ function benchmarkTooltipText() {
 }
 
 .detail-label {
-  display: inline-block;
-  min-width: 112px;
   color: #475569;
   font-weight: 600;
 }

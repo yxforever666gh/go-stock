@@ -134,7 +134,9 @@ func TestEMDictCode(t *testing.T) {
 		return
 	}
 	dict := &[]models.BKDict{}
-	json.Unmarshal(bytes, dict)
+	if err := json.Unmarshal(bytes, dict); err != nil {
+		t.Fatalf("unmarshal dict failed: %v", err)
+	}
 	logger.SugaredLogger.Debugf("value: %s", string(bytes))
 	md := util.MarkdownTableWithTitle("行业/板块代码", dict)
 	logger.SugaredLogger.Debugf(md)

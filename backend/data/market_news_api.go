@@ -177,9 +177,9 @@ func safeString(value any) string {
 	switch v := value.(type) {
 	case string:
 		return strings.TrimSpace(v)
-	case fmt.Stringer:
-		return strings.TrimSpace(v.String())
 	case json.Number:
+		return strings.TrimSpace(v.String())
+	case fmt.Stringer:
 		return strings.TrimSpace(v.String())
 	case float64:
 		return strings.TrimSpace(strconv.FormatFloat(v, 'f', -1, 64))
@@ -764,9 +764,15 @@ func (m MarketNewsApi) LongTiger(date string) *[]models.LongTigerRankData {
 	})
 	//logger.SugaredLogger.Info(js)
 	vm := otto.New()
-	_, err = vm.Run(js)
-	_, err = vm.Run("var data = JSON.stringify(data);")
-	value, err := vm.Get("data")
+	if _, err = vm.Run(js); err != nil {
+		logger.SugaredLogger.Error(err)
+		return ranks
+	}
+	if _, err = vm.Run("var data = JSON.stringify(data);"); err != nil {
+		logger.SugaredLogger.Error(err)
+		return ranks
+	}
+	value, _ := vm.Get("data")
 	logger.SugaredLogger.Infof("resp-json:%s", value.String())
 	data := gjson.Get(value.String(), "result.data")
 	logger.SugaredLogger.Infof("resp:%v", data)
@@ -789,7 +795,7 @@ func (m MarketNewsApi) LongTiger(date string) *[]models.LongTigerRankData {
 }
 
 func (m MarketNewsApi) IndustryResearchReport(industryCode string, days int) []any {
-	beginDate := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Format("2006-01-02")
+	beginDate := time.Now().Add(-time.Duration(days) * 365 * time.Hour).Format("2006-01-02")
 	endDate := time.Now().Format("2006-01-02")
 	if strutil.Trim(industryCode) != "" {
 		beginDate = time.Now().Add(-time.Duration(days) * 365 * time.Hour).Format("2006-01-02")
@@ -824,12 +830,16 @@ func (m MarketNewsApi) IndustryResearchReport(industryCode string, days int) []a
 	if err != nil {
 		return []any{}
 	}
-	json.Unmarshal(resp.Body(), &respMap)
-	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
-	return respMap["data"].([]any)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return []any{}
+	}
+	if data, ok := respMap["data"].([]any); ok {
+		return data
+	}
+	return []any{}
 }
 func (m MarketNewsApi) StockResearchReport(stockCode string, days int) []any {
-	beginDate := time.Now().Add(-time.Duration(days) * 24 * time.Hour).Format("2006-01-02")
+	beginDate := ""
 	endDate := time.Now().Format("2006-01-02")
 	if strutil.ContainsAny(stockCode, []string{"."}) {
 		stockCode = strings.Split(stockCode, ".")[0]
@@ -888,9 +898,13 @@ func (m MarketNewsApi) StockResearchReport(stockCode string, days int) []any {
 	if err != nil {
 		return []any{}
 	}
-	json.Unmarshal(resp.Body(), &respMap)
-	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
-	return respMap["data"].([]any)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return []any{}
+	}
+	if data, ok := respMap["data"].([]any); ok {
+		return data
+	}
+	return []any{}
 }
 
 func (m MarketNewsApi) StockNotice(stock_list string) []any {
@@ -922,9 +936,18 @@ func (m MarketNewsApi) StockNotice(stock_list string) []any {
 	if err != nil {
 		return []any{}
 	}
-	json.Unmarshal(resp.Body(), &respMap)
-	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
-	return (respMap["data"].(map[string]any))["list"].([]any)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return []any{}
+	}
+	data, ok := respMap["data"].(map[string]any)
+	if !ok {
+		return []any{}
+	}
+	list, ok := data["list"].([]any)
+	if !ok {
+		return []any{}
+	}
+	return list
 }
 
 func (m MarketNewsApi) EMDictCode(code string, cache *freecache.Cache) []any {
@@ -932,8 +955,12 @@ func (m MarketNewsApi) EMDictCode(code string, cache *freecache.Cache) []any {
 
 	d, _ := cache.Get([]byte(code))
 	if d != nil {
-		json.Unmarshal(d, &respMap)
-		return respMap["data"].([]any)
+		if err := json.Unmarshal(d, &respMap); err == nil {
+			if data, ok := respMap["data"].([]any); ok {
+				return data
+			}
+		}
+		return []any{}
 	}
 
 	url := "https://reportapi.eastmoney.com/report/bk"
@@ -952,10 +979,14 @@ func (m MarketNewsApi) EMDictCode(code string, cache *freecache.Cache) []any {
 	if err != nil {
 		return []any{}
 	}
-	json.Unmarshal(resp.Body(), &respMap)
-	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
-	cache.Set([]byte(code), resp.Body(), 60*60*24)
-	return respMap["data"].([]any)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return []any{}
+	}
+	_ = cache.Set([]byte(code), resp.Body(), 60*60*24)
+	if data, ok := respMap["data"].([]any); ok {
+		return data
+	}
+	return []any{}
 }
 
 func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
@@ -985,7 +1016,9 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 	if err != nil {
 		return news
 	}
-	json.Unmarshal(items, TVNews)
+	if err := json.Unmarshal(items, TVNews); err != nil {
+		return news
+	}
 
 	for i, a := range *TVNews {
 		if i > 10 {
@@ -1053,7 +1086,7 @@ func (m MarketNewsApi) TradingViewNewsDetail(id string) *models.TVNewsDetail {
 
 func (m MarketNewsApi) XUEQIUHotStock(size int, marketType string) *[]models.HotItem {
 	request := newFetchRestyClient().SetTimeout(time.Duration(30) * time.Second).R()
-	_, err := request.
+	_, _ = request.
 		SetHeader("Host", "xueqiu.com").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0").
 		Get("https://xueqiu.com/hq#hot")
@@ -1063,7 +1096,7 @@ func (m MarketNewsApi) XUEQIUHotStock(size int, marketType string) *[]models.Hot
 
 	url := fmt.Sprintf("https://stock.xueqiu.com/v5/stock/hot_stock/list.json?page=1&size=%d&_type=%s&type=%s", size, marketType, marketType)
 	res := &models.XUEQIUHot{}
-	_, err = request.
+	_, err := request.
 		SetHeader("Host", "stock.xueqiu.com").
 		SetHeader("Origin", "https://xueqiu.com").
 		SetHeader("Referer", "https://xueqiu.com/").
@@ -1095,12 +1128,16 @@ func (m MarketNewsApi) HotEvent(size int) *[]models.HotEvent {
 	}
 	//logger.SugaredLogger.Infof("HotEvent:%s", resp.Body())
 	respMap := map[string]any{}
-	err = json.Unmarshal(resp.Body(), &respMap)
+	if err = json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return events
+	}
 	items, err := json.Marshal(respMap["list"])
 	if err != nil {
 		return events
 	}
-	json.Unmarshal(items, events)
+	if err := json.Unmarshal(items, events); err != nil {
+		return events
+	}
 	return events
 
 }
@@ -1124,8 +1161,13 @@ func (m MarketNewsApi) HotTopic(size int) []any {
 	}
 	//logger.SugaredLogger.Infof("HotTopic:%s", resp.Body())
 	respMap := map[string]any{}
-	err = json.Unmarshal(resp.Body(), &respMap)
-	return respMap["re"].([]any)
+	if err = json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return []any{}
+	}
+	if rows, ok := respMap["re"].([]any); ok {
+		return rows
+	}
+	return []any{}
 
 }
 
@@ -1156,8 +1198,13 @@ func (m MarketNewsApi) InvestCalendar(yearMonth string) []any {
 	}
 	//logger.SugaredLogger.Infof("InvestCalendar:%s", resp.Body())
 	respMap := map[string]any{}
-	err = json.Unmarshal(resp.Body(), &respMap)
-	return respMap["data"].([]any)
+	if err = json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return []any{}
+	}
+	if rows, ok := respMap["data"].([]any); ok {
+		return rows
+	}
+	return []any{}
 
 }
 
@@ -1373,7 +1420,11 @@ func (m MarketNewsApi) GetIndustryReportInfo(infoCode string) string {
 	}
 	body := resp.Body()
 	//logger.SugaredLogger.Debugf("GetIndustryReportInfo:%s", body)
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+	doc, parseErr := goquery.NewDocumentFromReader(strings.NewReader(string(body)))
+	if parseErr != nil {
+		logger.SugaredLogger.Errorf("GetIndustryReportInfo parse html err:%s", parseErr.Error())
+		return ""
+	}
 	title, _ := doc.Find("div.c-title").Html()
 	content, _ := doc.Find("div.ctx-content").Html()
 	//logger.SugaredLogger.Infof("GetIndustryReportInfo:\n%s\n%s", title, content)

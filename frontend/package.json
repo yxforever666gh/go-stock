@@ -1,12 +1,13 @@
 {
   "name": "go-stock",
-  "version": "1.2.7",
+  "version": "1.2.8",
   "description": "",
   "main": "",
   "scripts": {
     "dev": "vite",
     "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
     "lint": "eslint \"src/**/*.{js,ts,vue}\"",
+    "ci": "npm run lint && npm run build",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -54,7 +55,6 @@
   ],
   "author": "spark",
   "overrides": {
-    "brace-expansion": "^5.0.5",
     "flatted": "3.4.2",
     "lodash-es": "4.18.0",
     "validator": "13.15.22",

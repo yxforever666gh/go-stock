@@ -346,7 +346,7 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 	stats := marketSummaryActivationRepairStats{}
 	var rows []models.AiRecommendStocks
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
-		Where("summary_version = ?", marketSummaryPhase3Version).
+		Where("summary_version IN ?", []string{marketSummaryPhase3Version, marketSummaryPhase4Version}).
 		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error

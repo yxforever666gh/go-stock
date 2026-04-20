@@ -30,6 +30,14 @@ const tableOverflowTooltip = {
 const dataRef = ref([])
 const loadingRef = ref(true)
 const tableScrollX = 2500
+const strategyCohortRef = ref('all')
+const strategyCohortOptions = [
+  { label: 'All', value: 'all' },
+  { label: 'Current / phase3-v4', value: 'current' },
+  { label: 'Phase3-v4', value: 'phase3-v4' },
+  { label: 'Phase3-v3', value: 'phase3-v3' },
+  { label: 'Legacy', value: 'legacy' }
+]
 
 onBeforeMount(() => {
   GetConfig().then(result => {
@@ -231,7 +239,8 @@ function query({
   pageSize = 10,
   keyword = "",
   startDate = "",
-  endDate = ""
+  endDate = "",
+  strategyCohort = "all"
 }) {
   return new Promise((resolve) => {
     GetAiRecommendStocksList({
@@ -242,7 +251,8 @@ function query({
       stockCode: keyword,
       bkName: keyword,
       startDate,
-      endDate
+      endDate,
+      strategyCohort
     }).then((res) => {
       resolve({
         pageCount: res.totalPages,
@@ -269,7 +279,8 @@ async function refreshList(page) {
     pageSize: paginationReactive.pageSize,
     keyword: paginationReactive.keyword,
     startDate,
-    endDate
+    endDate,
+    strategyCohort: strategyCohortRef.value
   })
   dataRef.value = data.data
   paginationReactive.page = page
@@ -285,6 +296,13 @@ watch(researchDateRangeKey, async (nextKey, prevKey) => {
   await refreshList(1)
 })
 
+watch(strategyCohortRef, async (nextValue, prevValue) => {
+  if (!rangeReadyRef.value || !prevValue || nextValue === prevValue) {
+    return
+  }
+  await refreshList(1)
+})
+
 function handlePageChange(currentPage) {
   if (loadingRef.value) return
   refreshList(currentPage)
@@ -293,6 +311,11 @@ function handlePageChange(currentPage) {
 function handleSearch() {
   if (loadingRef.value) return
   refreshList(1)
+}
+
+function strategyCohortLabel() {
+  const matched = strategyCohortOptions.find((item) => item.value === strategyCohortRef.value)
+  return matched?.label || strategyCohortRef.value || '--'
 }
 
 function formatDate(dateValue) {
@@ -461,11 +484,20 @@ function deleteAiRecommendStocks(id) {
 <template>
   <n-input-group>
     <n-date-picker v-model:value="researchDateRangeModel" type="daterange" style="width: 50%" />
+    <n-select
+      v-model:value="strategyCohortRef"
+      :options="strategyCohortOptions"
+      style="width: 20%"
+    />
     <n-input clearable placeholder="输入关键词搜索" v-model:value="paginationReactive.keyword" />
     <n-button type="primary" ghost @click="handleSearch" @input="handleSearch">
       搜索
     </n-button>
   </n-input-group>
+  <div style="margin-top: 8px;">
+    <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
+    <n-text depth="3" style="margin-left: 12px;">推荐记录页默认看全量历史；切到 current 可只查看 phase3-v4 新口径记录。</n-text>
+  </div>
 
   <n-data-table
     ref="tableRef"

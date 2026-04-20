@@ -86,13 +86,14 @@ func (a *App) GetAiRecommendYieldMinuteChart(recommendID uint) *models.AiRecomme
 	return data
 }
 
-func (a *App) GetAiRecommendYieldDailyOverview() *models.AiRecommendYieldDailyOverviewData {
-	data, err := a.services.Recommend.GetAiRecommendYieldDailyOverview()
+func (a *App) GetAiRecommendYieldDailyOverview(query models.AiRecommendStocksQuery) *models.AiRecommendYieldDailyOverviewData {
+	data, err := a.services.Recommend.GetAiRecommendYieldDailyOverview(&query)
 	if err != nil {
 		return &models.AiRecommendYieldDailyOverviewData{
-			CalcMode: "strict",
-			Warnings: []string{"读取全库收益走势失败: " + err.Error()},
-			Points:   []models.AiRecommendYieldDailyOverviewPoint{},
+			CalcMode:       "strict",
+			StrategyCohort: query.StrategyCohort,
+			Warnings:       []string{"读取全库收益走势失败: " + err.Error()},
+			Points:         []models.AiRecommendYieldDailyOverviewPoint{},
 		}
 	}
 	return data

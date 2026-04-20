@@ -315,6 +315,9 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 		}
 		report.CreatedAt = startedAt
 	}
+	if report == nil {
+		return
+	}
 	report.ChatId = res.chatID
 	if err := db.Dao.Create(report).Error; err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结保存失败: %v", err)
@@ -332,7 +335,7 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 	}
 
 	setting := a.services.Config.GetConfig()
-	if report != nil && setting != nil && setting.Settings != nil && setting.YieldEmailEnable && setting.MarketSummaryEmailEnable {
+	if setting != nil && setting.Settings != nil && setting.YieldEmailEnable && setting.MarketSummaryEmailEnable {
 		if !a.tryAcquireYieldEmailTask() {
 			logger.SugaredLogger.Warn("市场资讯AI总结自动发送邮件已跳过: 上一次邮件发送任务仍在执行")
 			return

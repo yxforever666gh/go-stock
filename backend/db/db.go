@@ -80,14 +80,15 @@ func Init(sqlitePath string) {
 		SkipDefaultTransaction:                   true,
 		PrepareStmt:                              true,
 	})
-	//读写分离提高sqlite效率，防止锁库
-	openDb.Use(dbresolver.Register(
-		dbresolver.Config{
-			Replicas: []gorm.Dialector{sqlite.Open(sqlitePath)}},
-	))
-
 	if err != nil {
 		log.Fatalf("db connection error is %s", err.Error())
+	}
+	//读写分离提高sqlite效率，防止锁库
+	if err = openDb.Use(dbresolver.Register(
+		dbresolver.Config{
+			Replicas: []gorm.Dialector{sqlite.Open(sqlitePath)}},
+	)); err != nil {
+		log.Fatalf("db resolver init error is %s", err.Error())
 	}
 
 	dbCon, err := openDb.DB()

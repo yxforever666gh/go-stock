@@ -697,7 +697,9 @@ func sendSMTPSSL(addr string, cfg *yieldEmailRuntimeConfig, message []byte) erro
 	if err != nil {
 		return err
 	}
-	defer client.Quit()
+	defer func() {
+		_ = client.Quit()
+	}()
 	return sendWithSMTPClient(client, cfg, message)
 }
 
@@ -715,7 +717,9 @@ func sendSMTPSTARTTLS(addr string, cfg *yieldEmailRuntimeConfig, message []byte)
 		_ = conn.Close()
 		return err
 	}
-	defer client.Quit()
+	defer func() {
+		_ = client.Quit()
+	}()
 	if ok, _ := client.Extension("STARTTLS"); ok {
 		if err := client.StartTLS(&tls.Config{ServerName: cfg.Host, MinVersion: tls.VersionTLS12}); err != nil {
 			return err

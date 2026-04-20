@@ -105,7 +105,7 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 
 	// "auto" means: try Sina first (stable), then fall back to EM when Sina does
 	// not fully cover the requested [start, end] window.
-	usedSource := "akshare:" + sourcePref
+	usedSource := ""
 	var rows []akShareMinuteRow
 	if sourcePref == "auto" {
 		sinaRows, sinaErr := fetchRows("sina")

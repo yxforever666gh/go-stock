@@ -88,7 +88,9 @@ func TestSearchStockApi_HotStrategy(t *testing.T) {
 		return
 	}
 	strategy := &models.HotStrategy{}
-	json.Unmarshal(bytes, strategy)
+	if err := json.Unmarshal(bytes, strategy); err != nil {
+		t.Fatalf("unmarshal strategy failed: %v", err)
+	}
 	for _, data := range strategy.Data {
 		data.Chg = mathutil.RoundToFloat(100*data.Chg, 2)
 	}

@@ -135,7 +135,9 @@ func loadYieldEmailItems() ([]models.AiRecommendStocksYieldItem, error) {
 func buildYieldXLSXAttachment(items []models.AiRecommendStocksYieldItem) ([]byte, error) {
 	file := excelize.NewFile()
 	defaultSheet := file.GetSheetName(0)
-	file.SetSheetName(defaultSheet, yieldEmailSheetName)
+	if err := file.SetSheetName(defaultSheet, yieldEmailSheetName); err != nil {
+		return nil, err
+	}
 
 	headerStyle, err := file.NewStyle(&excelize.Style{
 		Font: &excelize.Font{

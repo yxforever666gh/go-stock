@@ -73,7 +73,12 @@ func (s SearchStockApi) SearchStock(pageSize int) map[string]any {
 		}
 	}
 	respMap := map[string]any{}
-	json.Unmarshal(resp.Body(), &respMap)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return map[string]any{
+			"code":    -1,
+			"message": err.Error(),
+		}
+	}
 	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
 	return respMap
 }
@@ -121,7 +126,12 @@ func (s SearchStockApi) SearchBk(pageSize int) map[string]any {
 		}
 	}
 	respMap := map[string]any{}
-	json.Unmarshal(resp.Body(), &respMap)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return map[string]any{
+			"code":    -1,
+			"message": err.Error(),
+		}
+	}
 	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
 	return respMap
 }
@@ -169,7 +179,12 @@ func (s SearchStockApi) SearchETF(pageSize int) map[string]any {
 		}
 	}
 	respMap := map[string]any{}
-	json.Unmarshal(resp.Body(), &respMap)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return map[string]any{
+			"code":    -1,
+			"message": err.Error(),
+		}
+	}
 	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
 	return respMap
 }
@@ -187,7 +202,9 @@ func (s SearchStockApi) HotStrategy() map[string]any {
 		return map[string]any{}
 	}
 	respMap := map[string]any{}
-	json.Unmarshal(resp.Body(), &respMap)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		return map[string]any{}
+	}
 	return respMap
 }
 
@@ -196,7 +213,9 @@ func (s SearchStockApi) HotStrategyTable() string {
 	res := s.HotStrategy()
 	bytes, _ := json.Marshal(res)
 	strategy := &models.HotStrategy{}
-	json.Unmarshal(bytes, strategy)
+	if err := json.Unmarshal(bytes, strategy); err != nil {
+		return markdownTable
+	}
 	for _, data := range strategy.Data {
 		data.Chg = mathutil.RoundToFloat(100*data.Chg, 2)
 	}
@@ -218,7 +237,10 @@ func (s SearchStockApi) StrategySquare() map[string]any {
 		return map[string]any{}
 	}
 	respMap := map[string]any{}
-	json.Unmarshal(resp.Body(), &respMap)
+	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
+		logger.SugaredLogger.Errorf("StrategySquare unmarshal err:%+v", err)
+		return map[string]any{}
+	}
 	logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
 	return respMap
 }

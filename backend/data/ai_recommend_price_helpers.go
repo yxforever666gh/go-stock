@@ -203,7 +203,7 @@ func parseStopProfitPrice(item models.AiRecommendStocks) (float64, bool) {
 	max := item.RecommendStopProfitPriceMax
 	if min > 0 && max > 0 {
 		if min > max {
-			min, max = max, min
+			min = max
 		}
 		// Use the lower bound for stop-profit, not the average.
 		return min, true
