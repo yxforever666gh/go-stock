@@ -1317,6 +1317,60 @@ type AiRecommendStocksYieldPageData struct {
 	DiemengHealthCheckedAt     string                       `json:"diemengHealthCheckedAt,omitempty"`
 }
 
+// AiRecommendYieldComprehensiveStats 综合统计（消除幸存者偏差）
+type AiRecommendYieldComprehensiveStats struct {
+	// 现有指标（仅 activated）
+	ActivatedCount         int     `json:"activatedCount"`
+	ActivatedYieldRate     float64 `json:"activatedYieldRate"`
+	ActivatedYieldRateText string  `json:"activatedYieldRateText"`
+
+	// 全样本指标
+	TotalRecommendCount int     `json:"totalRecommendCount"`
+	ActivationRate      float64 `json:"activationRate"`     // 激活率
+	ActivationRateText  string  `json:"activationRateText"` // 激活率文本
+
+	// 各状态分布
+	PendingCount    int `json:"pendingCount"`    // 待激活
+	SkippedCount    int `json:"skippedCount"`    // 已跳过
+	IneligibleCount int `json:"ineligibleCount"` // 不符合条件
+
+	// 机会成本分析
+	SkippedOpportunityCost     float64 `json:"skippedOpportunityCost"`     // 被跳过推荐的假设收益
+	SkippedOpportunityCostText string  `json:"skippedOpportunityCostText"` // 机会成本文本
+
+	// 选择偏差调整后的收益率
+	BiasAdjustedYieldRate     float64 `json:"biasAdjustedYieldRate"`     // 调整后收益率
+	BiasAdjustedYieldRateText string  `json:"biasAdjustedYieldRateText"` // 调整后收益率文本
+}
+
+// AiRecommendYieldCapitalEfficiency 资金利用率指标
+type AiRecommendYieldCapitalEfficiency struct {
+	TotalDays                    int     `json:"totalDays"`                    // 总天数
+	InvestedDays                 int     `json:"investedDays"`                 // 持仓天数
+	IdleDays                     int     `json:"idleDays"`                     // 空仓天数
+	CapitalUtilization           float64 `json:"capitalUtilization"`           // 资金利用率
+	CapitalUtilizationText       string  `json:"capitalUtilizationText"`       // 资金利用率文本
+	AdjustedAnnualizedReturn     float64 `json:"adjustedAnnualizedReturn"`     // 调整后的年化收益率
+	AdjustedAnnualizedReturnText string  `json:"adjustedAnnualizedReturnText"` // 调整后年化收益率文本
+}
+
+// AiRecommendOpeningReviewStats 开盘复核统计
+type AiRecommendOpeningReviewStats struct {
+	TotalOvernightRecommends      int     `json:"totalOvernightRecommends"`      // 隔夜推荐总数
+	ReviewedCount                 int     `json:"reviewedCount"`                 // 经过复核的数量
+	SkippedByGapDown              int     `json:"skippedByGapDown"`              // 因低开跳过
+	SkippedByGapUp                int     `json:"skippedByGapUp"`                // 因高开跳过
+	PassedReview                  int     `json:"passedReview"`                  // 通过复核
+	MissedOpportunityCount        int     `json:"missedOpportunityCount"`        // 错过的机会数
+	MissedOpportunityAvgYield     float64 `json:"missedOpportunityAvgYield"`     // 错过的平均收益
+	MissedOpportunityAvgYieldText string  `json:"missedOpportunityAvgYieldText"` // 错过的平均收益文本
+	AvoidedLossCount              int     `json:"avoidedLossCount"`              // 避免的损失数
+	AvoidedLossAvgAmount          float64 `json:"avoidedLossAvgAmount"`          // 避免的平均损失
+	AvoidedLossAvgAmountText      string  `json:"avoidedLossAvgAmountText"`      // 避免的平均损失文本
+	NetEffectiveness              float64 `json:"netEffectiveness"`              // 净有效性
+	NetEffectivenessText          string  `json:"netEffectivenessText"`          // 净有效性文本
+}
+
 type AiRecommendYieldState struct {
 	ID                 uint       `json:"id" gorm:"primarykey"`
 	CreatedAt          time.Time  `json:"createdAt"`

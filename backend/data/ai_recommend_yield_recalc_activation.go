@@ -790,18 +790,11 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 	info.LastMinuteTs = cacheInfo.LastMinuteTs
 	if !legacyDirectActivation {
 		if rule, err := parseActivationRuleJSON(rec.ActivationRuleJSON); err == nil {
-			if policy := resolveActivationOpeningPolicy(rule); policy != nil &&
-				policy.SameDayOnly &&
-				isCurrentStrategyCohortRecord(&rec) &&
-				!isSameCNTradeDate(recordTime, ctx.LatestTradeDate) {
-				info.DataStatus = "已跳过"
-				info.DataStatusReason = "sameDayOnly 生效，旧信号仅允许在信号当日激活"
-				return nil, 0, info
-			}
 			if policy := resolveActivationOpeningPolicy(rule); shouldApplyOpeningPolicyForActivation(recordTime, ctx.LatestTradeDate, policy) {
 				if bufferUntil, ok := resolveOpeningPolicyBufferUntil(ctx.LatestTradeDate, policy); ok {
 					preBars, postBars := splitMinuteBarsByCutoff(bars, bufferUntil)
 					sameDayBars := filterMinuteBarsByCNTradeDate(preBars, recordTime)
+					// 1. 先检查推荐当日是否已激活
 					if scan := resolveActivationRuleScan(rec, sameDayBars); scan.Triggered {
 						scan.Time = clampRecordActivationTime(recordTime, scan.Time)
 						t := scan.Time
@@ -809,11 +802,21 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 						info.ActivationPrice = scan.Price
 						return &t, scan.Price, info
 					}
+					// 2. 再检查开盘复核跳过原因（风险保护优先）
 					if skipReason := resolveOpeningPolicySkipReason(rec, policy, preBars); skipReason != "" {
 						info.DataStatus = "已跳过"
 						info.DataStatusReason = skipReason
 						return nil, 0, info
 					}
+					// 3. 然后检查 sameDayOnly 限制（时效限制）
+					if policy.SameDayOnly &&
+						isCurrentStrategyCohortRecord(&rec) &&
+						!isSameCNTradeDate(recordTime, ctx.LatestTradeDate) {
+						info.DataStatus = "已跳过"
+						info.DataStatusReason = "sameDayOnly 生效，旧信号仅允许在信号当日激活"
+						return nil, 0, info
+					}
+					// 4. 最后检查缓冲期等待
 					if ctx.Now.Before(bufferUntil) || end.Before(bufferUntil) {
 						info.DataStatus = "待激活"
 						info.DataStatusReason = fmt.Sprintf("隔夜推荐等待 %s 开盘复核完成后再开始激活扫描", bufferUntil.In(cnLocation()).Format("15:04"))

@@ -3131,6 +3131,7 @@ func calculateCashflowMatchedBenchmark(
 
 	prevValue := 0.0
 	nav := 1.0
+	moneyMarketDailyRate := moneyMarketAnnualRate / 365.0 / 100.0
 	for _, tradeDay := range tradingDays {
 		tradeDate := tradeDay.Format("2006-01-02")
 		totalValue := 0.0
@@ -3168,6 +3169,19 @@ func calculateCashflowMatchedBenchmark(
 		if dailyHoldingCostNet > 0 {
 			benchmarkDailyRate = round2(dailyAmount / dailyHoldingCostNet * 100)
 			nav = round4(nav * (1 + benchmarkDailyRate/100))
+		} else if costBasisNet > 0 {
+			// 空仓期：按货币基金收益计算（年化2.5%）
+			idleCashDailyReturn := prevValue * moneyMarketDailyRate
+			dailyAmount = round2(idleCashDailyReturn)
+			if prevValue > 0 {
+				benchmarkDailyRate = round2(dailyAmount / prevValue * 100)
+				nav = round4(nav * (1 + benchmarkDailyRate/100))
+			}
+			totalValue = prevValue + dailyAmount
+			cumulativeAmount = round2(totalValue - costBasisNet)
+			if costBasisNet > 0 {
+				benchmarkCumulativeRate = round2(cumulativeAmount / costBasisNet * 100)
+			}
 		}
 		valueByDay[tradeDate] = round2(totalValue)
 		cumulativeAmountByDay[tradeDate] = cumulativeAmount

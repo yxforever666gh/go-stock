@@ -34,6 +34,13 @@ type activationRule struct {
 	VolumeWindow     int                      `json:"volumeWindow,omitempty"`
 	VolumeMetric     string                   `json:"volumeMetric,omitempty"`
 	ExpireTradeDays  int                      `json:"expireTradeDays,omitempty"`
+	// 时间戳字段，用于防止事后拟合
+	GeneratedAt    time.Time `json:"generatedAt,omitempty"`    // 规则生成时间
+	ValidFrom      time.Time `json:"validFrom,omitempty"`      // 规则生效时间
+	DataCutoffTime time.Time `json:"dataCutoffTime,omitempty"` // 数据截止时间
+	// 量能条件优化字段
+	VolumeBaselineType string  `json:"volumeBaselineType,omitempty"` // "fixed", "percentile", "adaptive"
+	VolumePercentile   float64 `json:"volumePercentile,omitempty"`   // 使用的分位数（如75）
 }
 
 type activationOpeningPolicy struct {
@@ -232,6 +239,8 @@ func normalizeActivationRuleForSave(recommend *models.AiRecommendStocks) error {
 			recommend.ActivationInvalidReason = err.Error()
 			return err
 		}
+		// 设置时间戳
+		setActivationRuleTimestamps(rule, *recommend, time.Now())
 		raw, err := json.Marshal(rule)
 		if err != nil {
 			return err
@@ -248,6 +257,14 @@ func normalizeActivationRuleForSave(recommend *models.AiRecommendStocks) error {
 		recommend.ActivationInvalidReason = "结构化激活规则无效：" + err.Error()
 		return err
 	}
+
+	// 验证时间线（防止事后拟合）
+	if err := validateActivationRuleTimelineForPaths(rule, *recommend); err != nil {
+		recommend.ActivationStatus = "invalid"
+		recommend.ActivationInvalidReason = "规则时间线验证失败：" + err.Error()
+		return err
+	}
+
 	raw, err := json.Marshal(rule)
 	if err != nil {
 		return err
@@ -286,18 +303,20 @@ func buildActivationRuleFromRecommend(recommend *models.AiRecommendStocks) (*act
 	}
 	evaluationWindow := resolveActivationEvaluationWindow(combined)
 	rule := &activationRule{
-		Version:          activationRuleVersionV1,
-		SignalType:       "price_range_with_volume",
-		EvaluationWindow: evaluationWindow,
-		Baseline:         "avg_amount_5x5m",
-		Operator:         ">=",
-		ThresholdValue:   1,
-		ThresholdMax:     round2(maxPrice),
-		VolumeRatio:      1,
-		ConfirmBars:      1,
-		VolumeWindow:     5,
-		VolumeMetric:     "amount",
-		ExpireTradeDays:  recommendPendingActivationMaxTradeDays,
+		Version:            activationRuleVersionV1,
+		SignalType:         "price_range_with_volume",
+		EvaluationWindow:   evaluationWindow,
+		Baseline:           "avg_amount_5x5m",
+		Operator:           ">=",
+		ThresholdValue:     1,
+		ThresholdMax:       round2(maxPrice),
+		VolumeRatio:        1,
+		ConfirmBars:        1,
+		VolumeWindow:       5,
+		VolumeMetric:       "amount",
+		ExpireTradeDays:    recommendPendingActivationMaxTradeDays,
+		VolumeBaselineType: "percentile", // 默认使用分位数方法
+		VolumePercentile:   70,           // 默认70%分位数
 	}
 	rule.ThresholdValue = round2(minPrice)
 	if isMarketSummaryActivationSource(recommend.ActivationRuleSource) {
@@ -790,6 +809,14 @@ func passesVolumeRule(rule *activationRule, bars []minuteBar, idx int) (bool, st
 	if rule == nil {
 		return false, ""
 	}
+
+	// 优先使用分位数方法
+	baselineType := strings.TrimSpace(rule.VolumeBaselineType)
+	if baselineType == "percentile" || baselineType == "adaptive" {
+		return passesVolumeRuleWithPercentile(rule, bars, idx)
+	}
+
+	// 传统方法
 	window := rule.VolumeWindow
 	if window <= 0 {
 		window = 5

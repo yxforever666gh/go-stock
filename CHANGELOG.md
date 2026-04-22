@@ -1,5 +1,45 @@
 # 更新日志
 
+## 未发布
+
+## 1.3.0 - 2026-04-22
+
+### 重点更新
+
+- **回测算法核心优化**：针对 AI 推荐激活规则和收益率统计的五大硬伤进行系统性修复，消除事后拟合、幸存者偏差、固定量能阈值等问题，提升回测结果的可信度。
+
+### 新增
+
+- **P0-1: 防止事后拟合**
+  - 激活规则新增时间戳验证机制（`GeneratedAt`、`DataCutoffTime`）
+  - 自动检测规则是否使用未来数据，防止"用结果反推规则"
+  - 新增历史数据验证统计（`HistoricalValidation`），记录规则在历史数据上的表现
+  - 新增文件：`ai_recommend_activation_rule_validation.go`、`ai_recommend_activation_rule_backtest.go`
+
+- **P0-2: 消除幸存者偏差**
+  - 新增综合统计结构体 `AiRecommendYieldComprehensiveStats`，统计所有推荐（包括未激活的）
+  - 计算激活率、各状态分布（待激活/已跳过/不符合条件）
+  - 新增机会成本分析，计算被跳过推荐的假设收益
+  - 提供选择偏差调整后的收益率
+  - 新增文件：`ai_recommend_yield_opportunity_cost.go`、`ai_recommend_yield_comprehensive_stats.go`
+
+- **P1-1: 量能条件优化**
+  - 激活规则从固定"成交额>1亿"改为历史分位数模式（默认近30日70%分位）
+  - 自动适应不同市场环境和个股流动性特征
+  - 新规则默认使用分位数模式，旧规则保持向后兼容
+  - 新增文件：`ai_recommend_activation_volume_percentile.go`
+
+- **P1-2: 基准对比优化**
+  - 修复空仓期按0%收益计算的不公平假设
+  - 空仓期现在按年化2.5%的货币基金收益计算
+  - 基准对比更真实反映"持续投入策略"的实际表现
+  - 新增资金利用率计算模块 `AiRecommendYieldCapitalEfficiency`
+  - 新增文件：`ai_recommend_yield_capital_efficiency.go`
+
+### 修复
+
+- 调整 AI 推荐激活逻辑中 `sameDayOnly` 和开盘复核的执行顺序：开盘复核（风险保护）现在优先于 `sameDayOnly`（时效限制）执行，确保隔夜推荐在次日开盘时能正确应用跳空止损和追高限制策略，而不是被 `sameDayOnly` 提前拦截。跳过原因现在更准确地反映实际情况（"跳空止损" / "追高保护" / "时效限制"），便于策略优化和问题排查。
+
 ## 1.2.8 - 2026-04-21
 
 ### 重点更新

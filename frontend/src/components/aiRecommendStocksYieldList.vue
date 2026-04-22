@@ -14,7 +14,7 @@ import { useSharedResearchDateRange } from "../composables/useSharedResearchDate
 const message = useMessage()
 const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
 const rangeReadyRef = ref(false)
-const strategyCohortRef = ref('current')
+const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'Current / phase3-v4', value: 'current' },
   { label: 'Phase3-v4', value: 'phase3-v4' },
