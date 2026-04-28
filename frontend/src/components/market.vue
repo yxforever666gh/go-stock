@@ -84,12 +84,14 @@ const summaryCronEnabled = ref(true)
 const summaryCronTimes = ref('09:40,11:30,14:30')
 const visitedTabs = ref([])
 
-const defaultMarketSummaryQuestion = '总结和分析股票市场新闻中的投资机会，并推荐3个A股，并给出关键价位与交易计划'
+const defaultMarketSummaryQuestion = '总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出关键价位与交易计划'
 const summaryOutputHint = '固定输出：市场主线 / 候选方向 / 风险提示 / 推荐结论 / 交易计划说明 / 推荐股票池 / 跳过复审（结构化表格）'
 const legacyMarketSummaryQuestion = '总结和分析股票市场新闻中的投资机会'
 const legacyMarketSummaryQuestionWithTime = '请根据当前时间，总结和分析股票市场新闻中的投资机会'
 const legacyMarketSummaryQuestion3A = '总结和分析股票市场新闻中的投资机会，并推荐3只A股股票'
 const legacyMarketSummaryQuestion3A2 = '总结和分析股票市场新闻中的投资机会，并推荐3个A股股票'
+const legacyMarketSummaryQuestion3A3 = '总结和分析股票市场新闻中的投资机会，并推荐3只A股'
+const legacyMarketSummaryQuestion3A4 = '总结和分析股票市场新闻中的投资机会，并推荐3个A股'
 
 const marketTabComponents = {
   市场快讯: MarketNewsTab,
@@ -150,6 +152,8 @@ function normalizeMarketSummaryQuestion(q) {
   if (text === legacyMarketSummaryQuestionWithTime) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion3A) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion3A2) return defaultMarketSummaryQuestion
+  if (text === legacyMarketSummaryQuestion3A3) return defaultMarketSummaryQuestion
+  if (text === legacyMarketSummaryQuestion3A4) return defaultMarketSummaryQuestion
   if (text === '市场资讯分析和总结') return defaultMarketSummaryQuestion
   if (text === '市场资讯分析') return defaultMarketSummaryQuestion
   if (text.startsWith(legacyMarketSummaryQuestionWithTime) && !text.includes('买卖区间') && !text.includes('关键价位') && !text.includes('交易计划')) {
@@ -514,114 +518,123 @@ onBeforeMount(() => {
     ReFlesh('新浪财经')
     ReFlesh('外媒')
   }, 1000 * 10)
-})
 
-EventsOn('changeMarketTab', async (msg) => {
-  updateTab(msg.name)
-})
+  // Clean up any stale event listeners (defensive)
+  EventsOff('changeMarketTab')
+  EventsOff('newTelegraph')
+  EventsOff('newSinaNews')
+  EventsOff('tradingViewNews')
+  EventsOff('summaryStockNews')
+  EventsOff('summaryStockNewsToolStatus')
 
-EventsOn('newTelegraph', (data) => {
-  if (data != null) {
-    for (let i = 0; i < data.length; i++) {
-      telegraphList.value.pop()
+  // Register event listeners
+  EventsOn('changeMarketTab', async (msg) => {
+    updateTab(msg.name)
+  })
+
+  EventsOn('newTelegraph', (data) => {
+    if (data != null) {
+      for (let i = 0; i < data.length; i++) {
+        telegraphList.value.pop()
+      }
+      telegraphList.value.unshift(...data)
     }
-    telegraphList.value.unshift(...data)
-  }
-})
+  })
 
-EventsOn('newSinaNews', (data) => {
-  if (data != null) {
-    for (let i = 0; i < data.length; i++) {
-      sinaNewsList.value.pop()
+  EventsOn('newSinaNews', (data) => {
+    if (data != null) {
+      for (let i = 0; i < data.length; i++) {
+        sinaNewsList.value.pop()
+      }
+      sinaNewsList.value.unshift(...data)
     }
-    sinaNewsList.value.unshift(...data)
-  }
-})
+  })
 
-EventsOn('tradingViewNews', (data) => {
-  if (data != null) {
-    for (let i = 0; i < data.length; i++) {
-      foreignNewsList.value.pop()
+  EventsOn('tradingViewNews', (data) => {
+    if (data != null) {
+      for (let i = 0; i < data.length; i++) {
+        foreignNewsList.value.pop()
+      }
+      foreignNewsList.value.unshift(...data)
     }
-    foreignNewsList.value.unshift(...data)
-  }
-})
+  })
 
-EventsOn('summaryStockNews', async (msg) => {
-  if (msg === 'DONE') {
-    summaryRunning.value = false
-    loading.value = false
-    if (summaryHadError.value && !String(aiSummary.value || '').trim()) {
-      summaryStatusText.value = 'AI分析失败'
+  EventsOn('summaryStockNews', async (msg) => {
+    if (msg === 'DONE') {
+      summaryRunning.value = false
+      loading.value = false
+      if (summaryHadError.value && !String(aiSummary.value || '').trim()) {
+        summaryStatusText.value = 'AI分析失败'
+        return
+      }
+      summaryStatusText.value = 'AI分析完成'
+      message.info('AI分析完成！')
+      message.destroyAll()
       return
     }
-    summaryStatusText.value = 'AI分析完成'
-    message.info('AI分析完成！')
-    message.destroyAll()
-    return
-  }
 
-  const code = Number(msg?.code ?? 1)
-  if (code === 0) {
-    summaryRunning.value = false
-    loading.value = false
-    summaryHadError.value = true
-    summaryStatusText.value = 'AI分析失败'
-    summaryErrorMessage.value = msg?.content || 'AI总结执行失败'
-    if (msg?.content) {
-      message.error(msg.content)
+    const code = Number(msg?.code ?? 1)
+    if (code === 0) {
+      summaryRunning.value = false
+      loading.value = false
+      summaryHadError.value = true
+      summaryStatusText.value = 'AI分析失败'
+      summaryErrorMessage.value = msg?.content || 'AI总结执行失败'
+      if (msg?.content) {
+        message.error(msg.content)
+      }
+      return
     }
-    return
-  }
-  if (msg.chatId) {
-    chatId.value = msg.chatId
-  }
-  if (msg.question) {
-    setLastSummaryQuestion(msg.question)
-  }
-  if (msg.content) {
-    loading.value = false
-    aiSummary.value += msg.content
-  }
-  if (msg.extraContent) {
-    loading.value = false
-    aiSummary.value += msg.extraContent
-  }
-  if (msg.model) {
-    modelName.value = msg.model
-  }
-  if (msg.time) {
-    aiSummaryTime.value = msg.time
-  }
-})
+    if (msg.chatId) {
+      chatId.value = msg.chatId
+    }
+    if (msg.question) {
+      setLastSummaryQuestion(msg.question)
+    }
+    if (msg.content) {
+      loading.value = false
+      aiSummary.value += msg.content
+    }
+    if (msg.extraContent) {
+      loading.value = false
+      aiSummary.value += msg.extraContent
+    }
+    if (msg.model) {
+      modelName.value = msg.model
+    }
+    if (msg.time) {
+      aiSummaryTime.value = msg.time
+    }
+  })
 
-EventsOn('summaryStockNewsToolStatus', async (msg) => {
-  if (!msg || !msg.status) {
-    return
-  }
-  const toolLabel = getSummaryToolLabel(msg.tool)
-  const latency = formatSummaryLatency(msg.latencyMs)
-  if (msg.status === 'busy') {
-    summaryRunning.value = false
-    loading.value = false
-    message.warning('AI总结正在执行，请勿重复点击。')
-    summaryStatusText.value = 'AI总结任务仍在执行'
-    return
-  }
-  if (msg.status === 'running') {
-    summaryRunning.value = true
-    summaryStatusText.value = `${toolLabel}中...`
-    return
-  }
-  if (msg.status === 'success') {
-    summaryStatusText.value = msg.tool === 'phase3.generate' ? '总结正文生成完成' : latency ? `${toolLabel}完成（${latency}）` : `${toolLabel}完成`
-    return
-  }
-  if (msg.status === 'error') {
-    const detail = msg.error ? `：${msg.error}` : ''
-    summaryStatusText.value = `${toolLabel}失败`
-    message.error(`工具 ${msg.tool || 'unknown'} 执行失败${detail}`)
-  }
+  EventsOn('summaryStockNewsToolStatus', async (msg) => {
+    if (!msg || !msg.status) {
+      return
+    }
+    const toolLabel = getSummaryToolLabel(msg.tool)
+    const latency = formatSummaryLatency(msg.latencyMs)
+    if (msg.status === 'busy') {
+      summaryRunning.value = false
+      loading.value = false
+      message.warning('AI总结正在执行，请勿重复点击。')
+      summaryStatusText.value = 'AI总结任务仍在执行'
+      return
+    }
+    if (msg.status === 'running') {
+      summaryRunning.value = true
+      summaryStatusText.value = `${toolLabel}中...`
+      return
+    }
+    if (msg.status === 'success') {
+      summaryStatusText.value = msg.tool === 'phase3.generate' ? '总结正文生成完成' : latency ? `${toolLabel}完成（${latency}）` : `${toolLabel}完成`
+      return
+    }
+    if (msg.status === 'error') {
+      const detail = msg.error ? `：${msg.error}` : ''
+      summaryStatusText.value = `${toolLabel}失败`
+      message.error(`工具 ${msg.tool || 'unknown'} 执行失败${detail}`)
+    }
+  })
 })
 
 onBeforeUnmount(() => {
@@ -758,7 +771,7 @@ onBeforeUnmount(() => {
           @update:value="onQuestionInput"
           type="textarea"
           :show-count="true"
-          placeholder="请输入您的问题:例如 总结和分析股票市场新闻中的投资机会，并推荐3个A股，并给出买入区间、止盈区间、止损位与失效条件；结果将固定输出为市场主线/候选方向/风险提示/推荐结论/交易计划说明/推荐股票池"
+          placeholder="请输入您的问题:例如 总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出买入区间、止盈区间、止损位与失效条件；结果将固定输出为市场主线/候选方向/风险提示/推荐结论/交易计划说明/推荐股票池"
           :autosize="{ minRows: 2, maxRows: 5 }"
         />
         <n-button size="tiny" type="warning" :loading="summaryRunning" :disabled="summaryRunning" @click="reAiSummary">再次总结</n-button>

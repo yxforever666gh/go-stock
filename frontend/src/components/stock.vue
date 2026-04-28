@@ -336,6 +336,18 @@ onBeforeMount(() => {
     data.aiConfigId = res[0].ID
   })
 
+  // Clean up any stale event listeners (defensive)
+  EventsOff("loadingDone")
+  EventsOff("refresh")
+  EventsOff("showSearch")
+  EventsOff("stock_price")
+  EventsOff("refreshFollowList")
+  EventsOff("newChatStream")
+  EventsOff("changeTab")
+  EventsOff("updateVersion")
+  EventsOff("warnMsg")
+
+  // Register event listeners
   EventsOn("loadingDone", (data) => {
     message.loading("刷新股票基础数据...")
     GetStockList("").then(result => {

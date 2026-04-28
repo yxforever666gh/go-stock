@@ -22,67 +22,71 @@ onMounted(() => {
     selfUpdateEnabled.value = res.selfUpdateEnabled !== false;
     manualUpdateHint.value = res.manualUpdateHint || '';
   });
+
+  // Clean up any stale event listeners (defensive)
+  EventsOff('updateVersion');
+
+  // Register event listener
+  EventsOn('updateVersion', async (msg) => {
+    const githubTimeStr = msg.published_at;
+    const utcDate = new Date(githubTimeStr);
+    const date = new Date(utcDate.getTime());
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const hours = String(date.getHours()).padStart(2, '0');
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const seconds = String(date.getSeconds()).padStart(2, '0');
+
+    const formattedDate = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+
+    notify.info({
+      avatar: () =>
+        h(NAvatar, {
+          size: 'small',
+          round: false,
+          src: icon.value,
+        }),
+      title: '发现新版本: ' + msg.tag_name,
+      content: () => {
+        return h(
+          'div',
+          {
+            style: {
+              'text-align': 'left',
+              'font-size': '14px',
+            },
+          },
+          { default: () => msg.commit?.message },
+        );
+      },
+      duration: 5000,
+      meta: '发布时间:' + formattedDate,
+      action: () => {
+        return h(NButton, {
+          type: 'primary',
+          size: 'small',
+          onClick: () => {
+            Environment().then(env => {
+              switch (env.platform) {
+                case 'windows':
+                  window.open(msg.html_url);
+                  break;
+                default:
+                  OpenURL(msg.html_url);
+                  break;
+              }
+            });
+          },
+        }, { default: () => '查看' });
+      },
+    });
+  });
 });
 
 onBeforeUnmount(() => {
   notify.destroyAll();
   EventsOff('updateVersion');
-});
-
-EventsOn('updateVersion', async (msg) => {
-  const githubTimeStr = msg.published_at;
-  const utcDate = new Date(githubTimeStr);
-  const date = new Date(utcDate.getTime());
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-
-  const formattedDate = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-
-  notify.info({
-    avatar: () =>
-      h(NAvatar, {
-        size: 'small',
-        round: false,
-        src: icon.value,
-      }),
-    title: '发现新版本: ' + msg.tag_name,
-    content: () => {
-      return h(
-        'div',
-        {
-          style: {
-            'text-align': 'left',
-            'font-size': '14px',
-          },
-        },
-        { default: () => msg.commit?.message },
-      );
-    },
-    duration: 5000,
-    meta: '发布时间:' + formattedDate,
-    action: () => {
-      return h(NButton, {
-        type: 'primary',
-        size: 'small',
-        onClick: () => {
-          Environment().then(env => {
-            switch (env.platform) {
-              case 'windows':
-                window.open(msg.html_url);
-                break;
-              default:
-                OpenURL(msg.html_url);
-                break;
-            }
-          });
-        },
-      }, { default: () => '查看' });
-    },
-  });
 });
 
 const handleUpdateAction = () => {

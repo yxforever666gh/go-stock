@@ -204,15 +204,19 @@ onBeforeMount(() => {
 
 onMounted(() => {
   initDraggableTabs()
+
+  // Clean up any stale event listeners (defensive)
+  EventsOff("changeResearchTab")
+
+  // Register event listener
+  EventsOn("changeResearchTab", async (msg) => {
+    updateTab(msg.name)
+  })
 })
 
 watch(tabs, () => {
   initDraggableTabs()
 }, { deep: true })
-
-EventsOn("changeResearchTab", async (msg) => {
-  updateTab(msg.name)
-})
 
 onBeforeUnmount(() => {
   cleanupDraggableTabs()

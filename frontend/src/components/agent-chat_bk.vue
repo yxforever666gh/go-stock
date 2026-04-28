@@ -64,26 +64,6 @@ const sessionId = ref(`agent-bk-${Date.now()}-${Math.random().toString(36).slice
 onBeforeUnmount(() => {
   EventsOff("agent-message")
 })
-EventsOn("agent-message", (data) => {
-  console.log(data)
-  if(data['role']==="assistant"){
-    loading.value = false;
-    isStreamLoad.value = true;
-    const lastItem = chatList.value[0];
-    if (data['reasoning_content']){
-      lastItem.reasoning += data['reasoning_content'];
-    }
-    if (data['content']){
-      lastItem.content +=data['content'];
-    }
-    if(data['response_meta'].finish_reason==="stop"){
-      isStreamLoad.value = false;
-    }
-    if(data['tool_calls']){
-      lastItem.tool_calls = data['tool_calls'];
-    }
-  }
-})
 
 onMounted(() => {
   //chatRef.value.scrollToBottom();
@@ -99,6 +79,31 @@ onMounted(() => {
   GetVersionInfo().then((res) => {
     icon.value = res.icon;
   });
+
+  // Clean up any stale event listeners (defensive)
+  EventsOff("agent-message")
+
+  // Register event listener
+  EventsOn("agent-message", (data) => {
+    console.log(data)
+    if(data['role']==="assistant"){
+      loading.value = false;
+      isStreamLoad.value = true;
+      const lastItem = chatList.value[0];
+      if (data['reasoning_content']){
+        lastItem.reasoning += data['reasoning_content'];
+      }
+      if (data['content']){
+        lastItem.content +=data['content'];
+      }
+      if(data['response_meta'].finish_reason==="stop"){
+        isStreamLoad.value = false;
+      }
+      if(data['tool_calls']){
+        lastItem.tool_calls = data['tool_calls'];
+      }
+    }
+  })
 
 });
 
