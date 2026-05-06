@@ -222,6 +222,133 @@ func TestBuildAiRecommendMinuteCoverageTasks_ManualDownloadExtendsStartForNormal
 	}
 }
 
+func TestBuildRecalcTargets_ForceKeepsExplicitScope(t *testing.T) {
+	scope := normalizeScopeCodes([]string{"002297.SZ"})
+	codes := buildRecalcTargetCodes([]string{"002297.SZ", "300274.SZ"}, scope, true)
+	if len(codes) != 1 || codes[0] != "002297.SZ" {
+		t.Fatalf("target codes = %#v, want scoped 002297.SZ", codes)
+	}
+
+	now := time.Date(2026, 4, 29, 9, 40, 0, 0, cnLocation())
+	records := buildRecalcTargetRecords([]models.AiRecommendStocks{
+		{StockCode: "002297.SZ", DataTime: &now},
+		{StockCode: "300274.SZ", DataTime: &now},
+	}, scope, true)
+	if len(records) != 1 || records[0].StockCode != "002297.SZ" {
+		t.Fatalf("target records = %#v, want scoped 002297.SZ", records)
+	}
+}
+
+func TestIsFullAiRecommendYieldRecalc_ForceWithScopeIsNotFull(t *testing.T) {
+	scope := normalizeScopeCodes([]string{"002297.SZ"})
+	targets := &aiRecommendYieldTargets{
+		allCodes:      []string{"002297.SZ", "300274.SZ"},
+		targetCodes:   []string{"002297.SZ"},
+		records:       []models.AiRecommendStocks{{StockCode: "002297.SZ"}, {StockCode: "300274.SZ"}},
+		targetRecords: []models.AiRecommendStocks{{StockCode: "002297.SZ"}},
+	}
+	if isFullAiRecommendYieldRecalc(true, scope, targets) {
+		t.Fatal("force scoped manual recalc should not be treated as full recalc")
+	}
+	if !isFullAiRecommendYieldRecalc(true, nil, targets) {
+		t.Fatal("force without scope should be treated as full recalc")
+	}
+}
+
+func TestRecalcManagerPendingForceKeepsScopeAndReason(t *testing.T) {
+	manager := &aiRecommendYieldRecalcManager{running: true}
+	scope := normalizeScopeCodes([]string{"002297.SZ"})
+
+	manager.Request(true, "manual_minute_download", scope)
+
+	if !manager.pending {
+		t.Fatal("expected pending request")
+	}
+	if !manager.pendingForce {
+		t.Fatal("expected pending force")
+	}
+	if manager.pendingReason != "manual_minute_download" {
+		t.Fatalf("pending reason = %s, want manual_minute_download", manager.pendingReason)
+	}
+	if len(manager.pendingScope) != 1 {
+		t.Fatalf("pending scope = %#v, want one code", manager.pendingScope)
+	}
+	if _, ok := manager.pendingScope["002297.SZ"]; !ok {
+		t.Fatalf("pending scope = %#v, want 002297.SZ", manager.pendingScope)
+	}
+}
+
+func TestLoadAiRecommendYieldTargets_ManualDownloadSkipsRealtimePriceFetch(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-targets-skip-realtime.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendMinuteBar{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	loc := cnLocation()
+	now := time.Date(2026, 4, 30, 15, 30, 0, 0, loc)
+	recordTime := time.Date(2026, 4, 29, 9, 40, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "002297.SZ",
+		StockName:                   "博云新材",
+		StockPrice:                  "21.86",
+		RecommendBuyPrice:           "21.30-21.90",
+		RecommendBuyPriceMin:        21.3,
+		RecommendBuyPriceMax:        21.9,
+		RecommendStopProfitPrice:    "23.30-24.20",
+		RecommendStopProfitPriceMin: 23.3,
+		RecommendStopProfitPriceMax: 24.2,
+		RecommendStopLossPrice:      "20.80",
+		RecommendStatus:             "valid",
+		ExecutionState:              recommendExecutionConditional,
+		ActivationRuleSource:        "market_summary",
+		ActivationRuleJSON:          `{"version":"v3","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","thresholdValue":21.3,"thresholdMax":21.9,"volumeRatio":1.15,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount"}]}`,
+		ActivationStatus:            "pending",
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create record failed: %v", err)
+	}
+
+	oldFetch := fetchCurrentPriceMapFn
+	called := false
+	fetchCurrentPriceMapFn = func(aggrMap map[string]*aiRecommendYieldAggregate) (map[string]float64, map[string]string) {
+		called = true
+		return map[string]float64{}, map[string]string{}
+	}
+	t.Cleanup(func() {
+		fetchCurrentPriceMapFn = oldFetch
+	})
+
+	runtime := &aiRecommendYieldRecalcRuntime{
+		meta:       &models.AiRecommendYieldMeta{ID: 1},
+		now:        now,
+		inTrading:  false,
+		latestDate: time.Date(2026, 4, 30, 0, 0, 0, 0, loc),
+		ctx: yieldBuildContext{
+			Reason:             "manual_minute_download",
+			Now:                now,
+			InTradingSession:   false,
+			LatestTradeDate:    time.Date(2026, 4, 30, 0, 0, 0, 0, loc),
+			DisableMinuteFetch: true,
+		},
+	}
+	targets, err := loadAiRecommendYieldTargets(runtime, normalizeScopeCodes([]string{"002297.SZ"}), true)
+	if err != nil {
+		t.Fatalf("load targets failed: %v", err)
+	}
+	if len(targets.targetCodes) != 1 || targets.targetCodes[0] != "002297.SZ" {
+		t.Fatalf("target codes = %#v, want 002297.SZ", targets.targetCodes)
+	}
+	if called {
+		t.Fatal("manual minute download should not fetch realtime prices while loading targets")
+	}
+}
+
 func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "manual-scope-filter.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}); err != nil {
@@ -276,6 +403,22 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 			ActivationStatus:         "pending",
 			DataTime:                 &now,
 		},
+		{
+			StockCode:                "300004.SZ",
+			StockName:                "南风股份",
+			RecommendCategory:        "conditional",
+			RecommendStatus:          "missing_market_data",
+			ExecutionState:           recommendExecutionAnalysisOnly,
+			RecommendBuyPrice:        "",
+			BuySignal:                "缺少可信实时价格/量能数据，本次仅保留逻辑分析，不生成交易计划",
+			ActivationRuleJSON:       ruleJSON,
+			ActivationRuleSource:     "market_summary",
+			RecommendStopLossPrice:   "",
+			RecommendStopProfitPrice: "",
+			ActivationStatus:         "skipped",
+			Remarks:                  "等待激活；激活条件：pullback：价格进入10.00-10.50区间，5分钟成交额不低于近5个5分钟平均成交额的1.15倍；止盈区间：11.20-11.80；止损位：9.60",
+			DataTime:                 &now,
+		},
 	}
 	for _, row := range rows {
 		if err := db.Dao.Create(&row).Error; err != nil {
@@ -292,12 +435,47 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 		t.Fatalf("create skipped record state failed: %v", err)
 	}
 
-	got, err := filterManualDownloadScopeCodes([]string{"300001.SZ", "300002.SZ", "300003.SZ"})
+	got, err := filterManualDownloadScopeCodes([]string{"300001.SZ", "300002.SZ", "300003.SZ", "300004.SZ"})
 	if err != nil {
 		t.Fatalf("filterManualDownloadScopeCodes failed: %v", err)
 	}
-	if len(got) != 1 || got[0] != "300003.SZ" {
+	if len(got) != 2 || got[0] != "300003.SZ" || got[1] != "300004.SZ" {
 		t.Fatalf("unexpected filtered scope: %#v", got)
+	}
+}
+
+func TestLoadManualDownloadScopeCodesByRecoverablePlans_IncludesMissingExitPlan(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-download-recoverable-plan.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+	loc := cnLocation()
+	dataTime := time.Date(2026, 4, 29, 9, 40, 0, 0, loc)
+	row := models.AiRecommendStocks{
+		DataTime:                 &dataTime,
+		StockCode:                "002297.SZ",
+		StockName:                "博云新材",
+		RecommendStatus:          "valid",
+		ExecutionState:           recommendExecutionConditional,
+		ActivationStatus:         "pending",
+		ActivationRuleSource:     "market_summary",
+		ActivationRuleJSON:       `{"version":"v3","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","thresholdValue":21.3,"thresholdMax":21.9},{"name":"breakout","signalType":"price_breakout_with_volume","thresholdValue":22.65}]}`,
+		RecommendBuyPrice:        "21.3-21.9",
+		RecommendBuyPriceMin:     21.3,
+		RecommendBuyPriceMax:     21.9,
+		RecommendStopProfitPrice: "",
+		RecommendStopLossPrice:   "",
+	}
+	if err := db.Dao.Create(&row).Error; err != nil {
+		t.Fatalf("create row failed: %v", err)
+	}
+
+	got, err := loadManualDownloadScopeCodesByRecoverablePlans()
+	if err != nil {
+		t.Fatalf("loadManualDownloadScopeCodesByRecoverablePlans failed: %v", err)
+	}
+	if len(got) != 1 || got[0] != "002297.SZ" {
+		t.Fatalf("scope codes = %#v, want 002297.SZ", got)
 	}
 }
 

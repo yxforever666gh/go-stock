@@ -1,0 +1,20 @@
+[Unit]
+Description=Go-Stock Web Service Monitor
+After=network.target
+
+[Service]
+Type=simple
+User=admin
+WorkingDirectory=/home/admin/CodexData/go-stock-demo/go-stock
+ExecStart=/home/admin/CodexData/go-stock-demo/go-stock/scripts/monitor-and-restart.sh monitor
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/admin/CodexData/go-stock-demo/go-stock/logs/monitor-daemon.log
+StandardError=append:/home/admin/CodexData/go-stock-demo/go-stock/logs/monitor-daemon.log
+
+# 资源限制
+LimitNOFILE=65536
+LimitNPROC=4096
+
+[Install]
+WantedBy=multi-user.target

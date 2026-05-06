@@ -9,6 +9,7 @@ import {
   RunMarketSummaryHumanizeCompatFixNow,
   SendYieldEmailXLSXNow,
   SendYieldEmailTestMessage,
+  TestAIConfig,
   UpdateConfig
 } from "../services/app-api";
 import {NTag, useMessage} from "naive-ui";
@@ -72,6 +73,7 @@ const formValue = ref({
 const yieldEmailTestSending = ref(false)
 const yieldEmailXlsxSending = ref(false)
 const marketSummaryCompatFixing = ref(false)
+const aiConfigTestStates = ref({})
 const emailSendLogsLoading = ref(false)
 const emailSendLogs = ref([])
 const emailSendLogPage = ref(1)
@@ -102,8 +104,29 @@ const privateMinuteLevelOptions = [
   {label: '30 分钟', value: '30min'},
   {label: '60 分钟', value: '60min'},
 ]
+const aiProtocolOptions = [
+  {label: 'Chat Completions', value: 'chat_completions'},
+  {label: 'OpenAI Responses', value: 'openai_responses'},
+  {label: 'Anthropic Messages', value: 'anthropic_messages'},
+]
 let activeSavePromise = null
 let queuedAutoSave = false
+
+function normalizeAiProtocol(value) {
+  const text = String(value || '').trim()
+  if (text === 'openai_responses' || text === 'anthropic_messages') {
+    return text
+  }
+  return 'chat_completions'
+}
+
+function normalizeAiConfigs(configs) {
+  return (configs || []).map((item, index) => ({
+    ...item,
+    sort: item?.sort || index + 1,
+    apiProtocol: normalizeAiProtocol(item?.apiProtocol),
+  }))
+}
 
 // 添加一个新的AI配置到列表
 function addAiConfig() {
@@ -113,6 +136,7 @@ function addAiConfig() {
     baseUrl: 'https://api.deepseek.com',
     apiKey: '',
     modelName: 'deepseek-chat',
+    apiProtocol: 'chat_completions',
     temperature: 0.1,
     maxTokens: 4096,
     timeOut: 300,
@@ -126,17 +150,6 @@ function addAiConfig() {
 function removeAiConfig(index) {
   // 使用filter创建新数组确保响应式更新
   formValue.value.openAI.aiConfigs = formValue.value.openAI.aiConfigs.filter((_, i) => i !== index);
-  queueAutoSave()
-}
-
-function moveAiConfig(index, direction) {
-  const targetIndex = index + direction
-  if (targetIndex < 0 || targetIndex >= formValue.value.openAI.aiConfigs.length) {
-    return
-  }
-  const next = [...formValue.value.openAI.aiConfigs]
-  ;[next[index], next[targetIndex]] = [next[targetIndex], next[index]]
-  formValue.value.openAI.aiConfigs = next
   queueAutoSave()
 }
 
@@ -179,7 +192,7 @@ onMounted(() => {
     // 加载AI配置
     formValue.value.openAI = {
       enable: res.openAiEnable,
-      aiConfigs: res.aiConfigs || [],
+      aiConfigs: normalizeAiConfigs(res.aiConfigs || []),
       prompt: res.prompt,
       questionTemplate: res.questionTemplate ? res.questionTemplate : '{{stockName}}分析和总结',
       crawlTimeOut: res.crawlTimeOut,
@@ -280,6 +293,66 @@ function buildConfigPayload() {
     marketSummaryCronEnabled: formValue.value.marketSummaryCronEnabled,
     marketSummaryCronTimes: formValue.value.marketSummaryCronTimes
   })
+}
+
+function aiConfigTestKey(aiConfig, index) {
+  return String(aiConfig?.ID || `new-${index}`)
+}
+
+function aiConfigTestState(aiConfig, index) {
+  return aiConfigTestStates.value[aiConfigTestKey(aiConfig, index)] || {}
+}
+
+async function testAiConfig(index) {
+  const current = formValue.value.openAI.aiConfigs[index]
+  const key = aiConfigTestKey(current, index)
+  aiConfigTestStates.value = {
+    ...aiConfigTestStates.value,
+    [key]: {loading: true, result: null}
+  }
+  try {
+    const saved = await saveCurrentConfig({notifyError: true})
+    if (!saved) {
+      aiConfigTestStates.value = {
+        ...aiConfigTestStates.value,
+        [key]: {loading: false, result: {success: false, message: autoSaveError.value || '保存失败'}}
+      }
+      return
+    }
+    const latest = await GetConfig()
+    formValue.value.openAI.aiConfigs = normalizeAiConfigs(latest.aiConfigs || [])
+    const savedConfig = formValue.value.openAI.aiConfigs[index]
+    const savedKey = aiConfigTestKey(savedConfig, index)
+    if (!savedConfig?.ID) {
+      aiConfigTestStates.value = {
+        ...aiConfigTestStates.value,
+        [key]: {loading: false, result: null},
+        [savedKey]: {loading: false, result: {success: false, message: '请先保存 AI 配置后再测试'}}
+      }
+      return
+    }
+    aiConfigTestStates.value = {
+      ...aiConfigTestStates.value,
+      [key]: {loading: false, result: null},
+      [savedKey]: {loading: true, result: null}
+    }
+    const result = await TestAIConfig(Number(savedConfig.ID))
+    aiConfigTestStates.value = {
+      ...aiConfigTestStates.value,
+      [savedKey]: {loading: false, result}
+    }
+    if (result?.success) {
+      message.success(`模型测试成功：${result.contentPreview || result.message}`)
+    } else {
+      message.error(result?.message || '模型测试失败')
+    }
+  } catch (error) {
+    aiConfigTestStates.value = {
+      ...aiConfigTestStates.value,
+      [key]: {loading: false, result: {success: false, message: error?.message || String(error || '模型测试失败')}}
+    }
+    message.error(error?.message || String(error || '模型测试失败'))
+  }
 }
 
 function parseYieldEmailRecipients(input) {
@@ -962,52 +1035,74 @@ function deletePrompt(ID) {
             </n-gi>
             <n-gi :span="24" v-if="formValue.openAI.enable">
               <n-space vertical>
-                <n-card v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="index" :bordered="true"
-                        size="small">
-                  <template #header>
-                    <n-flex justify="space-between" align="center">
-                      <n-text depth="3">AI 配置 #{{ index + 1 }}</n-text>
-                      <n-space>
-                        <n-button size="tiny" ghost @click="moveAiConfig(index, -1)" :disabled="index === 0">上移</n-button>
-                        <n-button size="tiny" ghost @click="moveAiConfig(index, 1)" :disabled="index === formValue.openAI.aiConfigs.length - 1">下移</n-button>
-                        <n-button type="error" size="tiny" ghost @click="removeAiConfig(index)">删除</n-button>
-                      </n-space>
-                    </n-flex>
-                  </template>
-                  <n-grid :cols="24" :x-gap="24">
-                    <n-form-item-gi :span="24" hidden label="配置ID" :path="`openAI.aiConfigs[${index}].ID`">
-                      <n-input type="text" placeholder="配置ID" v-model:value="aiConfig.ID" clearable/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="12" label="配置名称" :path="`openAI.aiConfigs[${index}].name`">
-                      <n-input type="text" placeholder="配置名称" v-model:value="aiConfig.name" clearable @blur="handleTextFieldBlur"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="12" label="接口地址" :path="`openAI.aiConfigs[${index}].baseUrl`">
-                      <n-input type="text" placeholder="AI接口地址" v-model:value="aiConfig.baseUrl" clearable @blur="handleTextFieldBlur"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="12" label="令牌(apiKey)" :path="`openAI.aiConfigs[${index}].apiKey`">
-                      <n-input type="password" placeholder="apiKey" v-model:value="aiConfig.apiKey" clearable
-                               show-password-on="click" @blur="handleTextFieldBlur"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="8" label="模型名称" :path="`openAI.aiConfigs[${index}].modelName`">
-                      <n-input type="text" placeholder="AI模型名称" v-model:value="aiConfig.modelName" clearable @blur="handleTextFieldBlur"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="5" label="Temperature" :path="`openAI.aiConfigs[${index}].temperature`">
-                      <n-input-number placeholder="temperature" v-model:value="aiConfig.temperature" :step="0.1" @update:value="handleImmediateFieldChange"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="5" label="MaxTokens" :path="`openAI.aiConfigs[${index}].maxTokens`">
-                      <n-input-number placeholder="maxTokens" v-model:value="aiConfig.maxTokens" @update:value="handleImmediateFieldChange"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="5" label="Timeout(秒)" :path="`openAI.aiConfigs[${index}].timeOut`">
-                      <n-input-number min="60" step="1" placeholder="超时(秒)" v-model:value="aiConfig.timeOut" @update:value="handleImmediateFieldChange"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="12" label="http代理" :path="`openAI.aiConfigs[${index}].httpProxyEnabled`">
-                      <n-switch v-model:value="aiConfig.httpProxyEnabled" @update:value="handleImmediateFieldChange"/>
-                    </n-form-item-gi>
-                    <n-form-item-gi :span="12" v-if="aiConfig.httpProxyEnabled" title="http代理地址" :path="`openAI.aiConfigs[${index}].httpProxy`">
-                      <n-input type="text" placeholder="http代理地址" v-model:value="aiConfig.httpProxy" clearable @blur="handleTextFieldBlur"/>
-                    </n-form-item-gi>
-                  </n-grid>
-                </n-card>
+                <n-scrollbar x-scrollable>
+                  <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1320px;">
+                    <thead>
+                    <tr>
+                      <th style="width: 92px;">序号</th>
+                      <th style="width: 170px;">名称</th>
+                      <th>Base URL</th>
+                      <th style="width: 210px;">Model</th>
+                      <th style="width: 190px;">API 格式</th>
+                      <th style="width: 260px;">API Key</th>
+                      <th style="width: 110px;">测试</th>
+                      <th style="width: 90px;">删除</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    <template v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="aiConfig.ID || index">
+                      <tr>
+                        <td>
+                          <n-input-number v-model:value="aiConfig.sort" :min="1" :show-button="false"
+                                          placeholder="序号" @update:value="handleImmediateFieldChange"/>
+                        </td>
+                        <td>
+                          <n-input v-model:value="aiConfig.name" type="text" placeholder="名称" clearable
+                                   @blur="handleTextFieldBlur"/>
+                        </td>
+                        <td>
+                          <n-input v-model:value="aiConfig.baseUrl" type="text" placeholder="https://api.example.com/v1"
+                                   clearable @blur="handleTextFieldBlur"/>
+                        </td>
+                        <td>
+                          <n-input v-model:value="aiConfig.modelName" type="text" placeholder="模型名称" clearable
+                                   @blur="handleTextFieldBlur"/>
+                        </td>
+                        <td>
+                          <n-select v-model:value="aiConfig.apiProtocol" :options="aiProtocolOptions"
+                                    @update:value="handleImmediateFieldChange"/>
+                        </td>
+                        <td>
+                          <n-input v-model:value="aiConfig.apiKey" type="password" placeholder="API Key" clearable
+                                   show-password-on="click" @blur="handleTextFieldBlur"/>
+                        </td>
+                        <td>
+                          <n-button size="small" type="primary" ghost
+                                    :loading="aiConfigTestState(aiConfig, index).loading"
+                                    @click="testAiConfig(index)">测试</n-button>
+                        </td>
+                        <td>
+                          <n-button type="error" size="small" ghost @click="removeAiConfig(index)">删除</n-button>
+                        </td>
+                      </tr>
+                      <tr v-if="aiConfigTestState(aiConfig, index).result">
+                        <td colspan="8">
+                          <n-alert :type="aiConfigTestState(aiConfig, index).result.success ? 'success' : 'error'"
+                                   :bordered="false">
+                            {{ aiConfigTestState(aiConfig, index).result.message }}
+                            <template v-if="aiConfigTestState(aiConfig, index).result.success">
+                              ：{{ aiConfigTestState(aiConfig, index).result.protocol }} /
+                              {{ aiConfigTestState(aiConfig, index).result.model }} /
+                              {{ aiConfigTestState(aiConfig, index).result.latencyMs }}ms /
+                              {{ aiConfigTestState(aiConfig, index).result.contentPreview }}
+                            </template>
+                          </n-alert>
+                        </td>
+                      </tr>
+                    </template>
+                    </tbody>
+                  </n-table>
+                </n-scrollbar>
                 <n-button type="primary" dashed @click="addAiConfig" style="width: 100%;">+ 添加AI配置</n-button>
               </n-space>
             </n-gi>

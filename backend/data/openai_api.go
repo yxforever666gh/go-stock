@@ -10,6 +10,7 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/util"
+	"io"
 	"net"
 	"strings"
 	"sync"
@@ -35,6 +36,7 @@ type OpenAi struct {
 	ctx              context.Context
 	BaseUrl          string  `json:"base_url"`
 	ApiKey           string  `json:"api_key"`
+	ApiProtocol      string  `json:"api_protocol"`
 	ProviderName     string  `json:"provider_name"`
 	Model            string  `json:"model"`
 	MaxTokens        int     `json:"max_tokens"`
@@ -50,8 +52,8 @@ type OpenAi struct {
 }
 
 func (o OpenAi) String() string {
-	return fmt.Sprintf("OpenAi{BaseUrl: %s, Model: %s, MaxTokens: %d, Temperature: %.2f, Prompt: %s, TimeOut: %d, QuestionTemplate: %s, CrawlTimeOut: %d, KDays: %d, BrowserPath: %s, ApiKey: [MASKED]}",
-		o.BaseUrl, o.Model, o.MaxTokens, o.Temperature, o.Prompt, o.TimeOut, o.QuestionTemplate, o.CrawlTimeOut, o.KDays, o.BrowserPath)
+	return fmt.Sprintf("OpenAi{BaseUrl: %s, Protocol: %s, Model: %s, MaxTokens: %d, Temperature: %.2f, Prompt: %s, TimeOut: %d, QuestionTemplate: %s, CrawlTimeOut: %d, KDays: %d, BrowserPath: %s, ApiKey: [MASKED]}",
+		o.BaseUrl, NormalizeAIAPIProtocol(o.ApiProtocol), o.Model, o.MaxTokens, o.Temperature, o.Prompt, o.TimeOut, o.QuestionTemplate, o.CrawlTimeOut, o.KDays, o.BrowserPath)
 }
 
 func NewDeepSeekOpenAi(ctx context.Context, aiConfigId int) *OpenAi {
@@ -87,7 +89,8 @@ func NewOpenAiWithConfig(ctx context.Context, aiConfig *AIConfig) *OpenAi {
 		ctx:              ctx,
 		BaseUrl:          aiConfig.BaseUrl,
 		ApiKey:           aiConfig.ApiKey,
-		ProviderName:     DetectAIProviderName(aiConfig),
+		ApiProtocol:      NormalizeAIAPIProtocol(aiConfig.ApiProtocol),
+		ProviderName:     DisplayAIProviderName(aiConfig),
 		Model:            aiConfig.ModelName,
 		MaxTokens:        aiConfig.MaxTokens,
 		Temperature:      aiConfig.Temperature,
@@ -1203,7 +1206,458 @@ func (o *OpenAi) formatAIRequestError(err error) string {
 	return msg
 }
 
+func (o *OpenAi) newAnthropicClient() *resty.Client {
+	client := resty.New()
+	client.SetBaseURL(strutil.Trim(o.BaseUrl))
+	client.SetHeader("x-api-key", o.ApiKey)
+	client.SetHeader("anthropic-version", "2023-06-01")
+	client.SetHeader("Content-Type", "application/json")
+	client.SetTimeout(time.Duration(o.requestTimeoutSeconds()) * time.Second)
+	client.SetRetryCount(2)
+	client.SetRetryWaitTime(1 * time.Second)
+	client.SetRetryMaxWaitTime(6 * time.Second)
+	client.AddRetryCondition(func(r *resty.Response, err error) bool {
+		if shouldRetryAIRequest(err) {
+			return true
+		}
+		if r == nil {
+			return false
+		}
+		statusCode := r.StatusCode()
+		return statusCode == 408 || statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+	})
+	if o.HttpProxyEnabled && o.HttpProxy != "" {
+		client.SetProxy(o.HttpProxy)
+	}
+	return client
+}
+
+func (o *OpenAi) newAnthropicClientWithProxy(enableProxy bool) *resty.Client {
+	client := o.newAnthropicClient()
+	if !enableProxy {
+		client.RemoveProxy()
+	}
+	return client
+}
+
+func emitAIStreamContent(ch chan map[string]any, question, chatID, model, content string) {
+	if content == "" {
+		return
+	}
+	if content == "###" || content == "##" || content == "#" {
+		content = "\r\n" + content
+	}
+	ch <- map[string]any{
+		"code":     1,
+		"question": question,
+		"chatId":   chatID,
+		"model":    model,
+		"content":  content,
+		"time":     time.Now().Format(time.DateTime),
+	}
+}
+
+func emitAIStreamError(ch chan map[string]any, question, content string) {
+	ch <- map[string]any{
+		"code":     0,
+		"question": question,
+		"content":  content,
+	}
+}
+
+func parseAIHTTPError(statusCode int, body []byte) string {
+	bodyText := strings.TrimSpace(string(body))
+	if bodyText != "" {
+		res := &models.Resp{}
+		if err := json.Unmarshal(body, res); err == nil {
+			if msg := strings.TrimSpace(res.Error.Message); msg != "" {
+				return msg
+			}
+			if msg := strings.TrimSpace(res.Message); msg != "" {
+				return msg
+			}
+		}
+		var generic struct {
+			Error struct {
+				Message string `json:"message"`
+				Type    string `json:"type"`
+			} `json:"error"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(body, &generic); err == nil {
+			if msg := strings.TrimSpace(generic.Error.Message); msg != "" {
+				return msg
+			}
+			if msg := strings.TrimSpace(generic.Message); msg != "" {
+				return msg
+			}
+		}
+		return bodyText
+	}
+	if statusCode > 0 {
+		return fmt.Sprintf("model provider returned status %d", statusCode)
+	}
+	return "empty response from model provider"
+}
+
+func messageContentText(content any) string {
+	switch v := content.(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case []any:
+		parts := make([]string, 0, len(v))
+		for _, item := range v {
+			if itemMap, ok := item.(map[string]any); ok {
+				if text := strings.TrimSpace(convertor.ToString(itemMap["text"])); text != "" {
+					parts = append(parts, text)
+				}
+				continue
+			}
+			if text := strings.TrimSpace(convertor.ToString(item)); text != "" {
+				parts = append(parts, text)
+			}
+		}
+		return strings.Join(parts, "\n")
+	default:
+		return strings.TrimSpace(convertor.ToString(v))
+	}
+}
+
+func splitSystemAndDialogMessages(messages []map[string]interface{}) (string, []map[string]any) {
+	systemParts := make([]string, 0)
+	dialog := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		role := strings.ToLower(strings.TrimSpace(convertor.ToString(msg["role"])))
+		content := messageContentText(msg["content"])
+		if content == "" {
+			continue
+		}
+		switch role {
+		case "system", "developer":
+			systemParts = append(systemParts, content)
+		case "assistant":
+			dialog = append(dialog, map[string]any{"role": "assistant", "content": content})
+		default:
+			dialog = append(dialog, map[string]any{"role": "user", "content": content})
+		}
+	}
+	if len(dialog) == 0 {
+		dialog = append(dialog, map[string]any{"role": "user", "content": "请继续"})
+	}
+	dialog = mergeAdjacentRoleMessages(dialog)
+	if len(dialog) > 0 && dialog[0]["role"] == "assistant" {
+		dialog = append([]map[string]any{{"role": "user", "content": "请继续"}}, dialog...)
+	}
+	return strings.Join(systemParts, "\n\n"), dialog
+}
+
+func mergeAdjacentRoleMessages(messages []map[string]any) []map[string]any {
+	result := make([]map[string]any, 0, len(messages))
+	for _, msg := range messages {
+		role := strings.TrimSpace(convertor.ToString(msg["role"]))
+		content := strings.TrimSpace(convertor.ToString(msg["content"]))
+		if role == "" || content == "" {
+			continue
+		}
+		if len(result) > 0 && result[len(result)-1]["role"] == role {
+			prev := strings.TrimSpace(convertor.ToString(result[len(result)-1]["content"]))
+			result[len(result)-1]["content"] = strings.TrimSpace(prev + "\n\n" + content)
+			continue
+		}
+		result = append(result, map[string]any{"role": role, "content": content})
+	}
+	return result
+}
+
+func (o *OpenAi) openAIResponsesBody(messages []map[string]interface{}, stream bool) map[string]any {
+	system, dialog := splitSystemAndDialogMessages(messages)
+	bodyMap := map[string]any{
+		"model":             o.Model,
+		"max_output_tokens": o.MaxTokens,
+		"temperature":       o.Temperature,
+		"stream":            stream,
+		"input":             dialog,
+	}
+	if system != "" {
+		bodyMap["instructions"] = system
+	}
+	return bodyMap
+}
+
+func (o *OpenAi) anthropicMessagesBody(messages []map[string]interface{}, stream bool) map[string]any {
+	system, dialog := splitSystemAndDialogMessages(messages)
+	bodyMap := map[string]any{
+		"model":       o.Model,
+		"max_tokens":  o.MaxTokens,
+		"temperature": o.Temperature,
+		"stream":      stream,
+		"messages":    dialog,
+	}
+	if system != "" {
+		bodyMap["system"] = system
+	}
+	return bodyMap
+}
+
+func readErrorResponseBody(resp *resty.Response) []byte {
+	if resp == nil {
+		return nil
+	}
+	if rawBody := resp.RawBody(); rawBody != nil {
+		defer rawBody.Close()
+		body, _ := io.ReadAll(rawBody)
+		return body
+	}
+	return resp.Body()
+}
+
+func askAiOpenAIResponses(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string) {
+	client := o.newAIClient()
+	bodyMap := o.openAIResponsesBody(messages, true)
+	resp, err := client.R().
+		SetDoNotParseResponse(true).
+		SetBody(bodyMap).
+		Post("/responses")
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = o.newAIClientWithProxy(false).R().
+			SetDoNotParseResponse(true).
+			SetBody(bodyMap).
+			Post("/responses")
+	}
+	if err != nil {
+		logger.SugaredLogger.Infof("Responses stream error : %s, baseUrl:%s, timeout:%ds", err.Error(), strutil.Trim(o.BaseUrl), o.requestTimeoutSeconds())
+		emitAIStreamError(ch, question, o.formatAIRequestError(err))
+		return
+	}
+	if resp == nil {
+		emitAIStreamError(ch, question, "empty response from model provider")
+		return
+	}
+	if resp.IsError() {
+		emitAIStreamError(ch, question, parseAIHTTPError(resp.StatusCode(), readErrorResponseBody(resp)))
+		return
+	}
+
+	body := resp.RawBody()
+	defer body.Close()
+	scanner := bufio.NewScanner(body)
+	chatID := ""
+	model := o.Model
+	for scanner.Scan() {
+		line := scanner.Text()
+		logger.SugaredLogger.Infof("Received responses data: %s", line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strutil.Trim(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var event struct {
+			Type     string `json:"type"`
+			Delta    string `json:"delta"`
+			Response struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+			} `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			logger.SugaredLogger.Infof("Responses stream data error : %s", err.Error())
+			emitAIStreamError(ch, question, err.Error())
+			continue
+		}
+		if event.Response.ID != "" {
+			chatID = event.Response.ID
+		}
+		if event.Response.Model != "" {
+			model = event.Response.Model
+		}
+		if event.Type == "response.output_text.delta" && event.Delta != "" {
+			emitAIStreamContent(ch, question, chatID, model, event.Delta)
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		logger.SugaredLogger.Infof("Responses stream scanner error : %s", scanErr.Error())
+		emitAIStreamError(ch, question, o.formatAIRequestError(scanErr))
+	}
+}
+
+func askAiAnthropicMessages(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string) {
+	client := o.newAnthropicClient()
+	bodyMap := o.anthropicMessagesBody(messages, true)
+	resp, err := client.R().
+		SetDoNotParseResponse(true).
+		SetBody(bodyMap).
+		Post("/messages")
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = o.newAnthropicClientWithProxy(false).R().
+			SetDoNotParseResponse(true).
+			SetBody(bodyMap).
+			Post("/messages")
+	}
+	if err != nil {
+		logger.SugaredLogger.Infof("Anthropic stream error : %s, baseUrl:%s, timeout:%ds", err.Error(), strutil.Trim(o.BaseUrl), o.requestTimeoutSeconds())
+		emitAIStreamError(ch, question, o.formatAIRequestError(err))
+		return
+	}
+	if resp == nil {
+		emitAIStreamError(ch, question, "empty response from model provider")
+		return
+	}
+	if resp.IsError() {
+		emitAIStreamError(ch, question, parseAIHTTPError(resp.StatusCode(), readErrorResponseBody(resp)))
+		return
+	}
+
+	body := resp.RawBody()
+	defer body.Close()
+	scanner := bufio.NewScanner(body)
+	chatID := ""
+	model := o.Model
+	for scanner.Scan() {
+		line := scanner.Text()
+		logger.SugaredLogger.Infof("Received anthropic data: %s", line)
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		data := strutil.Trim(strings.TrimPrefix(line, "data:"))
+		if data == "" || data == "[DONE]" {
+			continue
+		}
+		var event struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+			} `json:"message"`
+			Delta struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"delta"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			logger.SugaredLogger.Infof("Anthropic stream data error : %s", err.Error())
+			emitAIStreamError(ch, question, err.Error())
+			continue
+		}
+		if event.Message.ID != "" {
+			chatID = event.Message.ID
+		}
+		if event.Message.Model != "" {
+			model = event.Message.Model
+		}
+		if event.Type == "content_block_delta" && event.Delta.Text != "" {
+			emitAIStreamContent(ch, question, chatID, model, event.Delta.Text)
+		}
+	}
+	if scanErr := scanner.Err(); scanErr != nil {
+		logger.SugaredLogger.Infof("Anthropic stream scanner error : %s", scanErr.Error())
+		emitAIStreamError(ch, question, o.formatAIRequestError(scanErr))
+	}
+}
+
+func (o *OpenAi) completeOpenAIResponses(messages []map[string]any) (string, string, string, error) {
+	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
+	}
+	resp, err := o.newAIClient().R().SetBody(o.openAIResponsesBody(interfaceMessages, false)).Post("/responses")
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = o.newAIClientWithProxy(false).R().SetBody(o.openAIResponsesBody(interfaceMessages, false)).Post("/responses")
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	if resp == nil {
+		return "", "", "", errors.New("empty response from model provider")
+	}
+	if resp.IsError() {
+		return "", "", "", errors.New(parseAIHTTPError(resp.StatusCode(), resp.Body()))
+	}
+	var result struct {
+		ID         string `json:"id"`
+		Model      string `json:"model"`
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Type    string `json:"type"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(resp.Body(), &result); err != nil {
+		return "", "", "", err
+	}
+	content := strings.TrimSpace(result.OutputText)
+	if content == "" {
+		parts := make([]string, 0)
+		for _, item := range result.Output {
+			for _, block := range item.Content {
+				if text := strings.TrimSpace(block.Text); text != "" {
+					parts = append(parts, text)
+				}
+			}
+		}
+		content = strings.TrimSpace(strings.Join(parts, "\n"))
+	}
+	if content == "" {
+		return "", result.ID, result.Model, errors.New("empty content from model provider")
+	}
+	return content, result.ID, result.Model, nil
+}
+
+func (o *OpenAi) completeAnthropicMessages(messages []map[string]any) (string, string, string, error) {
+	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
+	}
+	resp, err := o.newAnthropicClient().R().SetBody(o.anthropicMessagesBody(interfaceMessages, false)).Post("/messages")
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = o.newAnthropicClientWithProxy(false).R().SetBody(o.anthropicMessagesBody(interfaceMessages, false)).Post("/messages")
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	if resp == nil {
+		return "", "", "", errors.New("empty response from model provider")
+	}
+	if resp.IsError() {
+		return "", "", "", errors.New(parseAIHTTPError(resp.StatusCode(), resp.Body()))
+	}
+	var result struct {
+		ID      string `json:"id"`
+		Model   string `json:"model"`
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(resp.Body(), &result); err != nil {
+		return "", "", "", err
+	}
+	parts := make([]string, 0, len(result.Content))
+	for _, block := range result.Content {
+		if text := strings.TrimSpace(block.Text); text != "" {
+			parts = append(parts, text)
+		}
+	}
+	content := strings.TrimSpace(strings.Join(parts, "\n"))
+	if content == "" {
+		return "", result.ID, result.Model, errors.New("empty content from model provider")
+	}
+	return content, result.ID, result.Model, nil
+}
+
 func AskAi(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string, think bool) {
+	switch NormalizeAIAPIProtocol(o.ApiProtocol) {
+	case AIAPIProtocolOpenAIResponses:
+		askAiOpenAIResponses(o, messages, ch, question)
+		return
+	case AIAPIProtocolAnthropicMessage:
+		askAiAnthropicMessages(o, messages, ch, question)
+		return
+	}
 	client := o.newAIClient()
 	thinking := "disabled"
 	if think {
@@ -1377,6 +1831,10 @@ func AskAi(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any,
 	}
 }
 func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string, tools []Tool, thinkingMode bool) {
+	if NormalizeAIAPIProtocol(o.ApiProtocol) != AIAPIProtocolChatCompletions {
+		emitAIStreamError(ch, question, "当前协议暂不支持工具调用，请切换到 Chat Completions 或关闭工具模式")
+		return
+	}
 	bytes, _ := json.Marshal(messages)
 	logger.SugaredLogger.Debugf("Stream request: \n%s\n", string(bytes))
 

@@ -27,10 +27,10 @@ func NewStockAiAgentApi() *StockAiAgent {
 	return &StockAiAgent{}
 }
 
-func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId int) *StockAiAgent {
+func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId int) (*StockAiAgent, string) {
 	settingConfig := data.GetSettingConfig()
 	if len(settingConfig.AiConfigs) == 0 {
-		return nil
+		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
 	}
 	aiConfig, ok := lo.Find(settingConfig.AiConfigs, func(item *data.AIConfig) bool {
 		return uint(aiConfigId) == item.ID
@@ -39,15 +39,18 @@ func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId in
 		aiConfig = data.SelectPrimaryAIConfig(settingConfig.AiConfigs)
 	}
 	if aiConfig == nil {
-		return nil
+		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
+	}
+	if data.NormalizeAIAPIProtocol(aiConfig.ApiProtocol) != data.AIAPIProtocolChatCompletions {
+		return nil, "AI智能体暂不支持 OpenAI Responses 或 Anthropic Messages，请切换到 Chat Completions 协议的模型配置"
 	}
 	agentInstance := GetStockAiAgent(ctx, *aiConfig)
 	if agentInstance == nil {
-		return nil
+		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
 	}
 	return &StockAiAgent{
 		Agent: agentInstance,
-	}
+	}, ""
 }
 
 func (receiver StockAiAgent) Chat(question string, aiConfigId int, sysPromptId *int) chan *schema.Message {
@@ -62,9 +65,12 @@ func (receiver StockAiAgent) Chat(question string, aiConfigId int, sysPromptId *
 func (receiver StockAiAgent) ChatWithMessages(messages []*schema.Message, aiConfigId int, sysPromptId *int) chan *schema.Message {
 	ch := make(chan *schema.Message, 512)
 	ctx := context.Background()
-	stockAiAgent := receiver.newStockAiAgent(&ctx, aiConfigId)
+	stockAiAgent, initErr := receiver.newStockAiAgent(&ctx, aiConfigId)
 	if stockAiAgent == nil || stockAiAgent.Agent == nil {
-		pushAgentError(ch, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）")
+		if initErr == "" {
+			initErr = "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
+		}
+		pushAgentError(ch, initErr)
 		return ch
 	}
 

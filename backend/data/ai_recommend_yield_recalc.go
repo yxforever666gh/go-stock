@@ -49,11 +49,12 @@ type aiRecommendYieldAggregate struct {
 }
 
 type aiRecommendYieldRecalcManager struct {
-	mu           sync.Mutex
-	running      bool
-	pending      bool
-	pendingForce bool
-	pendingScope map[string]struct{}
+	mu            sync.Mutex
+	running       bool
+	pending       bool
+	pendingForce  bool
+	pendingReason string
+	pendingScope  map[string]struct{}
 }
 
 var globalAiRecommendYieldRecalcManager = &aiRecommendYieldRecalcManager{}
@@ -67,6 +68,7 @@ var fetchMinuteBarsWithTencentFn = fetchMinuteBarsWithTencent
 var fetchMinuteBarsWithAkShareFn = fetchMinuteBarsWithAkShare
 var fetchMinuteBarsWithSinaFn = fetchMinuteBarsWithSina
 var fetchMinuteBarsWithDiemengFn = fetchMinuteBarsWithDiemeng
+var fetchCurrentPriceMapFn = fetchCurrentPriceMap
 var requestAiRecommendYieldRecalcForQueryFn = requestAiRecommendYieldRecalc
 var requestAiRecommendYieldScopedRecalcForQueryFn = requestAiRecommendYieldRecalcWithScope
 var requestAiRecommendYieldScopedRecalcForMutationFn = requestAiRecommendYieldRecalcWithScope
@@ -166,7 +168,28 @@ func loadScopeCodesForManualDownload() ([]string, error) {
 			return filtered, nil
 		}
 	}
-	return loadManualDownloadScopeCodesByCoverage()
+	return mergeManualDownloadScopeCodes(loadManualDownloadScopeCodesByCoverage, loadManualDownloadScopeCodesByRecoverablePlans)
+}
+
+func mergeManualDownloadScopeCodes(loaders ...func() ([]string, error)) ([]string, error) {
+	scope := make(map[string]struct{})
+	for _, loader := range loaders {
+		if loader == nil {
+			continue
+		}
+		codes, err := loader()
+		if err != nil {
+			return nil, err
+		}
+		for _, code := range codes {
+			code = normalizeRecommendStockCode(code)
+			if code == "" {
+				continue
+			}
+			scope[code] = struct{}{}
+		}
+	}
+	return keysFromScopeMap(scope), nil
 }
 
 func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
@@ -195,6 +218,10 @@ func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
 		if code == "" {
 			continue
 		}
+		if shouldIncludeRecoverableMarketDataGapInManualDownload(rec) {
+			resultSet[code] = struct{}{}
+			continue
+		}
 		if !shouldDisplayRecommendInYield(&rec) {
 			continue
 		}
@@ -209,12 +236,43 @@ func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
 		if state, ok := recordStateMap[rec.ID]; ok && strings.TrimSpace(state.ActivationStatus) != "" {
 			status = strings.TrimSpace(strings.ToLower(state.ActivationStatus))
 		}
-		if status == "invalid" || status == "skipped" || status == "ineligible" {
+		if status == "invalid" || status == "skipped" || status == "expired" || status == "ineligible" {
 			continue
 		}
 		resultSet[code] = struct{}{}
 	}
 	return keysFromScopeMap(resultSet), nil
+}
+
+func shouldIncludeRecoverableMarketDataGapInManualDownload(rec models.AiRecommendStocks) bool {
+	if isPendingMarketDataRecommend(&rec) {
+		return hasRecoverableMarketSummaryTradePlan(rec)
+	}
+	if normalizeRecommendStatus(rec.RecommendStatus) != "missing_market_data" {
+		return false
+	}
+	return isRecoverableMarketSummaryMarketDataGap(rec)
+}
+
+func loadManualDownloadScopeCodesByRecoverablePlans() ([]string, error) {
+	rows := make([]models.AiRecommendStocks, 0, 16)
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
+		Order("COALESCE(data_time, created_at) ASC, id ASC").
+		Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	scope := make(map[string]struct{}, len(rows))
+	for _, rec := range rows {
+		code := normalizeRecommendStockCode(rec.StockCode)
+		if code == "" {
+			continue
+		}
+		if shouldIncludeRecoverableMarketDataGapInManualDownload(rec) || marketSummaryRecommendMissingExitPlan(rec) || marketSummaryRecommendHasStaleMissingMarketDataReason(rec) {
+			scope[code] = struct{}{}
+		}
+	}
+	return keysFromScopeMap(scope), nil
 }
 
 func loadManualDownloadScopeCodesByCoverage() ([]string, error) {
@@ -334,6 +392,120 @@ func loadDirtyAiRecommendYieldCodeSet(mode string) (map[string]models.AiRecommen
 	return result, nil
 }
 
+func markInvalidActivationExitPlanDirtyCodes(mode string) error {
+	if db.Dao == nil {
+		return nil
+	}
+	scope := make(map[string]struct{})
+	stateRows := make([]models.AiRecommendYieldState, 0, 16)
+	if err := db.Dao.Model(&models.AiRecommendYieldState{}).
+		Where("activation_status = ? AND buy_amount > 0 AND stop_profit_amount IS NOT NULL AND buy_amount >= stop_profit_amount", "activated").
+		Find(&stateRows).Error; err != nil && !isSQLiteNoSuchTable(err) {
+		return err
+	}
+	for _, row := range stateRows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if code != "" {
+			scope[code] = struct{}{}
+		}
+	}
+	recordRows := make([]models.AiRecommendYieldRecordState, 0, 16)
+	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+		Where("activation_status = ? AND buy_amount > 0 AND stop_profit_amount IS NOT NULL AND buy_amount >= stop_profit_amount", "activated").
+		Find(&recordRows).Error; err != nil && !isSQLiteNoSuchTable(err) {
+		return err
+	}
+	for _, row := range recordRows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if code != "" {
+			scope[code] = struct{}{}
+		}
+	}
+	if len(scope) == 0 {
+		return nil
+	}
+	return markAiRecommendYieldDirtyCodes(
+		keysFromScopeMap(scope),
+		"买入价不低于止盈价，等待按突破追价上限规则重算",
+		mode,
+	)
+}
+
+func markActivationWindowPolicyBugDirtyCodes(mode string) error {
+	if db.Dao == nil {
+		return nil
+	}
+	rows := make([]struct {
+		StockCode          string
+		SignalAt           time.Time
+		ActivationRuleJSON string
+		StateReason        string
+		RecordReason       string
+	}, 0, 32)
+	err := db.Dao.Table("ai_recommend_stocks AS r").
+		Select("r.stock_code, COALESCE(r.data_time, r.created_at) AS signal_at, r.activation_rule_json, COALESCE(s.data_status_reason, '') AS state_reason, COALESCE(r.activation_invalid_reason, '') AS record_reason").
+		Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
+		Where("r.deleted_at IS NULL").
+		Where("r.activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
+		Where("(COALESCE(s.activation_status, r.activation_status, '') = ? OR COALESCE(s.data_status, '') = ?)", "pending", "待激活").
+		Find(&rows).Error
+	if err != nil {
+		if isSQLiteNoSuchTable(err) {
+			return nil
+		}
+		return err
+	}
+	scope := make(map[string]struct{})
+	for _, row := range rows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if code == "" {
+			continue
+		}
+		reason := strings.TrimSpace(firstNonEmptyText(row.StateReason, row.RecordReason))
+		if reasonIndicatesActivationWindowPolicyBug(reason, row.SignalAt) || activationRuleHasBreakoutPathMissingThresholdMax(row.ActivationRuleJSON) {
+			scope[code] = struct{}{}
+		}
+	}
+	if len(scope) == 0 {
+		return nil
+	}
+	return markAiRecommendYieldDirtyCodes(
+		keysFromScopeMap(scope),
+		"激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
+		mode,
+	)
+}
+
+func reasonIndicatesActivationWindowPolicyBug(reason string, signalAt time.Time) bool {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || signalAt.IsZero() {
+		return false
+	}
+	if strings.Contains(reason, "隔夜推荐等待") {
+		return !shouldApplyOpeningPolicyForActivation(signalAt, normalizeActivationOpeningPolicy(&activationOpeningPolicy{}))
+	}
+	if strings.Contains(reason, "主买入区尚未进入可扫描窗口") {
+		loc := cnLocation()
+		t := normalizeMinuteTime(signalAt.In(loc))
+		minutes := t.Hour()*60 + t.Minute()
+		return minutes == 11*60+30 || minutes == 15*60
+	}
+	return false
+}
+
+func activationRuleHasBreakoutPathMissingThresholdMax(raw string) bool {
+	rule, err := parseActivationRuleJSON(raw)
+	if err != nil || rule == nil {
+		return false
+	}
+	for _, path := range activationRulePaths(rule) {
+		if strings.TrimSpace(path.SignalType) == "price_breakout_with_volume" && path.ThresholdValue > 0 && path.ThresholdMax <= 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func clearAiRecommendYieldDirtyCodes(scopeCodes []string) error {
 	normalized := normalizeScopeCodes(scopeCodes)
 	if len(normalized) == 0 {
@@ -353,7 +525,7 @@ func clearAiRecommendYieldDirtyCodesByRecordStates(states []models.AiRecommendYi
 	scopeSet := make(map[string]struct{}, len(states))
 	for _, state := range states {
 		status := strings.TrimSpace(strings.ToLower(state.ActivationStatus))
-		if status != "invalid" && status != "skipped" && status != "ineligible" {
+		if status != "invalid" && status != "skipped" && status != "expired" && status != "ineligible" {
 			continue
 		}
 		code := normalizeRecommendStockCode(state.StockCode)
@@ -630,6 +802,28 @@ func resetStaleYieldRecalcIfNeeded(meta *models.AiRecommendYieldMeta) bool {
 	return true
 }
 
+func ResetInterruptedAiRecommendYieldTasksOnStartup() {
+	if db.Dao == nil {
+		return
+	}
+	now := time.Now()
+	err := db.Dao.Model(&models.AiRecommendYieldMeta{}).
+		Where("recalc_in_progress = ? OR download_in_progress = ?", true, true).
+		Updates(map[string]any{
+			"recalc_in_progress":   false,
+			"download_in_progress": false,
+			"last_error":           "检测到上次程序退出前收益率任务未正常结束，已在本次启动时自动解锁",
+			"last_download_error":  "",
+			"updated_at":           now,
+		}).Error
+	if err != nil {
+		if isSQLiteNoSuchTable(err) {
+			return
+		}
+		logger.SugaredLogger.Warnf("reset interrupted ai recommend yield tasks on startup failed: %v", err)
+	}
+}
+
 func ensureYieldMetaSchema() error {
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendYieldMeta{},
@@ -637,6 +831,7 @@ func ensureYieldMetaSchema() error {
 		&models.AiRecommendYieldRecordState{},
 		&models.AiRecommendYieldDirtyCode{},
 		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendDailyBar{},
 	); err != nil {
 		return err
 	}

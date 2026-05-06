@@ -282,24 +282,41 @@ func (receiver StockDataApi) GetStockBaseInfo() {
 		logger.SugaredLogger.Error(res.Msg)
 		return
 	}
-	for _, item := range res.Data.Items {
-		stock := &StockBasic{}
-		data := map[string]any{}
-		for _, field := range strings.Split(fields, ",") {
-			//logger.SugaredLogger.Infof("field: %s", field)
-			idx := slice.IndexOf(res.Data.Fields, field)
-			if idx == -1 {
-				continue
+
+	// 使用批量操作和限流，避免阻塞主线程
+	batchSize := 100
+	semaphore := make(chan struct{}, 5) // 限制并发数为5
+
+	for i := 0; i < len(res.Data.Items); i += batchSize {
+		end := i + batchSize
+		if end > len(res.Data.Items) {
+			end = len(res.Data.Items)
+		}
+		batch := res.Data.Items[i:end]
+
+		semaphore <- struct{}{} // 获取信号量
+		go func(items [][]any) {
+			defer func() { <-semaphore }() // 释放信号量
+
+			for _, item := range items {
+				stock := &StockBasic{}
+				data := map[string]any{}
+				for _, field := range strings.Split(fields, ",") {
+					idx := slice.IndexOf(res.Data.Fields, field)
+					if idx == -1 {
+						continue
+					}
+					data[field] = item[idx]
+				}
+				jsonData, _ := json.Marshal(data)
+				err := json.Unmarshal(jsonData, stock)
+				if err != nil {
+					continue
+				}
+				stock.ID = 0
+				db.Dao.Model(&StockBasic{}).FirstOrCreate(stock, &StockBasic{TsCode: stock.TsCode}).Where("ts_code = ?", stock.TsCode).Updates(stock)
 			}
-			data[field] = item[idx]
-		}
-		jsonData, _ := json.Marshal(data)
-		err := json.Unmarshal(jsonData, stock)
-		if err != nil {
-			continue
-		}
-		stock.ID = 0
-		db.Dao.Model(&StockBasic{}).FirstOrCreate(stock, &StockBasic{TsCode: stock.TsCode}).Where("ts_code = ?", stock.TsCode).Updates(stock)
+		}(batch)
 	}
 
 }
@@ -1400,7 +1417,7 @@ func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]Minut
 }
 
 func (receiver StockDataApi) GetKLineData(stockCode string, kLineType string, days int64) *[]KLineData {
-	url := fmt.Sprintf("http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=yes&datalen=%d", stockCode, kLineType, days)
+	url := fmt.Sprintf("https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=yes&datalen=%d", stockCode, kLineType, days)
 	K := &[]KLineData{}
 	_, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
 		SetHeader("Host", "quotes.sina.cn").

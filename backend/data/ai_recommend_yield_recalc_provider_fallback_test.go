@@ -28,7 +28,7 @@ func TestFetchMinuteBarsFromProviders_PublicHistoricalWindowReturnsGuidanceError
 	start := time.Date(2026, 3, 10, 14, 30, 0, 0, cnLocation())
 	end := time.Date(2026, 3, 20, 15, 0, 0, 0, cnLocation())
 
-	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end)
+	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end, time.Second)
 	if err == nil {
 		t.Fatalf("expected guidance error for public historical window, got nil")
 	}
@@ -109,7 +109,7 @@ func TestFetchMinuteBarsFromProviders_PublicHistoricalWindowFallsBackToDiemengWh
 		return nil, "sina", fmt.Errorf("should not hit sina when private fallback is ready")
 	}
 
-	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end)
+	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end, time.Second)
 	if err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
@@ -183,7 +183,7 @@ func TestFetchMinuteBarsFromProviders_RecentFallsBackToAkshareAfterHedgedProvide
 		return wantBars, "akshare", nil
 	}
 
-	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end)
+	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end, time.Second)
 	if err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
@@ -242,7 +242,7 @@ func TestFetchMinuteBarsFromProviders_TodayIntradayPrefersSina(t *testing.T) {
 		return nil, "diemeng", fmt.Errorf("should not win race")
 	}
 
-	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end)
+	bars, source, err := fetchMinuteBarsFromProviders("603019.SH", start, end, time.Second)
 	if err != nil {
 		t.Fatalf("expected nil err, got %v", err)
 	}
@@ -251,5 +251,90 @@ func TestFetchMinuteBarsFromProviders_TodayIntradayPrefersSina(t *testing.T) {
 	}
 	if len(bars) != len(wantBars) {
 		t.Fatalf("expected %d bars, got %d", len(wantBars), len(bars))
+	}
+}
+
+func TestExecuteMinuteProviderPlan_ReturnsPartialBarsWithoutWaitingForSlowHedge(t *testing.T) {
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	defer func() {
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	}()
+
+	start := time.Date(2026, 4, 2, 9, 31, 0, 0, cnLocation())
+	end := time.Date(2026, 4, 2, 10, 30, 0, 0, cnLocation())
+	wantBars := []minuteBar{{TradeTime: start, Close: 9.9}}
+	fetchMinuteBarsWithSinaFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		return wantBars, "sina", nil
+	}
+	fetchMinuteBarsWithDiemengFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		time.Sleep(500 * time.Millisecond)
+		return nil, "diemeng", fmt.Errorf("slow provider should not block partial usable data")
+	}
+
+	started := time.Now()
+	bars, source, err := executeMinuteProviderPlan(
+		"603019.SH",
+		start,
+		end,
+		[]minuteProviderAttempt{{Provider: "sina"}, {Provider: "diemeng"}},
+		nil,
+		100*time.Millisecond,
+	)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+	if source != "sina" {
+		t.Fatalf("expected sina source, got %s", source)
+	}
+	if len(bars) != len(wantBars) {
+		t.Fatalf("expected %d bars, got %d", len(wantBars), len(bars))
+	}
+	if elapsed >= 250*time.Millisecond {
+		t.Fatalf("provider plan waited for slow hedge: elapsed=%s", elapsed)
+	}
+}
+
+func TestExecuteMinuteProviderPlan_TimesOutSlowFallback(t *testing.T) {
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	defer func() {
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	}()
+
+	start := time.Date(2026, 4, 2, 9, 31, 0, 0, cnLocation())
+	end := time.Date(2026, 4, 2, 10, 30, 0, 0, cnLocation())
+	fetchMinuteBarsWithSinaFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		return nil, "sina", fmt.Errorf("sina unavailable")
+	}
+	fetchMinuteBarsWithDiemengFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		time.Sleep(500 * time.Millisecond)
+		return nil, "diemeng", nil
+	}
+
+	started := time.Now()
+	bars, source, err := executeMinuteProviderPlan(
+		"603019.SH",
+		start,
+		end,
+		[]minuteProviderAttempt{{Provider: "sina"}},
+		[]string{"diemeng"},
+		100*time.Millisecond,
+	)
+	elapsed := time.Since(started)
+	if err == nil || !strings.Contains(err.Error(), "响应超时") {
+		t.Fatalf("expected timeout error, got %v", err)
+	}
+	if source != "diemeng" {
+		t.Fatalf("expected diemeng timeout source, got %s", source)
+	}
+	if len(bars) != 0 {
+		t.Fatalf("expected no bars, got %d", len(bars))
+	}
+	if elapsed >= 250*time.Millisecond {
+		t.Fatalf("fallback timeout did not cap slow provider: elapsed=%s", elapsed)
 	}
 }

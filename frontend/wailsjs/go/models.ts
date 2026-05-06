@@ -1,5 +1,5 @@
 export namespace data {
-	
+
 	export class AIConfig {
 	    ID: number;
 	    // Go type: time
@@ -11,16 +11,17 @@ export namespace data {
 	    baseUrl: string;
 	    apiKey: string;
 	    modelName: string;
+	    apiProtocol: string;
 	    maxTokens: number;
 	    temperature: number;
 	    timeOut: number;
 	    httpProxy: string;
 	    httpProxyEnabled: boolean;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -31,13 +32,14 @@ export namespace data {
 	        this.baseUrl = source["baseUrl"];
 	        this.apiKey = source["apiKey"];
 	        this.modelName = source["modelName"];
+	        this.apiProtocol = source["apiProtocol"];
 	        this.maxTokens = source["maxTokens"];
 	        this.temperature = source["temperature"];
 	        this.timeOut = source["timeOut"];
 	        this.httpProxy = source["httpProxy"];
 	        this.httpProxyEnabled = source["httpProxyEnabled"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -55,6 +57,28 @@ export namespace data {
 		    }
 		    return a;
 		}
+	}
+	export class AIModelTestResult {
+	    success: boolean;
+	    message: string;
+	    protocol: string;
+	    model: string;
+	    latencyMs: number;
+	    contentPreview: string;
+
+	    static createFrom(source: any = {}) {
+	        return new AIModelTestResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.success = source["success"];
+	        this.message = source["message"];
+	        this.protocol = source["protocol"];
+	        this.model = source["model"];
+	        this.latencyMs = source["latencyMs"];
+	        this.contentPreview = source["contentPreview"];
+	    }
 	}
 	export class FundBasic {
 	    ID: number;
@@ -87,11 +111,11 @@ export namespace data {
 	    netGrowth60?: number;
 	    netGrowthYTD?: number;
 	    netGrowthAll?: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FundBasic(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -122,7 +146,7 @@ export namespace data {
 	        this.netGrowthYTD = source["netGrowthYTD"];
 	        this.netGrowthAll = source["netGrowthAll"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -158,11 +182,11 @@ export namespace data {
 	    netAccumulated?: number;
 	    netEstimatedRate?: number;
 	    fundBasic: FundBasic;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FollowedFund(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -179,7 +203,7 @@ export namespace data {
 	        this.netEstimatedRate = source["netEstimatedRate"];
 	        this.fundBasic = this.convertValues(source["fundBasic"], FundBasic);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -208,11 +232,11 @@ export namespace data {
 	    DeletedAt: any;
 	    name: string;
 	    sort: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Group(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -222,7 +246,7 @@ export namespace data {
 	        this.name = source["name"];
 	        this.sort = source["sort"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -252,11 +276,11 @@ export namespace data {
 	    stockCode: string;
 	    groupId: number;
 	    groupInfo: Group;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new GroupStock(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -267,7 +291,7 @@ export namespace data {
 	        this.groupId = source["groupId"];
 	        this.groupInfo = this.convertValues(source["groupInfo"], Group);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -303,11 +327,11 @@ export namespace data {
 	    IsDel: number;
 	    Groups: GroupStock[];
 	    AiConfigId: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new FollowedStock(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.StockCode = source["StockCode"];
@@ -326,7 +350,7 @@ export namespace data {
 	        this.Groups = this.convertValues(source["Groups"], GroupStock);
 	        this.AiConfigId = source["AiConfigId"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -345,9 +369,9 @@ export namespace data {
 		    return a;
 		}
 	}
-	
-	
-	
+
+
+
 	export class SettingConfig {
 	    ID: number;
 	    // Go type: time
@@ -408,11 +432,11 @@ export namespace data {
 	    eastmoneyMinuteEnabled: boolean;
 	    akshareMinuteSourceMode: string;
 	    aiConfigs: AIConfig[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SettingConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -472,7 +496,7 @@ export namespace data {
 	        this.akshareMinuteSourceMode = source["akshareMinuteSourceMode"];
 	        this.aiConfigs = this.convertValues(source["aiConfigs"], AIConfig);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -518,11 +542,11 @@ export namespace data {
 	    act_ent_type: string;
 	    bk_name: string;
 	    bk_code: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new StockBasic(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -549,7 +573,7 @@ export namespace data {
 	        this.bk_name = source["bk_name"];
 	        this.bk_code = source["bk_code"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -626,11 +650,11 @@ export namespace data {
 	    alarmChangePercent: number;
 	    alarmPrice: number;
 	    Groups: GroupStock[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new StockInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -688,7 +712,7 @@ export namespace data {
 	        this.alarmPrice = source["alarmPrice"];
 	        this.Groups = this.convertValues(source["Groups"], GroupStock);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -711,7 +735,7 @@ export namespace data {
 }
 
 export namespace models {
-	
+
 	export class AIResponseResult {
 	    ID: number;
 	    // Go type: time
@@ -728,11 +752,11 @@ export namespace models {
 	    question: string;
 	    content: string;
 	    IsDel: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIResponseResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -748,7 +772,7 @@ export namespace models {
 	        this.content = source["content"];
 	        this.IsDel = source["IsDel"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -773,11 +797,11 @@ export namespace models {
 	    page: number;
 	    pageSize: number;
 	    totalPages: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIResponseResultPageData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.list = this.convertValues(source["list"], AIResponseResult);
@@ -786,7 +810,7 @@ export namespace models {
 	        this.pageSize = source["pageSize"];
 	        this.totalPages = source["totalPages"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -815,11 +839,11 @@ export namespace models {
 	    question: string;
 	    startDate: string;
 	    endDate: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AIResponseResultQuery(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.page = source["page"];
@@ -847,11 +871,11 @@ export namespace models {
 	    reasoning: string;
 	    seq: number;
 	    isDel: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AgentChatMessage(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -865,7 +889,7 @@ export namespace models {
 	        this.seq = source["seq"];
 	        this.isDel = source["isDel"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -901,11 +925,11 @@ export namespace models {
 	    messageCount: number;
 	    isPinned: boolean;
 	    isDel: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AgentChatSession(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -921,7 +945,7 @@ export namespace models {
 	        this.isPinned = source["isPinned"];
 	        this.isDel = source["isDel"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -957,11 +981,11 @@ export namespace models {
 	    suggestedTakeProfit: number;
 	    modelName: string;
 	    rawSummary: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendOpeningReviewSummary(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.recommendId = source["recommendId"];
@@ -1039,11 +1063,11 @@ export namespace models {
 	    riskRemarks: string;
 	    remarks: string;
 	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocks(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -1099,7 +1123,7 @@ export namespace models {
 	        this.remarks = source["remarks"];
 	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1125,11 +1149,11 @@ export namespace models {
 	    pageSize: number;
 	    totalPages: number;
 	    strategyCohort?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksPageData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.list = this.convertValues(source["list"], AiRecommendStocks);
@@ -1139,7 +1163,7 @@ export namespace models {
 	        this.totalPages = source["totalPages"];
 	        this.strategyCohort = source["strategyCohort"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1170,11 +1194,11 @@ export namespace models {
 	    endDate: string;
 	    yieldMode: string;
 	    strategyCohort: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksQuery(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.page = source["page"];
@@ -1239,11 +1263,11 @@ export namespace models {
 	    dataStatus: string;
 	    dataStatusReason?: string;
 	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksYieldItem(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.recommendId = source["recommendId"];
@@ -1295,7 +1319,7 @@ export namespace models {
 	        this.dataStatusReason = source["dataStatusReason"];
 	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1356,6 +1380,10 @@ export namespace models {
 	    dataAsOf: string;
 	    recalcInProgress: boolean;
 	    recalcProgress: number;
+	    downloadInProgress: boolean;
+	    downloadProgress: number;
+	    downloadDone: number;
+	    downloadTotal: number;
 	    minuteDownloadDone: number;
 	    minuteDownloadTotal: number;
 	    minuteDownloadPending: number;
@@ -1374,11 +1402,11 @@ export namespace models {
 	    diemengHealthStatus?: string;
 	    diemengHealthSummary?: string;
 	    diemengHealthCheckedAt?: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendStocksYieldPageData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.list = this.convertValues(source["list"], AiRecommendStocksYieldItem);
@@ -1422,6 +1450,10 @@ export namespace models {
 	        this.dataAsOf = source["dataAsOf"];
 	        this.recalcInProgress = source["recalcInProgress"];
 	        this.recalcProgress = source["recalcProgress"];
+	        this.downloadInProgress = source["downloadInProgress"];
+	        this.downloadProgress = source["downloadProgress"];
+	        this.downloadDone = source["downloadDone"];
+	        this.downloadTotal = source["downloadTotal"];
 	        this.minuteDownloadDone = source["minuteDownloadDone"];
 	        this.minuteDownloadTotal = source["minuteDownloadTotal"];
 	        this.minuteDownloadPending = source["minuteDownloadPending"];
@@ -1441,7 +1473,7 @@ export namespace models {
 	        this.diemengHealthSummary = source["diemengHealthSummary"];
 	        this.diemengHealthCheckedAt = source["diemengHealthCheckedAt"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1466,11 +1498,11 @@ export namespace models {
 	    price: number;
 	    label: string;
 	    status: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendYieldChartMarker(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -1500,11 +1532,11 @@ export namespace models {
 	    excessDailyRate: number;
 	    strategyNav: number;
 	    benchmarkNav: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendYieldDailyOverviewPoint(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.tradeDate = source["tradeDate"];
@@ -1541,11 +1573,11 @@ export namespace models {
 	    skippedRecordCount: number;
 	    warnings: string[];
 	    points: AiRecommendYieldDailyOverviewPoint[];
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendYieldDailyOverviewData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.rangeStart = source["rangeStart"];
@@ -1561,7 +1593,7 @@ export namespace models {
 	        this.warnings = source["warnings"];
 	        this.points = this.convertValues(source["points"], AiRecommendYieldDailyOverviewPoint);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1580,7 +1612,7 @@ export namespace models {
 		    return a;
 		}
 	}
-	
+
 	export class AiRecommendYieldMinuteBarDTO {
 	    tradeTime: string;
 	    open: number;
@@ -1589,11 +1621,11 @@ export namespace models {
 	    close: number;
 	    volume: number;
 	    amount: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendYieldMinuteBarDTO(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.tradeTime = source["tradeTime"];
@@ -1626,11 +1658,11 @@ export namespace models {
 	    bars: AiRecommendYieldMinuteBarDTO[];
 	    markers: AiRecommendYieldChartMarker[];
 	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new AiRecommendYieldMinuteChartData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.recommendId = source["recommendId"];
@@ -1654,7 +1686,7 @@ export namespace models {
 	        this.markers = this.convertValues(source["markers"], AiRecommendYieldChartMarker);
 	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1696,11 +1728,11 @@ export namespace models {
 	    attachmentCount: number;
 	    attachmentBytes: number;
 	    extraSummary: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EmailSendLog(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -1721,7 +1753,7 @@ export namespace models {
 	        this.attachmentBytes = source["attachmentBytes"];
 	        this.extraSummary = source["extraSummary"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1746,11 +1778,11 @@ export namespace models {
 	    page: number;
 	    pageSize: number;
 	    totalPages: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EmailSendLogPageData(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.list = this.convertValues(source["list"], EmailSendLog);
@@ -1759,7 +1791,7 @@ export namespace models {
 	        this.pageSize = source["pageSize"];
 	        this.totalPages = source["totalPages"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1789,11 +1821,11 @@ export namespace models {
 	    reportStockName: string;
 	    startDate: string;
 	    endDate: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new EmailSendLogQuery(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.page = source["page"];
@@ -1813,11 +1845,11 @@ export namespace models {
 	    name: string;
 	    content: string;
 	    type: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new Prompt(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -1832,11 +1864,11 @@ export namespace models {
 	    PositiveCount: number;
 	    NegativeCount: number;
 	    Description: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new SentimentResult(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.Score = source["Score"];
@@ -1865,11 +1897,11 @@ export namespace models {
 	    selfUpdateEnabled: boolean;
 	    manualUpdateHint: string;
 	    IsDel: number;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new VersionInfo(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.ID = source["ID"];
@@ -1888,7 +1920,7 @@ export namespace models {
 	        this.manualUpdateHint = source["manualUpdateHint"];
 	        this.IsDel = source["IsDel"];
 	    }
-	
+
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -1909,4 +1941,3 @@ export namespace models {
 	}
 
 }
-

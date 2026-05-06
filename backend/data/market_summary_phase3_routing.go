@@ -19,7 +19,7 @@ const (
 	marketSummaryRunSlotEvening marketSummaryRunSlot = "evening"
 )
 
-const marketSummaryFinalCandidateLimit = 3
+const marketSummaryFinalCandidateLimit = 2
 
 type marketSummaryTimeWindow struct {
 	Slot  marketSummaryRunSlot

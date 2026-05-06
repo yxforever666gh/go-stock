@@ -185,9 +185,9 @@ const defaultAiRecommendSummaryVersion = "phase2-v1"
 const recommendPendingActivationMaxTradeDays = 5
 const benchmarkSummaryCalcTimeout = 6 * time.Second
 const benchmarkSummaryCacheTTL = 5 * time.Minute
-const defaultBenchmarkCode = "sh000300"
-const defaultBenchmarkModelCode = "000300.SH"
-const defaultBenchmarkName = "沪深300（现金流匹配）"
+const defaultBenchmarkCode = "sh510300"
+const defaultBenchmarkModelCode = "510300.SH"
+const defaultBenchmarkName = "沪深300ETF（510300.SH，现金流匹配，已扣成本）"
 const recommendKeywordInterceptionBypassDate = "2026-04-07"
 
 const (
@@ -554,6 +554,10 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	dataAsOf := ""
 	recalcInProgress := false
 	recalcProgress := 0
+	downloadInProgress := false
+	downloadProgress := 0
+	downloadDone := 0
+	downloadTotal := 0
 	manualCooldownUntil := ""
 	manualCooldownRemainSec := 0
 	diemengHealthStatus := ""
@@ -587,6 +591,10 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		}
 		recalcInProgress = meta.RecalcInProgress
 		recalcProgress = meta.RecalcProgress
+		downloadInProgress = meta.DownloadInProgress
+		downloadProgress = meta.DownloadProgress
+		downloadDone = meta.DownloadDone
+		downloadTotal = meta.DownloadTotal
 		if meta.LastFullRecalcAt != nil {
 			dataAsOf = meta.LastFullRecalcAt.Format("2006-01-02 15:04:05")
 		}
@@ -659,6 +667,12 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	}
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
 	records = collapseRecommendRecordsSameDayByCode(records)
+	if err := markInvalidActivationExitPlanDirtyCodes(aiRecommendYieldModeStrict); err != nil {
+		logger.SugaredLogger.Warnf("mark invalid activation exit plan dirty codes failed: %v", err)
+	}
+	if err := markActivationWindowPolicyBugDirtyCodes(aiRecommendYieldModeStrict); err != nil {
+		logger.SugaredLogger.Warnf("mark activation window policy bug dirty codes failed: %v", err)
+	}
 	dirtyMap, err := loadDirtyAiRecommendYieldCodeSet(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
@@ -713,6 +727,10 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			DataAsOf:                  dataAsOf,
 			RecalcInProgress:          recalcInProgress,
 			RecalcProgress:            recalcProgress,
+			DownloadInProgress:        downloadInProgress,
+			DownloadProgress:          downloadProgress,
+			DownloadDone:              downloadDone,
+			DownloadTotal:             downloadTotal,
 			MinuteDownloadDone:        minuteDone,
 			MinuteDownloadTotal:       minuteTotal,
 			MinuteDownloadPending:     minutePending,
@@ -844,6 +862,10 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           recalcInProgress,
 		RecalcProgress:             recalcProgress,
+		DownloadInProgress:         downloadInProgress,
+		DownloadProgress:           downloadProgress,
+		DownloadDone:               downloadDone,
+		DownloadTotal:              downloadTotal,
 		MinuteDownloadDone:         minuteDone,
 		MinuteDownloadTotal:        minuteTotal,
 		MinuteDownloadPending:      minutePending,
@@ -2100,6 +2122,8 @@ func mapRecommendAggregateStateToYieldItem(
 		applyAggregateStateBacktestEligibility(&item, state)
 	case "skipped":
 		applyAggregateStateBacktestEligibility(&item, state)
+	case "expired":
+		applyAggregateStateBacktestEligibility(&item, state)
 	case "ineligible":
 		applyAggregateStateBacktestEligibility(&item, state)
 	}
@@ -2120,6 +2144,8 @@ func applyAggregateStateBacktestEligibility(item *models.AiRecommendStocksYieldI
 		if strings.TrimSpace(item.BacktestEligibilityReason) == "" {
 			item.BacktestEligibilityReason = strings.TrimSpace(state.DataStatusReason)
 		}
+	case "expired":
+		item.BacktestEligibility = recommendBacktestEligible
 	case "ineligible":
 		item.BacktestEligibility = recommendBacktestIneligible
 		if strings.TrimSpace(item.BacktestEligibilityReason) == "" {
@@ -2456,6 +2482,14 @@ func applyInactiveYieldDefaults(item *models.AiRecommendStocksYieldItem) {
 		if strings.TrimSpace(item.DataStatus) == "" || item.DataStatus == "正常" || item.DataStatus == "计算中" {
 			item.DataStatus = "已跳过"
 		}
+	case "expired":
+		item.SellTime = "过期未触发"
+		if strings.TrimSpace(item.PositionStatus) == "" || item.PositionStatus == "待激活" || item.PositionStatus == "持有" {
+			item.PositionStatus = "过期未触发"
+		}
+		if strings.TrimSpace(item.DataStatus) == "" || item.DataStatus == "正常" || item.DataStatus == "计算中" {
+			item.DataStatus = "已过期"
+		}
 	case "ineligible":
 		item.SellTime = "未纳入回测"
 		item.PositionStatus = "未纳入回测"
@@ -2627,9 +2661,14 @@ func defaultBenchmarkSummaryResult() benchmarkSummaryResult {
 }
 
 func hasBenchmarkSummaryMetricData(result benchmarkSummaryResult) bool {
-	return strings.TrimSpace(result.RateText) != "" ||
-		strings.TrimSpace(result.StrategyXirrText) != "" ||
-		strings.TrimSpace(result.MaxDrawdownText) != ""
+	return hasDisplayMetricText(result.RateText) ||
+		hasDisplayMetricText(result.StrategyXirrText) ||
+		hasDisplayMetricText(result.MaxDrawdownText)
+}
+
+func hasDisplayMetricText(text string) bool {
+	text = strings.TrimSpace(text)
+	return text != "" && text != "--"
 }
 
 func buildYieldDailyOverviewEntries(items []models.AiRecommendStocksYieldItem) []yieldDailyOverviewEntry {
@@ -3068,6 +3107,10 @@ func calculateCashflowMatchedBenchmark(
 		if buyClose <= 0 || entry.BuyCostNet <= 0 {
 			continue
 		}
+		benchmarkBuy := calcBenchmarkETFBuyTrade(entry.BuyCostNet, buyClose)
+		if !benchmarkBuy.Valid || benchmarkBuy.Shares <= 0 {
+			continue
+		}
 		endDay := entry.CurrentDay
 		endTime := time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 15, 0, 0, 0, cnLocation())
 		if !entry.SellDay.IsZero() {
@@ -3096,21 +3139,25 @@ func calculateCashflowMatchedBenchmark(
 			EndDay:           endDay,
 			EndTime:          endTime,
 			InvestedNet:      entry.BuyCostNet,
-			Shares:           entry.BuyCostNet / buyClose,
+			Shares:           benchmarkBuy.Shares,
 			SellAmount:       endPrice,
 			HasSellAmount:    entry.HasSellAmount,
 			CurrentPrice:     endPrice,
 			CurrentDay:       entry.CurrentDay,
 			CurrentPriceTime: entry.CurrentPriceTime,
 		}
-		positions = append(positions, position)
-		strategyCashflows = append(strategyCashflows, xirrCashflow{At: entry.BuyTime, Amount: -entry.BuyCostNet})
-		benchmarkCashflows = append(benchmarkCashflows, xirrCashflow{At: entry.BuyTime, Amount: -entry.BuyCostNet})
 		strategyEndValue := entry.RealizedValueNet
 		if !entry.HasSellAmount {
 			strategyEndValue = resolveStrategyCurrentNetValue(entry)
 		}
-		benchmarkEndValue := round2(position.Shares * endPrice)
+		benchmarkSell := calcBenchmarkETFSellTrade(position.Shares, endPrice)
+		if !benchmarkSell.Valid || benchmarkSell.NetAmount <= 0 {
+			continue
+		}
+		benchmarkEndValue := benchmarkSell.NetAmount
+		positions = append(positions, position)
+		strategyCashflows = append(strategyCashflows, xirrCashflow{At: entry.BuyTime, Amount: -entry.BuyCostNet})
+		benchmarkCashflows = append(benchmarkCashflows, xirrCashflow{At: entry.BuyTime, Amount: -entry.BuyCostNet})
 		strategyCashflows = append(strategyCashflows, xirrCashflow{At: endTime, Amount: strategyEndValue})
 		benchmarkCashflows = append(benchmarkCashflows, xirrCashflow{At: endTime, Amount: benchmarkEndValue})
 		if entry.BuyCostNet > 0 && benchmarkEndValue > 0 {
@@ -3157,7 +3204,11 @@ func calculateCashflowMatchedBenchmark(
 			if price <= 0 {
 				continue
 			}
-			totalValue += round2(position.Shares * price)
+			benchmarkValue := calcBenchmarkETFSellTrade(position.Shares, price)
+			if !benchmarkValue.Valid || benchmarkValue.NetAmount <= 0 {
+				continue
+			}
+			totalValue += benchmarkValue.NetAmount
 		}
 		cumulativeAmount := round2(totalValue - costBasisNet)
 		dailyAmount := round2(totalValue - prevValue)
@@ -4261,7 +4312,7 @@ func applyStrictPendingStateToYieldItem(item *models.AiRecommendStocksYieldItem,
 		return
 	}
 	status := strings.TrimSpace(strings.ToLower(item.ActivationStatus))
-	if status == "invalid" || status == "skipped" || status == "ineligible" {
+	if status == "invalid" || status == "skipped" || status == "expired" || status == "ineligible" {
 		item.StrictReady = true
 		item.StrictPendingReason = ""
 		return

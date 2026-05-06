@@ -1,9 +1,9 @@
 package data
 
 import (
-	"math"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"math"
 	"testing"
 	"time"
 )
@@ -196,6 +196,60 @@ func TestCalculateStrategySummaryByEntries_ProducesStrategyOnlyMetrics(t *testin
 	summary := calculateStrategySummaryByEntries(entries)
 	if summary.StrategyXirrText == "--" {
 		t.Fatalf("expected strategy xirr text, got --")
+	}
+}
+
+func TestCalculateCashflowMatchedBenchmark_UsesETFNetTradeCosts(t *testing.T) {
+	loc := cnLocation()
+	day1 := time.Date(2026, 4, 14, 0, 0, 0, 0, loc)
+	day2 := time.Date(2027, 4, 14, 0, 0, 0, 0, loc)
+	buyTime := time.Date(2026, 4, 14, 9, 35, 0, 0, loc)
+	sellTime := time.Date(2027, 4, 14, 14, 55, 0, 0, loc)
+	entry := yieldDailyOverviewEntry{
+		RecommendID:      1,
+		StockCode:        "000001.SZ",
+		BuyTime:          buyTime,
+		BuyDay:           day1,
+		SellDay:          day2,
+		CurrentDay:       day2,
+		BuyAmount:        10,
+		SellAmount:       11,
+		HasSellAmount:    true,
+		BuyCostNet:       round2(calcBuyTradeCost(10, resolveTradingMarket("000001.SZ")).NetAmount),
+		RealizedValueNet: round2(calcSellTradeCost(10, 11, resolveTradingMarket("000001.SZ")).NetAmount),
+		SellTime:         sellTime.Format("2006-01-02 15:04:05"),
+	}
+	benchmarkSeries := &yieldDailyOverviewPriceSeries{
+		Code: defaultBenchmarkModelCode,
+		CloseByDay: map[string]float64{
+			"2026-04-14": 5.0,
+			"2027-04-14": 5.5,
+		},
+	}
+
+	series, itemRateMap, _, benchmarkXirr, _, _, _, _, ok := calculateCashflowMatchedBenchmark(
+		[]yieldDailyOverviewEntry{entry},
+		[]time.Time{day1, day2},
+		benchmarkSeries,
+	)
+
+	if !ok {
+		t.Fatal("expected benchmark calculation to succeed")
+	}
+	if series.Code != defaultBenchmarkModelCode {
+		t.Fatalf("unexpected benchmark code: %s", series.Code)
+	}
+	if math.Abs(itemRateMap[1]-9.54) > 0.001 {
+		t.Fatalf("expected ETF net benchmark rate 9.54, got %.4f", itemRateMap[1])
+	}
+	if math.Abs(series.ValueByDay["2026-04-14"]-2993.5) > 0.001 {
+		t.Fatalf("expected day1 ETF liquidation value 2993.5, got %.4f", series.ValueByDay["2026-04-14"])
+	}
+	if math.Abs(series.CumulativeAmountByDay["2027-04-14"]-286.85) > 0.001 {
+		t.Fatalf("expected day2 ETF net cumulative amount 286.85, got %.4f", series.CumulativeAmountByDay["2027-04-14"])
+	}
+	if benchmarkXirr == 0 {
+		t.Fatal("expected non-zero benchmark XIRR")
 	}
 }
 

@@ -808,7 +808,11 @@ type marketSummaryRow struct {
 }
 
 func parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName string, dataTime time.Time) []*marketSummaryRecommendDraft {
-	rows := extractMarkdownTableRows(summaryText)
+	section := extractMarkdownSection(summaryText, "推荐股票池")
+	if strings.TrimSpace(section) == "" {
+		section = summaryText
+	}
+	rows := extractMarkdownTableRows(section)
 	if len(rows) == 0 {
 		return nil
 	}
@@ -1515,6 +1519,19 @@ func extractMarketSummaryPrimaryBuyRangeText(text string) string {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
 		return ""
+	}
+	for _, label := range []string{"买入区间", "主买入区", "价格进入"} {
+		idx := strings.Index(trimmed, label)
+		if idx < 0 {
+			continue
+		}
+		fragment := trimmed[idx:]
+		if len(fragment) > 120 {
+			fragment = fragment[:120]
+		}
+		if matched := strings.TrimSpace(marketSummaryRangePattern.FindString(fragment)); matched != "" {
+			return matched
+		}
 	}
 	segments := splitMarketSummaryRangeSegments(trimmed)
 	for _, segment := range segments {

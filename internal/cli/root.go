@@ -43,6 +43,8 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		runErr = runNetworkAudit(cmdArgs, opts, stdout, stderr)
 	case "repair-market-summary":
 		runErr = runRepairMarketSummary(cmdArgs, opts, stdout, stderr)
+	case "backfill-market-summary-recommend":
+		runErr = runBackfillMarketSummaryRecommend(cmdArgs, opts, stdout, stderr)
 	case "help", "-h", "--help":
 		printRootUsage(stdout)
 		return 0
@@ -96,4 +98,5 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
 	fmt.Fprintln(w, "  network-audit  审计当前环境下所有主要网络数据接口")
 	fmt.Fprintln(w, "  repair-market-summary  修复市场资讯历史激活规则与脏数据")
+	fmt.Fprintln(w, "  backfill-market-summary-recommend  从历史市场资讯 AI 报告补写推荐记录")
 }

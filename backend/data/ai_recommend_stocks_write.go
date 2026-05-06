@@ -77,9 +77,11 @@ var evidencePositiveKeywords = []string{"回购", "增持", "预增", "中标", 
 var evidenceNegativeKeywords = []string{"减持", "解禁", "问询", "监管", "立案", "亏损", "下滑", "不及预期", "低于预期", "跌破", "处罚", "终止", "质押", "风险", "波动", "走弱"}
 
 const (
-	recommendExecutionImmediate    = "immediate"
-	recommendExecutionConditional  = "conditional"
-	recommendExecutionAnalysisOnly = "analysis_only"
+	recommendExecutionImmediate      = "immediate"
+	recommendExecutionConditional    = "conditional"
+	recommendExecutionAnalysisOnly   = "analysis_only"
+	recommendStatusPendingMarketData = "pending_market_data"
+	recommendActivationPendingData   = "pending_data"
 )
 
 func normalizeAiRecommendStockForSave(recommend *models.AiRecommendStocks) error {
@@ -117,8 +119,8 @@ func normalizeAiRecommendStockForSave(recommend *models.AiRecommendStocks) error
 	if err := normalizeActivationRuleForSave(recommend); err != nil {
 		return err
 	}
-	if stopProfitMin <= buyMin {
-		return errors.New("建议止盈区间必须高于建议买入区间")
+	if stopProfitMin <= buyMax {
+		return errors.New("建议止盈区间必须高于建议买入区间上沿")
 	}
 	if stopLossValue >= buyMax {
 		return errors.New("建议止损价必须低于建议买入区间")

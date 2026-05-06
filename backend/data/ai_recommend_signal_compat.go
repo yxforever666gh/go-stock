@@ -161,7 +161,7 @@ func validateSignalDrivenRecommend(recommend *models.AiRecommendStocks) error {
 	if hasVolumeSignal(sellCombined) && !hasCompleteVolumeContext(sellCombined) {
 		return errors.New("卖出信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
 	}
-	if hasVolumeSignal(invalidCombined) && !hasCompleteVolumeContext(invalidCombined) {
+	if hasVolumeSignal(invalidCombined) && !hasCompleteVolumeContext(invalidCombined) && !invalidSignalCanReferenceActivationRule(recommend, invalidCombined) {
 		return errors.New("失效信号中的量能条件必须写清锚点价位、比较基准、观察周期和触发阈值")
 	}
 	if !shouldBypassRecommendKeywordInterception(recommend.DataTime) {
@@ -173,6 +173,25 @@ func validateSignalDrivenRecommend(recommend *models.AiRecommendStocks) error {
 		}
 	}
 	return nil
+}
+
+func invalidSignalCanReferenceActivationRule(recommend *models.AiRecommendStocks, invalidCombined string) bool {
+	if recommend == nil || !hasMachineActivationRule(recommend) {
+		return false
+	}
+	text := normalizeRecommendText(invalidCombined)
+	if text == "" {
+		return false
+	}
+	if !strings.Contains(text, "未触发") &&
+		!strings.Contains(text, "未同时触发") &&
+		!strings.Contains(text, "未同时满足") {
+		return false
+	}
+	return strings.Contains(text, "价格与量能") ||
+		strings.Contains(text, "价格和量能") ||
+		strings.Contains(text, "价格及量能") ||
+		strings.Contains(text, "量能条件")
 }
 
 func containsConditionalCue(text string) bool {

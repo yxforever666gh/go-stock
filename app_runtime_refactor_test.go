@@ -125,8 +125,18 @@ func TestResolveAIProviderNameFromConfigs_ByConfigID(t *testing.T) {
 		{ID: 3, Name: "OpenAI Primary", BaseUrl: "https://api.openai.com/v1", ModelName: "gpt-5.4"},
 	}
 
+	if got := resolveAIProviderNameFromConfigs(configs, 3, "gpt-5.4"); got != "OpenAI Primary" {
+		t.Fatalf("unexpected provider by config id: got=%q want=%q", got, "OpenAI Primary")
+	}
+}
+
+func TestResolveAIProviderNameFromConfigs_ByConfigIDFallbackToDetectedProvider(t *testing.T) {
+	configs := []*data.AIConfig{
+		{ID: 3, BaseUrl: "https://api.openai.com/v1", ModelName: "gpt-5.4"},
+	}
+
 	if got := resolveAIProviderNameFromConfigs(configs, 3, "gpt-5.4"); got != "OpenAI" {
-		t.Fatalf("unexpected provider by config id: got=%q want=%q", got, "OpenAI")
+		t.Fatalf("unexpected provider by config id fallback: got=%q want=%q", got, "OpenAI")
 	}
 }
 

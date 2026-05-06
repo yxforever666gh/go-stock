@@ -2,7 +2,7 @@ package data
 
 import "strings"
 
-const DefaultMarketSummaryQuestion = "总结和分析股票市场新闻中的投资机会，并推荐3个A股，并给出关键价位与交易计划"
+const DefaultMarketSummaryQuestion = "总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出关键价位与交易计划"
 
 const marketSummaryOutputInstruction = `
 【市场资讯AI总结输出规范】
@@ -32,6 +32,7 @@ const marketSummaryOutputInstruction = `
 
 约束：
 - 推荐股票必须是 A 股。
+- 推荐股票池最多输出 2 只股票，只保留证据最完整、评分最高、最接近可执行交易计划的两只；不足 2 只时宁缺毋滥。
 - 每只股票都必须同时给出：核心催化、关键证据、价格锚点、买入区间、止盈区间、止损位、买入依据、失效条件、风险点、预期周期、4维置信度、操作备注。
 - 只允许输出“推荐股票”，不要输出“观察标的 / 回避标的 / 低吸候选 / 右侧确认”这类标签。
 - 必须先结合“当前时间”和A股交易时段判断输出方式：
@@ -48,8 +49,8 @@ const marketSummaryOutputInstruction = `
 - 除了 Markdown 表格，你在调用 CreateAiRecommendStocks 或 BatchCreateAiRecommendStocks 时，必须同步传入 activationRuleJson，作为收益率 strict 模式唯一可信的激活依据。
 - activationRuleJson 禁止使用自然语言模糊词，必须改成机器字段，例如：
   {"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.42,"thresholdMax":9.56,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}
-- 若同时给出回踩激活与突破激活，activationRuleJson 必须输出双路径 JSON，例如：
-  {"version":"v2","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.42,"thresholdMax":9.56,"volumeRatio":1.15,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5},{"name":"breakout","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.60,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}]}
+- 若同时给出回踩激活与突破激活，activationRuleJson 必须输出双路径 JSON；breakout 路径里的 thresholdMax 表示最高可买价/追价上限，必须低于止盈区间下沿，例如：
+  {"version":"v2","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.42,"thresholdMax":9.56,"volumeRatio":1.15,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5},{"name":"breakout","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":9.60,"thresholdMax":9.72,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}]}
 - “失效条件”必须使用固定硬格式，一行内写成：
   时间失效：...；价格失效：...
 - “买入依据”中的量化条件必须写明：
@@ -71,6 +72,7 @@ const marketSummaryOutputInstruction = `
 - 若证据核验层给出了 minutePrice / minuteAmount / minuteVolume，且当前锚点不是集合竞价，价格锚点、买入区间、止盈区间、止损位必须优先围绕该实时分钟线价格生成，并结合最新一分钟成交额/成交量判断活跃度。
 - stockPrice 字段应优先填写当前价格锚点；集合竞价时优先 auctionPrice，其次 minutePrice，当两者都缺失时才允许回退到 CurrentPrice。
 - 价格锚点、买入区间、突破激活价、止盈区间、止损位必须与当前锚点保持同一价格数量级；若任一关键价位相对当前锚点偏离超过20%，视为无效输出，必须重写。
+- 突破激活价只代表触发确认价，不代表可以无限追高；若设置突破路径，必须同步给出低于止盈区间下沿的最高可买价 thresholdMax，且预留手续费、滑点和最小收益空间。
 - 至少要有 2 类不同证据，且至少 1 条来自高信任源（优先：一级披露 / 财报财务 / 互动易）；证据不足时不得进入推荐股票池。
 - 如存在公告与媒体解读冲突，必须输出争议结论，并从推荐股票池中剔除，不得强行给出交易计划。
 - “跳过复审”中的“原记录ID”必须直接引用输入里的 recommendId，不得编造。
@@ -134,6 +136,10 @@ func NormalizeMarketSummaryQuestion(question string) string {
 	case "总结和分析股票市场新闻中的投资机会，并推荐3只A股股票":
 		return DefaultMarketSummaryQuestion
 	case "总结和分析股票市场新闻中的投资机会，并推荐3个A股股票":
+		return DefaultMarketSummaryQuestion
+	case "总结和分析股票市场新闻中的投资机会，并推荐3只A股":
+		return DefaultMarketSummaryQuestion
+	case "总结和分析股票市场新闻中的投资机会，并推荐3个A股":
 		return DefaultMarketSummaryQuestion
 	case "市场资讯分析和总结":
 		return DefaultMarketSummaryQuestion

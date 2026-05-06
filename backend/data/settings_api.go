@@ -86,6 +86,7 @@ type AIConfig struct {
 	BaseUrl          string  `json:"baseUrl"`
 	ApiKey           string  `json:"apiKey" `
 	ModelName        string  `json:"modelName"`
+	ApiProtocol      string  `json:"apiProtocol" gorm:"default:'chat_completions'"`
 	MaxTokens        int     `json:"maxTokens"`
 	Temperature      float64 `json:"temperature"`
 	TimeOut          int     `json:"timeOut"`
@@ -106,9 +107,23 @@ type SettingsApi struct {
 	Config *SettingConfig
 }
 
+type AIModelTestResult struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	Protocol       string `json:"protocol"`
+	Model          string `json:"model"`
+	LatencyMs      int64  `json:"latencyMs"`
+	ContentPreview string `json:"contentPreview"`
+}
+
 var strictYieldEmailCronTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
 
 const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
+const (
+	AIAPIProtocolChatCompletions  = "chat_completions"
+	AIAPIProtocolOpenAIResponses  = "openai_responses"
+	AIAPIProtocolAnthropicMessage = "anthropic_messages"
+)
 
 func NewSettingsApi() *SettingsApi {
 	return &SettingsApi{
@@ -360,7 +375,10 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 		if e != nil {
 			return
 		}
-		item.Sort = index + 1
+		if item.Sort <= 0 {
+			item.Sort = index + 1
+		}
+		item.ApiProtocol = NormalizeAIAPIProtocol(item.ApiProtocol)
 		if !idMap[item.ID] {
 			addAiConfigs = append(addAiConfigs, item)
 		} else {
@@ -371,6 +389,7 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 				"base_url":           item.BaseUrl,
 				"api_key":            item.ApiKey,
 				"model_name":         item.ModelName,
+				"api_protocol":       item.ApiProtocol,
 				"max_tokens":         item.MaxTokens,
 				"temperature":        item.Temperature,
 				"time_out":           item.TimeOut,
@@ -427,6 +446,7 @@ func GetSettingConfig() *SettingConfig {
 				if item.Sort <= 0 {
 					item.Sort = index + 1
 				}
+				item.ApiProtocol = NormalizeAIAPIProtocol(item.ApiProtocol)
 				if item.TimeOut <= 0 {
 					item.TimeOut = 60 * 5
 				}
@@ -454,6 +474,17 @@ func GetSettingConfig() *SettingConfig {
 	applyRuntimeOverrideFromSettings(settings)
 
 	return settingConfig
+}
+
+func NormalizeAIAPIProtocol(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case AIAPIProtocolOpenAIResponses:
+		return AIAPIProtocolOpenAIResponses
+	case AIAPIProtocolAnthropicMessage:
+		return AIAPIProtocolAnthropicMessage
+	default:
+		return AIAPIProtocolChatCompletions
+	}
 }
 
 func applySettingDefaults(settings *Settings) {

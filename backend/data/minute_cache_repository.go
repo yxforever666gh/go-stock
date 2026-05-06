@@ -35,7 +35,7 @@ func listMinuteBarsFromCache(stockCode string, start, end time.Time) ([]minuteBa
 	if code == "" {
 		return []minuteBar{}, nil
 	}
-	if !start.Before(end) {
+	if start.After(end) {
 		return []minuteBar{}, nil
 	}
 

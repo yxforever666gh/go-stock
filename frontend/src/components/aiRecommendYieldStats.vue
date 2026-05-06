@@ -9,11 +9,11 @@ const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRang
 const loadingRef = ref(true)
 const overviewLoadingRef = ref(true)
 const rangeReadyRef = ref(false)
-const strategyCohortRef = ref('current')
+const strategyCohortRef = ref('all')
 
 const totalYieldRateRef = ref(0)
 const totalYieldRateTextRef = ref('--')
-const benchmarkNameRef = ref('沪深300（现金流匹配）')
+const benchmarkNameRef = ref('沪深300ETF（510300.SH，现金流匹配，已扣成本）')
 const benchmarkRateRef = ref(0)
 const benchmarkRateTextRef = ref('--')
 const excessYieldRateRef = ref(0)
@@ -61,11 +61,11 @@ const strategyCohortLabelRef = computed(() => {
 
 const metricHelpTexts = computed(() => ({
   totalYield: '这是整套策略最后一共赚了多少，已经按统一交易成本口径合并计算。看它可以快速判断这套策略整体有没有挣钱，但不要只盯这一个数。',
-  benchmark: `${benchmarkNameRef.value} 会按策略真实的买卖时间和资金进出来同步匹配。它回答的是：如果同样的钱、在同样的时点去买基准，而不是买这套策略，最后会怎样。`,
+  benchmark: `${benchmarkNameRef.value} 会按策略真实的买卖时间和资金进出来同步匹配，并扣除 ETF 佣金和滑点；不扣股票印花税。它回答的是：如果同样的钱、在同样的时点去买可交易基准，而不是买这套策略，最后会怎样。`,
   excessYield: '这是策略收益率减去基准收益率后的差值。大于 0 说明整体跑赢了基准，小于 0 说明这套策略还不如按同样节奏去买基准。',
   maxDrawdown: '这是净值从某个高点往后回落时，最深曾经跌了多少。它回答的是这套策略最难熬的时候有多痛，通常越接近 0 越稳。',
   strategyXirr: '这是把每次真实买入、卖出的时间点都算进去后，折算出来的年化收益率。它更适合看分批买入、分批卖出的策略，不会把资金使用时点忽略掉。',
-  benchmarkXirr: `这是按和策略相同的资金进出时间去买 ${benchmarkNameRef.value} 后，折算出来的年化收益率。它回答的是：同样的出手节奏，如果改买基准，资金效率会怎样。`,
+  benchmarkXirr: `这是按和策略相同的资金进出时间去买 ${benchmarkNameRef.value} 并扣除 ETF 交易成本后，折算出来的年化收益率。它回答的是：同样的出手节奏，如果改买基准，资金效率会怎样。`,
   excessXirr: '这是策略 XIRR 减去基准 XIRR。它更适合判断分批买入策略有没有真正跑赢基准，因为它把时间和资金效率也一起算进去了。',
   winRateVsBenchmark: '这是所有纳入统计的推荐里，最终收益跑赢对应基准的占比。它主要看稳定性，而不是只靠少数几次大赚把总收益抬上去。',
   medianExcessYield: '这是把每条记录的超额收益率排好序后，取正中间那个值。它比平均值更不容易被极端大赚或大亏样本带偏，更适合看多数样本的真实水平。',
@@ -175,7 +175,7 @@ async function loadSummary() {
     })
     totalYieldRateRef.value = Number(result?.totalYieldRate || 0)
     totalYieldRateTextRef.value = result?.totalYieldRateText || '--'
-    benchmarkNameRef.value = result?.benchmarkName || '沪深300（现金流匹配）'
+    benchmarkNameRef.value = result?.benchmarkName || '沪深300ETF（510300.SH，现金流匹配，已扣成本）'
     benchmarkRateRef.value = Number(result?.benchmarkRate || 0)
     benchmarkRateTextRef.value = result?.benchmarkRateText || '--'
     excessYieldRateRef.value = Number(result?.excessYieldRate || 0)
@@ -401,7 +401,7 @@ function dailyOverviewWarningText() {
             <div class="metric-value">
               <n-text :type="benchmarkTextType()">{{ benchmarkRateTextRef }}</n-text>
             </div>
-            <div class="metric-meta">现金流匹配基准</div>
+            <div class="metric-meta">现金流匹配 ETF 净基准</div>
           </n-card>
         </n-grid-item>
         <n-grid-item>
@@ -547,7 +547,7 @@ function dailyOverviewWarningText() {
           <n-card size="small" title="口径说明">
             <div class="detail-row">
               <span class="detail-label">比较方式</span>
-              <n-text depth="3">基准使用“{{ benchmarkNameRef }}”现金流匹配口径，更适合和分批买入的策略做同口径比较。</n-text>
+              <n-text depth="3">基准使用“{{ benchmarkNameRef }}”现金流匹配净口径，已扣 ETF 佣金和滑点，更适合和分批买入的策略做同口径比较。</n-text>
             </div>
             <div class="detail-row">
               <span class="detail-label">适合判断什么</span>

@@ -210,11 +210,11 @@ func buildPendingOpeningReviews(tradeDay time.Time, now time.Time) ([]models.AiR
 			}
 		} else {
 			status := strings.TrimSpace(rec.ActivationStatus)
-			if status == "activated" || status == "skipped" || status == "invalid" || status == "ineligible" {
+			if status == "activated" || status == "skipped" || status == "expired" || status == "invalid" || status == "ineligible" {
 				continue
 			}
 		}
-		if expiry, _, ok := resolveRecommendPendingActivationExpiry(recordTime, rec.ExpectedCycle); ok && !expiry.After(now) {
+		if expiry, _, ok := resolveRecommendPendingActivationExpiryForRecommend(rec, recordTime); ok && !expiry.After(now) {
 			continue
 		}
 

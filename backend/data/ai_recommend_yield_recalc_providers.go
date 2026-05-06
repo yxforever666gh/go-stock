@@ -24,7 +24,15 @@ type minuteSyncInfo struct {
 	CoverageOK   bool
 }
 
-func syncMinuteBars(tsCode string, start, end time.Time, _ int64, allowHeadBackfill bool) ([]minuteBar, minuteSyncInfo) {
+func syncMinuteBars(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool) ([]minuteBar, minuteSyncInfo) {
+	return syncMinuteBarsWithFetch(tsCode, start, end, crawlTimeout, allowHeadBackfill, true)
+}
+
+func syncMinuteBarsFromCacheOnly(tsCode string, start, end time.Time) ([]minuteBar, minuteSyncInfo) {
+	return syncMinuteBarsWithFetch(tsCode, start, end, 0, false, false)
+}
+
+func syncMinuteBarsWithFetch(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool) ([]minuteBar, minuteSyncInfo) {
 	info := minuteSyncInfo{}
 	start = normalizeMinuteTime(start)
 	end = normalizeMinuteTime(end)
@@ -39,34 +47,36 @@ func syncMinuteBars(tsCode string, start, end time.Time, _ int64, allowHeadBackf
 	info.CacheStart = cacheStart
 	info.CacheEnd = cacheEnd
 
-	missingWindows := buildMinuteFetchWindows(start, end, cacheStart, cacheEnd, allowHeadBackfill)
 	fetchedCount := 0
-	for _, window := range missingWindows {
-		if window.Start.After(window.End) {
-			continue
-		}
-		fetched, source, fetchErr := fetchMinuteBarsFromProviders(tsCode, window.Start, window.End)
-		if audit := currentActiveManualYieldAudit(); audit != nil && source != "" {
-			audit.recordProvider(source)
-		}
-		if source != "" {
-			info.CacheSource = source
-		}
-		if fetchErr != nil {
-			// Best-effort: some providers may return partial data along with an
-			// error (e.g. rate limit on a later page). Persist what we got so the
-			// cache can still advance, then keep the error for observability.
-			info.SyncErr = mergeSyncErr(info.SyncErr, fetchErr)
-		}
-		if len(fetched) > 0 {
-			inserted, upsertErr := upsertMinuteBarsToCache(tsCode, fetched, source)
-			if upsertErr != nil {
-				info.SyncErr = mergeSyncErr(info.SyncErr, upsertErr)
+	if allowFetch {
+		missingWindows := buildMinuteFetchWindows(start, end, cacheStart, cacheEnd, allowHeadBackfill)
+		for _, window := range missingWindows {
+			if window.Start.After(window.End) {
 				continue
 			}
-			fetchedCount += inserted
+			fetched, source, fetchErr := fetchMinuteBarsFromProviders(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+			if audit := currentActiveManualYieldAudit(); audit != nil && source != "" {
+				audit.recordProvider(source)
+			}
+			if source != "" {
+				info.CacheSource = source
+			}
+			if fetchErr != nil {
+				// Best-effort: some providers may return partial data along with an
+				// error (e.g. rate limit on a later page). Persist what we got so the
+				// cache can still advance, then keep the error for observability.
+				info.SyncErr = mergeSyncErr(info.SyncErr, fetchErr)
+			}
+			if len(fetched) > 0 {
+				inserted, upsertErr := upsertMinuteBarsToCache(tsCode, fetched, source)
+				if upsertErr != nil {
+					info.SyncErr = mergeSyncErr(info.SyncErr, upsertErr)
+					continue
+				}
+				fetchedCount += inserted
+			}
+			// If fetch failed and returned nothing, continue to the next window.
 		}
-		// If fetch failed and returned nothing, continue to the next window.
 	}
 
 	bars, reloadErr := listMinuteBarsFromCache(tsCode, start, end)
@@ -126,6 +136,39 @@ type minuteProviderResult struct {
 	Bars     []minuteBar
 	Err      error
 	Complete bool
+}
+
+func fetchMinuteBarsWithNamedProviderTimeout(provider string, tsCode string, start, end time.Time, timeout time.Duration) minuteProviderResult {
+	if timeout <= 0 {
+		timeout = 20 * time.Second
+	}
+	resultCh := make(chan minuteProviderResult, 1)
+	go func() {
+		bars, source, err := fetchMinuteBarsWithNamedProvider(provider, tsCode, start, end)
+		resultCh <- buildMinuteProviderResult(provider, bars, source, err, start, end)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case res := <-resultCh:
+		return res
+	case <-timer.C:
+		return buildMinuteProviderResult(provider, nil, provider, fmt.Errorf("分钟线数据源响应超时：%s provider=%s", tsCode, provider), start, end)
+	}
+}
+
+func minuteProviderAttemptTimeout(crawlTimeout int64) time.Duration {
+	if crawlTimeout <= 0 {
+		crawlTimeout = 20
+	}
+	timeout := time.Duration(crawlTimeout) * time.Second
+	if timeout < 5*time.Second {
+		return 5 * time.Second
+	}
+	if timeout > 20*time.Second {
+		return 20 * time.Second
+	}
+	return timeout
 }
 
 func shouldAutoHeadBackfill(start, end time.Time, cacheStart *time.Time) bool {
@@ -205,7 +248,7 @@ func mergeSyncErr(base, current error) error {
 	return fmt.Errorf("%v; %v", base, current)
 }
 
-func fetchMinuteBarsFromProviders(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+func fetchMinuteBarsFromProviders(tsCode string, start, end time.Time, timeout time.Duration) ([]minuteBar, string, error) {
 	provider := appconfig.Load().Minute.Provider
 	switch provider {
 	case "public", "diemeng", "akshare", "auto", "sina", "tencent":
@@ -217,7 +260,7 @@ func fetchMinuteBarsFromProviders(tsCode string, start, end time.Time) ([]minute
 	if err != nil {
 		return []minuteBar{}, "", err
 	}
-	return executeMinuteProviderPlan(tsCode, start, end, hedgedPlan, fallbackPlan)
+	return executeMinuteProviderPlan(tsCode, start, end, hedgedPlan, fallbackPlan, timeout)
 }
 
 func minuteAkshareFallbackEnabled() bool {
@@ -288,9 +331,12 @@ func currentMinuteProviderMode() string {
 	return normalizeMinuteProviderMode(settings.MinuteProviderMode)
 }
 
-func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan []minuteProviderAttempt, fallbackPlan []string) ([]minuteBar, string, error) {
+func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan []minuteProviderAttempt, fallbackPlan []string, timeout time.Duration) ([]minuteBar, string, error) {
 	if len(hedgedPlan) == 0 {
 		return []minuteBar{}, "", fmt.Errorf("当前分钟线配置不可用，请检查数据源设置")
+	}
+	if timeout <= 0 {
+		timeout = 20 * time.Second
 	}
 	type asyncResult struct {
 		result minuteProviderResult
@@ -312,8 +358,19 @@ func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan [
 	hasBest := false
 	var mergedErr error
 
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
 	for i := 0; i < len(hedgedPlan); i++ {
-		res := (<-resultCh).result
+		var res minuteProviderResult
+		select {
+		case async := <-resultCh:
+			res = async.result
+		case <-deadline.C:
+			if hasBest && len(best.Bars) > 0 {
+				return best.Bars, best.Source, mergeSyncErr(mergedErr, fmt.Errorf("分钟线数据源响应超时：%s", tsCode))
+			}
+			return []minuteBar{}, "", mergeSyncErr(mergedErr, fmt.Errorf("分钟线数据源响应超时：%s", tsCode))
+		}
 		attempted[res.Provider] = struct{}{}
 		if res.Complete && res.Err == nil {
 			return res.Bars, res.Source, nil
@@ -324,6 +381,9 @@ func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan [
 		}
 		if res.Err != nil {
 			mergedErr = mergeSyncErr(mergedErr, res.Err)
+		}
+		if hasBest && len(best.Bars) > 0 {
+			return best.Bars, best.Source, mergedErr
 		}
 	}
 
@@ -336,8 +396,7 @@ func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan [
 			continue
 		}
 		attempted[provider] = struct{}{}
-		bars, source, err := fetchMinuteBarsWithNamedProvider(provider, tsCode, start, end)
-		res := buildMinuteProviderResult(provider, bars, source, err, start, end)
+		res := fetchMinuteBarsWithNamedProviderTimeout(provider, tsCode, start, end, timeout)
 		if res.Complete && res.Err == nil {
 			return res.Bars, res.Source, nil
 		}

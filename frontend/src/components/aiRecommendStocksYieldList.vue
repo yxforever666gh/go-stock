@@ -40,6 +40,10 @@ const loadingRef = ref(true)
 const dataAsOfRef = ref("")
 const recalcInProgressRef = ref(false)
 const recalcProgressRef = ref(0)
+const downloadInProgressRef = ref(false)
+const downloadProgressRef = ref(0)
+const downloadDoneRef = ref(0)
+const downloadTotalRef = ref(0)
 const minuteDownloadDoneRef = ref(0)
 const minuteDownloadTotalRef = ref(0)
 const minuteDownloadPendingRef = ref(0)
@@ -193,6 +197,7 @@ const defaultColumns = [
         activated: 'success',
         pending: 'warning',
         skipped: 'default',
+        expired: 'default',
         invalid: 'error',
         ineligible: 'default'
       }
@@ -200,6 +205,7 @@ const defaultColumns = [
         activated: '已激活',
         pending: '待激活',
         skipped: '已跳过',
+        expired: '过期未触发',
         invalid: '无法回算',
         ineligible: '未纳入回测'
       }
@@ -264,6 +270,15 @@ const defaultColumns = [
           h("div", {
             style: "font-size: 12px; color: #666; margin-top: 2px; white-space: normal;"
           }, reason || "未激活，已按规则跳过")
+        ])
+      }
+      if (activationStatus === 'expired') {
+        const reason = skippedDisplayReason(row)
+        return h("div", {style: "line-height: 1.35;"}, [
+          h(NText, {type: textType}, {default: () => "过期未触发"}),
+          h("div", {
+            style: "font-size: 12px; color: #666; margin-top: 2px; white-space: normal;"
+          }, reason || "超过有效期仍未触发主买入区")
         ])
       }
       if (activationStatus === 'ineligible') {
@@ -522,6 +537,10 @@ function query({
         dataAsOf: res.dataAsOf || "",
         recalcInProgress: !!res.recalcInProgress,
         recalcProgress: Number(res.recalcProgress || 0),
+        downloadInProgress: !!res.downloadInProgress,
+        downloadProgress: Number(res.downloadProgress || 0),
+        downloadDone: Number(res.downloadDone || 0),
+        downloadTotal: Number(res.downloadTotal || 0),
         minuteDownloadDone: Number(res.minuteDownloadDone || 0),
         minuteDownloadTotal: Number(res.minuteDownloadTotal || 0),
         minuteDownloadPending: Number(res.minuteDownloadPending || 0),
@@ -580,6 +599,10 @@ function fetchYieldList(page, options = {}) {
     dataAsOfRef.value = data.dataAsOf
     recalcInProgressRef.value = data.recalcInProgress
     recalcProgressRef.value = Number(data.recalcProgress || 0)
+    downloadInProgressRef.value = data.downloadInProgress
+    downloadProgressRef.value = Number(data.downloadProgress || 0)
+    downloadDoneRef.value = Number(data.downloadDone || 0)
+    downloadTotalRef.value = Number(data.downloadTotal || 0)
     minuteDownloadDoneRef.value = Number(data.minuteDownloadDone || 0)
     minuteDownloadTotalRef.value = Number(data.minuteDownloadTotal || 0)
     minuteDownloadPendingRef.value = Number(data.minuteDownloadPending || 0)
@@ -832,23 +855,17 @@ function formatCooldownMMSS(seconds) {
   return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`
 }
 
-function currentDownloadProgressPercent() {
-  const total = Number(minuteDownloadTotalRef.value || 0)
-  const done = Number(minuteDownloadDoneRef.value || 0)
-  if (!total || total <= 0) {
-    return 0
-  }
-  const pct = Math.round((done / total) * 100)
-  return Math.min(100, Math.max(0, pct))
-}
-
 function manualDownloadButtonText() {
-  if (recalcInProgressRef.value) {
-    const total = Number(minuteDownloadTotalRef.value || 0)
-    const done = Number(minuteDownloadDoneRef.value || 0)
-    if (total > 0 && done < total) {
-      return `手动下载分钟线（下载中 ${currentDownloadProgressPercent()}%）`
+  if (downloadInProgressRef.value) {
+    const total = Number(downloadTotalRef.value || 0)
+    const done = Number(downloadDoneRef.value || 0)
+    const p = Math.max(0, Number(downloadProgressRef.value || 0))
+    if (total > 0) {
+      return `手动下载分钟线（下载中 ${p}% ${done}/${total}）`
     }
+    return "手动下载分钟线（下载中）"
+  }
+  if (recalcInProgressRef.value) {
     const p = Math.max(0, Number(recalcProgressRef.value || 0))
     return `手动下载分钟线（回算中 ${p}%）`
   }
@@ -908,12 +925,16 @@ function minuteCoveragePercentText() {
 }
 
 function taskProgressText() {
-  if (recalcInProgressRef.value) {
-    const total = Number(minuteDownloadTotalRef.value || 0)
-    const done = Number(minuteDownloadDoneRef.value || 0)
-    if (total > 0 && done < total) {
-      return `下载中 ${currentDownloadProgressPercent()}%（${done}/${total}）`
+  if (downloadInProgressRef.value) {
+    const total = Number(downloadTotalRef.value || 0)
+    const done = Number(downloadDoneRef.value || 0)
+    const p = Math.max(0, Number(downloadProgressRef.value || 0))
+    if (total > 0) {
+      return `下载中 ${p}%（${done}/${total}）`
     }
+    return "下载中"
+  }
+  if (recalcInProgressRef.value) {
     const p = Number(recalcProgressRef.value || 0)
     return `回算中 ${p}%`
   }
@@ -923,8 +944,11 @@ function taskProgressText() {
 function taskStatusHintText() {
   const pending = Number(minuteDownloadPendingRef.value || 0)
   const uncoverable = Number(minuteDownloadUncoverableRef.value || 0)
+  if (downloadInProgressRef.value) {
+    return "后台正在下载分钟线"
+  }
   if (recalcInProgressRef.value) {
-    return "后台任务执行中（这是任务进度，不等于覆盖进度）"
+    return "后台正在回算收益率（覆盖进度不等于任务进度）"
   }
   if (pending > 0 || uncoverable > 0) {
     return "后台任务已结束，但仍有待覆盖/不可覆盖记录"
@@ -1119,6 +1143,9 @@ function normalizeActivationStatus(status) {
   if (text === 'skipped') {
     return 'skipped'
   }
+  if (text === 'expired') {
+    return 'expired'
+  }
   if (text === 'ineligible') {
     return 'ineligible'
   }
@@ -1133,7 +1160,7 @@ function resolveBuySellVisualType(row) {
     return 'warning'
   }
   const activationStatus = normalizeActivationStatus(row?.activationStatus)
-  if (activationStatus === 'skipped') {
+  if (activationStatus === 'skipped' || activationStatus === 'expired') {
     return 'default'
   }
   if (activationStatus === 'ineligible') {
@@ -1171,7 +1198,7 @@ function isDataFullySynced(row) {
     return false
   }
   const status = String(row?.dataStatus || "").trim()
-  return status === "" || status === "正常" || status === "已跳过" || status === "未结构化"
+  return status === "" || status === "正常" || status === "已跳过" || status === "已过期" || status === "已失效" || status === "未结构化"
 }
 
 function dataSyncStatus(row) {
@@ -1204,6 +1231,12 @@ function dataSyncReason(row) {
   }
   if (status === "已跳过") {
     return "未激活结果已同步"
+  }
+  if (status === "已过期") {
+    return "过期未触发结果已同步"
+  }
+  if (status === "已失效") {
+    return "失效结果已同步"
   }
   if (isDataFullySynced(row)) {
     return "分钟线覆盖完整，数据已更新"

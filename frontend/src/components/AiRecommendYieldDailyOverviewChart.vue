@@ -148,7 +148,7 @@ function buildRateOption() {
   const strategyValues = points.map((item) => Number(isDailyMode.value ? item.dailyYieldRate : item.cumulativeYieldRate) || 0)
   const benchmarkValues = points.map((item) => Number(isDailyMode.value ? item.benchmarkDailyRate : item.benchmarkCumulativeRate) || 0)
   const excessValues = points.map((item) => Number(isDailyMode.value ? item.excessDailyRate : item.excessCumulativeRate) || 0)
-  const benchmarkName = String(props.overviewData?.benchmarkName || '沪深300（现金流匹配）').trim()
+  const benchmarkName = String(props.overviewData?.benchmarkName || '沪深300ETF（510300.SH，现金流匹配，已扣成本）').trim()
 
   return {
     animation: false,
@@ -274,7 +274,7 @@ function buildAmountOption() {
   const strategyAmountValues = points.map((item) => Number(isDailyMode.value ? item.dailyAmountChange : item.cumulativeAmountChange) || 0)
   const benchmarkAmountValues = points.map((item) => Number(isDailyMode.value ? item.benchmarkDailyAmountChange : item.benchmarkCumulativeAmountChange) || 0)
   const excessAmountValues = points.map((item) => Number(isDailyMode.value ? item.excessDailyAmountChange : item.excessCumulativeAmountChange) || 0)
-  const benchmarkName = String(props.overviewData?.benchmarkName || '沪深300（现金流匹配）').trim()
+  const benchmarkName = String(props.overviewData?.benchmarkName || '沪深300ETF（510300.SH，现金流匹配，已扣成本）').trim()
 
   return {
     animation: false,

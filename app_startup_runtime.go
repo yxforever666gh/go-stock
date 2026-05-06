@@ -130,7 +130,9 @@ func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
 		if appconfig.Load().Update.SelfUpdateEnabled && config.CheckUpdate {
 			a.CheckUpdate(0)
 		}
-		go a.CheckStockBaseInfo(a.ctx)
+		if config.UpdateBasicInfoOnStart {
+			go a.CheckStockBaseInfo(a.ctx)
+		}
 
 		if _, err := a.cron.AddFunc("0 0 2 * * *", func() {
 			logger.SugaredLogger.Errorf("Checking for updates...")

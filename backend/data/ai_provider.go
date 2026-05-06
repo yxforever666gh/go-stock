@@ -62,6 +62,16 @@ func DetectAIProviderName(aiConfig *AIConfig) string {
 	return fallbackAIProviderNameFromBaseURL(aiConfig.BaseUrl)
 }
 
+func DisplayAIProviderName(aiConfig *AIConfig) string {
+	if aiConfig == nil {
+		return ""
+	}
+	if name := strings.TrimSpace(aiConfig.Name); name != "" {
+		return name
+	}
+	return strings.TrimSpace(DetectAIProviderName(aiConfig))
+}
+
 func matchAIProviderByText(text string, rules []aiProviderRule) string {
 	lowerText := strings.ToLower(strings.TrimSpace(text))
 	if lowerText == "" {

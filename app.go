@@ -516,7 +516,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 					},
 					"activationRuleJson": map[string]any{
 						"type":        "string",
-						"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，还应包含 thresholdMax；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
+						"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，thresholdMax 表示区间上沿；若为突破触发，thresholdMax 表示最高可买价/追价上限且必须低于止盈区间下沿；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
 					},
 					"riskRemarks": map[string]any{
 						"type":        "string",
@@ -656,7 +656,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 								},
 								"activationRuleJson": map[string]any{
 									"type":        "string",
-									"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，还应包含 thresholdMax；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
+									"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，thresholdMax 表示区间上沿；若为突破触发，thresholdMax 表示最高可买价/追价上限且必须低于止盈区间下沿；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
 								},
 								"riskRemarks": map[string]any{
 									"type":        "string",

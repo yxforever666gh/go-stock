@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type AppRuntime struct {
@@ -98,10 +99,16 @@ func AutoMigrate() {
 		&models.AiRecommendYieldRecordState{},
 		&models.AiRecommendYieldMeta{},
 		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendDailyBar{},
 		&models.CronTaskRun{},
 		&models.EmailSendLog{},
 	); err != nil {
 		logger.SugaredLogger.Errorf("auto migrate failed: %v", err)
+		return
+	}
+	data.ResetInterruptedAiRecommendYieldTasksOnStartup()
+	if _, err := data.RepairSameDayOnlyLegacySkippedRecommendations(time.Now()); err != nil {
+		logger.SugaredLogger.Warnf("repair sameDayOnly legacy skipped recommendations failed: %v", err)
 	}
 }
 

@@ -17,9 +17,14 @@ func (m *aiRecommendYieldRecalcManager) Request(force bool, reason string, scope
 	m.mu.Lock()
 	if m.running {
 		m.pending = true
+		m.pendingReason = reason
 		if force {
 			m.pendingForce = true
-			m.pendingScope = nil
+			if len(scope) == 0 {
+				m.pendingScope = nil
+			} else {
+				m.pendingScope = mergeScopeMap(m.pendingScope, scope)
+			}
 		} else if !m.pendingForce {
 			m.pendingScope = mergeScopeMap(m.pendingScope, scope)
 		}
@@ -45,10 +50,14 @@ func (m *aiRecommendYieldRecalcManager) run(force bool, reason string, scope map
 		m.mu.Lock()
 		if m.pending {
 			nextForce = m.pendingForce
-			nextReason = "pending"
+			nextReason = strings.TrimSpace(m.pendingReason)
+			if nextReason == "" {
+				nextReason = "pending"
+			}
 			nextScope = copyScopeMap(m.pendingScope)
 			m.pending = false
 			m.pendingForce = false
+			m.pendingReason = ""
 			m.pendingScope = nil
 			m.mu.Unlock()
 			continue
@@ -107,6 +116,8 @@ type aiRecommendYieldCalcResult struct {
 	State        *models.AiRecommendYieldState
 	RecordStates []models.AiRecommendYieldRecordState
 }
+
+const manualYieldCalcTaskTimeout = 12 * time.Second
 
 type aiRecommendYieldManualAudit struct {
 	StartedAt          time.Time
@@ -389,7 +400,7 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 		return err
 	}
 
-	fullRecalc := force || len(scope) == 0 || (len(targets.targetCodes) == len(targets.allCodes) && len(targets.targetRecords) == len(targets.records))
+	fullRecalc := isFullAiRecommendYieldRecalc(force, scope, targets)
 	if fullRecalc {
 		if err = cleanupAiRecommendYieldSnapshots(targets.allCodes, targets.allRecordIDs); err != nil {
 			markAiRecommendYieldRecalcError(runtime.meta.ID, err)
@@ -399,6 +410,19 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 
 	go sendYieldXLSXEmailIfEnabled(reason, fullRecalc)
 	return nil
+}
+
+func isFullAiRecommendYieldRecalc(force bool, scope map[string]struct{}, targets *aiRecommendYieldTargets) bool {
+	if len(scope) > 0 {
+		return false
+	}
+	if force {
+		return true
+	}
+	if targets == nil {
+		return false
+	}
+	return len(targets.targetCodes) == len(targets.allCodes) && len(targets.targetRecords) == len(targets.records)
 }
 
 func beginAiRecommendYieldRecalc(force bool, reason string) (*aiRecommendYieldRecalcRuntime, func(*error), error) {
@@ -476,10 +500,11 @@ func finishAiRecommendYieldRecalc(metaID uint, startedAt time.Time, runErr error
 	}
 	if runErr == nil {
 		updateMap["last_full_recalc_at"] = startedAt
+		updateMap["recalc_done"] = gorm.Expr("CASE WHEN recalc_total > 0 THEN recalc_total ELSE recalc_done END")
 		updateMap["recalc_progress"] = 100
 		updateMap["download_in_progress"] = false
 		updateMap["download_done"] = gorm.Expr("CASE WHEN download_total > 0 THEN download_total ELSE download_done END")
-		updateMap["download_progress"] = gorm.Expr("CASE WHEN download_total > 0 THEN 100 ELSE download_progress END")
+		updateMap["download_progress"] = 100
 		updateMap["last_download_error"] = ""
 	} else {
 		updateMap["download_in_progress"] = false
@@ -550,7 +575,11 @@ func buildAiRecommendYieldRecalcRuntime(meta *models.AiRecommendYieldMeta, now t
 		"current_trade_date": latestTradeDate.Format("2006-01-02"),
 	}).Error
 
-	priceMap, priceTimeMap := fetchCurrentPriceMap(nil)
+	priceMap := map[string]float64{}
+	priceTimeMap := map[string]string{}
+	if reason != "manual_minute_download" {
+		priceMap, priceTimeMap = fetchCurrentPriceMapFn(nil)
+	}
 	return &aiRecommendYieldRecalcRuntime{
 		meta:       meta,
 		now:        now,
@@ -563,6 +592,7 @@ func buildAiRecommendYieldRecalcRuntime(meta *models.AiRecommendYieldMeta, now t
 			InTradingSession:    inTrading,
 			LatestTradeDate:     latestTradeDate,
 			CrawlTimeout:        crawlTimeout,
+			DisableMinuteFetch:  reason == "manual_minute_download",
 			Tushare:             tushare,
 			CurrentPriceMap:     priceMap,
 			CurrentPriceTimeMap: priceTimeMap,
@@ -599,9 +629,11 @@ func loadAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, scope m
 	targetCodes := buildRecalcTargetCodes(allCodes, scope, force)
 	targetRecords := buildRecalcTargetRecords(records, scope, force)
 
-	priceMap, priceTimeMap := fetchCurrentPriceMap(aggrMap)
-	runtime.ctx.CurrentPriceMap = priceMap
-	runtime.ctx.CurrentPriceTimeMap = priceTimeMap
+	if runtime.ctx.Reason != "manual_minute_download" {
+		priceMap, priceTimeMap := fetchCurrentPriceMapFn(aggrMap)
+		runtime.ctx.CurrentPriceMap = priceMap
+		runtime.ctx.CurrentPriceTimeMap = priceTimeMap
+	}
 
 	return &aiRecommendYieldTargets{
 		aggrMap:        aggrMap,
@@ -705,7 +737,7 @@ func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targ
 		go func() {
 			defer wg.Done()
 			for task := range taskCh {
-				resultCh <- executeAiRecommendYieldCalcTask(task, runtime.ctx)
+				resultCh <- executeAiRecommendYieldCalcTaskWithTimeout(task, runtime.ctx)
 			}
 		}()
 	}
@@ -718,6 +750,116 @@ func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targ
 	close(resultCh)
 
 	return <-writerDoneCh
+}
+
+func executeAiRecommendYieldCalcTaskWithTimeout(task aiRecommendYieldCalcTask, ctx yieldBuildContext) aiRecommendYieldCalcResult {
+	if ctx.Reason != "manual_minute_download" {
+		return executeAiRecommendYieldCalcTask(task, ctx)
+	}
+	resultCh := make(chan aiRecommendYieldCalcResult, 1)
+	go func() {
+		resultCh <- executeAiRecommendYieldCalcTask(task, ctx)
+	}()
+	select {
+	case result := <-resultCh:
+		return result
+	case <-time.After(manualYieldCalcTaskTimeout):
+		logger.SugaredLogger.Warnf("manual yield calc task timed out: code=%s records=%d", task.StockCode, len(task.Records))
+		return buildTimedOutYieldCalcResult(task, ctx)
+	}
+}
+
+func buildTimedOutYieldCalcResult(task aiRecommendYieldCalcTask, ctx yieldBuildContext) aiRecommendYieldCalcResult {
+	result := aiRecommendYieldCalcResult{
+		RecordStates: make([]models.AiRecommendYieldRecordState, 0, len(task.Records)),
+	}
+	recalcAt := ctx.Now
+	for _, rec := range task.Records {
+		if existing := task.ExistingRecord[rec.ID]; existing != nil {
+			state := *existing
+			state.LastRecalcAt = &recalcAt
+			if strings.TrimSpace(state.DataStatus) == "" {
+				state.DataStatus = "无法判定"
+			}
+			state.DataStatusReason = appendReasonText(state.DataStatusReason, "手动回算单票超时，已保留上次快照")
+			result.RecordStates = append(result.RecordStates, state)
+			continue
+		}
+		recordTime := recommendRecordTime(rec)
+		state := models.AiRecommendYieldRecordState{
+			RecommendID:       rec.ID,
+			StockCode:         normalizeRecommendStockCode(rec.StockCode),
+			StockName:         strings.TrimSpace(rec.StockName),
+			ModelName:         strings.TrimSpace(rec.ModelName),
+			BkName:            strings.TrimSpace(rec.BkName),
+			RecommendCategory: strings.TrimSpace(rec.RecommendCategory),
+			ActivationStatus:  "pending",
+			PositionStatus:    "待激活",
+			YieldRateText:     "--",
+			DataStatus:        "无法判定",
+			DataStatusReason:  "手动回算单票超时，等待下次重算",
+			TotalScopeEnd:     ctx.Now.Format("2006-01-02"),
+			LastRecalcAt:      &recalcAt,
+		}
+		if !recordTime.IsZero() {
+			t := recordTime
+			state.RecommendTime = &t
+			state.SignalTime = &t
+			state.TotalScopeStart = t.Format("2006-01-02")
+		}
+		fillYieldRecordMetrics(&state)
+		result.RecordStates = append(result.RecordStates, state)
+	}
+	if task.Aggregate != nil {
+		if task.ExistingState != nil {
+			state := *task.ExistingState
+			state.LastRecalcAt = &recalcAt
+			if strings.TrimSpace(state.DataStatus) == "" {
+				state.DataStatus = "无法判定"
+			}
+			state.DataStatusReason = appendReasonText(state.DataStatusReason, "手动回算单票超时，已保留上次快照")
+			result.State = &state
+		} else {
+			state := models.AiRecommendYieldState{
+				StockCode:        task.Aggregate.StockCode,
+				StockName:        task.Aggregate.StockName,
+				ModelNames:       strings.Join(task.Aggregate.ModelNames, "、"),
+				BkName:           strings.Join(task.Aggregate.BkNames, "、"),
+				RecommendCount:   task.Aggregate.RecommendCount,
+				ActivationStatus: "pending",
+				PositionStatus:   "待激活",
+				YieldRateText:    "--",
+				DataStatus:       "无法判定",
+				DataStatusReason: "手动回算单票超时，等待下次重算",
+				TotalScopeStart:  task.Aggregate.SignalTime.Format("2006-01-02"),
+				TotalScopeEnd:    ctx.Now.Format("2006-01-02"),
+				LastRecalcAt:     &recalcAt,
+			}
+			if !task.Aggregate.SignalTime.IsZero() {
+				t := task.Aggregate.SignalTime
+				state.RecommendTime = &t
+				state.SignalTime = &t
+			}
+			fillYieldMetrics(&state)
+			result.State = &state
+		}
+	}
+	return result
+}
+
+func appendReasonText(existing, reason string) string {
+	existing = strings.TrimSpace(existing)
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return existing
+	}
+	if existing == "" {
+		return reason
+	}
+	if strings.Contains(existing, reason) {
+		return existing
+	}
+	return existing + "；" + reason
 }
 
 func executeAiRecommendYieldCalcTask(task aiRecommendYieldCalcTask, ctx yieldBuildContext) aiRecommendYieldCalcResult {
@@ -1178,7 +1320,7 @@ func (w *aiRecommendYieldSnapshotWriter) flushProgressIfNeeded() error {
 }
 
 func buildRecalcTargetCodes(allCodes []string, scope map[string]struct{}, force bool) []string {
-	if force || len(scope) == 0 {
+	if len(scope) == 0 {
 		return allCodes
 	}
 	result := make([]string, 0, len(allCodes))
@@ -1191,7 +1333,7 @@ func buildRecalcTargetCodes(allCodes []string, scope map[string]struct{}, force 
 }
 
 func buildRecalcTargetRecords(allRecords []models.AiRecommendStocks, scope map[string]struct{}, force bool) []models.AiRecommendStocks {
-	if force || len(scope) == 0 {
+	if len(scope) == 0 {
 		return allRecords
 	}
 	result := make([]models.AiRecommendStocks, 0, len(allRecords))

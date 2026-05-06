@@ -354,6 +354,10 @@ export function SummaryStockNews(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SummaryStockNews'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function TestAIConfig(arg1) {
+  return window['go']['main']['App']['TestAIConfig'](arg1);
+}
+
 export function UnFollow(arg1) {
   return window['go']['main']['App']['UnFollow'](arg1);
 }

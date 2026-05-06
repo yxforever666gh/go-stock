@@ -61,9 +61,12 @@ func TestResolvePendingRecommendInvalidation_StopLossTriggered(t *testing.T) {
 		{TradeTime: time.Date(2026, 3, 24, 9, 35, 0, 0, loc), Open: 84.9, High: 85.1, Low: 84.6, Close: 84.7},
 	}
 
-	reason, skip := resolvePendingRecommendInvalidation(rec, recordTime, evalEnd, bars, true)
-	if !skip {
-		t.Fatal("expected pending recommendation to be skipped after stop loss breach")
+	reason, status, done := resolvePendingRecommendInvalidation(rec, recordTime, evalEnd, bars, true)
+	if !done {
+		t.Fatal("expected pending recommendation to be invalid after stop loss breach")
+	}
+	if status != "invalid" {
+		t.Fatalf("expected invalid status, got %s", status)
 	}
 	if !strings.Contains(reason, "跌破止损/失效位") {
 		t.Fatalf("expected stop loss reason, got %s", reason)
@@ -87,9 +90,12 @@ func TestResolvePendingRecommendInvalidation_ExpectedCycleExpired(t *testing.T) 
 		t.Fatal("expected cycle expiry")
 	}
 
-	reason, skip := resolvePendingRecommendInvalidation(rec, recordTime, expiry, bars, true)
-	if !skip {
-		t.Fatal("expected pending recommendation to be skipped after expected cycle expiry")
+	reason, status, done := resolvePendingRecommendInvalidation(rec, recordTime, expiry, bars, true)
+	if !done {
+		t.Fatal("expected pending recommendation to be expired after expected cycle expiry")
+	}
+	if status != "expired" {
+		t.Fatalf("expected expired status, got %s", status)
 	}
 	if !strings.Contains(reason, "超过待激活有效期") {
 		t.Fatalf("expected expiry reason, got %s", reason)

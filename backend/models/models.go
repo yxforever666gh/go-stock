@@ -1297,6 +1297,10 @@ type AiRecommendStocksYieldPageData struct {
 	DataAsOf                   string                       `json:"dataAsOf"`
 	RecalcInProgress           bool                         `json:"recalcInProgress"`
 	RecalcProgress             int                          `json:"recalcProgress"`
+	DownloadInProgress         bool                         `json:"downloadInProgress"`
+	DownloadProgress           int                          `json:"downloadProgress"`
+	DownloadDone               int                          `json:"downloadDone"`
+	DownloadTotal              int                          `json:"downloadTotal"`
 	MinuteDownloadDone         int                          `json:"minuteDownloadDone"`
 	MinuteDownloadTotal        int                          `json:"minuteDownloadTotal"`
 	MinuteDownloadPending      int                          `json:"minuteDownloadPending"`
@@ -1548,6 +1552,23 @@ type AiRecommendMinuteBar struct {
 }
 
 func (AiRecommendMinuteBar) TableName() string { return "ai_recommend_minute_bar" }
+
+type AiRecommendDailyBar struct {
+	ID        uint      `json:"id" gorm:"primarykey"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+	StockCode string    `json:"stockCode" gorm:"size:32;index;uniqueIndex:idx_ai_rec_daily_code_date,priority:1"`
+	TradeDate time.Time `json:"tradeDate" gorm:"index;uniqueIndex:idx_ai_rec_daily_code_date,priority:2"`
+	Open      float64   `json:"open"`
+	High      float64   `json:"high"`
+	Low       float64   `json:"low"`
+	Close     float64   `json:"close"`
+	Volume    float64   `json:"volume"`
+	Amount    float64   `json:"amount"`
+	Source    string    `json:"source"`
+}
+
+func (AiRecommendDailyBar) TableName() string { return "ai_recommend_daily_bar" }
 
 // StockFinancialInfoResp
 type StockFinancialInfoResp struct {

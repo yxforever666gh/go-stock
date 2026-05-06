@@ -159,7 +159,7 @@ func resolveAIProviderNameFromConfigs(aiConfigs []*data.AIConfig, aiConfigID int
 	if aiConfigID > 0 {
 		for _, item := range aiConfigs {
 			if item != nil && int(item.ID) == aiConfigID {
-				if provider := strings.TrimSpace(data.DetectAIProviderName(item)); provider != "" {
+				if provider := strings.TrimSpace(data.DisplayAIProviderName(item)); provider != "" {
 					return provider
 				}
 				break

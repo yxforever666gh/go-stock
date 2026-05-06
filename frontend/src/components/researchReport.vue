@@ -8,9 +8,11 @@ import { useSharedResearchDateRange } from "../composables/useSharedResearchDate
 
 const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
 const rangeReadyRef = ref(false)
+const aiConfigsRef = ref([])
 
 onBeforeMount(()=> {
   GetConfig().then(result => {
+    aiConfigsRef.value = Array.isArray(result.aiConfigs) ? result.aiConfigs : []
     if (result.darkTheme) {
       editorDataRef.darkTheme = true
     }
@@ -40,8 +42,38 @@ const editorDataRef = reactive({
 const dataRef = ref([])
 const loadingRef = ref(true)
 const tableScrollX = 1100
-function formatProviderModelLabel(providerName, modelName) {
+const aiConfigNameSet = computed(() => {
+  return new Set(aiConfigsRef.value.map((item) => String(item?.name || "").trim()).filter(Boolean))
+})
+const aiConfigNamesByModel = computed(() => {
+  const result = new Map()
+  aiConfigsRef.value.forEach((item) => {
+    const model = String(item?.modelName || "").trim()
+    const name = String(item?.name || "").trim()
+    if (!model || !name) {
+      return
+    }
+    if (!result.has(model)) {
+      result.set(model, new Set())
+    }
+    result.get(model).add(name)
+  })
+  return result
+})
+function resolveProviderDisplayName(providerName, modelName) {
   const provider = String(providerName || "").trim()
+  const model = String(modelName || "").trim()
+  if (provider && aiConfigNameSet.value.has(provider)) {
+    return provider
+  }
+  const names = model ? Array.from(aiConfigNamesByModel.value.get(model) || []) : []
+  if (names.length === 1) {
+    return names[0]
+  }
+  return provider
+}
+function formatProviderModelLabel(providerName, modelName) {
+  const provider = resolveProviderDisplayName(providerName, modelName)
   const model = String(modelName || "").trim()
   if (provider && model) {
     return `${provider} / ${model}`

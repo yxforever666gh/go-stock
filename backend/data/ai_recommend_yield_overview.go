@@ -7,7 +7,6 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,7 +16,7 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 	if query == nil {
 		query = &models.AiRecommendStocksQuery{}
 	}
-	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
+	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortAll)
 
 	signature, err := buildYieldDailyOverviewSignature(query)
 	if err != nil {
@@ -198,7 +197,7 @@ func buildYieldDailyOverviewSignature(query *models.AiRecommendStocksQuery) (str
 	}
 	return fmt.Sprintf(
 		"cohort:%s|record:%d:%d|recommend:%d:%d|override:%d:%d",
-		normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent),
+		normalizeStrategyCohort(query.StrategyCohort, strategyCohortAll),
 		recordStamp.Count,
 		recordStamp.MaxAt.UnixNano(),
 		recommendStamp.Count,
@@ -338,23 +337,25 @@ func resolveYieldDailyOverviewWindow(entries []yieldDailyOverviewEntry) (time.Ti
 
 func loadYieldDailyOverviewTradingDays(startDay, endDay time.Time) ([]time.Time, *yieldDailyOverviewPriceSeries, error) {
 	klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
-	kLines := NewStockDataApi().GetKLineData(defaultBenchmarkCode, "240", klineDays)
-	if kLines == nil || len(*kLines) == 0 {
-		return nil, nil, errors.New("读取沪深300日线失败")
+	bars, err := loadDailyBarsWithCache(defaultBenchmarkModelCode, defaultBenchmarkCode, startDay, endDay, klineDays)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(bars) == 0 {
+		return nil, nil, errors.New("读取沪深300ETF日线失败")
 	}
 
 	loc := cnLocation()
-	days := make([]time.Time, 0, len(*kLines))
-	rawCloseByDay := make(map[string]float64, len(*kLines))
-	for _, line := range *kLines {
-		day, ok := parseYieldOverviewTradeDay(line.Day)
-		if !ok || day.Before(startDay) || day.After(endDay) {
+	days := make([]time.Time, 0, len(bars))
+	rawCloseByDay := make(map[string]float64, len(bars))
+	for _, bar := range bars {
+		day := normalizeDailyTradeDate(bar.TradeDate)
+		if day.IsZero() || day.Before(startDay) || day.After(endDay) {
 			continue
 		}
 		days = append(days, day)
-		closePrice, err := strconv.ParseFloat(strings.TrimSpace(line.Close), 64)
-		if err == nil && closePrice > 0 {
-			rawCloseByDay[day.Format("2006-01-02")] = round2(closePrice)
+		if bar.Close > 0 {
+			rawCloseByDay[day.Format("2006-01-02")] = round2(bar.Close)
 		}
 	}
 	if len(days) == 0 {
@@ -416,8 +417,19 @@ func loadYieldDailyOverviewPriceSeries(
 		wg.Add(1)
 		go func(stockCode string) {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+
+			// Acquire semaphore before processing
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-time.After(30 * time.Second):
+				// Timeout to prevent permanent blocking
+				select {
+				case errCh <- fmt.Errorf("semaphore acquire timeout for stock %s", stockCode):
+				default:
+				}
+				return
+			}
 
 			series, err := loadYieldDailyOverviewPriceSeriesByCode(stockCode, startDay, endDay, tradingDays)
 			if err != nil {
@@ -460,22 +472,24 @@ func loadYieldDailyOverviewPriceSeriesByCode(
 	}
 
 	klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
-	kLines := NewStockDataApi().GetKLineData(quoteCode, "240", klineDays)
-	if kLines == nil || len(*kLines) == 0 {
+	bars, err := loadDailyBarsWithCache(stockCode, quoteCode, startDay, endDay, klineDays)
+	if err != nil {
+		return nil, err
+	}
+	if len(bars) == 0 {
 		return nil, nil
 	}
 
-	rawCloseByDay := make(map[string]float64, len(*kLines))
-	for _, line := range *kLines {
-		day, ok := parseYieldOverviewTradeDay(line.Day)
-		if !ok || day.Before(startDay) || day.After(endDay) {
+	rawCloseByDay := make(map[string]float64, len(bars))
+	for _, bar := range bars {
+		day := normalizeDailyTradeDate(bar.TradeDate)
+		if day.IsZero() || day.Before(startDay) || day.After(endDay) {
 			continue
 		}
-		closePrice, err := strconv.ParseFloat(strings.TrimSpace(line.Close), 64)
-		if err != nil || closePrice <= 0 {
+		if bar.Close <= 0 {
 			continue
 		}
-		rawCloseByDay[day.Format("2006-01-02")] = round2(closePrice)
+		rawCloseByDay[day.Format("2006-01-02")] = round2(bar.Close)
 	}
 	if len(rawCloseByDay) == 0 {
 		return nil, nil

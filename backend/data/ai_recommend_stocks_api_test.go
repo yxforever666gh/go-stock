@@ -374,6 +374,20 @@ func TestValidateSignalDrivenRecommendRequiresStructuredWaitingActivationPlan(t 
 	}
 }
 
+func TestValidateSignalDrivenRecommendAllowsInvalidSignalToReferenceActivationRule(t *testing.T) {
+	item := &models.AiRecommendStocks{
+		ExecutionState:       recommendExecutionConditional,
+		BuySignal:            "价格触发：未来5个交易日内，回踩路径为5分钟收盘价进入133.30-136.20；突破路径为5分钟收盘价>=139.20；量能触发：在133.30-136.20区间或139.20突破价附近，5分钟成交额>=近5个5分钟均额的1.20倍，确认1根5分钟K线",
+		SellSignal:           "触及145.80-151.50止盈区间卖出",
+		InvalidSignal:        "时间失效：未来5个交易日内未同时触发价格与量能条件则失效；价格失效：触发前或触发后5分钟收盘价<131.80则失效",
+		ActivationRuleJSON:   `{"version":"v2","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":133.3,"thresholdMax":136.2,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5},{"name":"breakout","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":139.2,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}]}`,
+		ActivationRuleSource: "market_summary",
+	}
+	if err := validateSignalDrivenRecommend(item); err != nil {
+		t.Fatalf("expected invalid signal to reuse activation rule volume context, got err=%v", err)
+	}
+}
+
 func TestValidateSignalDrivenRecommendRejectsAmbiguousTriggerPhrases(t *testing.T) {
 	item := &models.AiRecommendStocks{
 		ExecutionState: recommendExecutionConditional,

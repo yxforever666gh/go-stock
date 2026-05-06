@@ -18,6 +18,7 @@ func TestRenderMarketSummaryTemplateAddsStructuredInstruction(t *testing.T) {
 		"[市场资讯]",
 		"非交易时段",
 		"未来3-5个交易日",
+		"推荐股票池最多输出 2 只股票",
 	}
 	for _, item := range mustContain {
 		if !strings.Contains(prompt, item) {
@@ -46,6 +47,7 @@ func TestNormalizeMarketSummaryQuestion(t *testing.T) {
 		{name: "with instruction", input: "自定义问题\n\n【市场资讯AI总结输出规范】\n# 市场主线", want: "自定义问题"},
 		{name: "placeholder template", input: "{{stockName}}分析和总结", want: DefaultMarketSummaryQuestion},
 		{name: "generic market info", input: "市场资讯分析和总结", want: DefaultMarketSummaryQuestion},
+		{name: "legacy three stocks", input: "总结和分析股票市场新闻中的投资机会，并推荐3个A股", want: DefaultMarketSummaryQuestion},
 		{name: "custom", input: "从最近市场资讯里提炼可交易主线，并筛选3只A股", want: "从最近市场资讯里提炼可交易主线，并筛选3只A股"},
 	}
 

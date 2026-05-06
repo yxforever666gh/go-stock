@@ -84,8 +84,7 @@ func passesVolumeRuleWithPercentile(rule *activationRule, bars []minuteBar, idx 
 
 	baseline, err := calculateVolumePercentileBaseline(rule, bars, idx, percentile)
 	if err != nil {
-		// 降级到传统方法
-		return passesVolumeRule(rule, bars, idx)
+		return passesTraditionalVolumeRule(rule, bars, idx)
 	}
 
 	// 应用倍数要求

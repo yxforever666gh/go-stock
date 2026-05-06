@@ -80,9 +80,6 @@ func setActivationRuleTimestamps(rule *activationRule, rec models.AiRecommendSto
 		recordTime = now
 	}
 
-	// 设置生成时间为当前时间
-	rule.GeneratedAt = now
-
 	// 设置数据截止时间为推荐时间（确保不使用未来数据）
 	rule.DataCutoffTime = recordTime
 

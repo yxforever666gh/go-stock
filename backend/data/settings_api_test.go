@@ -29,16 +29,18 @@ func TestUpdateConfigPersistsAIConfigSortOrder(t *testing.T) {
 		},
 		AiConfigs: []*AIConfig{
 			{
-				Name:      "second",
-				BaseUrl:   "https://second.example.com",
-				ApiKey:    "second-key",
-				ModelName: "second-model",
+				Name:        "second",
+				BaseUrl:     "https://second.example.com",
+				ApiKey:      "second-key",
+				ModelName:   "second-model",
+				ApiProtocol: AIAPIProtocolOpenAIResponses,
 			},
 			{
-				Name:      "first",
-				BaseUrl:   "https://first.example.com",
-				ApiKey:    "first-key",
-				ModelName: "first-model",
+				Name:        "first",
+				BaseUrl:     "https://first.example.com",
+				ApiKey:      "first-key",
+				ModelName:   "first-model",
+				ApiProtocol: "unknown",
 			},
 		},
 	})
@@ -53,8 +55,14 @@ func TestUpdateConfigPersistsAIConfigSortOrder(t *testing.T) {
 	if cfg.AiConfigs[0].Name != "second" || cfg.AiConfigs[0].Sort != 1 {
 		t.Fatalf("unexpected first ai config: %+v", cfg.AiConfigs[0])
 	}
+	if cfg.AiConfigs[0].ApiProtocol != AIAPIProtocolOpenAIResponses {
+		t.Fatalf("unexpected first ai protocol: %+v", cfg.AiConfigs[0])
+	}
 	if cfg.AiConfigs[1].Name != "first" || cfg.AiConfigs[1].Sort != 2 {
 		t.Fatalf("unexpected second ai config: %+v", cfg.AiConfigs[1])
+	}
+	if cfg.AiConfigs[1].ApiProtocol != AIAPIProtocolChatCompletions {
+		t.Fatalf("unexpected normalized fallback protocol: %+v", cfg.AiConfigs[1])
 	}
 
 	reordered := UpdateConfig(&SettingConfig{
@@ -72,11 +80,12 @@ func TestUpdateConfigPersistsAIConfigSortOrder(t *testing.T) {
 				ModelName: cfg.AiConfigs[1].ModelName,
 			},
 			{
-				ID:        cfg.AiConfigs[0].ID,
-				Name:      cfg.AiConfigs[0].Name,
-				BaseUrl:   cfg.AiConfigs[0].BaseUrl,
-				ApiKey:    cfg.AiConfigs[0].ApiKey,
-				ModelName: cfg.AiConfigs[0].ModelName,
+				ID:          cfg.AiConfigs[0].ID,
+				Name:        cfg.AiConfigs[0].Name,
+				BaseUrl:     cfg.AiConfigs[0].BaseUrl,
+				ApiKey:      cfg.AiConfigs[0].ApiKey,
+				ModelName:   cfg.AiConfigs[0].ModelName,
+				ApiProtocol: AIAPIProtocolAnthropicMessage,
 			},
 		},
 	})
@@ -93,6 +102,9 @@ func TestUpdateConfigPersistsAIConfigSortOrder(t *testing.T) {
 	}
 	if cfg.AiConfigs[1].Name != "second" || cfg.AiConfigs[1].Sort != 2 {
 		t.Fatalf("unexpected reordered second ai config: %+v", cfg.AiConfigs[1])
+	}
+	if cfg.AiConfigs[1].ApiProtocol != AIAPIProtocolAnthropicMessage {
+		t.Fatalf("unexpected updated ai protocol: %+v", cfg.AiConfigs[1])
 	}
 }
 
@@ -153,5 +165,46 @@ func TestUpdateConfigReplacesOldAIConfigsWithNewOnes(t *testing.T) {
 	}
 	if cfg.AiConfigs[0].Name != "new-only" || cfg.AiConfigs[0].Sort != 1 {
 		t.Fatalf("unexpected replaced ai config: %+v", cfg.AiConfigs[0])
+	}
+}
+
+func TestUpdateConfigPersistsManualAIConfigSort(t *testing.T) {
+	initSettingsTestDB(t)
+
+	res := UpdateConfig(&SettingConfig{
+		Settings: &Settings{
+			OpenAiEnable:   true,
+			AkshareEnabled: true,
+		},
+		AiConfigs: []*AIConfig{
+			{
+				Sort:      20,
+				Name:      "later",
+				BaseUrl:   "https://later.example.com",
+				ApiKey:    "later-key",
+				ModelName: "later-model",
+			},
+			{
+				Sort:      10,
+				Name:      "earlier",
+				BaseUrl:   "https://earlier.example.com",
+				ApiKey:    "earlier-key",
+				ModelName: "earlier-model",
+			},
+		},
+	})
+	if res != "保存成功！" {
+		t.Fatalf("unexpected save result: %s", res)
+	}
+
+	cfg := GetSettingConfig()
+	if cfg == nil || len(cfg.AiConfigs) != 2 {
+		t.Fatalf("unexpected ai config count: %+v", cfg)
+	}
+	if cfg.AiConfigs[0].Name != "earlier" || cfg.AiConfigs[0].Sort != 10 {
+		t.Fatalf("expected manual sort to drive first item: %+v", cfg.AiConfigs[0])
+	}
+	if cfg.AiConfigs[1].Name != "later" || cfg.AiConfigs[1].Sort != 20 {
+		t.Fatalf("expected manual sort to drive second item: %+v", cfg.AiConfigs[1])
 	}
 }

@@ -448,6 +448,8 @@ func yieldNormalizeActivationStatus(status string) string {
 		return "activated"
 	case "skipped":
 		return "skipped"
+	case "expired":
+		return "expired"
 	case "ineligible":
 		return "ineligible"
 	case "invalid":
@@ -462,7 +464,7 @@ func yieldResolveBuySellVisualType(item models.AiRecommendStocksYieldItem) strin
 		return "warning"
 	}
 	activationStatus := yieldNormalizeActivationStatus(item.ActivationStatus)
-	if activationStatus == "skipped" || activationStatus == "ineligible" {
+	if activationStatus == "skipped" || activationStatus == "expired" || activationStatus == "ineligible" {
 		return "default"
 	}
 	if activationStatus == "invalid" {
@@ -492,7 +494,7 @@ func yieldIsDataFullySynced(item models.AiRecommendStocksYieldItem) bool {
 		return false
 	}
 	status := strings.TrimSpace(item.DataStatus)
-	return status == "" || status == "正常" || status == "已跳过" || status == "未结构化"
+	return status == "" || status == "正常" || status == "已跳过" || status == "已过期" || status == "已失效" || status == "未结构化"
 }
 
 func yieldDataSyncStatus(item models.AiRecommendStocksYieldItem) yieldDisplayStatus {
@@ -522,6 +524,12 @@ func yieldDataSyncReason(item models.AiRecommendStocksYieldItem) string {
 	}
 	if status == "已跳过" {
 		return "未激活结果已同步"
+	}
+	if status == "已过期" {
+		return "过期未触发结果已同步"
+	}
+	if status == "已失效" {
+		return "失效结果已同步"
 	}
 	if yieldIsDataFullySynced(item) {
 		return "分钟线覆盖完整，数据已更新"
@@ -597,6 +605,8 @@ func yieldActivationStatusLabel(item models.AiRecommendStocksYieldItem) string {
 		return "已激活"
 	case "skipped":
 		return "已跳过"
+	case "expired":
+		return "过期未触发"
 	case "invalid":
 		return "无法回算"
 	case "ineligible":
@@ -613,7 +623,7 @@ func yieldActivationStatusType(item models.AiRecommendStocksYieldItem) string {
 	switch yieldNormalizeActivationStatus(item.ActivationStatus) {
 	case "activated":
 		return "success"
-	case "skipped", "ineligible":
+	case "skipped", "expired", "ineligible":
 		return "default"
 	case "invalid":
 		return "error"
@@ -670,6 +680,8 @@ func yieldSellTimeDisplay(item models.AiRecommendStocksYieldItem) string {
 	switch yieldNormalizeActivationStatus(item.ActivationStatus) {
 	case "skipped":
 		return "已跳过\n" + yieldSkippedDisplayReason(item)
+	case "expired":
+		return "过期未触发\n" + yieldSkippedDisplayReason(item)
 	case "ineligible":
 		return "未纳入回测"
 	case "invalid":

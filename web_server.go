@@ -355,7 +355,11 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 	server := &http.Server{
 		Addr:              addr,
 		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	log.SugaredLogger.Infof("web mode listening on http://%s", addr)
 	return server.ListenAndServe()

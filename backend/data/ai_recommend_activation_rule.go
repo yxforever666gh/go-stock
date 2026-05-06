@@ -16,6 +16,8 @@ const activationRuleVersionV1 = "v1"
 const activationRuleVersionV2 = "v2"
 const activationRuleVersionV3 = "v3"
 const activationRuleModeAnyOf = "any_of"
+const breakoutMaxEntryChaseRatio = 1.015
+const breakoutStopProfitSafetyRatio = 0.995
 
 type activationRule struct {
 	Version          string                   `json:"version,omitempty"`
@@ -64,7 +66,7 @@ type activationScanResult struct {
 var (
 	activationVolumeRatioRegexp    = regexp.MustCompile(`(?:近|相对近)\s*(\d+)\s*个\s*(?:\d+\s*分钟)?(?:均量|均额)|近\s*(\d+)\s*个\s*(?:\d+\s*分钟)?(?:均量|均额)|量比\s*[≥>=]+\s*(\d+(?:\.\d+)?)|(?:至少|不低于|大于等于|≥|>=)\s*(\d+(?:\.\d+)?)\s*倍`)
 	activationPriceBreakoutRegexps = []*regexp.Regexp{
-		regexp.MustCompile(`(?:任一\s*\d+\s*分钟K线)?收盘\s*[≥>=]+\s*(\d+(?:\.\d+)?)`),
+		regexp.MustCompile(`(?:任一\s*\d+\s*分钟K线)?收盘(?:价)?\s*[≥>=]+\s*(\d+(?:\.\d+)?)`),
 		regexp.MustCompile(`(?:突破路径(?:为)?|突破激活(?:价)?|上破确认(?:价)?|突破价|突破位)\s*[:：]?\s*(\d+(?:\.\d+)?)`),
 		regexp.MustCompile(`(?:价格)?站上\s*(\d+(?:\.\d+)?)`),
 		regexp.MustCompile(`(?:价格)?突破\s*(\d+(?:\.\d+)?)`),
@@ -257,6 +259,11 @@ func normalizeActivationRuleForSave(recommend *models.AiRecommendStocks) error {
 		recommend.ActivationInvalidReason = "结构化激活规则无效：" + err.Error()
 		return err
 	}
+	if err := normalizeActivationRuleEntryBoundsForRecommend(recommend, rule); err != nil {
+		recommend.ActivationStatus = "invalid"
+		recommend.ActivationInvalidReason = "结构化激活规则价格边界无效：" + err.Error()
+		return err
+	}
 
 	// 验证时间线（防止事后拟合）
 	if err := validateActivationRuleTimelineForPaths(rule, *recommend); err != nil {
@@ -279,6 +286,112 @@ func normalizeActivationRuleForSave(recommend *models.AiRecommendStocks) error {
 	}
 	recommend.ActivationInvalidReason = ""
 	return nil
+}
+
+func normalizeActivationRuleEntryBoundsForRecommend(recommend *models.AiRecommendStocks, rule *activationRule) error {
+	if recommend == nil || rule == nil {
+		return nil
+	}
+	stopProfit, hasStopProfit := parseStopProfitPrice(*recommend)
+	stopLoss, hasStopLoss := parseStopLossPrice(*recommend)
+	normalizePath := func(path *activationRule) (bool, error) {
+		if path == nil {
+			return false, nil
+		}
+		switch strings.TrimSpace(path.SignalType) {
+		case "price_range_with_volume":
+			if path.ThresholdMax <= 0 {
+				path.ThresholdMax = path.ThresholdValue
+			}
+			if path.ThresholdMax < path.ThresholdValue {
+				path.ThresholdValue, path.ThresholdMax = path.ThresholdMax, path.ThresholdValue
+			}
+			if hasStopLoss && stopLoss > 0 && path.ThresholdValue <= stopLoss {
+				return false, fmt.Errorf("回踩路径下沿 %.2f 不高于止损/失效位 %.2f", round2(path.ThresholdValue), round2(stopLoss))
+			}
+			if hasStopProfit && stopProfit > 0 && path.ThresholdMax >= stopProfit {
+				return false, fmt.Errorf("回踩路径上沿 %.2f 不低于止盈触发价 %.2f", round2(path.ThresholdMax), round2(stopProfit))
+			}
+			return true, nil
+		case "price_breakout_with_volume":
+			if path.ThresholdValue <= 0 {
+				return false, nil
+			}
+			if hasStopProfit && stopProfit > 0 && path.ThresholdValue >= stopProfit {
+				return false, nil
+			}
+			maxEntry, ok := resolveBreakoutMaxEntryPrice(path.ThresholdValue, stopProfit)
+			if !ok {
+				return false, nil
+			}
+			if path.ThresholdMax <= 0 || path.ThresholdMax < path.ThresholdValue || (hasStopProfit && path.ThresholdMax >= stopProfit) {
+				path.ThresholdMax = maxEntry
+			}
+			if path.ThresholdMax < path.ThresholdValue {
+				return false, nil
+			}
+			if hasStopProfit && stopProfit > 0 && path.ThresholdMax >= stopProfit {
+				return false, nil
+			}
+			if hasStopLoss && stopLoss > 0 && path.ThresholdValue <= stopLoss {
+				return false, nil
+			}
+			return true, nil
+		default:
+			return false, fmt.Errorf("不支持的 signalType: %s", strings.TrimSpace(path.SignalType))
+		}
+	}
+
+	if len(rule.Paths) > 0 {
+		normalized := make([]activationRule, 0, len(rule.Paths))
+		var lastErr error
+		for i := range rule.Paths {
+			path := rule.Paths[i]
+			keep, err := normalizePath(&path)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			if keep {
+				normalized = append(normalized, path)
+			}
+		}
+		if len(normalized) == 0 {
+			if lastErr != nil {
+				return lastErr
+			}
+			return errors.New("没有可执行的激活路径")
+		}
+		rule.Paths = normalized
+		return nil
+	}
+	keep, err := normalizePath(rule)
+	if err != nil {
+		return err
+	}
+	if !keep {
+		return errors.New("激活规则没有可执行价格空间")
+	}
+	return nil
+}
+
+func resolveBreakoutMaxEntryPrice(threshold, stopProfit float64) (float64, bool) {
+	threshold = round2(threshold)
+	if threshold <= 0 {
+		return 0, false
+	}
+	maxEntry := threshold * breakoutMaxEntryChaseRatio
+	if stopProfit > 0 {
+		stopProfitLimit := stopProfit * breakoutStopProfitSafetyRatio
+		if stopProfitLimit < maxEntry {
+			maxEntry = stopProfitLimit
+		}
+	}
+	maxEntry = round2(maxEntry)
+	if maxEntry < threshold {
+		return 0, false
+	}
+	return maxEntry, true
 }
 
 func buildActivationRuleFromRecommend(recommend *models.AiRecommendStocks) (*activationRule, error) {
@@ -423,11 +536,20 @@ func buildMarketSummaryDualActivationRule(recommend *models.AiRecommendStocks, c
 	if breakout.ThresholdValue < buyMax {
 		breakout.ThresholdValue = buyMax
 	}
+	if stopProfit, ok := parseStopProfitPrice(*recommend); ok && stopProfit > 0 {
+		if maxEntry, ok := resolveBreakoutMaxEntryPrice(breakout.ThresholdValue, stopProfit); ok {
+			breakout.ThresholdMax = maxEntry
+		}
+	}
 
+	paths := []activationRule{pullback}
+	if breakout.ThresholdMax >= breakout.ThresholdValue {
+		paths = append(paths, breakout)
+	}
 	return &activationRule{
 		Version: activationRuleVersionV3,
 		Mode:    activationRuleModeAnyOf,
-		Paths:   []activationRule{pullback, breakout},
+		Paths:   paths,
 	}
 }
 
@@ -622,6 +744,9 @@ func resolveActivationRuleScan(rec models.AiRecommendStocks, bars []minuteBar) a
 	if err != nil {
 		return activationScanResult{Reason: "结构化激活规则无效：" + err.Error()}
 	}
+	if err := normalizeActivationRuleEntryBoundsForRecommend(&rec, rule); err != nil {
+		return activationScanResult{Reason: "结构化激活规则价格边界无效：" + err.Error()}
+	}
 	paths := activationRulePaths(rule)
 	if len(paths) == 0 {
 		return activationScanResult{Reason: "结构化激活规则为空"}
@@ -760,18 +885,33 @@ func scanActivationByBreakoutRule(rule *activationRule, bars []minuteBar) activa
 	if rule == nil || len(bars) == 0 {
 		return activationScanResult{}
 	}
+	maxEntry := round2(rule.ThresholdMax)
 	confirmNeed := rule.ConfirmBars
 	if confirmNeed <= 0 {
 		confirmNeed = 1
 	}
 	streak := 0
 	lastVolumeReason := ""
+	lastChaseReason := ""
 	for idx, bar := range bars {
 		if bar.TradeTime.IsZero() {
 			continue
 		}
-		if bar.Close < rule.ThresholdValue && bar.High < rule.ThresholdValue {
+		price := bar.Close
+		if price <= 0 {
+			price = bar.Open
+		}
+		if price < rule.ThresholdValue {
 			streak = 0
+			continue
+		}
+		if maxEntry > 0 && price > maxEntry {
+			streak = 0
+			lastChaseReason = fmt.Sprintf(
+				"突破已发生但收盘价 %.2f 超过追价上限 %.2f",
+				round2(price),
+				round2(maxEntry),
+			)
 			continue
 		}
 		passed, reason := passesVolumeRule(rule, bars, idx)
@@ -786,10 +926,6 @@ func scanActivationByBreakoutRule(rule *activationRule, bars []minuteBar) activa
 		if streak < confirmNeed {
 			continue
 		}
-		price := bar.Close
-		if price <= 0 {
-			price = bar.Open
-		}
 		if price < rule.ThresholdValue {
 			price = rule.ThresholdValue
 		}
@@ -802,6 +938,9 @@ func scanActivationByBreakoutRule(rule *activationRule, bars []minuteBar) activa
 	if strings.TrimSpace(lastVolumeReason) != "" {
 		return activationScanResult{Reason: lastVolumeReason}
 	}
+	if strings.TrimSpace(lastChaseReason) != "" {
+		return activationScanResult{Reason: lastChaseReason}
+	}
 	return activationScanResult{Reason: "未触发结构化激活规则"}
 }
 
@@ -810,13 +949,18 @@ func passesVolumeRule(rule *activationRule, bars []minuteBar, idx int) (bool, st
 		return false, ""
 	}
 
-	// 优先使用分位数方法
 	baselineType := strings.TrimSpace(rule.VolumeBaselineType)
 	if baselineType == "percentile" || baselineType == "adaptive" {
 		return passesVolumeRuleWithPercentile(rule, bars, idx)
 	}
+	return passesTraditionalVolumeRule(rule, bars, idx)
+}
 
-	// 传统方法
+func passesTraditionalVolumeRule(rule *activationRule, bars []minuteBar, idx int) (bool, string) {
+	if rule == nil {
+		return false, ""
+	}
+
 	window := rule.VolumeWindow
 	if window <= 0 {
 		window = 5

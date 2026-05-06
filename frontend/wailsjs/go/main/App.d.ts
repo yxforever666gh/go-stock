@@ -180,6 +180,8 @@ export function SummarizeAgentSessionTitle(arg1:string):Promise<string>;
 
 export function SummaryStockNews(arg1:string,arg2:number,arg3:any,arg4:boolean,arg5:boolean):Promise<void>;
 
+export function TestAIConfig(arg1:number):Promise<data.AIModelTestResult>;
+
 export function UnFollow(arg1:string):Promise<string>;
 
 export function UnFollowFund(arg1:string):Promise<string>;

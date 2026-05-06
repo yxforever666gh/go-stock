@@ -29,11 +29,21 @@ type tradeCostBreakdown struct {
 }
 
 type netYieldResult struct {
-	BuyCost  float64
-	SellNet  float64
+	BuyCost   float64
+	SellNet   float64
 	YieldRate float64
 	YieldText string
 	Valid     bool
+}
+
+type benchmarkETFTradeCostBreakdown struct {
+	CashOut    float64
+	Notional   float64
+	Commission float64
+	Slippage   float64
+	Shares     float64
+	NetAmount  float64
+	Valid      bool
 }
 
 func resolveTradingMarket(stockCode string) tradingMarket {
@@ -131,8 +141,8 @@ func calculateNetYield(stockCode string, buyPrice float64, exitPrice float64) ne
 	sellNet := calcSellTradeCost(buyPrice, exitPrice, market)
 	if buyCost.NetAmount <= 0 || sellNet.NetAmount <= 0 {
 		return netYieldResult{
-			BuyCost:  buyCost.NetAmount,
-			SellNet:  sellNet.NetAmount,
+			BuyCost:   buyCost.NetAmount,
+			SellNet:   sellNet.NetAmount,
 			YieldText: "--",
 		}
 	}
@@ -143,5 +153,59 @@ func calculateNetYield(stockCode string, buyPrice float64, exitPrice float64) ne
 		YieldRate: yieldRate,
 		YieldText: formatSignedPercent(yieldRate),
 		Valid:     true,
+	}
+}
+
+func calcBenchmarkETFBuyTrade(cashBudget, price float64) benchmarkETFTradeCostBreakdown {
+	if cashBudget <= defaultCommissionMin || price <= 0 {
+		return benchmarkETFTradeCostBreakdown{}
+	}
+
+	notional := (cashBudget - defaultCommissionMin) / (1 + defaultSlippageRate)
+	commission := defaultCommissionMin
+	if notional <= 0 {
+		return benchmarkETFTradeCostBreakdown{}
+	}
+	if rateCommission := notional * defaultCommissionRate; rateCommission > defaultCommissionMin {
+		notional = cashBudget / (1 + defaultCommissionRate + defaultSlippageRate)
+		commission = notional * defaultCommissionRate
+	}
+	slippage := notional * defaultSlippageRate
+	cashOut := notional + commission + slippage
+	shares := notional / price
+	if cashOut <= 0 || shares <= 0 {
+		return benchmarkETFTradeCostBreakdown{}
+	}
+	return benchmarkETFTradeCostBreakdown{
+		CashOut:    round2(cashOut),
+		Notional:   round2(notional),
+		Commission: round2(commission),
+		Slippage:   round2(slippage),
+		Shares:     shares,
+		NetAmount:  round2(notional),
+		Valid:      true,
+	}
+}
+
+func calcBenchmarkETFSellTrade(shares, price float64) benchmarkETFTradeCostBreakdown {
+	if shares <= 0 || price <= 0 {
+		return benchmarkETFTradeCostBreakdown{}
+	}
+	gross := shares * price
+	commission := gross * defaultCommissionRate
+	if commission < defaultCommissionMin {
+		commission = defaultCommissionMin
+	}
+	slippage := gross * defaultSlippageRate
+	netAmount := gross - commission - slippage
+	if netAmount <= 0 {
+		return benchmarkETFTradeCostBreakdown{}
+	}
+	return benchmarkETFTradeCostBreakdown{
+		Notional:   round2(gross),
+		Commission: round2(commission),
+		Slippage:   round2(slippage),
+		NetAmount:  round2(netAmount),
+		Valid:      true,
 	}
 }

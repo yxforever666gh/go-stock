@@ -10,18 +10,20 @@ import (
 )
 
 const (
-	marketSummaryPriceMismatchThreshold = 0.20
-	marketSummaryBreakoutDistanceMax    = 0.12
-	marketSummaryRefScanWindowBefore    = 30 * time.Minute
-	marketSummaryRefScanWindowAfter     = 2 * time.Hour
-	marketSummaryActivationRepairReason = "market_summary_activation_repair"
-	marketSummaryAnalysisOnlySkipReason = "缺少真实价格/量能数据，已跳过激活与回测"
+	marketSummaryPriceMismatchThreshold  = 0.20
+	marketSummaryBreakoutDistanceMax     = 0.12
+	marketSummaryRefScanWindowBefore     = 30 * time.Minute
+	marketSummaryRefScanWindowAfter      = 2 * time.Hour
+	marketSummaryActivationRepairReason  = "market_summary_activation_repair"
+	marketSummaryAnalysisOnlySkipReason  = "缺少真实价格/量能数据，已跳过激活与回测"
+	marketSummaryPendingMarketDataReason = "等待本地分钟线补齐后激活与回测"
 )
 
 type marketSummaryActivationRepairStats struct {
 	Scanned      int
 	Downgraded   int
 	RuleUpgraded int
+	Recovered    int
 	SkippedNoRef int
 }
 
@@ -55,7 +57,11 @@ func validateMarketSummaryRecommendForSave(recommend *models.AiRecommendStocks) 
 }
 
 func detectMarketSummaryPriceMismatch(rec models.AiRecommendStocks) (string, bool) {
-	snapshot, ok := loadMarketSummaryReferenceSnapshot(rec)
+	return detectMarketSummaryPriceMismatchWithFetch(rec, true)
+}
+
+func detectMarketSummaryPriceMismatchWithFetch(rec models.AiRecommendStocks, allowFetch bool) (string, bool) {
+	snapshot, ok := loadMarketSummaryReferenceSnapshotWithFetch(rec, allowFetch)
 	if !ok || snapshot.Price <= 0 {
 		return "", false
 	}
@@ -91,14 +97,22 @@ func detectMarketSummaryPriceMismatch(rec models.AiRecommendStocks) (string, boo
 }
 
 func loadMarketSummaryReferenceSnapshot(rec models.AiRecommendStocks) (marketSummaryReferenceSnapshot, bool) {
+	return loadMarketSummaryReferenceSnapshotWithFetch(rec, true)
+}
+
+func loadMarketSummaryReferenceSnapshotWithFetch(rec models.AiRecommendStocks, allowFetch bool) (marketSummaryReferenceSnapshot, bool) {
 	recordTime := recommendRecordTime(rec)
 	if recordTime.IsZero() {
 		return marketSummaryReferenceSnapshot{}, false
 	}
-	return loadMarketSummaryReferenceSnapshotByCode(recordTime, normalizeRecommendStockCode(rec.StockCode))
+	return loadMarketSummaryReferenceSnapshotByCodeWithFetch(recordTime, normalizeRecommendStockCode(rec.StockCode), allowFetch)
 }
 
 func loadMarketSummaryReferenceSnapshotByCode(recordTime time.Time, stockCode string) (marketSummaryReferenceSnapshot, bool) {
+	return loadMarketSummaryReferenceSnapshotByCodeWithFetch(recordTime, stockCode, true)
+}
+
+func loadMarketSummaryReferenceSnapshotByCodeWithFetch(recordTime time.Time, stockCode string, allowFetch bool) (marketSummaryReferenceSnapshot, bool) {
 	stockCode = normalizeRecommendStockCode(stockCode)
 	if recordTime.IsZero() || stockCode == "" {
 		return marketSummaryReferenceSnapshot{}, false
@@ -107,11 +121,11 @@ func loadMarketSummaryReferenceSnapshotByCode(recordTime time.Time, stockCode st
 	recordTime = recordTime.In(loc)
 	start := recordTime.Add(-marketSummaryRefScanWindowBefore)
 	end := recordTime.Add(marketSummaryRefScanWindowAfter)
-	bars, _ := syncMinuteBars(stockCode, start, end, 0, false)
+	bars, _ := syncMinuteBarsWithFetch(stockCode, start, end, 0, false, allowFetch)
 	if len(bars) == 0 {
 		dayStart := time.Date(recordTime.Year(), recordTime.Month(), recordTime.Day(), 9, 25, 0, 0, loc)
 		dayEnd := time.Date(recordTime.Year(), recordTime.Month(), recordTime.Day(), 15, 0, 0, 0, loc)
-		bars, _ = syncMinuteBars(stockCode, dayStart, dayEnd, 0, false)
+		bars, _ = syncMinuteBarsWithFetch(stockCode, dayStart, dayEnd, 0, false, allowFetch)
 		if len(bars) == 0 {
 			return marketSummaryReferenceSnapshot{}, false
 		}
@@ -148,15 +162,23 @@ func loadMarketSummaryReferenceSnapshotByCode(recordTime time.Time, stockCode st
 }
 
 func normalizeMarketSummaryExecutionDataForSave(recommend *models.AiRecommendStocks) error {
+	return normalizeMarketSummaryExecutionDataForSaveWithFetch(recommend, true)
+}
+
+func normalizeMarketSummaryExecutionDataForSaveWithFetch(recommend *models.AiRecommendStocks, allowFetch bool) error {
 	if recommend == nil || !isMarketSummaryActivationSource(recommend.ActivationRuleSource) {
 		return nil
 	}
-	snapshot, ok := loadMarketSummaryReferenceSnapshot(*recommend)
+	snapshot, ok := loadMarketSummaryReferenceSnapshotWithFetch(*recommend, allowFetch)
 	if !ok || snapshot.Price <= 0 || snapshot.Amount <= 0 {
-		downgradeMarketSummaryRecommendToAnalysisOnly(recommend, marketSummaryReferenceSnapshot{}, marketSummaryAnalysisOnlySkipReason)
+		if hasRecoverableMarketSummaryTradePlan(*recommend) {
+			markMarketSummaryRecommendPendingMarketData(recommend, marketSummaryPendingMarketDataReason)
+		} else {
+			downgradeMarketSummaryRecommendToAnalysisOnly(recommend, marketSummaryReferenceSnapshot{}, marketSummaryAnalysisOnlySkipReason)
+		}
 		return nil
 	}
-	if reason, bad := detectMarketSummaryPriceMismatch(*recommend); bad {
+	if reason, bad := detectMarketSummaryPriceMismatchWithFetch(*recommend, allowFetch); bad {
 		downgradeMarketSummaryRecommendToAnalysisOnly(recommend, snapshot, reason+"，已降级为仅分析并跳过激活")
 		return nil
 	}
@@ -168,6 +190,15 @@ func shouldAttemptRecoverHistoricalMarketSummaryRule(rec models.AiRecommendStock
 	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
 		return false
 	}
+	if isRecoverableMarketSummaryMarketDataGap(rec) {
+		return true
+	}
+	if marketSummaryRecommendMissingExitPlan(rec) {
+		return true
+	}
+	if marketSummaryRecommendHasStaleMissingMarketDataReason(rec) {
+		return true
+	}
 	if strings.Contains(strings.TrimSpace(rec.ActivationInvalidReason), "偏离过大") {
 		return true
 	}
@@ -175,6 +206,58 @@ func shouldAttemptRecoverHistoricalMarketSummaryRule(rec models.AiRecommendStock
 		return true
 	}
 	return false
+}
+
+func hasRecoverableMarketSummaryTradePlan(rec models.AiRecommendStocks) bool {
+	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
+		return false
+	}
+	if strings.TrimSpace(rec.ActivationRuleJSON) != "" {
+		return true
+	}
+	if strings.TrimSpace(rec.RecommendBuyPrice) != "" && strings.TrimSpace(rec.RecommendStopProfitPrice) != "" && strings.TrimSpace(rec.RecommendStopLossPrice) != "" {
+		return true
+	}
+	return false
+}
+
+func marketSummaryRecommendMissingExitPlan(rec models.AiRecommendStocks) bool {
+	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
+		return false
+	}
+	status := normalizeRecommendStatus(rec.RecommendStatus)
+	if status != "valid" && status != recommendStatusPendingMarketData && status != "missing_market_data" {
+		return false
+	}
+	if strings.TrimSpace(rec.RecommendStopProfitPrice) != "" && strings.TrimSpace(rec.RecommendStopLossPrice) != "" {
+		return false
+	}
+	return strings.TrimSpace(rec.RecommendBuyPrice) != "" || strings.TrimSpace(rec.ActivationRuleJSON) != ""
+}
+
+func marketSummaryRecommendHasStaleMissingMarketDataReason(rec models.AiRecommendStocks) bool {
+	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
+		return false
+	}
+	if strings.TrimSpace(rec.RecommendBuyPrice) == "" || strings.TrimSpace(rec.RecommendStopProfitPrice) == "" || strings.TrimSpace(rec.RecommendStopLossPrice) == "" {
+		return false
+	}
+	return strings.Contains(rec.InvalidCondition, marketSummaryAnalysisOnlySkipReason) ||
+		strings.Contains(rec.InvalidCondition, "缺少真实价格/量能数据") ||
+		strings.Contains(rec.ActivationInvalidReason, marketSummaryAnalysisOnlySkipReason) ||
+		strings.Contains(rec.ActivationInvalidReason, "缺少真实价格/量能数据")
+}
+
+func isRecoverableMarketSummaryMarketDataGap(rec models.AiRecommendStocks) bool {
+	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
+		return false
+	}
+	status := normalizeRecommendStatus(rec.RecommendStatus)
+	activationStatus := strings.TrimSpace(strings.ToLower(rec.ActivationStatus))
+	if status != recommendStatusPendingMarketData && status != "missing_market_data" && activationStatus != recommendActivationPendingData && activationStatus != "skipped" {
+		return false
+	}
+	return hasRecoverableMarketSummaryTradePlan(rec)
 }
 
 func ruleLooksCorruptedForMarketSummary(raw string) bool {
@@ -237,18 +320,19 @@ func tryRecoverHistoricalMarketSummaryRule(rec *models.AiRecommendStocks) bool {
 	if rec == nil || !shouldAttemptRecoverHistoricalMarketSummaryRule(*rec) {
 		return false
 	}
+	recoverMarketSummaryTradePlanFromStoredReport(rec)
 	signalText := extractRecoverableMarketSummarySignal(*rec)
-	if signalText == "" {
+	if signalText == "" && strings.TrimSpace(rec.ActivationRuleJSON) == "" {
 		return false
 	}
 
-	if isAnalysisOnlyPlaceholderSignal(rec.BuySignal) || strings.TrimSpace(rec.BuySignal) == "" {
+	if signalText != "" && (isAnalysisOnlyPlaceholderSignal(rec.BuySignal) || strings.TrimSpace(rec.BuySignal) == "") {
 		rec.BuySignal = signalText
 	}
 	if strings.TrimSpace(rec.BuySignalDetail) == "" {
 		rec.BuySignalDetail = ""
 	}
-	if strings.TrimSpace(rec.RecommendBuyPrice) == "" || rec.RecommendBuyPriceMin <= 0 || rec.RecommendBuyPriceMax <= 0 {
+	if signalText != "" && (strings.TrimSpace(rec.RecommendBuyPrice) == "" || rec.RecommendBuyPriceMin <= 0 || rec.RecommendBuyPriceMax <= 0) {
 		if text, minVal, maxVal := parseMarketSummaryBuyRange(signalText); text != "" && minVal > 0 && maxVal > 0 {
 			rec.RecommendBuyPrice = text
 			rec.RecommendBuyPriceMin = minVal
@@ -261,6 +345,7 @@ func tryRecoverHistoricalMarketSummaryRule(rec *models.AiRecommendStocks) bool {
 	if strings.TrimSpace(rec.RecommendBuyPrice) == "" || rec.RecommendBuyPriceMin <= 0 || rec.RecommendBuyPriceMax <= 0 {
 		return false
 	}
+	recoverMarketSummaryExitPlan(rec)
 
 	rec.RecommendStatus = "valid"
 	rec.ExecutionState = recommendExecutionConditional
@@ -273,6 +358,155 @@ func tryRecoverHistoricalMarketSummaryRule(rec *models.AiRecommendStocks) bool {
 		return false
 	}
 	return true
+}
+
+func recoverMarketSummaryTradePlanFromStoredReport(rec *models.AiRecommendStocks) {
+	if rec == nil || rec.DataTime == nil {
+		return
+	}
+	if strings.TrimSpace(rec.RecommendBuyPrice) != "" &&
+		strings.TrimSpace(rec.RecommendStopProfitPrice) != "" &&
+		strings.TrimSpace(rec.RecommendStopLossPrice) != "" &&
+		!marketSummaryRecommendHasStaleMissingMarketDataReason(*rec) {
+		return
+	}
+	draft := loadMarketSummaryRecommendDraftFromStoredReport(*rec)
+	if draft == nil {
+		return
+	}
+	if strings.TrimSpace(rec.RecommendBuyPrice) == "" && strings.TrimSpace(draft.RecommendBuyPrice) != "" {
+		rec.RecommendBuyPrice = draft.RecommendBuyPrice
+		rec.RecommendBuyPriceMin = draft.RecommendBuyPriceMin
+		rec.RecommendBuyPriceMax = draft.RecommendBuyPriceMax
+		if strings.TrimSpace(rec.FocusPrice) == "" {
+			rec.FocusPrice = draft.RecommendBuyPrice
+		}
+	}
+	if strings.TrimSpace(rec.RecommendStopProfitPrice) == "" && strings.TrimSpace(draft.RecommendStopProfitPrice) != "" {
+		rec.RecommendStopProfitPrice = draft.RecommendStopProfitPrice
+		rec.RecommendStopProfitPriceMin = draft.RecommendStopProfitPriceMin
+		rec.RecommendStopProfitPriceMax = draft.RecommendStopProfitPriceMax
+	}
+	if strings.TrimSpace(rec.RecommendStopLossPrice) == "" && strings.TrimSpace(draft.RecommendStopLossPrice) != "" {
+		rec.RecommendStopLossPrice = draft.RecommendStopLossPrice
+	}
+	if isAnalysisOnlyPlaceholderSignal(rec.BuySignal) && strings.TrimSpace(draft.BuySignal) != "" {
+		rec.BuySignal = draft.BuySignal
+		rec.BuySignalDetail = draft.BuySignalDetail
+	}
+	if (strings.TrimSpace(rec.InvalidCondition) == "" || strings.Contains(rec.InvalidCondition, marketSummaryAnalysisOnlySkipReason) || strings.Contains(rec.InvalidCondition, "缺少真实价格/量能数据")) && strings.TrimSpace(draft.InvalidCondition) != "" {
+		rec.InvalidCondition = draft.InvalidCondition
+	}
+	if strings.TrimSpace(rec.RiskRemarks) == "" && strings.TrimSpace(draft.RiskRemarks) != "" {
+		rec.RiskRemarks = draft.RiskRemarks
+	}
+	if strings.TrimSpace(rec.Remarks) == "" && strings.TrimSpace(draft.Remarks) != "" {
+		rec.Remarks = draft.Remarks
+	}
+}
+
+func loadMarketSummaryRecommendDraftFromStoredReport(rec models.AiRecommendStocks) *marketSummaryRecommendDraft {
+	code := normalizeRecommendStockCode(rec.StockCode)
+	if code == "" || rec.DataTime == nil {
+		return nil
+	}
+	if db.Dao == nil || !db.Dao.Migrator().HasTable(&models.AIResponseResult{}) {
+		return nil
+	}
+	start, end := marketSummaryDayBounds(*rec.DataTime)
+	var reports []models.AIResponseResult
+	if err := db.Dao.Model(&models.AIResponseResult{}).
+		Where("created_at >= ? AND created_at < ?", start, end).
+		Where("(stock_code = ? OR stock_name = ? OR question LIKE ?)", "市场资讯", "市场资讯", "%市场%").
+		Order("created_at asc").
+		Find(&reports).Error; err != nil {
+		return nil
+	}
+	for idx := range reports {
+		report := reports[idx]
+		if strings.TrimSpace(report.Content) == "" {
+			continue
+		}
+		if !strings.Contains(report.Content, rec.StockCode) && !strings.Contains(report.Content, rec.StockName) {
+			continue
+		}
+		drafts := parseMarketSummaryRecommendStockDrafts(report.Content, report.ProviderName, report.ModelName, *rec.DataTime)
+		for _, draft := range drafts {
+			if draft == nil || normalizeRecommendStockCode(draft.StockCode) != code {
+				continue
+			}
+			return draft
+		}
+	}
+	return nil
+}
+
+func recoverMarketSummaryExitPlan(rec *models.AiRecommendStocks) {
+	if rec == nil {
+		return
+	}
+	source := normalizeRecommendText(strings.Join([]string{
+		rec.RecommendReason,
+		rec.SellSignal,
+		rec.InvalidSignal,
+		rec.InvalidCondition,
+		rec.Remarks,
+	}, "\n"))
+	if strings.TrimSpace(rec.RecommendStopProfitPrice) == "" {
+		if text, minVal, maxVal := extractMarketSummaryNamedRange(source, []string{"止盈区间", "止盈", "卖出区间"}); text != "" {
+			rec.RecommendStopProfitPrice = text
+			rec.RecommendStopProfitPriceMin = minVal
+			rec.RecommendStopProfitPriceMax = maxVal
+		}
+	}
+	if strings.TrimSpace(rec.RecommendStopLossPrice) == "" {
+		if text := extractMarketSummaryNamedSinglePrice(source, []string{"止损位", "止损"}); text != "" {
+			rec.RecommendStopLossPrice = text
+		}
+	}
+}
+
+func extractMarketSummaryNamedRange(text string, labels []string) (string, float64, float64) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", 0, 0
+	}
+	for _, label := range labels {
+		idx := strings.Index(text, label)
+		if idx < 0 {
+			continue
+		}
+		fragment := text[idx:]
+		if len(fragment) > 120 {
+			fragment = fragment[:120]
+		}
+		if matched := strings.TrimSpace(marketSummaryRangePattern.FindString(fragment)); matched != "" {
+			parsed, minVal, maxVal := parseMarketSummaryNumericRange(matched)
+			return parsed, minVal, maxVal
+		}
+	}
+	return "", 0, 0
+}
+
+func extractMarketSummaryNamedSinglePrice(text string, labels []string) string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return ""
+	}
+	for _, label := range labels {
+		idx := strings.Index(text, label)
+		if idx < 0 {
+			continue
+		}
+		fragment := text[idx:]
+		if len(fragment) > 80 {
+			fragment = fragment[:80]
+		}
+		if matched := firstNumericValue(fragment); matched != "" {
+			return matched
+		}
+	}
+	return ""
 }
 
 func applyMarketSummaryReferenceSnapshot(recommend *models.AiRecommendStocks, snapshot marketSummaryReferenceSnapshot) {
@@ -324,6 +558,117 @@ func downgradeMarketSummaryRecommendToAnalysisOnly(recommend *models.AiRecommend
 	}
 }
 
+func markMarketSummaryRecommendPendingMarketData(recommend *models.AiRecommendStocks, reason string) {
+	if recommend == nil {
+		return
+	}
+	reason = normalizeRecommendText(reason)
+	if reason == "" {
+		reason = marketSummaryPendingMarketDataReason
+	}
+	recommend.RecommendStatus = recommendStatusPendingMarketData
+	recommend.ExecutionState = recommendExecutionConditional
+	recommend.ActivationStatus = recommendActivationPendingData
+	recommend.ActivationInvalidReason = reason
+	recommend.InvalidCondition = reason
+	if strings.TrimSpace(recommend.BuySignal) == "" || isAnalysisOnlyPlaceholderSignal(recommend.BuySignal) {
+		if signal := extractRecoverableMarketSummarySignal(*recommend); signal != "" {
+			recommend.BuySignal = signal
+		}
+	}
+	if recommend.Remarks == "" {
+		recommend.Remarks = reason
+	} else if !strings.Contains(recommend.Remarks, reason) {
+		recommend.Remarks = normalizeRecommendText(recommend.Remarks + "\n" + reason)
+	}
+}
+
+func recoverPendingMarketSummaryRecommendationsForScope(scope map[string]struct{}) ([]string, error) {
+	if len(scope) == 0 {
+		return nil, nil
+	}
+	codes := keysFromScopeMap(scope)
+	if len(codes) == 0 {
+		return nil, nil
+	}
+	rows := make([]models.AiRecommendStocks, 0, len(codes))
+	err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("stock_code IN ?", codes).
+		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
+		Order("COALESCE(data_time, created_at) ASC, id ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	changed := make([]string, 0, len(rows))
+	for _, row := range rows {
+		if !isRecoverableMarketSummaryMarketDataGap(row) && !marketSummaryRecommendMissingExitPlan(row) && !marketSummaryRecommendHasStaleMissingMarketDataReason(row) {
+			continue
+		}
+		rec := row
+		recovered := tryRecoverHistoricalMarketSummaryRule(&rec)
+		if err := normalizeMarketSummaryExecutionDataForSaveWithFetch(&rec, false); err != nil {
+			return nil, err
+		}
+		if isPendingMarketDataRecommend(&rec) || isAnalysisOnlyRecommend(&rec) {
+			continue
+		}
+		rec.ActivationRuleJSON = ""
+		rec.ActivationRuleVersion = ""
+		rec.ActivationInvalidReason = ""
+		if err := normalizeActivationRuleForSave(&rec); err != nil {
+			continue
+		}
+		updateMap := map[string]any{
+			"stock_price":                     rec.StockPrice,
+			"stock_current_price":             rec.StockCurrentPrice,
+			"stock_current_price_time":        rec.StockCurrentPriceTime,
+			"stock_close_price":               rec.StockClosePrice,
+			"stock_pre_price":                 rec.StockPrePrice,
+			"observe_price":                   rec.ObservePrice,
+			"recommend_status":                rec.RecommendStatus,
+			"execution_state":                 rec.ExecutionState,
+			"recommend_buy_price":             rec.RecommendBuyPrice,
+			"recommend_buy_price_min":         rec.RecommendBuyPriceMin,
+			"recommend_buy_price_max":         rec.RecommendBuyPriceMax,
+			"recommend_stop_profit_price":     rec.RecommendStopProfitPrice,
+			"recommend_stop_profit_price_min": rec.RecommendStopProfitPriceMin,
+			"recommend_stop_profit_price_max": rec.RecommendStopProfitPriceMax,
+			"recommend_stop_loss_price":       rec.RecommendStopLossPrice,
+			"focus_price":                     rec.FocusPrice,
+			"buy_signal":                      rec.BuySignal,
+			"buy_signal_detail":               rec.BuySignalDetail,
+			"sell_signal":                     rec.SellSignal,
+			"sell_signal_detail":              rec.SellSignalDetail,
+			"invalid_signal":                  rec.InvalidSignal,
+			"invalid_condition":               rec.InvalidCondition,
+			"activation_status":               rec.ActivationStatus,
+			"activation_rule_json":            rec.ActivationRuleJSON,
+			"activation_rule_version":         rec.ActivationRuleVersion,
+			"activation_invalid_reason":       "",
+			"remarks":                         rec.Remarks,
+		}
+		if !recovered &&
+			row.RecommendStatus == rec.RecommendStatus &&
+			row.ExecutionState == rec.ExecutionState &&
+			row.ActivationStatus == rec.ActivationStatus &&
+			row.InvalidCondition == rec.InvalidCondition &&
+			row.ActivationInvalidReason == rec.ActivationInvalidReason {
+			continue
+		}
+		if err := db.Dao.Model(&models.AiRecommendStocks{}).Where("id = ?", row.ID).Updates(updateMap).Error; err != nil {
+			return nil, err
+		}
+		changed = append(changed, normalizeRecommendStockCode(row.StockCode))
+	}
+	if len(changed) > 0 {
+		if err := markAiRecommendYieldDirtyCodes(changed, "分钟线补齐后恢复市场总结推荐，等待严格模式回算", aiRecommendYieldModeStrict); err != nil {
+			return nil, err
+		}
+	}
+	return changed, nil
+}
+
 func exceedsMarketSummaryPriceThreshold(left, right, threshold float64) bool {
 	if left <= 0 || right <= 0 || threshold <= 0 {
 		return false
@@ -362,7 +707,16 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 		if err := normalizeMarketSummaryExecutionDataForSave(&rec); err != nil {
 			return stats, err
 		}
-		if isAnalysisOnlyRecommend(&rec) {
+		if isPendingMarketDataRecommend(&rec) {
+			updateMap["recommend_status"] = rec.RecommendStatus
+			updateMap["execution_state"] = rec.ExecutionState
+			updateMap["activation_status"] = rec.ActivationStatus
+			updateMap["activation_invalid_reason"] = rec.ActivationInvalidReason
+			updateMap["invalid_condition"] = rec.InvalidCondition
+			updateMap["remarks"] = rec.Remarks
+			updateMap["buy_signal"] = rec.BuySignal
+			updateMap["buy_signal_detail"] = rec.BuySignalDetail
+		} else if isAnalysisOnlyRecommend(&rec) {
 			updateMap["stock_price"] = rec.StockPrice
 			updateMap["stock_current_price"] = rec.StockCurrentPrice
 			updateMap["stock_current_price_time"] = rec.StockCurrentPriceTime
@@ -414,9 +768,14 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 				rec.RecommendBuyPrice != row.RecommendBuyPrice ||
 				rec.RecommendBuyPriceMin != row.RecommendBuyPriceMin ||
 				rec.RecommendBuyPriceMax != row.RecommendBuyPriceMax ||
+				rec.RecommendStopProfitPrice != row.RecommendStopProfitPrice ||
+				rec.RecommendStopProfitPriceMin != row.RecommendStopProfitPriceMin ||
+				rec.RecommendStopProfitPriceMax != row.RecommendStopProfitPriceMax ||
+				rec.RecommendStopLossPrice != row.RecommendStopLossPrice ||
 				rec.FocusPrice != row.FocusPrice ||
 				rec.BuySignal != row.BuySignal ||
 				rec.BuySignalDetail != row.BuySignalDetail ||
+				rec.InvalidCondition != row.InvalidCondition ||
 				rec.ActivationStatus != row.ActivationStatus {
 				updateMap["stock_price"] = rec.StockPrice
 				updateMap["stock_current_price"] = rec.StockCurrentPrice
@@ -429,9 +788,14 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 				updateMap["recommend_buy_price"] = rec.RecommendBuyPrice
 				updateMap["recommend_buy_price_min"] = rec.RecommendBuyPriceMin
 				updateMap["recommend_buy_price_max"] = rec.RecommendBuyPriceMax
+				updateMap["recommend_stop_profit_price"] = rec.RecommendStopProfitPrice
+				updateMap["recommend_stop_profit_price_min"] = rec.RecommendStopProfitPriceMin
+				updateMap["recommend_stop_profit_price_max"] = rec.RecommendStopProfitPriceMax
+				updateMap["recommend_stop_loss_price"] = rec.RecommendStopLossPrice
 				updateMap["focus_price"] = rec.FocusPrice
 				updateMap["buy_signal"] = rec.BuySignal
 				updateMap["buy_signal_detail"] = rec.BuySignalDetail
+				updateMap["invalid_condition"] = rec.InvalidCondition
 				updateMap["activation_status"] = rec.ActivationStatus
 				updateMap["activation_rule_json"] = rec.ActivationRuleJSON
 				updateMap["activation_rule_version"] = rec.ActivationRuleVersion

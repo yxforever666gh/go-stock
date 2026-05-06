@@ -152,6 +152,30 @@ func TestParseMarketSummaryRecommendStockDraftsAndToRecommendStock(t *testing.T)
 	}
 }
 
+func TestParseMarketSummaryRecommendStockDraftsOnlyUsesRecommendSection(t *testing.T) {
+	setupMarketSummaryRecommendBackfillRealtimeEnv(t, "market-summary-recommend-section-only.db")
+	dataTime := time.Date(2026, 4, 29, 14, 30, 0, 0, cnLocation())
+
+	summary := `# 推荐股票池
+| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 阳光电源(300274.SZ) | 风光储氢充绿电设备 | 绿电会议催化 | [市场资讯] 会议召开；[一级披露] 一季报披露 | 138.77 | 133.30-136.20 | 145.80-151.50 | 131.80 | 价格触发：未来5个交易日内，回踩路径为5分钟收盘价进入133.30-136.20；突破路径为5分钟收盘价>=139.20；量能触发：在133.30-136.20区间或139.20突破价附近，5分钟成交额>=近5个5分钟均额的1.20倍，确认1根5分钟K线 | 时间失效：未来5个交易日内未同时触发价格与量能条件则失效；价格失效：触发前或触发后5分钟收盘价<131.80则失效 | 会议兑现后可能回落 | 3-5个交易日 | 80 | 80 | 80 | 80 | 等待激活 |
+
+# 跳过复审
+| 原记录ID | 股票（代码） | 复审结论 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 跳过/复审说明 |
+|---|---|---|---|---|---|---|---|---|
+| 327 | 中大力德（002896.SZ） | 继续跳过 | - | - | - | - | - | 继续跳过 |
+`
+
+	drafts := parseMarketSummaryRecommendStockDrafts(summary, "TestProvider", "test-model", dataTime)
+	if len(drafts) != 1 {
+		t.Fatalf("expected only recommend-section row, got %d", len(drafts))
+	}
+	if drafts[0].StockCode != "300274.SZ" {
+		t.Fatalf("unexpected stock code: %s", drafts[0].StockCode)
+	}
+}
+
 func TestParseMarketSummaryBuyRange_PrefersPullbackSegment(t *testing.T) {
 	text, min, max := parseMarketSummaryBuyRange("398.80-401.20（回踩激活）；404.80-407.00上破确认（突破激活）")
 	if text != "398.80-401.20" {

@@ -180,6 +180,8 @@ func normalizeRecommendStatus(status string) string {
 		return "avoid"
 	case "missing_market_data", "数据缺失", "行情缺失":
 		return "missing_market_data"
+	case recommendStatusPendingMarketData, "待补分钟线", "待补行情", "等待分钟线":
+		return recommendStatusPendingMarketData
 	default:
 		return text
 	}
@@ -205,6 +207,14 @@ func isAnalysisOnlyRecommend(recommend *models.AiRecommendStocks) bool {
 	}
 	return normalizeRecommendStatus(recommend.RecommendStatus) == "missing_market_data" ||
 		normalizeRecommendExecutionState(recommend.ExecutionState) == recommendExecutionAnalysisOnly
+}
+
+func isPendingMarketDataRecommend(recommend *models.AiRecommendStocks) bool {
+	if recommend == nil {
+		return false
+	}
+	return normalizeRecommendStatus(recommend.RecommendStatus) == recommendStatusPendingMarketData ||
+		strings.TrimSpace(strings.ToLower(recommend.ActivationStatus)) == recommendActivationPendingData
 }
 
 func hasSignalDrivenRecommend(recommend *models.AiRecommendStocks) bool {
@@ -409,6 +419,9 @@ func resolveRecommendBacktestEligibility(recommend *models.AiRecommendStocks) (s
 	if recommend == nil {
 		return recommendBacktestIneligible, "推荐记录为空，未纳入回测"
 	}
+	if isPendingMarketDataRecommend(recommend) {
+		return recommendBacktestSkipped, "等待本地分钟线补齐后激活与回测"
+	}
 	if isAnalysisOnlyRecommend(recommend) {
 		return recommendBacktestSkipped, marketSummaryAnalysisOnlySkipReason
 	}
@@ -470,6 +483,9 @@ func resolveRecommendYieldSkipInfo(recommend *models.AiRecommendStocks) (string,
 	}
 
 	status := normalizeRecommendStatus(recommend.RecommendStatus)
+	if status == recommendStatusPendingMarketData || isPendingMarketDataRecommend(recommend) {
+		return recommendActivationPendingData, "待补分钟线", "待补分钟线", "等待本地分钟线补齐后激活与回测", true
+	}
 	if status == "missing_market_data" || isAnalysisOnlyRecommend(recommend) {
 		return "skipped", "已跳过", "已跳过", marketSummaryAnalysisOnlySkipReason, true
 	}
@@ -595,7 +611,7 @@ func hasExplicitExecutableActivationPlan(recommend *models.AiRecommendStocks) bo
 	if hasVolumeSignal(buyCombined) && !hasCompleteVolumeContext(buyCombined) {
 		return false
 	}
-	if hasVolumeSignal(invalidCombined) && !hasCompleteVolumeContext(invalidCombined) {
+	if hasVolumeSignal(invalidCombined) && !hasCompleteVolumeContext(invalidCombined) && !invalidSignalCanReferenceActivationRule(recommend, invalidCombined) {
 		return false
 	}
 	return true

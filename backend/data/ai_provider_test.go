@@ -59,3 +59,26 @@ func TestDetectAIProviderName(t *testing.T) {
 		})
 	}
 }
+
+func TestDisplayAIProviderNamePrefersConfigName(t *testing.T) {
+	config := &AIConfig{
+		Name:      "OpenAI Primary",
+		BaseUrl:   "https://api.openai.com/v1",
+		ModelName: "gpt-5.4",
+	}
+
+	if got := DisplayAIProviderName(config); got != "OpenAI Primary" {
+		t.Fatalf("DisplayAIProviderName() = %q, want %q", got, "OpenAI Primary")
+	}
+}
+
+func TestDisplayAIProviderNameFallbackToDetectedProvider(t *testing.T) {
+	config := &AIConfig{
+		BaseUrl:   "https://api.deepseek.com",
+		ModelName: "deepseek-chat",
+	}
+
+	if got := DisplayAIProviderName(config); got != "DeepSeek" {
+		t.Fatalf("DisplayAIProviderName() = %q, want %q", got, "DeepSeek")
+	}
+}
