@@ -1154,6 +1154,127 @@ func resolveMinuteCoverageScope(state *models.AiRecommendYieldRecordState, stock
 	return time.Time{}, time.Time{}, false
 }
 
+type minuteCoverageSession struct {
+	Start time.Time
+	End   time.Time
+}
+
+func buildMinuteCoverageSessions(start, end time.Time) []minuteCoverageSession {
+	if start.IsZero() || end.IsZero() || start.After(end) {
+		return nil
+	}
+	loc := cnLocation()
+	start = normalizeMinuteTime(start.In(loc))
+	end = normalizeMinuteTime(end.In(loc))
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, loc)
+	sessions := make([]minuteCoverageSession, 0, int(endDay.Sub(startDay).Hours()/24+1)*2)
+	for day, guard := startDay, 0; !day.After(endDay) && guard < 370; day, guard = day.AddDate(0, 0, 1), guard+1 {
+		if !isCNOpenTradeDay(day) {
+			continue
+		}
+		daySessions := [][2]time.Time{
+			{
+				time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+				time.Date(day.Year(), day.Month(), day.Day(), 11, 30, 0, 0, loc),
+			},
+			{
+				time.Date(day.Year(), day.Month(), day.Day(), 13, 1, 0, 0, loc),
+				time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc),
+			},
+		}
+		for _, session := range daySessions {
+			sessionStart := session[0]
+			sessionEnd := session[1]
+			if sessionEnd.Before(start) || sessionStart.After(end) {
+				continue
+			}
+			if sessionStart.Before(start) {
+				sessionStart = start
+			}
+			if sessionEnd.After(end) {
+				sessionEnd = end
+			}
+			if sessionStart.After(sessionEnd) {
+				continue
+			}
+			sessions = append(sessions, minuteCoverageSession{
+				Start: normalizeMinuteTime(sessionStart),
+				End:   normalizeMinuteTime(sessionEnd),
+			})
+		}
+	}
+	return sessions
+}
+
+func minuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCoverageSession) string {
+	if len(sessions) == 0 {
+		return ""
+	}
+	loc := cnLocation()
+	const tolerance = 5 * time.Minute
+	idx := 0
+	for _, session := range sessions {
+		sessionBars := make([]minuteBar, 0, 128)
+		for idx < len(bars) && normalizeMinuteTime(bars[idx].TradeTime.In(loc)).Before(session.Start) {
+			idx++
+		}
+		for scan := idx; scan < len(bars); scan++ {
+			barTime := normalizeMinuteTime(bars[scan].TradeTime.In(loc))
+			if barTime.After(session.End) {
+				break
+			}
+			sessionBars = append(sessionBars, bars[scan])
+		}
+		if len(sessionBars) == 0 {
+			return fmt.Sprintf("分钟线交易时段缺口：%s~%s 无数据", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"))
+		}
+		first := normalizeMinuteTime(sessionBars[0].TradeTime.In(loc))
+		last := normalizeMinuteTime(sessionBars[len(sessionBars)-1].TradeTime.In(loc))
+		if first.After(session.Start.Add(tolerance)) {
+			return fmt.Sprintf("分钟线交易时段缺口：%s~%s 首根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), first.Format("15:04"))
+		}
+		if last.Before(session.End.Add(-tolerance)) {
+			return fmt.Sprintf("分钟线交易时段缺口：%s~%s 末根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), last.Format("15:04"))
+		}
+		prev := first
+		for i := 1; i < len(sessionBars); i++ {
+			cur := normalizeMinuteTime(sessionBars[i].TradeTime.In(loc))
+			if cur.Sub(prev) > tolerance {
+				return fmt.Sprintf("分钟线交易时段缺口：%s %s~%s 断档", cur.Format("2006-01-02"), prev.Format("15:04"), cur.Format("15:04"))
+			}
+			prev = cur
+		}
+	}
+	return ""
+}
+
+func resolveMinuteCoverageContinuityIssue(stockCode string, start, end time.Time) (string, error) {
+	sessions := buildMinuteCoverageSessions(start, end)
+	if len(sessions) == 0 {
+		return "", nil
+	}
+	bars, err := listMinuteBarsFromCache(stockCode, sessions[0].Start, sessions[len(sessions)-1].End)
+	if err != nil {
+		return "", err
+	}
+	return minuteCoverageContinuityIssue(bars, sessions), nil
+}
+
+func resolveYieldMinuteCoverageRequiredStart(recordTime time.Time) time.Time {
+	if recordTime.IsZero() {
+		return time.Time{}
+	}
+	start := resolveRecommendBuyTime(recordTime.In(cnLocation()))
+	if start.IsZero() {
+		return time.Time{}
+	}
+	if replayStart := resolveYieldReplayExpandedRangeStart(start); !replayStart.IsZero() && replayStart.Before(start) {
+		start = replayStart
+	}
+	return normalizeMinuteTime(start)
+}
+
 func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
 	loc := cnLocation()
 	now := timeNow().In(loc)
@@ -1227,6 +1348,7 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 	if m, err := loadMinuteCacheRangeMap(); err == nil && len(m) > 0 {
 		cacheRanges = m
 	}
+	continuityIssueCache := make(map[string]string)
 
 	formatTs := func(t time.Time) string {
 		if t.IsZero() {
@@ -1285,7 +1407,7 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 		if recordTime.IsZero() {
 			continue
 		}
-		requiredStart := resolveRecommendSellEligibleTime(recordTime.In(loc))
+		requiredStart := resolveYieldMinuteCoverageRequiredStart(recordTime.In(loc))
 		if !coverableStartMinute.IsZero() && requiredStart.Before(coverableStartMinute) {
 			// Outside coverable window: do not count it in done/total.
 			continue
@@ -1357,6 +1479,22 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 					fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
 						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)))
 			}
+			continue
+		}
+		continuityKey := strings.Join([]string{code, requiredStart.Format(time.RFC3339Nano), requiredEnd.Format(time.RFC3339Nano)}, "|")
+		continuityIssue, checked := continuityIssueCache[continuityKey]
+		if !checked {
+			if reason, err := resolveMinuteCoverageContinuityIssue(code, requiredStart, requiredEnd); err != nil {
+				continuityIssue = fmt.Sprintf("分钟线连续性检查失败（目标 %s~%s）：%v", formatTs(requiredStart), formatTs(requiredEnd), err)
+			} else {
+				continuityIssue = reason
+			}
+			continuityIssueCache[continuityKey] = continuityIssue
+		}
+		if strings.TrimSpace(continuityIssue) != "" {
+			pending++
+			appendIssue(rec, recordTime, code, "待覆盖",
+				fmt.Sprintf("%s（目标 %s~%s）", strings.TrimSpace(continuityIssue), formatTs(requiredStart), formatTs(requiredEnd)))
 			continue
 		}
 		done++

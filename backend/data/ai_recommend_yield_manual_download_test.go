@@ -2,6 +2,7 @@ package data
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +128,28 @@ func TestPersistManualYieldAudit_WritesFinishedSummary(t *testing.T) {
 	}
 	if got.LastManualProviderSummary != "diemeng:1, tencent:1" {
 		t.Fatalf("LastManualProviderSummary=%q", got.LastManualProviderSummary)
+	}
+}
+
+func TestMinuteCoverageContinuityIssueDetectsIntradayGap(t *testing.T) {
+	loc := cnLocation()
+	day := time.Date(2026, 5, 12, 0, 0, 0, 0, loc)
+	sessions := buildMinuteCoverageSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc),
+	)
+	bars := []minuteBar{
+		{TradeTime: time.Date(day.Year(), day.Month(), day.Day(), 14, 0, 0, 0, loc)},
+		{TradeTime: time.Date(day.Year(), day.Month(), day.Day(), 14, 1, 0, 0, loc)},
+		{TradeTime: time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc)},
+	}
+
+	reason := minuteCoverageContinuityIssue(bars, sessions)
+	if reason == "" {
+		t.Fatalf("expected intraday minute gap to be detected")
+	}
+	if !strings.Contains(reason, "09:31") {
+		t.Fatalf("expected morning gap reason, got %q", reason)
 	}
 }
 

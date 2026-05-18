@@ -1239,7 +1239,7 @@ function dataSyncReason(row) {
     return "失效结果已同步"
   }
   if (isDataFullySynced(row)) {
-    return "分钟线覆盖完整，数据已更新"
+    return "分钟线交易时段连续性已校验，数据已更新"
   }
   if (reason) {
     return reason
@@ -1379,12 +1379,12 @@ function replayMarkerSummaryText() {
   </n-input-group>
   <div style="margin-top: 8px;">
     <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">current 默认只看 phase3-v4；它强调同日新鲜信号，不再把旧观察信号混进收益统计。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">current 默认只看 phase3-v4 同日新鲜信号，旧观察信号不混入收益统计。</n-text>
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">当前口径：严格回算</n-text>
     <n-text depth="3" style="margin-left: 12px;">待回算：{{ strictPendingCountRef }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">strict 只读取已落库的严格快照；待回算股票需要先下载分钟线并等待后台刷新。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">strict 只读已落库严格快照；待回算股票需补齐交易时段连续分钟线并等待后台刷新。</n-text>
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">最近一次手动任务：</n-text>
@@ -1392,8 +1392,8 @@ function replayMarkerSummaryText() {
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">数据时间：{{ dataAsOfRef || "--" }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">分钟线覆盖：{{ minuteCoverageText() }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">覆盖进度：{{ minuteCoveragePercentText() }}</n-text>
+    <n-text depth="3" style="margin-left: 12px;">分钟线连续覆盖：{{ minuteCoverageText() }}</n-text>
+    <n-text depth="3" style="margin-left: 12px;">连续覆盖进度：{{ minuteCoveragePercentText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">任务进度：{{ taskProgressText() }}</n-text>
     <n-text depth="3" style="margin-left: 12px;">{{ taskStatusHintText() }}</n-text>
   </div>
