@@ -47,8 +47,7 @@ const openCountRef = ref(0)
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
-  { label: 'Current / phase3-v4', value: 'current' },
-  { label: 'Phase3-v4', value: 'phase3-v4' },
+  { label: 'V1.3.1', value: 'current' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
   { label: 'Legacy', value: 'legacy' },
   { label: 'All', value: 'all' }
@@ -362,7 +361,7 @@ function dailyOverviewWarningText() {
           </n-button>
         </n-input-group>
         <div class="yield-stats-toolbar-hint">
-          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。收益统计默认看 current，也就是 phase3-v4 这批同日新鲜信号。</n-text>
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。收益统计默认查看 V1.3.1 这批同日新鲜信号。</n-text>
         </div>
         <div class="yield-stats-toolbar-hint">
           <n-text depth="3">当前页专注收益率统计与可视化；个股明细、分钟回放和手动补算仍保留在“股票收益率”栏目。</n-text>
@@ -604,7 +603,7 @@ function dailyOverviewWarningText() {
             </div>
             <div class="detail-row">
               <span class="detail-label">解读重点</span>
-              <n-text depth="3">同日激活率越高越说明信号新鲜；隔日旧信号激活率越低越符合 phase3-v4 的 same-day 约束。</n-text>
+              <n-text depth="3">同日激活率越高越说明信号新鲜；隔日旧信号激活率越低越符合 V1.3.1 的 same-day 约束。</n-text>
             </div>
           </n-card>
         </n-grid-item>

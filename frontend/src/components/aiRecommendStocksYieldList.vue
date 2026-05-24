@@ -16,8 +16,7 @@ const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRang
 const rangeReadyRef = ref(false)
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
-  { label: 'Current / phase3-v4', value: 'current' },
-  { label: 'Phase3-v4', value: 'phase3-v4' },
+  { label: 'V1.3.1', value: 'current' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
   { label: 'Legacy', value: 'legacy' },
   { label: 'All', value: 'all' }
@@ -1379,7 +1378,7 @@ function replayMarkerSummaryText() {
   </n-input-group>
   <div style="margin-top: 8px;">
     <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">current 默认只看 phase3-v4 同日新鲜信号，旧观察信号不混入收益统计。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">V1.3.1 默认只看同日新鲜信号，旧观察信号不混入收益统计。</n-text>
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">当前口径：严格回算</n-text>
