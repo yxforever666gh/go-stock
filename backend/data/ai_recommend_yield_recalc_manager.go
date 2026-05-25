@@ -102,6 +102,7 @@ type aiRecommendMinuteCoverageTask struct {
 	StockCode string
 	Start     time.Time
 	End       time.Time
+	Forced    bool
 }
 
 type aiRecommendYieldCalcTask struct {
@@ -673,6 +674,18 @@ func warmManualAiRecommendMinuteData(reason string, runtime *aiRecommendYieldRec
 	if warmErr := warmupDiemengMinuteBarsByDailyDump(warmDate, targetCodes); warmErr != nil {
 		logger.SugaredLogger.Warnf("warmup diemeng daily_dump failed: %v", warmErr)
 	}
+	for dayKey, codes := range manualMinuteGapWarmupPlan(targetCodes) {
+		day, ok := parseYieldTradeDate(dayKey)
+		if !ok {
+			continue
+		}
+		if day.Equal(warmDate) {
+			continue
+		}
+		if warmErr := warmupDiemengMinuteBarsByDailyDump(day, codes); warmErr != nil {
+			logger.SugaredLogger.Warnf("warmup diemeng daily_dump for gap failed: date=%s err=%v", dayKey, warmErr)
+		}
+	}
 	if !runtime.inTrading {
 		return
 	}
@@ -689,6 +702,61 @@ func warmManualAiRecommendMinuteData(reason string, runtime *aiRecommendYieldRec
 			logger.SugaredLogger.Warnf("warmup sina intraday minute bars failed: %v", warmErr2)
 		}
 	}
+}
+
+func manualMinuteGapWarmupPlan(targetCodes []string) map[string][]string {
+	if db.Dao == nil {
+		return nil
+	}
+	codeSet := make(map[string]struct{}, len(targetCodes))
+	for _, code := range targetCodes {
+		code = normalizeRecommendStockCode(code)
+		if code == "" {
+			continue
+		}
+		codeSet[code] = struct{}{}
+	}
+	if len(codeSet) == 0 {
+		return nil
+	}
+	meta, err := getOrCreateYieldMeta()
+	if err != nil {
+		logger.SugaredLogger.Warnf("load yield meta for manual gap warmup failed: %v", err)
+		return nil
+	}
+	_, issues := computeMinuteDownloadCoverageStatsWithIssues(meta, -1)
+	byDay := make(map[string]map[string]struct{})
+	loc := cnLocation()
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.Status) != "待覆盖" {
+			continue
+		}
+		code := normalizeRecommendStockCode(issue.StockCode)
+		if code == "" {
+			continue
+		}
+		if _, ok := codeSet[code]; !ok {
+			continue
+		}
+		if issue.MissingStart.IsZero() {
+			continue
+		}
+		day := issue.MissingStart.In(loc).Format("2006-01-02")
+		if byDay[day] == nil {
+			byDay[day] = map[string]struct{}{}
+		}
+		byDay[day][code] = struct{}{}
+	}
+	out := make(map[string][]string, len(byDay))
+	for day, codes := range byDay {
+		list := make([]string, 0, len(codes))
+		for code := range codes {
+			list = append(list, code)
+		}
+		sort.Strings(list)
+		out[day] = list
+	}
+	return out
 }
 
 func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targets *aiRecommendYieldTargets, writer *aiRecommendYieldSnapshotWriter) error {
@@ -1081,6 +1149,36 @@ func groupRecommendRecordsByCode(records []models.AiRecommendStocks) map[string]
 
 func prefetchAiRecommendMinuteCoverage(runtime *aiRecommendYieldRecalcRuntime, targets *aiRecommendYieldTargets) {
 	tasks := buildAiRecommendMinuteCoverageTasks(runtime, targets)
+	if len(tasks) == 0 {
+		_ = updateYieldDownloadProgress(runtime.meta.ID, 0, 0)
+		return
+	}
+
+	seenForced := make(map[string]struct{}, len(tasks))
+	for _, task := range tasks {
+		if task.Forced {
+			seenForced[minuteCoverageTaskKey(task)] = struct{}{}
+		}
+	}
+	runAiRecommendMinuteCoverageTasks(runtime, tasks)
+
+	if runtime.ctx.Reason != "manual_minute_download" {
+		return
+	}
+	codeSet := buildMinuteCoverageCodeSet(targets)
+	for round := 0; round < 5; round++ {
+		nextTasks := filterNewForcedMinuteCoverageTasks(buildManualMinuteGapCoverageTasks(codeSet), seenForced)
+		if len(nextTasks) == 0 {
+			return
+		}
+		for _, task := range nextTasks {
+			seenForced[minuteCoverageTaskKey(task)] = struct{}{}
+		}
+		runAiRecommendMinuteCoverageTasks(runtime, nextTasks)
+	}
+}
+
+func runAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime, tasks []aiRecommendMinuteCoverageTask) {
 	total := len(tasks)
 	_ = updateYieldDownloadProgress(runtime.meta.ID, 0, total)
 	if total == 0 {
@@ -1104,7 +1202,12 @@ func prefetchAiRecommendMinuteCoverage(runtime *aiRecommendYieldRecalcRuntime, t
 		go func() {
 			defer wg.Done()
 			for task := range taskCh {
-				_, info := syncMinuteBars(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout, runtime.ctx.Reason == "manual_minute_download")
+				var info minuteSyncInfo
+				if task.Forced {
+					_, info = syncMinuteBarsForcedWindow(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout)
+				} else {
+					_, info = syncMinuteBars(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout, runtime.ctx.Reason == "manual_minute_download")
+				}
 				if info.SyncErr != nil {
 					logger.SugaredLogger.Warnf("prefetch minute coverage failed: code=%s start=%s end=%s err=%v", task.StockCode, task.Start.In(cnLocation()).Format("2006-01-02 15:04:05"), task.End.In(cnLocation()).Format("2006-01-02 15:04:05"), info.SyncErr)
 				}
@@ -1138,17 +1241,7 @@ func buildAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime,
 		return nil
 	}
 	recordsByCode := groupRecommendRecordsByCode(targets.targetRecords)
-	codeSet := make(map[string]struct{}, len(targets.targetCodes)+len(recordsByCode))
-	for _, code := range targets.targetCodes {
-		code = normalizeRecommendStockCode(code)
-		if code == "" {
-			continue
-		}
-		codeSet[code] = struct{}{}
-	}
-	for code := range recordsByCode {
-		codeSet[code] = struct{}{}
-	}
+	codeSet := buildMinuteCoverageCodeSet(targets)
 	if len(codeSet) == 0 {
 		return nil
 	}
@@ -1169,6 +1262,9 @@ func buildAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime,
 	sort.Strings(codes)
 
 	tasks := make([]aiRecommendMinuteCoverageTask, 0, len(codes))
+	if runtime.ctx.Reason == "manual_minute_download" {
+		tasks = append(tasks, buildManualMinuteGapCoverageTasks(codeSet)...)
+	}
 	for _, code := range codes {
 		if !isAShareTsCode(code) {
 			continue
@@ -1214,6 +1310,148 @@ func buildAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime,
 		})
 	}
 	return tasks
+}
+
+func buildMinuteCoverageCodeSet(targets *aiRecommendYieldTargets) map[string]struct{} {
+	if targets == nil {
+		return nil
+	}
+	recordsByCode := groupRecommendRecordsByCode(targets.targetRecords)
+	codeSet := make(map[string]struct{}, len(targets.targetCodes)+len(recordsByCode))
+	for _, code := range targets.targetCodes {
+		code = normalizeRecommendStockCode(code)
+		if code == "" {
+			continue
+		}
+		codeSet[code] = struct{}{}
+	}
+	for code := range recordsByCode {
+		codeSet[code] = struct{}{}
+	}
+	return codeSet
+}
+
+func minuteCoverageTaskKey(task aiRecommendMinuteCoverageTask) string {
+	return strings.Join([]string{
+		normalizeRecommendStockCode(task.StockCode),
+		normalizeMinuteTime(task.Start).Format(time.RFC3339Nano),
+		normalizeMinuteTime(task.End).Format(time.RFC3339Nano),
+	}, "|")
+}
+
+func filterNewForcedMinuteCoverageTasks(tasks []aiRecommendMinuteCoverageTask, seen map[string]struct{}) []aiRecommendMinuteCoverageTask {
+	if len(tasks) == 0 {
+		return nil
+	}
+	out := make([]aiRecommendMinuteCoverageTask, 0, len(tasks))
+	for _, task := range tasks {
+		if !task.Forced {
+			continue
+		}
+		key := minuteCoverageTaskKey(task)
+		if key == "||" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		out = append(out, task)
+	}
+	return out
+}
+
+func buildManualMinuteGapCoverageTasks(codeSet map[string]struct{}) []aiRecommendMinuteCoverageTask {
+	if len(codeSet) == 0 {
+		return nil
+	}
+	if db.Dao == nil {
+		return nil
+	}
+	meta, err := getOrCreateYieldMeta()
+	if err != nil {
+		logger.SugaredLogger.Warnf("load yield meta for manual minute gap tasks failed: %v", err)
+		return nil
+	}
+	_, issues := computeMinuteDownloadCoverageStatsWithIssues(meta, -1)
+	if len(issues) == 0 {
+		return nil
+	}
+
+	type taskKey struct {
+		code  string
+		start string
+		end   string
+	}
+	seen := make(map[taskKey]struct{}, len(issues))
+	tasks := make([]aiRecommendMinuteCoverageTask, 0, len(issues))
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.Status) != "待覆盖" {
+			continue
+		}
+		code := normalizeRecommendStockCode(issue.StockCode)
+		if code == "" {
+			continue
+		}
+		if _, ok := codeSet[code]; !ok {
+			continue
+		}
+		start := normalizeMinuteTime(issue.MissingStart)
+		end := normalizeMinuteTime(issue.MissingEnd)
+		if start.IsZero() || end.IsZero() || start.After(end) {
+			continue
+		}
+		key := taskKey{
+			code:  code,
+			start: start.Format(time.RFC3339Nano),
+			end:   end.Format(time.RFC3339Nano),
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		tasks = append(tasks, aiRecommendMinuteCoverageTask{
+			StockCode: code,
+			Start:     start,
+			End:       end,
+			Forced:    true,
+		})
+	}
+	sort.Slice(tasks, func(i, j int) bool {
+		if tasks[i].StockCode != tasks[j].StockCode {
+			return tasks[i].StockCode < tasks[j].StockCode
+		}
+		if !tasks[i].Start.Equal(tasks[j].Start) {
+			return tasks[i].Start.Before(tasks[j].Start)
+		}
+		return tasks[i].End.Before(tasks[j].End)
+	})
+	return mergeMinuteCoverageTasks(tasks)
+}
+
+func mergeMinuteCoverageTasks(tasks []aiRecommendMinuteCoverageTask) []aiRecommendMinuteCoverageTask {
+	if len(tasks) <= 1 {
+		return tasks
+	}
+	merged := make([]aiRecommendMinuteCoverageTask, 0, len(tasks))
+	for _, task := range tasks {
+		if task.StockCode == "" || task.Start.IsZero() || task.End.IsZero() || task.Start.After(task.End) {
+			continue
+		}
+		n := len(merged)
+		if n == 0 {
+			merged = append(merged, task)
+			continue
+		}
+		last := &merged[n-1]
+		if last.StockCode == task.StockCode && last.Forced == task.Forced && !task.Start.After(last.End.Add(time.Minute)) {
+			if task.End.After(last.End) {
+				last.End = task.End
+			}
+			continue
+		}
+		merged = append(merged, task)
+	}
+	return merged
 }
 
 func cleanupAiRecommendYieldSnapshots(allCodes []string, allRecordIDs []uint) error {

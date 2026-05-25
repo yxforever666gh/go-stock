@@ -1294,6 +1294,10 @@ type AiRecommendStocksYieldPageData struct {
 	StopLossCount              int                          `json:"stopLossCount"`
 	TakeProfitCount            int                          `json:"takeProfitCount"`
 	OpenCount                  int                          `json:"openCount"`
+	V132GateBlockedCount       int                          `json:"v132GateBlockedCount"`
+	V132StrengthBlockedCount   int                          `json:"v132StrengthBlockedCount"`
+	V132RewardRiskBlockedCount int                          `json:"v132RewardRiskBlockedCount"`
+	V132CooldownBlockedCount   int                          `json:"v132CooldownBlockedCount"`
 	DataAsOf                   string                       `json:"dataAsOf"`
 	RecalcInProgress           bool                         `json:"recalcInProgress"`
 	RecalcProgress             int                          `json:"recalcProgress"`

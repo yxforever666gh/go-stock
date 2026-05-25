@@ -43,20 +43,39 @@ const analysisOnlyRateTextRef = ref('--')
 const stopLossCountRef = ref(0)
 const takeProfitCountRef = ref(0)
 const openCountRef = ref(0)
+const v132GateBlockedCountRef = ref(0)
+const v132StrengthBlockedCountRef = ref(0)
+const v132RewardRiskBlockedCountRef = ref(0)
+const v132CooldownBlockedCountRef = ref(0)
 
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
+  { label: 'All', value: 'all' },
   { label: 'V1.3.1', value: 'current' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
-  { label: 'Legacy', value: 'legacy' },
-  { label: 'All', value: 'all' }
+  { label: 'Legacy', value: 'legacy' }
 ]
+const strategyCohortLabelMap = {
+  current: 'V1.3.1',
+  'v1.3.2': 'V1.3.1',
+  '1.3.2': 'V1.3.1',
+  'phase3-v4': 'V1.3.1',
+  '1.3.1': 'V1.3.1',
+  v4: 'V1.3.1',
+  'phase3-v3': 'Phase3-v3',
+  legacy: 'Legacy',
+  all: 'All'
+}
 
 const strategyCohortLabelRef = computed(() => {
-  const matched = strategyCohortOptions.find((item) => item.value === strategyCohortRef.value)
-  return matched?.label || strategyCohortRef.value || '--'
+  return formatStrategyCohortLabel(strategyCohortRef.value)
 })
+
+function formatStrategyCohortLabel(value) {
+  const key = String(value || '').trim().toLowerCase()
+  return strategyCohortLabelMap[key] || '--'
+}
 
 const metricHelpTexts = computed(() => ({
   totalYield: '这是整套策略最后一共赚了多少，已经按统一交易成本口径合并计算。看它可以快速判断这套策略整体有没有挣钱，但不要只盯这一个数。',
@@ -204,6 +223,10 @@ async function loadSummary() {
     stopLossCountRef.value = Number(result?.stopLossCount || 0)
     takeProfitCountRef.value = Number(result?.takeProfitCount || 0)
     openCountRef.value = Number(result?.openCount || 0)
+    v132GateBlockedCountRef.value = Number(result?.v132GateBlockedCount || 0)
+    v132StrengthBlockedCountRef.value = Number(result?.v132StrengthBlockedCount || 0)
+    v132RewardRiskBlockedCountRef.value = Number(result?.v132RewardRiskBlockedCount || 0)
+    v132CooldownBlockedCountRef.value = Number(result?.v132CooldownBlockedCount || 0)
   } catch (error) {
     console.error('loadSummary failed', error)
   } finally {
@@ -361,7 +384,7 @@ function dailyOverviewWarningText() {
           </n-button>
         </n-input-group>
         <div class="yield-stats-toolbar-hint">
-          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。收益统计默认查看 V1.3.1 这批同日新鲜信号。</n-text>
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.3.1 或历史阶段对比不同策略阶段。</n-text>
         </div>
         <div class="yield-stats-toolbar-hint">
           <n-text depth="3">当前页专注收益率统计与可视化；个股明细、分钟回放和手动补算仍保留在“股票收益率”栏目。</n-text>
@@ -585,6 +608,14 @@ function dailyOverviewWarningText() {
               <span class="detail-label">仅分析占比</span>
               <n-text depth="3">{{ analysisOnlyRateTextRef }}</n-text>
             </div>
+            <div class="detail-row">
+              <span class="detail-label">V1.3.1硬规则拦截</span>
+              <n-text depth="3">{{ v132GateBlockedCountRef }}</n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">强弱/盈亏比/冷却</span>
+              <n-text depth="3">{{ v132StrengthBlockedCountRef }} / {{ v132RewardRiskBlockedCountRef }} / {{ v132CooldownBlockedCountRef }}</n-text>
+            </div>
           </n-card>
         </n-grid-item>
         <n-grid-item>
@@ -603,7 +634,7 @@ function dailyOverviewWarningText() {
             </div>
             <div class="detail-row">
               <span class="detail-label">解读重点</span>
-              <n-text depth="3">同日激活率越高越说明信号新鲜；隔日旧信号激活率越低越符合 V1.3.1 的 same-day 约束。</n-text>
+              <n-text depth="3">同日激活率越高越说明信号新鲜；V1.3.1 会额外用强弱过滤、盈亏比和止损冷却控制交易质量。</n-text>
             </div>
           </n-card>
         </n-grid-item>

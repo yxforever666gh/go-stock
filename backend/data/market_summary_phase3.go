@@ -20,7 +20,8 @@ import (
 
 const marketSummaryPhase3Version = "phase3-v3"
 const marketSummaryPhase4Version = "phase3-v4"
-const marketSummaryCurrentVersion = marketSummaryPhase4Version
+const marketSummaryVersionV132 = "v1.3.2"
+const marketSummaryCurrentVersion = marketSummaryVersionV132
 
 const (
 	strategyCohortCurrent = "current"
@@ -38,6 +39,10 @@ func normalizeStrategyCohort(raw string, defaultCohort string) string {
 		return normalizeStrategyCohort(defaultCohort, "")
 	case strategyCohortCurrent, strategyCohortAll, strategyCohortLegacy:
 		return text
+	case "1.3.2", "v132", strings.ToLower(marketSummaryVersionV132):
+		return marketSummaryVersionV132
+	case "1.3.1", "v131":
+		return marketSummaryPhase4Version
 	case strings.ToLower(marketSummaryPhase3Version):
 		return marketSummaryPhase3Version
 	case strings.ToLower(marketSummaryPhase4Version):
@@ -58,8 +63,8 @@ func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
 	case strategyCohortCurrent:
 		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
 	case strategyCohortLegacy:
-		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version <> ?)", marketSummaryCurrentVersion)
-	case marketSummaryPhase3Version, marketSummaryPhase4Version:
+		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", []string{marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132})
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132:
 		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
 	default:
 		return q

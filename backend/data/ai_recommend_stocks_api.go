@@ -859,6 +859,10 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		StopLossCount:              diagnostics.StopLossCount,
 		TakeProfitCount:            diagnostics.TakeProfitCount,
 		OpenCount:                  diagnostics.OpenCount,
+		V132GateBlockedCount:       diagnostics.V132GateBlockedCount,
+		V132StrengthBlockedCount:   diagnostics.V132StrengthBlockedCount,
+		V132RewardRiskBlockedCount: diagnostics.V132RewardRiskBlockedCount,
+		V132CooldownBlockedCount:   diagnostics.V132CooldownBlockedCount,
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           recalcInProgress,
 		RecalcProgress:             recalcProgress,
@@ -1040,13 +1044,16 @@ type minuteCoverageStats struct {
 }
 
 type minuteCoverageIssue struct {
-	RowKey     string
-	RecordID   uint
-	RecordTime time.Time
-	StockCode  string
-	StockName  string
-	Status     string
-	RawReason  string
+	RowKey       string
+	RecordID     uint
+	RecordTime   time.Time
+	StockCode    string
+	StockName    string
+	Status       string
+	RawReason    string
+	IssueKind    string
+	MissingStart time.Time
+	MissingEnd   time.Time
 }
 
 func applyRecommendRepeatCount(items []models.AiRecommendStocksYieldItem) {
@@ -1208,8 +1215,32 @@ func buildMinuteCoverageSessions(start, end time.Time) []minuteCoverageSession {
 }
 
 func minuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCoverageSession) string {
+	issue := computeMinuteCoverageContinuityIssue(bars, sessions)
+	return issue.Reason
+}
+
+type minuteCoverageContinuityIssueResult struct {
+	Reason       string
+	Kind         string
+	MissingStart time.Time
+	MissingEnd   time.Time
+}
+
+func minuteCoverageContinuityIssueFromWindow(reason, kind string, start, end time.Time) minuteCoverageContinuityIssueResult {
+	if start.IsZero() || end.IsZero() || start.After(end) {
+		return minuteCoverageContinuityIssueResult{Reason: reason, Kind: kind}
+	}
+	return minuteCoverageContinuityIssueResult{
+		Reason:       reason,
+		Kind:         kind,
+		MissingStart: normalizeMinuteTime(start),
+		MissingEnd:   normalizeMinuteTime(end),
+	}
+}
+
+func computeMinuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCoverageSession) minuteCoverageContinuityIssueResult {
 	if len(sessions) == 0 {
-		return ""
+		return minuteCoverageContinuityIssueResult{}
 	}
 	loc := cnLocation()
 	const tolerance = 5 * time.Minute
@@ -1227,38 +1258,47 @@ func minuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCoverageSe
 			sessionBars = append(sessionBars, bars[scan])
 		}
 		if len(sessionBars) == 0 {
-			return fmt.Sprintf("分钟线交易时段缺口：%s~%s 无数据", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"))
+			reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 无数据", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"))
+			return minuteCoverageContinuityIssueFromWindow(reason, "session_empty", session.Start, session.End)
 		}
 		first := normalizeMinuteTime(sessionBars[0].TradeTime.In(loc))
 		last := normalizeMinuteTime(sessionBars[len(sessionBars)-1].TradeTime.In(loc))
 		if first.After(session.Start.Add(tolerance)) {
-			return fmt.Sprintf("分钟线交易时段缺口：%s~%s 首根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), first.Format("15:04"))
+			reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 首根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), first.Format("15:04"))
+			return minuteCoverageContinuityIssueFromWindow(reason, "session_late_first", session.Start, first.Add(-time.Minute))
 		}
 		if last.Before(session.End.Add(-tolerance)) {
-			return fmt.Sprintf("分钟线交易时段缺口：%s~%s 末根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), last.Format("15:04"))
+			reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 末根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), last.Format("15:04"))
+			return minuteCoverageContinuityIssueFromWindow(reason, "session_early_last", last.Add(time.Minute), session.End)
 		}
 		prev := first
 		for i := 1; i < len(sessionBars); i++ {
 			cur := normalizeMinuteTime(sessionBars[i].TradeTime.In(loc))
 			if cur.Sub(prev) > tolerance {
-				return fmt.Sprintf("分钟线交易时段缺口：%s %s~%s 断档", cur.Format("2006-01-02"), prev.Format("15:04"), cur.Format("15:04"))
+				reason := fmt.Sprintf("分钟线交易时段缺口：%s %s~%s 断档", cur.Format("2006-01-02"), prev.Format("15:04"), cur.Format("15:04"))
+				return minuteCoverageContinuityIssueFromWindow(reason, "session_gap", prev.Add(time.Minute), cur.Add(-time.Minute))
 			}
 			prev = cur
 		}
 	}
-	return ""
+	return minuteCoverageContinuityIssueResult{}
 }
 
 func resolveMinuteCoverageContinuityIssue(stockCode string, start, end time.Time) (string, error) {
+	issue, err := resolveMinuteCoverageContinuityIssueDetail(stockCode, start, end)
+	return issue.Reason, err
+}
+
+func resolveMinuteCoverageContinuityIssueDetail(stockCode string, start, end time.Time) (minuteCoverageContinuityIssueResult, error) {
 	sessions := buildMinuteCoverageSessions(start, end)
 	if len(sessions) == 0 {
-		return "", nil
+		return minuteCoverageContinuityIssueResult{}, nil
 	}
 	bars, err := listMinuteBarsFromCache(stockCode, sessions[0].Start, sessions[len(sessions)-1].End)
 	if err != nil {
-		return "", err
+		return minuteCoverageContinuityIssueResult{}, err
 	}
-	return minuteCoverageContinuityIssue(bars, sessions), nil
+	return computeMinuteCoverageContinuityIssue(bars, sessions), nil
 }
 
 func resolveYieldMinuteCoverageRequiredStart(recordTime time.Time) time.Time {
@@ -1348,7 +1388,7 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 	if m, err := loadMinuteCacheRangeMap(); err == nil && len(m) > 0 {
 		cacheRanges = m
 	}
-	continuityIssueCache := make(map[string]string)
+	continuityIssueCache := make(map[string]minuteCoverageContinuityIssueResult)
 
 	formatTs := func(t time.Time) string {
 		if t.IsZero() {
@@ -1361,7 +1401,7 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 		issueCap = issueLimit
 	}
 	issues := make([]minuteCoverageIssue, 0, issueCap)
-	appendIssue := func(rec models.AiRecommendStocks, recordTime time.Time, code, status, reason string) {
+	appendIssue := func(rec models.AiRecommendStocks, recordTime time.Time, code, status, reason string, detail minuteCoverageContinuityIssueResult) {
 		if issueLimit == 0 {
 			return
 		}
@@ -1372,13 +1412,16 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 			return
 		}
 		issues = append(issues, minuteCoverageIssue{
-			RowKey:     yieldRowKeyFromRecommend(rec, code),
-			RecordID:   rec.ID,
-			RecordTime: recordTime.In(loc),
-			StockCode:  code,
-			StockName:  strings.TrimSpace(rec.StockName),
-			Status:     status,
-			RawReason:  strings.TrimSpace(reason),
+			RowKey:       yieldRowKeyFromRecommend(rec, code),
+			RecordID:     rec.ID,
+			RecordTime:   recordTime.In(loc),
+			StockCode:    code,
+			StockName:    strings.TrimSpace(rec.StockName),
+			Status:       status,
+			RawReason:    strings.TrimSpace(reason),
+			IssueKind:    strings.TrimSpace(detail.Kind),
+			MissingStart: detail.MissingStart,
+			MissingEnd:   detail.MissingEnd,
 		})
 	}
 
@@ -1438,11 +1481,11 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 				if reason == "" {
 					reason = fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd))
 				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason)
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, minuteCoverageContinuityIssueResult{})
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖",
-					fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd)))
+					fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd)), minuteCoverageContinuityIssueResult{})
 			}
 			continue
 		}
@@ -1455,12 +1498,12 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 					reason = fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
 						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
 				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason)
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, minuteCoverageContinuityIssueResult{})
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖",
 					fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)))
+						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), minuteCoverageContinuityIssueResult{})
 			}
 			continue
 		}
@@ -1472,29 +1515,29 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 					reason = fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
 						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
 				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason)
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, minuteCoverageContinuityIssueResult{})
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖",
 					fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)))
+						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), minuteCoverageContinuityIssueResult{})
 			}
 			continue
 		}
 		continuityKey := strings.Join([]string{code, requiredStart.Format(time.RFC3339Nano), requiredEnd.Format(time.RFC3339Nano)}, "|")
-		continuityIssue, checked := continuityIssueCache[continuityKey]
+		continuityDetail, checked := continuityIssueCache[continuityKey]
 		if !checked {
-			if reason, err := resolveMinuteCoverageContinuityIssue(code, requiredStart, requiredEnd); err != nil {
-				continuityIssue = fmt.Sprintf("分钟线连续性检查失败（目标 %s~%s）：%v", formatTs(requiredStart), formatTs(requiredEnd), err)
+			if detail, err := resolveMinuteCoverageContinuityIssueDetail(code, requiredStart, requiredEnd); err != nil {
+				continuityDetail = minuteCoverageContinuityIssueResult{Reason: fmt.Sprintf("分钟线连续性检查失败（目标 %s~%s）：%v", formatTs(requiredStart), formatTs(requiredEnd), err)}
 			} else {
-				continuityIssue = reason
+				continuityDetail = detail
 			}
-			continuityIssueCache[continuityKey] = continuityIssue
+			continuityIssueCache[continuityKey] = continuityDetail
 		}
-		if strings.TrimSpace(continuityIssue) != "" {
+		if strings.TrimSpace(continuityDetail.Reason) != "" {
 			pending++
 			appendIssue(rec, recordTime, code, "待覆盖",
-				fmt.Sprintf("%s（目标 %s~%s）", strings.TrimSpace(continuityIssue), formatTs(requiredStart), formatTs(requiredEnd)))
+				fmt.Sprintf("%s（目标 %s~%s）", strings.TrimSpace(continuityDetail.Reason), formatTs(requiredStart), formatTs(requiredEnd)), continuityDetail)
 			continue
 		}
 		done++
@@ -4007,6 +4050,10 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		StopLossCount:              diagnostics.StopLossCount,
 		TakeProfitCount:            diagnostics.TakeProfitCount,
 		OpenCount:                  diagnostics.OpenCount,
+		V132GateBlockedCount:       diagnostics.V132GateBlockedCount,
+		V132StrengthBlockedCount:   diagnostics.V132StrengthBlockedCount,
+		V132RewardRiskBlockedCount: diagnostics.V132RewardRiskBlockedCount,
+		V132CooldownBlockedCount:   diagnostics.V132CooldownBlockedCount,
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           true,
 		RecalcProgress:             recalcProgress,
@@ -4042,6 +4089,10 @@ type yieldDiagnosticSummary struct {
 	StopLossCount              int
 	TakeProfitCount            int
 	OpenCount                  int
+	V132GateBlockedCount       int
+	V132StrengthBlockedCount   int
+	V132RewardRiskBlockedCount int
+	V132CooldownBlockedCount   int
 }
 
 func calculateYieldDiagnosticSummary(records []models.AiRecommendStocks, items []models.AiRecommendStocksYieldItem) yieldDiagnosticSummary {
@@ -4072,6 +4123,18 @@ func calculateYieldDiagnosticSummary(records []models.AiRecommendStocks, items [
 	sameDayCount := 0
 	for _, item := range items {
 		if strings.TrimSpace(item.ActivationStatus) != "activated" {
+			reason := strings.TrimSpace(item.DataStatusReason)
+			if strings.Contains(reason, "V1.3.2") {
+				result.V132GateBlockedCount++
+				switch {
+				case strings.Contains(reason, "强弱过滤"):
+					result.V132StrengthBlockedCount++
+				case strings.Contains(reason, "盈亏比"):
+					result.V132RewardRiskBlockedCount++
+				case strings.Contains(reason, "重复止损冷却"):
+					result.V132CooldownBlockedCount++
+				}
+			}
 			continue
 		}
 		activatedCount++
@@ -4207,6 +4270,10 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		StopLossCount:              diagnostics.StopLossCount,
 		TakeProfitCount:            diagnostics.TakeProfitCount,
 		OpenCount:                  diagnostics.OpenCount,
+		V132GateBlockedCount:       diagnostics.V132GateBlockedCount,
+		V132StrengthBlockedCount:   diagnostics.V132StrengthBlockedCount,
+		V132RewardRiskBlockedCount: diagnostics.V132RewardRiskBlockedCount,
+		V132CooldownBlockedCount:   diagnostics.V132CooldownBlockedCount,
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           recalcInProgress,
 		RecalcProgress:             recalcProgress,

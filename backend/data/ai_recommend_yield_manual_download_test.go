@@ -153,6 +153,65 @@ func TestMinuteCoverageContinuityIssueDetectsIntradayGap(t *testing.T) {
 	}
 }
 
+func TestMinuteCoverageContinuityIssueReturnsMissingWindow(t *testing.T) {
+	loc := cnLocation()
+	day := time.Date(2026, 5, 12, 0, 0, 0, 0, loc)
+	sessions := buildMinuteCoverageSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc),
+	)
+	bars := []minuteBar{
+		{TradeTime: time.Date(day.Year(), day.Month(), day.Day(), 11, 0, 0, 0, loc)},
+		{TradeTime: time.Date(day.Year(), day.Month(), day.Day(), 11, 1, 0, 0, loc)},
+		{TradeTime: time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc)},
+	}
+
+	issue := computeMinuteCoverageContinuityIssue(bars, sessions)
+	if issue.Kind != "session_late_first" {
+		t.Fatalf("kind=%q, want session_late_first; reason=%q", issue.Kind, issue.Reason)
+	}
+	wantStart := time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc)
+	wantEnd := time.Date(day.Year(), day.Month(), day.Day(), 10, 59, 0, 0, loc)
+	if !issue.MissingStart.Equal(wantStart) || !issue.MissingEnd.Equal(wantEnd) {
+		t.Fatalf("missing window=%v~%v, want %v~%v", issue.MissingStart, issue.MissingEnd, wantStart, wantEnd)
+	}
+}
+
+func TestMergeMinuteCoverageTasks_MergesAdjacentForcedWindows(t *testing.T) {
+	loc := cnLocation()
+	tasks := []aiRecommendMinuteCoverageTask{
+		{
+			StockCode: "002747.SZ",
+			Start:     time.Date(2026, 5, 12, 9, 31, 0, 0, loc),
+			End:       time.Date(2026, 5, 12, 10, 0, 0, 0, loc),
+			Forced:    true,
+		},
+		{
+			StockCode: "002747.SZ",
+			Start:     time.Date(2026, 5, 12, 10, 1, 0, 0, loc),
+			End:       time.Date(2026, 5, 12, 11, 30, 0, 0, loc),
+			Forced:    true,
+		},
+		{
+			StockCode: "688017.SH",
+			Start:     time.Date(2026, 5, 12, 9, 31, 0, 0, loc),
+			End:       time.Date(2026, 5, 12, 11, 30, 0, 0, loc),
+			Forced:    true,
+		},
+	}
+
+	merged := mergeMinuteCoverageTasks(tasks)
+	if len(merged) != 2 {
+		t.Fatalf("merged len=%d, want 2: %#v", len(merged), merged)
+	}
+	if merged[0].StockCode != "002747.SZ" || !merged[0].End.Equal(time.Date(2026, 5, 12, 11, 30, 0, 0, loc)) {
+		t.Fatalf("first merged task unexpected: %#v", merged[0])
+	}
+	if !merged[0].Forced {
+		t.Fatal("expected merged task to remain forced")
+	}
+}
+
 func TestBuildAiRecommendMinuteCoverageTasks_ManualDownloadExtendsStartForPrevDayActivity(t *testing.T) {
 	loc := cnLocation()
 	now := time.Date(2026, 3, 10, 15, 10, 0, 0, loc)

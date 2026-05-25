@@ -28,11 +28,19 @@ func syncMinuteBars(tsCode string, start, end time.Time, crawlTimeout int64, all
 	return syncMinuteBarsWithFetch(tsCode, start, end, crawlTimeout, allowHeadBackfill, true)
 }
 
+func syncMinuteBarsForcedWindow(tsCode string, start, end time.Time, crawlTimeout int64) ([]minuteBar, minuteSyncInfo) {
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, false, true, true)
+}
+
 func syncMinuteBarsFromCacheOnly(tsCode string, start, end time.Time) ([]minuteBar, minuteSyncInfo) {
 	return syncMinuteBarsWithFetch(tsCode, start, end, 0, false, false)
 }
 
 func syncMinuteBarsWithFetch(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool) ([]minuteBar, minuteSyncInfo) {
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, allowFetch, false)
+}
+
+func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool, forceWindowFetch bool) ([]minuteBar, minuteSyncInfo) {
 	info := minuteSyncInfo{}
 	start = normalizeMinuteTime(start)
 	end = normalizeMinuteTime(end)
@@ -50,6 +58,9 @@ func syncMinuteBarsWithFetch(tsCode string, start, end time.Time, crawlTimeout i
 	fetchedCount := 0
 	if allowFetch {
 		missingWindows := buildMinuteFetchWindows(start, end, cacheStart, cacheEnd, allowHeadBackfill)
+		if forceWindowFetch {
+			missingWindows = []minuteFetchWindow{{Start: start, End: end}}
+		}
 		for _, window := range missingWindows {
 			if window.Start.After(window.End) {
 				continue
