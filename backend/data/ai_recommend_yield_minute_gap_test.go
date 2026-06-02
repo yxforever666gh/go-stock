@@ -134,6 +134,105 @@ func TestMinuteProviderResultRejectsTradingSessionGap(t *testing.T) {
 	}
 }
 
+func TestMinuteCoverageContinuityReportsUnsuspendedEmptySession(t *testing.T) {
+	oldFetchSuspensions := fetchDiemengSuspensionsFn
+	clearDiemengSuspensionCache()
+	t.Cleanup(func() {
+		fetchDiemengSuspensionsFn = oldFetchSuspensions
+		clearDiemengSuspensionCache()
+	})
+	fetchDiemengSuspensionsFn = func(stockCode string, tradeDate time.Time) ([]diemengSuspensionItem, error) {
+		return nil, nil
+	}
+
+	loc := cnLocation()
+	day := time.Date(2026, 5, 29, 0, 0, 0, 0, loc)
+	sessions := buildMinuteCoverageSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc),
+	)
+	bars := minuteBarsForSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 11, 30, 0, 0, loc),
+	)
+
+	issue := computeMinuteCoverageContinuityIssueForStock("301293.SZ", bars, sessions)
+	if !strings.Contains(issue.Reason, "13:01~15:00 无数据") {
+		t.Fatalf("expected afternoon empty-session issue, got %#v", issue)
+	}
+}
+
+func TestMinuteCoverageContinuityIgnoresSuspendedEmptySession(t *testing.T) {
+	oldFetchSuspensions := fetchDiemengSuspensionsFn
+	clearDiemengSuspensionCache()
+	t.Cleanup(func() {
+		fetchDiemengSuspensionsFn = oldFetchSuspensions
+		clearDiemengSuspensionCache()
+	})
+	fetchDiemengSuspensionsFn = func(stockCode string, tradeDate time.Time) ([]diemengSuspensionItem, error) {
+		start := "13:00:00"
+		end := "15:00:00"
+		return []diemengSuspensionItem{
+			{
+				StockCode:        "301293.SZ",
+				SuspendDate:      tradeDate.In(cnLocation()).Format("2006-01-02"),
+				SuspendStartTime: &start,
+				SuspendEndTime:   &end,
+			},
+		}, nil
+	}
+
+	loc := cnLocation()
+	day := time.Date(2026, 5, 29, 0, 0, 0, 0, loc)
+	sessions := buildMinuteCoverageSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc),
+	)
+	bars := minuteBarsForSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 11, 30, 0, 0, loc),
+	)
+
+	issue := computeMinuteCoverageContinuityIssueForStockWithSuspensionFetch("301293.SZ", bars, sessions, true)
+	if strings.TrimSpace(issue.Reason) != "" {
+		t.Fatalf("expected suspended afternoon to be ignored, got %#v", issue)
+	}
+}
+
+func TestMinuteBarsCoverTradingSessionsAllowsSuspendedEmptySession(t *testing.T) {
+	oldFetchSuspensions := fetchDiemengSuspensionsFn
+	clearDiemengSuspensionCache()
+	t.Cleanup(func() {
+		fetchDiemengSuspensionsFn = oldFetchSuspensions
+		clearDiemengSuspensionCache()
+	})
+	fetchDiemengSuspensionsFn = func(stockCode string, tradeDate time.Time) ([]diemengSuspensionItem, error) {
+		start := "13:00:00"
+		end := "15:00:00"
+		return []diemengSuspensionItem{
+			{
+				StockCode:        extractAShareSymbol(stockCode),
+				SuspendDate:      tradeDate.In(cnLocation()).Format("2006-01-02"),
+				SuspendStartTime: &start,
+				SuspendEndTime:   &end,
+			},
+		}, nil
+	}
+
+	loc := cnLocation()
+	day := time.Date(2026, 5, 29, 0, 0, 0, 0, loc)
+	bars := minuteBarsForSessions(
+		time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc),
+		time.Date(day.Year(), day.Month(), day.Day(), 11, 30, 0, 0, loc),
+	)
+	if minuteBarsCoverTradingSessions(bars, time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc), time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc)) {
+		t.Fatal("stock-agnostic coverage should still reject the missing afternoon")
+	}
+	if !minuteBarsCoverTradingSessionsForStockWithSuspensionFetch("301293.SZ", bars, time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc), time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc), true) {
+		t.Fatal("expected stock-aware coverage to allow suspended afternoon")
+	}
+}
+
 func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "manual-gap-close-retry.db"))
 	if err := db.Dao.AutoMigrate(

@@ -134,7 +134,7 @@ func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout
 	}
 
 	// Determine whether cached minute bars fully cover the requested trading sessions.
-	info.CoverageOK = minuteBarsCoverTradingSessions(bars, start, end)
+	info.CoverageOK = minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(tsCode, bars, start, end, true)
 	return bars, info
 }
 
@@ -1109,6 +1109,7 @@ func upsertYieldRecordStates(states []models.AiRecommendYieldRecordState) error 
 	if err := syncRecommendActivationStatusFromRecordStates(states); err != nil {
 		return err
 	}
+	clearMinuteCoverageStatsCache()
 	return clearAiRecommendYieldDirtyCodesByRecordStates(states)
 }
 

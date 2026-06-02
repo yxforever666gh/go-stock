@@ -167,6 +167,7 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 		return 0, err
 	}
 	if !minuteCacheDualWriteEnabled() {
+		clearMinuteCoverageStatsCache()
 		return len(rows), nil
 	}
 	if !legacyMinuteBarTableAvailable() {
@@ -177,6 +178,7 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 	if err := upsertMinuteBarsToLegacyCache(rows); err != nil {
 		return 0, err
 	}
+	clearMinuteCoverageStatsCache()
 	return len(rows), nil
 }
 

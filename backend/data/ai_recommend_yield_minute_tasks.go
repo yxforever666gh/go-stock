@@ -188,7 +188,7 @@ func buildManualMinuteGapCoverageTasks(codeSet map[string]struct{}) []aiRecommen
 		logger.SugaredLogger.Warnf("load yield meta for manual minute gap tasks failed: %v", err)
 		return nil
 	}
-	_, issues := computeMinuteDownloadCoverageStatsWithIssues(meta, -1)
+	_, issues := computeMinuteDownloadCoverageStatsWithSuspensionFetch(meta, -1)
 	if len(issues) == 0 {
 		return nil
 	}

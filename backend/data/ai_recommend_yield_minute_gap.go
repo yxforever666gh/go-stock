@@ -19,7 +19,7 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 	deadline := manualMinuteCoverageNow().Add(manualMinuteCoverageRetryBudget)
 	round := 0
 	for {
-		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, -1)
+		stats, issues := computeMinuteDownloadCoverageStatsWithSuspensionFetch(runtime.meta, -1)
 		if stats.Pending == 0 {
 			if stats.Uncoverable == 0 {
 				_ = runWithSQLiteBusyRetry(func() error {
@@ -51,7 +51,7 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 		_ = updateManualMinuteCoverageRetryStatus(runtime.meta.ID, round, deadline, stats, issues)
 		runAiRecommendMinuteCoverageTasks(runtime, nextTasks)
 
-		stats, issues = computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, -1)
+		stats, issues = computeMinuteDownloadCoverageStatsWithSuspensionFetch(runtime.meta, -1)
 		if stats.Pending == 0 {
 			continue
 		}
@@ -139,7 +139,7 @@ func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.Ai
 	existing := models.AiRecommendYieldRecordState{}
 	err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).Where("recommend_id = ?", issue.RecordID).First(&existing).Error
 	if err == nil {
-		return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+		err = db.Dao.Model(&models.AiRecommendYieldRecordState{}).
 			Where("recommend_id = ?", issue.RecordID).
 			Updates(map[string]any{
 				"data_status":        "无法判定",
@@ -147,6 +147,10 @@ func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.Ai
 				"last_recalc_at":     now,
 				"updated_at":         now,
 			}).Error
+		if err == nil {
+			clearMinuteCoverageStatsCache()
+		}
+		return err
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
@@ -182,7 +186,11 @@ func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.Ai
 	if !issue.MissingEnd.IsZero() {
 		state.TotalScopeEnd = issue.MissingEnd.In(cnLocation()).Format("2006-01-02")
 	}
-	return db.Dao.Create(&state).Error
+	err = db.Dao.Create(&state).Error
+	if err == nil {
+		clearMinuteCoverageStatsCache()
+	}
+	return err
 }
 
 func updateManualMinuteCoverageRetryStatus(metaID uint, round int, deadline time.Time, stats minuteCoverageStats, issues []minuteCoverageIssue) error {

@@ -334,12 +334,20 @@ func minuteBarsCoverRange(bars []minuteBar, start, end time.Time) bool {
 }
 
 func minuteBarsCoverTradingSessions(bars []minuteBar, start, end time.Time) bool {
+	return minuteBarsCoverTradingSessionsForStock("", bars, start, end)
+}
+
+func minuteBarsCoverTradingSessionsForStock(stockCode string, bars []minuteBar, start, end time.Time) bool {
+	return minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode, bars, start, end, false)
+}
+
+func minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string, bars []minuteBar, start, end time.Time, allowSuspensionFetch bool) bool {
 	sessions := buildMinuteCoverageSessions(start, end)
 	if len(sessions) == 0 {
 		return true
 	}
 	if len(bars) == 0 {
-		return false
+		return minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, start, end, allowSuspensionFetch)
 	}
 	ordered := append([]minuteBar(nil), bars...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -360,17 +368,31 @@ func minuteBarsCoverTradingSessions(bars []minuteBar, start, end time.Time) bool
 			sessionBars = append(sessionBars, ordered[scan])
 		}
 		if len(sessionBars) == 0 {
+			if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, session.End, allowSuspensionFetch) {
+				continue
+			}
 			return false
 		}
 		first := normalizeMinuteTime(sessionBars[0].TradeTime)
 		last := normalizeMinuteTime(sessionBars[len(sessionBars)-1].TradeTime)
-		if first.After(session.Start) || last.Before(session.End) {
-			return false
+		if first.After(session.Start) {
+			if !minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, first.Add(-time.Minute), allowSuspensionFetch) {
+				return false
+			}
+		}
+		if last.Before(session.End) {
+			if !minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, last.Add(time.Minute), session.End, allowSuspensionFetch) {
+				return false
+			}
 		}
 		prev := first
 		for i := 1; i < len(sessionBars); i++ {
 			cur := normalizeMinuteTime(sessionBars[i].TradeTime)
 			if cur.Sub(prev) > tolerance {
+				if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, prev.Add(time.Minute), cur.Add(-time.Minute), allowSuspensionFetch) {
+					prev = cur
+					continue
+				}
 				return false
 			}
 			prev = cur

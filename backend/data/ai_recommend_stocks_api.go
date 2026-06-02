@@ -1050,6 +1050,14 @@ type minuteCoverageStats struct {
 	Uncoverable int
 }
 
+type minuteCoverageStatsCacheEntry struct {
+	Key        string
+	ExpireAt   time.Time
+	Stats      minuteCoverageStats
+	Issues     []minuteCoverageIssue
+	IssueLimit int
+}
+
 type minuteCoverageIssue struct {
 	RowKey       string
 	RecordID     uint
@@ -1061,6 +1069,19 @@ type minuteCoverageIssue struct {
 	IssueKind    string
 	MissingStart time.Time
 	MissingEnd   time.Time
+}
+
+var (
+	minuteCoverageStatsCacheMu sync.Mutex
+	minuteCoverageStatsCache   minuteCoverageStatsCacheEntry
+)
+
+const minuteCoverageStatsCacheTTL = 30 * time.Second
+
+func clearMinuteCoverageStatsCache() {
+	minuteCoverageStatsCacheMu.Lock()
+	minuteCoverageStatsCache = minuteCoverageStatsCacheEntry{}
+	minuteCoverageStatsCacheMu.Unlock()
 }
 
 func applyRecommendRepeatCount(items []models.AiRecommendStocksYieldItem) {
@@ -1246,6 +1267,14 @@ func minuteCoverageContinuityIssueFromWindow(reason, kind string, start, end tim
 }
 
 func computeMinuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCoverageSession) minuteCoverageContinuityIssueResult {
+	return computeMinuteCoverageContinuityIssueForStock("", bars, sessions)
+}
+
+func computeMinuteCoverageContinuityIssueForStock(stockCode string, bars []minuteBar, sessions []minuteCoverageSession) minuteCoverageContinuityIssueResult {
+	return computeMinuteCoverageContinuityIssueForStockWithSuspensionFetch(stockCode, bars, sessions, false)
+}
+
+func computeMinuteCoverageContinuityIssueForStockWithSuspensionFetch(stockCode string, bars []minuteBar, sessions []minuteCoverageSession, allowSuspensionFetch bool) minuteCoverageContinuityIssueResult {
 	if len(sessions) == 0 {
 		return minuteCoverageContinuityIssueResult{}
 	}
@@ -1265,16 +1294,53 @@ func computeMinuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCov
 			sessionBars = append(sessionBars, bars[scan])
 		}
 		if len(sessionBars) == 0 {
+			if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, session.End, allowSuspensionFetch) {
+				continue
+			}
 			reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 无数据", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"))
 			return minuteCoverageContinuityIssueFromWindow(reason, "session_empty", session.Start, session.End)
 		}
 		first := normalizeMinuteTime(sessionBars[0].TradeTime.In(loc))
 		last := normalizeMinuteTime(sessionBars[len(sessionBars)-1].TradeTime.In(loc))
 		if first.After(session.Start.Add(tolerance)) {
+			missingStart := session.Start
+			missingEnd := first.Add(-time.Minute)
+			if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, missingStart, missingEnd, allowSuspensionFetch) {
+				prev := first
+				for i := 1; i < len(sessionBars); i++ {
+					cur := normalizeMinuteTime(sessionBars[i].TradeTime.In(loc))
+					if cur.Sub(prev) > tolerance {
+						gapStart := prev.Add(time.Minute)
+						gapEnd := cur.Add(-time.Minute)
+						if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, gapStart, gapEnd, allowSuspensionFetch) {
+							prev = cur
+							continue
+						}
+						reason := fmt.Sprintf("分钟线交易时段缺口：%s %s~%s 断档", cur.Format("2006-01-02"), prev.Format("15:04"), cur.Format("15:04"))
+						return minuteCoverageContinuityIssueFromWindow(reason, "session_gap", gapStart, gapEnd)
+					}
+					prev = cur
+				}
+				if last.Before(session.End.Add(-tolerance)) {
+					tailStart := last.Add(time.Minute)
+					tailEnd := session.End
+					if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, tailStart, tailEnd, allowSuspensionFetch) {
+						continue
+					}
+					reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 末根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), last.Format("15:04"))
+					return minuteCoverageContinuityIssueFromWindow(reason, "session_early_last", tailStart, tailEnd)
+				}
+				continue
+			}
 			reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 首根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), first.Format("15:04"))
 			return minuteCoverageContinuityIssueFromWindow(reason, "session_late_first", session.Start, first.Add(-time.Minute))
 		}
 		if last.Before(session.End.Add(-tolerance)) {
+			missingStart := last.Add(time.Minute)
+			missingEnd := session.End
+			if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, missingStart, missingEnd, allowSuspensionFetch) {
+				continue
+			}
 			reason := fmt.Sprintf("分钟线交易时段缺口：%s~%s 末根为 %s", session.Start.Format("2006-01-02 15:04"), session.End.Format("15:04"), last.Format("15:04"))
 			return minuteCoverageContinuityIssueFromWindow(reason, "session_early_last", last.Add(time.Minute), session.End)
 		}
@@ -1282,6 +1348,12 @@ func computeMinuteCoverageContinuityIssue(bars []minuteBar, sessions []minuteCov
 		for i := 1; i < len(sessionBars); i++ {
 			cur := normalizeMinuteTime(sessionBars[i].TradeTime.In(loc))
 			if cur.Sub(prev) > tolerance {
+				missingStart := prev.Add(time.Minute)
+				missingEnd := cur.Add(-time.Minute)
+				if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, missingStart, missingEnd, allowSuspensionFetch) {
+					prev = cur
+					continue
+				}
 				reason := fmt.Sprintf("分钟线交易时段缺口：%s %s~%s 断档", cur.Format("2006-01-02"), prev.Format("15:04"), cur.Format("15:04"))
 				return minuteCoverageContinuityIssueFromWindow(reason, "session_gap", prev.Add(time.Minute), cur.Add(-time.Minute))
 			}
@@ -1297,6 +1369,10 @@ func resolveMinuteCoverageContinuityIssue(stockCode string, start, end time.Time
 }
 
 func resolveMinuteCoverageContinuityIssueDetail(stockCode string, start, end time.Time) (minuteCoverageContinuityIssueResult, error) {
+	return resolveMinuteCoverageContinuityIssueDetailWithSuspensionFetch(stockCode, start, end, false)
+}
+
+func resolveMinuteCoverageContinuityIssueDetailWithSuspensionFetch(stockCode string, start, end time.Time, allowSuspensionFetch bool) (minuteCoverageContinuityIssueResult, error) {
 	sessions := buildMinuteCoverageSessions(start, end)
 	if len(sessions) == 0 {
 		return minuteCoverageContinuityIssueResult{}, nil
@@ -1305,7 +1381,7 @@ func resolveMinuteCoverageContinuityIssueDetail(stockCode string, start, end tim
 	if err != nil {
 		return minuteCoverageContinuityIssueResult{}, err
 	}
-	return computeMinuteCoverageContinuityIssue(bars, sessions), nil
+	return computeMinuteCoverageContinuityIssueForStockWithSuspensionFetch(stockCode, bars, sessions, allowSuspensionFetch), nil
 }
 
 func resolveYieldMinuteCoverageRequiredStart(recordTime time.Time) time.Time {
@@ -1323,6 +1399,53 @@ func resolveYieldMinuteCoverageRequiredStart(recordTime time.Time) time.Time {
 }
 
 func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
+	key := minuteCoverageStatsCacheKey(meta, issueLimit)
+	now := time.Now()
+	minuteCoverageStatsCacheMu.Lock()
+	if minuteCoverageStatsCache.Key == key && minuteCoverageStatsCache.IssueLimit == issueLimit && now.Before(minuteCoverageStatsCache.ExpireAt) {
+		stats := minuteCoverageStatsCache.Stats
+		issues := append([]minuteCoverageIssue(nil), minuteCoverageStatsCache.Issues...)
+		minuteCoverageStatsCacheMu.Unlock()
+		return stats, issues
+	}
+	minuteCoverageStatsCacheMu.Unlock()
+
+	stats, issues := computeMinuteDownloadCoverageStatsWithIssuesFresh(meta, issueLimit, false)
+	minuteCoverageStatsCacheMu.Lock()
+	minuteCoverageStatsCache = minuteCoverageStatsCacheEntry{
+		Key:        key,
+		IssueLimit: issueLimit,
+		ExpireAt:   time.Now().Add(minuteCoverageStatsCacheTTL),
+		Stats:      stats,
+		Issues:     append([]minuteCoverageIssue(nil), issues...),
+	}
+	minuteCoverageStatsCacheMu.Unlock()
+	return stats, issues
+}
+
+func minuteCoverageStatsCacheKey(meta *models.AiRecommendYieldMeta, issueLimit int) string {
+	if meta == nil {
+		return fmt.Sprintf("nil|%d", issueLimit)
+	}
+	return fmt.Sprintf("%d|%s|%s|%d|%d|%d|%d",
+		meta.ID,
+		meta.CurrentTradeDate,
+		meta.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		boolCacheKey(meta.RecalcInProgress),
+		boolCacheKey(meta.DownloadInProgress),
+		meta.DownloadDone,
+		issueLimit,
+	)
+}
+
+func boolCacheKey(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendYieldMeta, issueLimit int, allowSuspensionFetch bool) (minuteCoverageStats, []minuteCoverageIssue) {
 	loc := cnLocation()
 	now := timeNow().In(loc)
 	tradeDate := resolveExpectedYieldTradeDate(now)
@@ -1494,6 +1617,10 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 		cacheStart, cacheEnd, hasScope := resolveMinuteCoverageScope(statePtr, code, cacheRanges)
 		if !hasScope {
 			detail := missingWindow("", "no_cache", requiredStart, requiredEnd)
+			if minuteCoverageGapCoveredBySuspensionWithFetch(code, detail.MissingStart, detail.MissingEnd, allowSuspensionFetch) {
+				done++
+				continue
+			}
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
 				reason := strings.TrimSpace(state.DataStatusReason)
@@ -1515,6 +1642,10 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 				missingEnd = requiredEnd
 			}
 			detail := missingWindow("", "range_start", requiredStart, missingEnd)
+			if minuteCoverageGapCoveredBySuspensionWithFetch(code, detail.MissingStart, detail.MissingEnd, allowSuspensionFetch) {
+				done++
+				continue
+			}
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
 				reason := strings.TrimSpace(state.DataStatusReason)
@@ -1537,6 +1668,10 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 				missingStart = requiredStart
 			}
 			detail := missingWindow("", "range_end", missingStart, requiredEnd)
+			if minuteCoverageGapCoveredBySuspensionWithFetch(code, detail.MissingStart, detail.MissingEnd, allowSuspensionFetch) {
+				done++
+				continue
+			}
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
 				reason := strings.TrimSpace(state.DataStatusReason)
@@ -1556,7 +1691,7 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 		continuityKey := strings.Join([]string{code, requiredStart.Format(time.RFC3339Nano), requiredEnd.Format(time.RFC3339Nano)}, "|")
 		continuityDetail, checked := continuityIssueCache[continuityKey]
 		if !checked {
-			if detail, err := resolveMinuteCoverageContinuityIssueDetail(code, requiredStart, requiredEnd); err != nil {
+			if detail, err := resolveMinuteCoverageContinuityIssueDetailWithSuspensionFetch(code, requiredStart, requiredEnd, allowSuspensionFetch); err != nil {
 				continuityDetail = minuteCoverageContinuityIssueResult{Reason: fmt.Sprintf("分钟线连续性检查失败（目标 %s~%s）：%v", formatTs(requiredStart), formatTs(requiredEnd), err)}
 			} else {
 				continuityDetail = detail
