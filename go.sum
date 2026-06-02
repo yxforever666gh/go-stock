@@ -484,8 +484,8 @@ github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d h1:VhgPp6v9qf9Agr/
 github.com/nu7hatch/gouuid v0.0.0-20131221200532-179d4d0c4d8d/go.mod h1:YUTz3bUH2ZwIWBy3CJBeOBEugqcmXREj14T+iG/4k4U=
 github.com/nxadm/tail v1.4.4/go.mod h1:kenIhsEOeOJmVchQTgglprH7qJGnHDVpk1VPCcaMI8A=
 github.com/nxadm/tail v1.4.8/go.mod h1:+ncqLTQzXmGhMZNUePPaPqPvBxHAIsmXswZKocGu+AU=
-github.com/ollama/ollama v0.13.0 h1:M/vhiiVVw89U/9y8au61AErI5owG3R5oWyuq05dl9Uc=
-github.com/ollama/ollama v0.13.0/go.mod h1:2VxohsKICsmUCrBjowf+luTXYiXn2Q70Cnvv5Urbzkw=
+github.com/ollama/ollama v0.20.3 h1:oP7eJZ+U4FzkoGGdzBq9mbq4wyuNyvVkz/BWxOrrAc0=
+github.com/ollama/ollama v0.20.3/go.mod h1:tCX4IMV8DHjl3zY0THxuEkpWDZSOchJpzTuLACpMwFw=
 github.com/onsi/ginkgo v1.6.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
 github.com/onsi/ginkgo v1.7.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
 github.com/onsi/ginkgo v1.8.0/go.mod h1:lLunBs/Ym6LB5Z9jYTR76FiuTmxDTDusOGeTQH+WWjE=
