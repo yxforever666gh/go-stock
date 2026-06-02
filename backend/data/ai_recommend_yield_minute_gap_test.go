@@ -77,17 +77,60 @@ func TestBuildManualMinuteGapCoverageTasks_IncludesRangeStartGap(t *testing.T) {
 	if got.StockCode != "301293.SZ" || !got.Forced {
 		t.Fatalf("unexpected task: %#v", got)
 	}
+	if !got.PreferHistorical {
+		t.Fatalf("expected range-start gap task to prefer historical providers: %#v", got)
+	}
 	wantStart := time.Date(2026, 5, 27, 9, 31, 0, 0, loc)
 	if !got.Start.Equal(wantStart) {
 		t.Fatalf("task start=%v, want %v", got.Start, wantStart)
 	}
-	wantEnd := time.Date(2026, 5, 29, 10, 59, 0, 0, loc)
+	wantEnd := time.Date(2026, 5, 27, 11, 30, 0, 0, loc)
 	if !got.End.Equal(wantEnd) {
 		t.Fatalf("task end=%v, want %v", got.End, wantEnd)
+	}
+	if len(tasks) != 5 {
+		t.Fatalf("task len=%d, want 5 split trading sessions: %#v", len(tasks), tasks)
+	}
+	last := tasks[len(tasks)-1]
+	wantLastStart := time.Date(2026, 5, 29, 9, 31, 0, 0, loc)
+	wantLastEnd := time.Date(2026, 5, 29, 10, 59, 0, 0, loc)
+	if !last.Start.Equal(wantLastStart) || !last.End.Equal(wantLastEnd) {
+		t.Fatalf("last task=%v~%v, want %v~%v", last.Start, last.End, wantLastStart, wantLastEnd)
 	}
 	warning := buildManualDownloadCoverageWarning(&models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}, 5)
 	if !strings.Contains(warning, "仍有待覆盖 1 条") || !strings.Contains(warning, "301293.SZ") {
 		t.Fatalf("unexpected warning: %q", warning)
+	}
+}
+
+func TestMinuteProviderResultCompletesOvernightNonTradingWindow(t *testing.T) {
+	loc := cnLocation()
+	start := time.Date(2026, 6, 1, 9, 31, 0, 0, loc)
+	end := time.Date(2026, 6, 2, 9, 29, 0, 0, loc)
+	bars := minuteBarsForSessions(start, end)
+	if len(bars) != 240 {
+		t.Fatalf("bars=%d, want 240", len(bars))
+	}
+
+	result := buildMinuteProviderResult("diemeng", bars, "diemeng", nil, start, end)
+	if !result.Complete {
+		t.Fatalf("expected trading-session coverage to be complete for overnight non-trading tail")
+	}
+	if minuteBarsCoverRange(bars, start, end) {
+		t.Fatalf("natural range coverage should remain false for this regression scenario")
+	}
+}
+
+func TestMinuteProviderResultRejectsTradingSessionGap(t *testing.T) {
+	loc := cnLocation()
+	start := time.Date(2026, 6, 1, 9, 31, 0, 0, loc)
+	end := time.Date(2026, 6, 2, 9, 29, 0, 0, loc)
+	bars := minuteBarsForSessions(start, end)
+	bars = bars[30:]
+
+	result := buildMinuteProviderResult("diemeng", bars, "diemeng", nil, start, end)
+	if result.Complete {
+		t.Fatalf("expected missing trading-session head to be incomplete")
 	}
 }
 
@@ -110,6 +153,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) 
 	oldManualSleep := manualMinuteCoverageSleep
 	oldBackoffs := manualMinuteCoverageRetryBackoffs
 	oldBudget := manualMinuteCoverageRetryBudget
+	oldMaxRetryRounds := manualMinuteCoverageMaxRetryRounds
 	oldTencent := fetchMinuteBarsWithTencentFn
 	oldAkshare := fetchMinuteBarsWithAkShareFn
 	oldSina := fetchMinuteBarsWithSinaFn
@@ -120,6 +164,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) 
 		manualMinuteCoverageSleep = oldManualSleep
 		manualMinuteCoverageRetryBackoffs = oldBackoffs
 		manualMinuteCoverageRetryBudget = oldBudget
+		manualMinuteCoverageMaxRetryRounds = oldMaxRetryRounds
 		fetchMinuteBarsWithTencentFn = oldTencent
 		fetchMinuteBarsWithAkShareFn = oldAkshare
 		fetchMinuteBarsWithSinaFn = oldSina
@@ -133,6 +178,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) 
 	manualMinuteCoverageSleep = func(time.Duration) {}
 	manualMinuteCoverageRetryBackoffs = []time.Duration{0}
 	manualMinuteCoverageRetryBudget = time.Minute
+	manualMinuteCoverageMaxRetryRounds = 6
 
 	meta := models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}
 	if err := db.Dao.Create(&meta).Error; err != nil {
@@ -206,6 +252,97 @@ func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) 
 	}
 	if providerCalls <= 4 {
 		t.Fatalf("expected retry after incomplete provider responses, calls=%d", providerCalls)
+	}
+}
+
+func TestCloseManualMinuteCoverageGaps_MarksUncoverableAfterRetryExhausted(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-gap-uncoverable.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	oldManualNow := manualMinuteCoverageNow
+	oldManualSleep := manualMinuteCoverageSleep
+	oldBackoffs := manualMinuteCoverageRetryBackoffs
+	oldBudget := manualMinuteCoverageRetryBudget
+	oldMaxRetryRounds := manualMinuteCoverageMaxRetryRounds
+	oldTencent := fetchMinuteBarsWithTencentFn
+	oldAkshare := fetchMinuteBarsWithAkShareFn
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	t.Cleanup(func() {
+		timeNow = oldNow
+		manualMinuteCoverageNow = oldManualNow
+		manualMinuteCoverageSleep = oldManualSleep
+		manualMinuteCoverageRetryBackoffs = oldBackoffs
+		manualMinuteCoverageRetryBudget = oldBudget
+		manualMinuteCoverageMaxRetryRounds = oldMaxRetryRounds
+		fetchMinuteBarsWithTencentFn = oldTencent
+		fetchMinuteBarsWithAkShareFn = oldAkshare
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	})
+
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	manualMinuteCoverageNow = func() time.Time { return now }
+	manualMinuteCoverageSleep = func(time.Duration) {}
+	manualMinuteCoverageRetryBackoffs = []time.Duration{0}
+	manualMinuteCoverageRetryBudget = time.Minute
+	manualMinuteCoverageMaxRetryRounds = 2
+
+	meta := models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}
+	if err := db.Dao.Create(&meta).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "301293.SZ",
+		StockName:                   "三博脑科",
+		RecommendBuyPrice:           "10-10.5",
+		RecommendStopProfitPrice:    "11-12",
+		RecommendStopLossPrice:      "9.6",
+		RecommendStatus:             "valid",
+		RecommendCategory:           recommendExecutionImmediate,
+		ActivationStatus:            "pending",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.5,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPriceMax: 12,
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create recommend failed: %v", err)
+	}
+
+	fetch := func(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+		return []minuteBar{}, "empty-test", nil
+	}
+	fetchMinuteBarsWithTencentFn = fetch
+	fetchMinuteBarsWithAkShareFn = fetch
+	fetchMinuteBarsWithSinaFn = fetch
+	fetchMinuteBarsWithDiemengFn = fetch
+
+	err := closeManualMinuteCoverageGaps(&aiRecommendYieldRecalcRuntime{meta: &meta}, map[string]struct{}{"301293.SZ": {}})
+	if err != nil {
+		t.Fatalf("closeManualMinuteCoverageGaps failed: %v", err)
+	}
+	stats, issues := computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending != 0 || stats.Uncoverable != 1 {
+		t.Fatalf("coverage stats after exhausted retry = %#v issues=%#v, want pending=0 uncoverable=1", stats, issues)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].RawReason, "连续2轮重试") {
+		t.Fatalf("unexpected issues after exhausted retry: %#v", issues)
 	}
 }
 

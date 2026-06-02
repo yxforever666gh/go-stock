@@ -596,7 +596,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		downloadProgress = meta.DownloadProgress
 		downloadDone = meta.DownloadDone
 		downloadTotal = meta.DownloadTotal
-		lastDownloadError = strings.TrimSpace(meta.LastDownloadError)
+		lastDownloadError = yieldLastDownloadMessage(meta.LastDownloadError)
 		if meta.LastFullRecalcAt != nil {
 			dataAsOf = meta.LastFullRecalcAt.Format("2006-01-02 15:04:05")
 		}
@@ -3976,7 +3976,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 			DataAsOf:                  dataAsOf,
 			RecalcInProgress:          recalcInProgress,
 			RecalcProgress:            recalcProgress,
-			LastDownloadError:         strings.TrimSpace(meta.LastDownloadError),
+			LastDownloadError:         yieldLastDownloadMessage(meta.LastDownloadError),
 			MinuteDownloadDone:        stats.Done,
 			MinuteDownloadTotal:       stats.Total,
 			MinuteDownloadPending:     stats.Pending,
@@ -4087,7 +4087,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           true,
 		RecalcProgress:             recalcProgress,
-		LastDownloadError:          strings.TrimSpace(meta.LastDownloadError),
+		LastDownloadError:          yieldLastDownloadMessage(meta.LastDownloadError),
 		MinuteDownloadDone:         stats.Done,
 		MinuteDownloadTotal:        stats.Total,
 		MinuteDownloadPending:      stats.Pending,
@@ -4308,7 +4308,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           recalcInProgress,
 		RecalcProgress:             recalcProgress,
-		LastDownloadError:          strings.TrimSpace(meta.LastDownloadError),
+		LastDownloadError:          yieldLastDownloadMessage(meta.LastDownloadError),
 		MinuteDownloadDone:         minuteDone,
 		MinuteDownloadTotal:        minuteTotal,
 		MinuteDownloadPending:      minutePending,

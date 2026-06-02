@@ -1,11 +1,15 @@
 package data
 
 import (
+	"errors"
 	"fmt"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"sort"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeSet map[string]struct{}) error {
@@ -16,37 +20,45 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 	round := 0
 	for {
 		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, -1)
-		if stats.Pending == 0 && stats.Uncoverable == 0 {
-			_ = runWithSQLiteBusyRetry(func() error {
-				return db.Dao.Model(&models.AiRecommendYieldMeta{}).
-					Where("id = ?", runtime.meta.ID).
-					Update("last_download_error", "").Error
-			})
+		if stats.Pending == 0 {
+			if stats.Uncoverable == 0 {
+				_ = runWithSQLiteBusyRetry(func() error {
+					return db.Dao.Model(&models.AiRecommendYieldMeta{}).
+						Where("id = ?", runtime.meta.ID).
+						Update("last_download_error", "").Error
+				})
+			} else {
+				runtime.manualDownloadWarning = buildManualDownloadCoverageFailure(runtime.meta, 5)
+			}
 			return nil
 		}
 		if !manualMinuteCoverageNow().Before(deadline) {
-			failure := buildManualDownloadCoverageFailure(runtime.meta, 5)
-			if failure == "" {
-				failure = "分钟线缺口未补齐"
+			if err := markPendingMinuteCoverageIssuesUncoverable(runtime.meta, issues, "分钟线数据源在重试时间内仍未补齐缺口"); err != nil {
+				return err
 			}
-			return fmt.Errorf("分钟线补齐失败：15分钟内仍未全部连续覆盖；%s", failure)
+			continue
 		}
 
 		nextTasks := buildManualMinuteGapCoverageTasks(codeSet)
 		if len(nextTasks) == 0 {
-			failure := buildManualDownloadCoverageFailure(runtime.meta, 5)
-			if failure == "" {
-				failure = "存在覆盖问题，但没有可执行的缺口下载任务"
+			if err := markPendingMinuteCoverageIssuesUncoverable(runtime.meta, issues, "存在覆盖问题，但没有可执行的缺口下载任务"); err != nil {
+				return err
 			}
-			return fmt.Errorf("分钟线补齐失败：%s", failure)
+			continue
 		}
 
 		round++
 		_ = updateManualMinuteCoverageRetryStatus(runtime.meta.ID, round, stats, issues)
 		runAiRecommendMinuteCoverageTasks(runtime, nextTasks)
 
-		stats, _ = computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, 0)
-		if stats.Pending == 0 && stats.Uncoverable == 0 {
+		stats, issues = computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, -1)
+		if stats.Pending == 0 {
+			continue
+		}
+		if manualMinuteCoverageMaxRetryRounds > 0 && round >= manualMinuteCoverageMaxRetryRounds {
+			if err := markPendingMinuteCoverageIssuesUncoverable(runtime.meta, issues, fmt.Sprintf("分钟线数据源连续%d轮重试后仍未补齐缺口", round)); err != nil {
+				return err
+			}
 			continue
 		}
 		if wait := manualMinuteCoverageRetryBackoff(round - 1); wait > 0 {
@@ -58,6 +70,119 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 			}
 		}
 	}
+}
+
+func minuteCoverageGapNeedsHistoricalSource(start, end time.Time) bool {
+	start = normalizeMinuteTime(start)
+	end = normalizeMinuteTime(end)
+	if start.IsZero() || end.IsZero() {
+		return false
+	}
+	return !isSameCNTradeDate(start, end) || !isTodayCN(end)
+}
+
+func markPendingMinuteCoverageIssuesUncoverable(meta *models.AiRecommendYieldMeta, issues []minuteCoverageIssue, prefix string) error {
+	if meta == nil || len(issues) == 0 {
+		return nil
+	}
+	pending := make([]minuteCoverageIssue, 0, len(issues))
+	recordIDs := make([]uint, 0, len(issues))
+	seen := map[uint]struct{}{}
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.Status) != "待覆盖" || issue.RecordID == 0 {
+			continue
+		}
+		pending = append(pending, issue)
+		if _, ok := seen[issue.RecordID]; ok {
+			continue
+		}
+		seen[issue.RecordID] = struct{}{}
+		recordIDs = append(recordIDs, issue.RecordID)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	sort.Slice(recordIDs, func(i, j int) bool { return recordIDs[i] < recordIDs[j] })
+	records := make([]models.AiRecommendStocks, 0, len(recordIDs))
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).Where("id IN ?", recordIDs).Find(&records).Error; err != nil {
+		return err
+	}
+	recordMap := make(map[uint]models.AiRecommendStocks, len(records))
+	for _, rec := range records {
+		recordMap[rec.ID] = rec
+	}
+	now := time.Now()
+	for _, issue := range pending {
+		reason := buildUncoverableMinuteIssueReason(issue, prefix)
+		if err := upsertMinuteUncoverableRecordState(issue, recordMap[issue.RecordID], reason, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func buildUncoverableMinuteIssueReason(issue minuteCoverageIssue, prefix string) string {
+	reason := strings.TrimSpace(issue.RawReason)
+	if reason == "" {
+		reason = "分钟线缺口未补齐"
+	}
+	if strings.TrimSpace(prefix) != "" {
+		reason = strings.TrimSpace(prefix) + "：" + reason
+	}
+	return reason
+}
+
+func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.AiRecommendStocks, reason string, now time.Time) error {
+	if issue.RecordID == 0 {
+		return nil
+	}
+	existing := models.AiRecommendYieldRecordState{}
+	err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).Where("recommend_id = ?", issue.RecordID).First(&existing).Error
+	if err == nil {
+		return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+			Where("recommend_id = ?", issue.RecordID).
+			Updates(map[string]any{
+				"data_status":        "无法判定",
+				"data_status_reason": reason,
+				"last_recalc_at":     now,
+				"updated_at":         now,
+			}).Error
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
+	}
+	recordTime := issue.RecordTime
+	if recordTime.IsZero() {
+		recordTime = recommendRecordTime(rec)
+	}
+	code := normalizeRecommendStockCode(issue.StockCode)
+	if code == "" {
+		code = normalizeRecommendStockCode(rec.StockCode)
+	}
+	state := models.AiRecommendYieldRecordState{
+		RecommendID:       issue.RecordID,
+		StockCode:         code,
+		StockName:         firstNonEmptyText(issue.StockName, rec.StockName),
+		ModelName:         strings.TrimSpace(rec.ModelName),
+		BkName:            strings.TrimSpace(rec.BkName),
+		RecommendCategory: strings.TrimSpace(rec.RecommendCategory),
+		ActivationStatus:  firstNonEmptyText(rec.ActivationStatus, "pending"),
+		PositionStatus:    "待激活",
+		YieldRateText:     "--",
+		DataStatus:        "无法判定",
+		DataStatusReason:  reason,
+		LastRecalcAt:      &now,
+	}
+	if !recordTime.IsZero() {
+		t := recordTime
+		state.RecommendTime = &t
+		state.SignalTime = &t
+		state.TotalScopeStart = t.In(cnLocation()).Format("2006-01-02")
+	}
+	if !issue.MissingEnd.IsZero() {
+		state.TotalScopeEnd = issue.MissingEnd.In(cnLocation()).Format("2006-01-02")
+	}
+	return db.Dao.Create(&state).Error
 }
 
 func updateManualMinuteCoverageRetryStatus(metaID uint, round int, stats minuteCoverageStats, issues []minuteCoverageIssue) error {

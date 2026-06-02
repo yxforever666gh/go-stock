@@ -97,6 +97,34 @@ func OptimizeMinuteCacheDB() error {
 	return nil
 }
 
+func minuteCacheMigrationWarning() string {
+	if db.Dao == nil || db.MinuteDao == nil {
+		return ""
+	}
+	if !legacyMinuteBarTableAvailable() {
+		return ""
+	}
+	if hasAnyMinuteCacheRows(db.MinuteDao, "minute_bar") {
+		return ""
+	}
+	if !hasAnyMinuteCacheRows(db.Dao, "ai_recommend_minute_bar") {
+		return ""
+	}
+	return "分钟线新库尚未迁移：当前仍在读取旧表 fallback，建议执行 go run . migrate-minute-db"
+}
+
+func hasAnyMinuteCacheRows(dao *gorm.DB, table string) bool {
+	if dao == nil || strings.TrimSpace(table) == "" {
+		return false
+	}
+	type oneRow struct {
+		One int `gorm:"column:one"`
+	}
+	row := oneRow{}
+	err := dao.Raw("SELECT 1 AS one FROM " + table + " LIMIT 1").Scan(&row).Error
+	return err == nil && row.One == 1
+}
+
 func validateMinuteCacheMigration() error {
 	if err := validateMinuteCacheMigrationByStock(); err != nil {
 		return err

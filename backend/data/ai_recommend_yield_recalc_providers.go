@@ -29,11 +29,15 @@ func syncMinuteBars(tsCode string, start, end time.Time, crawlTimeout int64, all
 }
 
 func syncMinuteBarsStrict(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool) ([]minuteBar, minuteSyncInfo) {
-	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, true, false, true)
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, true, false, true, false)
 }
 
 func syncMinuteBarsForcedWindow(tsCode string, start, end time.Time, crawlTimeout int64) ([]minuteBar, minuteSyncInfo) {
-	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, false, true, true, true)
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, false, true, true, true, false)
+}
+
+func syncMinuteBarsForcedHistoricalWindow(tsCode string, start, end time.Time, crawlTimeout int64) ([]minuteBar, minuteSyncInfo) {
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, false, true, true, true, true)
 }
 
 func syncMinuteBarsFromCacheOnly(tsCode string, start, end time.Time) ([]minuteBar, minuteSyncInfo) {
@@ -41,10 +45,10 @@ func syncMinuteBarsFromCacheOnly(tsCode string, start, end time.Time) ([]minuteB
 }
 
 func syncMinuteBarsWithFetch(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool) ([]minuteBar, minuteSyncInfo) {
-	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, allowFetch, false, false)
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, allowFetch, false, false, false)
 }
 
-func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool, forceWindowFetch bool, requireComplete bool) ([]minuteBar, minuteSyncInfo) {
+func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool, forceWindowFetch bool, requireComplete bool, preferHistorical bool) ([]minuteBar, minuteSyncInfo) {
 	info := minuteSyncInfo{}
 	start = normalizeMinuteTime(start)
 	end = normalizeMinuteTime(end)
@@ -73,7 +77,11 @@ func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout
 			var source string
 			var fetchErr error
 			if requireComplete {
-				fetched, source, fetchErr = fetchMinuteBarsFromProvidersStrict(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+				if preferHistorical {
+					fetched, source, fetchErr = fetchMinuteBarsFromHistoricalProvidersStrict(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+				} else {
+					fetched, source, fetchErr = fetchMinuteBarsFromProvidersStrict(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+				}
 			} else {
 				fetched, source, fetchErr = fetchMinuteBarsFromProviders(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
 			}
@@ -125,16 +133,8 @@ func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout
 		info.CacheUpdated = &now
 	}
 
-	// Determine whether cached minute bars fully cover the requested window.
-	if info.CacheStart != nil && info.CacheEnd != nil {
-		startCovered := minuteStartCovered(start, *info.CacheStart)
-		endCovered := !info.CacheEnd.Before(end)
-		info.CoverageOK = startCovered && endCovered && minuteBarsCoverRange(bars, start, end)
-		if info.CoverageOK {
-			sessions := buildMinuteCoverageSessions(start, end)
-			info.CoverageOK = computeMinuteCoverageContinuityIssue(bars, sessions).Reason == ""
-		}
-	}
+	// Determine whether cached minute bars fully cover the requested trading sessions.
+	info.CoverageOK = minuteBarsCoverTradingSessions(bars, start, end)
 	return bars, info
 }
 
@@ -280,6 +280,14 @@ func fetchMinuteBarsFromProviders(tsCode string, start, end time.Time, timeout t
 
 func fetchMinuteBarsFromProvidersStrict(tsCode string, start, end time.Time, timeout time.Duration) ([]minuteBar, string, error) {
 	return fetchMinuteBarsFromProvidersWithMode(tsCode, start, end, timeout, true)
+}
+
+func fetchMinuteBarsFromHistoricalProvidersStrict(tsCode string, start, end time.Time, timeout time.Duration) ([]minuteBar, string, error) {
+	hedgedPlan, fallbackPlan, err := buildHistoricalMinuteProviderPlan(start, end)
+	if err != nil {
+		return []minuteBar{}, "", err
+	}
+	return executeMinuteProviderPlanWithMode(tsCode, start, end, hedgedPlan, fallbackPlan, timeout, true)
 }
 
 func fetchMinuteBarsFromProvidersWithMode(tsCode string, start, end time.Time, timeout time.Duration, requireComplete bool) ([]minuteBar, string, error) {
@@ -561,6 +569,32 @@ func buildAdaptiveMinuteProviderPlan(start, end time.Time) ([]minuteProviderAtte
 	}
 }
 
+func buildHistoricalMinuteProviderPlan(start, end time.Time) ([]minuteProviderAttempt, []string, error) {
+	attempts := make([]minuteProviderAttempt, 0, 2)
+	fallback := make([]string, 0, 3)
+	mode := currentMinuteProviderMode()
+	if mode != "public" || minuteHistoricalPrivateFallbackReady() {
+		attempts = append(attempts, minuteProviderAttempt{Provider: "diemeng"})
+	}
+	if minutePublicAkshareEnabled() || yieldAkshareFallbackEnabled() {
+		if len(attempts) == 0 {
+			attempts = append(attempts, minuteProviderAttempt{Provider: "akshare"})
+		} else {
+			fallback = append(fallback, "akshare")
+		}
+	}
+	if minutePublicTencentEnabled() {
+		fallback = append(fallback, "tencent")
+	}
+	if minutePublicSinaEnabled() && canUseSinaMinuteWindow(start, end) {
+		fallback = append(fallback, "sina")
+	}
+	if len(attempts) == 0 {
+		return nil, nil, fmt.Errorf("当前缺口需要历史分钟线，但未启用可用历史分钟线来源")
+	}
+	return attempts, mergeUniqueProviders(fallback...), nil
+}
+
 func classifyMinuteWindow(start, end time.Time) minuteWindowClass {
 	if canUseSinaMinuteWindow(start, end) {
 		loc := cnLocation()
@@ -625,7 +659,7 @@ func buildMinuteProviderResult(provider string, bars []minuteBar, source string,
 		Source:   source,
 		Bars:     bars,
 		Err:      err,
-		Complete: minuteBarsCoverRange(bars, start, end),
+		Complete: minuteBarsCoverTradingSessions(bars, start, end),
 	}
 }
 

@@ -115,8 +115,9 @@ type aiRecommendYieldCalcResult struct {
 const manualYieldCalcTaskTimeout = 12 * time.Second
 
 var (
-	manualMinuteCoverageRetryBudget   = 15 * time.Minute
-	manualMinuteCoverageRetryBackoffs = []time.Duration{
+	manualMinuteCoverageRetryBudget    = 15 * time.Minute
+	manualMinuteCoverageMaxRetryRounds = 3
+	manualMinuteCoverageRetryBackoffs  = []time.Duration{
 		10 * time.Second,
 		20 * time.Second,
 		40 * time.Second,
@@ -1006,6 +1007,10 @@ func appendReasonText(existing, reason string) string {
 		return existing
 	}
 	return existing + "；" + reason
+}
+
+func yieldLastDownloadMessage(existing string) string {
+	return appendReasonText(existing, minuteCacheMigrationWarning())
 }
 
 func executeAiRecommendYieldCalcTask(task aiRecommendYieldCalcTask, ctx yieldBuildContext) aiRecommendYieldCalcResult {

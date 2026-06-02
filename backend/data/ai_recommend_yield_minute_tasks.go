@@ -10,10 +10,11 @@ import (
 )
 
 type aiRecommendMinuteCoverageTask struct {
-	StockCode string
-	Start     time.Time
-	End       time.Time
-	Forced    bool
+	StockCode        string
+	Start            time.Time
+	End              time.Time
+	Forced           bool
+	PreferHistorical bool
 }
 
 func runAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime, tasks []aiRecommendMinuteCoverageTask) {
@@ -42,7 +43,11 @@ func runAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime, t
 			for task := range taskCh {
 				var info minuteSyncInfo
 				if task.Forced {
-					_, info = syncMinuteBarsForcedWindow(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout)
+					if task.PreferHistorical {
+						_, info = syncMinuteBarsForcedHistoricalWindow(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout)
+					} else {
+						_, info = syncMinuteBarsForcedWindow(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout)
+					}
 				} else if runtime.ctx.Reason == "manual_minute_download" {
 					_, info = syncMinuteBarsStrict(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout, true)
 				} else {
@@ -211,21 +216,29 @@ func buildManualMinuteGapCoverageTasks(codeSet map[string]struct{}) []aiRecommen
 		if start.IsZero() || end.IsZero() || start.After(end) {
 			continue
 		}
-		key := taskKey{
-			code:  code,
-			start: start.Format(time.RFC3339Nano),
-			end:   end.Format(time.RFC3339Nano),
+		for _, session := range buildMinuteCoverageSessions(start, end) {
+			sessionStart := normalizeMinuteTime(session.Start)
+			sessionEnd := normalizeMinuteTime(session.End)
+			if sessionStart.IsZero() || sessionEnd.IsZero() || sessionStart.After(sessionEnd) {
+				continue
+			}
+			key := taskKey{
+				code:  code,
+				start: sessionStart.Format(time.RFC3339Nano),
+				end:   sessionEnd.Format(time.RFC3339Nano),
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			tasks = append(tasks, aiRecommendMinuteCoverageTask{
+				StockCode:        code,
+				Start:            sessionStart,
+				End:              sessionEnd,
+				Forced:           true,
+				PreferHistorical: minuteCoverageGapNeedsHistoricalSource(sessionStart, sessionEnd),
+			})
 		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		seen[key] = struct{}{}
-		tasks = append(tasks, aiRecommendMinuteCoverageTask{
-			StockCode: code,
-			Start:     start,
-			End:       end,
-			Forced:    true,
-		})
 	}
 	sort.Slice(tasks, func(i, j int) bool {
 		if tasks[i].StockCode != tasks[j].StockCode {
@@ -254,7 +267,7 @@ func mergeMinuteCoverageTasks(tasks []aiRecommendMinuteCoverageTask) []aiRecomme
 			continue
 		}
 		last := &merged[n-1]
-		if last.StockCode == task.StockCode && last.Forced == task.Forced && !task.Start.After(last.End.Add(time.Minute)) {
+		if last.StockCode == task.StockCode && last.Forced == task.Forced && last.PreferHistorical == task.PreferHistorical && !task.Start.After(last.End.Add(time.Minute)) {
 			if task.End.After(last.End) {
 				last.End = task.End
 			}

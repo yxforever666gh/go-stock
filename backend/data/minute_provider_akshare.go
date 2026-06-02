@@ -111,7 +111,7 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 		sinaRows, sinaErr := fetchRows("sina")
 		if sinaErr == nil {
 			sinaBars := convertAkShareRowsToBars(sinaRows, start, end)
-			if minuteBarsCoverRange(sinaBars, start, end) {
+			if minuteBarsCoverTradingSessions(sinaBars, start, end) {
 				return sinaBars, "akshare:sina", nil
 			}
 			emRows, emErr := fetchRows("em")
@@ -331,6 +331,52 @@ func minuteBarsCoverRange(bars []minuteBar, start, end time.Time) bool {
 	first := normalizeMinuteTime(bars[0].TradeTime)
 	last := normalizeMinuteTime(bars[len(bars)-1].TradeTime)
 	return !first.After(start) && !last.Before(end)
+}
+
+func minuteBarsCoverTradingSessions(bars []minuteBar, start, end time.Time) bool {
+	sessions := buildMinuteCoverageSessions(start, end)
+	if len(sessions) == 0 {
+		return true
+	}
+	if len(bars) == 0 {
+		return false
+	}
+	ordered := append([]minuteBar(nil), bars...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return normalizeMinuteTime(ordered[i].TradeTime).Before(normalizeMinuteTime(ordered[j].TradeTime))
+	})
+	idx := 0
+	const tolerance = 5 * time.Minute
+	for _, session := range sessions {
+		sessionBars := make([]minuteBar, 0, 128)
+		for idx < len(ordered) && normalizeMinuteTime(ordered[idx].TradeTime).Before(session.Start) {
+			idx++
+		}
+		for scan := idx; scan < len(ordered); scan++ {
+			barTime := normalizeMinuteTime(ordered[scan].TradeTime)
+			if barTime.After(session.End) {
+				break
+			}
+			sessionBars = append(sessionBars, ordered[scan])
+		}
+		if len(sessionBars) == 0 {
+			return false
+		}
+		first := normalizeMinuteTime(sessionBars[0].TradeTime)
+		last := normalizeMinuteTime(sessionBars[len(sessionBars)-1].TradeTime)
+		if first.After(session.Start) || last.Before(session.End) {
+			return false
+		}
+		prev := first
+		for i := 1; i < len(sessionBars); i++ {
+			cur := normalizeMinuteTime(sessionBars[i].TradeTime)
+			if cur.Sub(prev) > tolerance {
+				return false
+			}
+			prev = cur
+		}
+	}
+	return true
 }
 
 func akShareScriptEnv() []string {

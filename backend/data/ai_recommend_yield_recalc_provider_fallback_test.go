@@ -157,10 +157,7 @@ func TestFetchMinuteBarsFromProviders_RecentFallsBackToAkshareAfterHedgedProvide
 	timeNow = func() time.Time { return now }
 	start := time.Date(2026, 4, 1, 14, 30, 0, 0, cnLocation())
 	end := time.Date(2026, 4, 1, 15, 0, 0, 0, cnLocation())
-	wantBars := []minuteBar{
-		{TradeTime: start, Close: 12.1},
-		{TradeTime: end, Close: 12.8},
-	}
+	wantBars := minuteBarsForSessions(start, end)
 
 	var akshareCalls atomic.Int32
 	fetchMinuteBarsWithTencentFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
@@ -225,10 +222,7 @@ func TestFetchMinuteBarsFromProviders_TodayIntradayPrefersSina(t *testing.T) {
 	timeNow = func() time.Time { return now }
 	start := time.Date(2026, 4, 2, 9, 31, 0, 0, cnLocation())
 	end := time.Date(2026, 4, 2, 10, 30, 0, 0, cnLocation())
-	wantBars := []minuteBar{
-		{TradeTime: start, Close: 9.9},
-		{TradeTime: end, Close: 10.2},
-	}
+	wantBars := minuteBarsForSessions(start, end)
 
 	fetchMinuteBarsWithSinaFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
 		return wantBars, "sina", nil
