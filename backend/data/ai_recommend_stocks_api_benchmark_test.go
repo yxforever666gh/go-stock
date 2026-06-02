@@ -4,6 +4,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"math"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -291,6 +292,22 @@ func TestCalculateStrategyMaxDrawdownByEntries_WithPriceSeries(t *testing.T) {
 }
 
 func TestCalculateBenchmarkSummaryByItems_MissingStockPriceSeriesKeepsStrategyXirr(t *testing.T) {
+	oldDB := db.Dao
+	db.Init(filepath.Join(t.TempDir(), "benchmark-missing-stock-series.db"))
+	t.Cleanup(func() { db.Dao = oldDB })
+	if err := db.Dao.AutoMigrate(&models.AiRecommendDailyBar{}); err != nil {
+		t.Fatalf("auto migrate daily bars failed: %v", err)
+	}
+	loc := cnLocation()
+	if _, err := upsertDailyBarsToCache(defaultBenchmarkModelCode, []dailyBar{
+		{TradeDate: time.Date(2026, 4, 14, 0, 0, 0, 0, loc), Open: 4.00, High: 4.10, Low: 3.98, Close: 4.00},
+		{TradeDate: time.Date(2026, 4, 15, 0, 0, 0, 0, loc), Open: 4.00, High: 4.18, Low: 3.99, Close: 4.12},
+		{TradeDate: time.Date(2026, 4, 16, 0, 0, 0, 0, loc), Open: 4.12, High: 4.25, Low: 4.08, Close: 4.20},
+		{TradeDate: time.Date(2026, 4, 17, 0, 0, 0, 0, loc), Open: 4.20, High: 4.31, Low: 4.15, Close: 4.28},
+	}, "test"); err != nil {
+		t.Fatalf("seed benchmark daily bars failed: %v", err)
+	}
+
 	items := []models.AiRecommendStocksYieldItem{
 		{
 			RecommendID:         1,

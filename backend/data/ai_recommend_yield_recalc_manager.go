@@ -78,6 +78,10 @@ type aiRecommendYieldRecalcRuntime struct {
 	manualDownloadWarning string
 }
 
+const manualMinuteWarmupSyncBudget = 25 * time.Second
+
+var errManualMinuteWarmupTimeout = fmt.Errorf("manual minute warmup timeout")
+
 type aiRecommendYieldTargets struct {
 	aggrMap        map[string]*aiRecommendYieldAggregate
 	records        []models.AiRecommendStocks
@@ -744,14 +748,20 @@ func warmManualAiRecommendMinuteData(reason string, runtime *aiRecommendYieldRec
 	if reason != "manual_minute_download" {
 		return
 	}
+	deadline := time.Now().Add(manualMinuteWarmupSyncBudget)
+	_ = updateManualMinuteWarmupStatus(runtime.meta.ID, "正在预热分钟线数据源")
 	warmDate := runtime.latestDate
 	warmEnd := resolveLatestCloseEvalEnd(runtime.now, runtime.latestDate)
 	if !warmEnd.IsZero() {
 		loc := cnLocation()
 		warmDate = time.Date(warmEnd.In(loc).Year(), warmEnd.In(loc).Month(), warmEnd.In(loc).Day(), 0, 0, 0, 0, loc)
 	}
-	if warmErr := warmupDiemengMinuteBarsByDailyDump(warmDate, targetCodes); warmErr != nil {
+	if warmErr := warmupDiemengMinuteBarsByDailyDumpWithBudget(warmDate, targetCodes, deadline); warmErr != nil {
 		logger.SugaredLogger.Warnf("warmup diemeng daily_dump failed: %v", warmErr)
+		if isManualMinuteWarmupTimeout(warmErr) {
+			_ = updateManualMinuteWarmupStatus(runtime.meta.ID, "分钟线预热超时，直接进入正式下载")
+			return
+		}
 	}
 	for dayKey, codes := range manualMinuteGapWarmupPlan(targetCodes) {
 		day, ok := parseYieldTradeDate(dayKey)
@@ -761,8 +771,12 @@ func warmManualAiRecommendMinuteData(reason string, runtime *aiRecommendYieldRec
 		if day.Equal(warmDate) {
 			continue
 		}
-		if warmErr := warmupDiemengMinuteBarsByDailyDump(day, codes); warmErr != nil {
+		if warmErr := warmupDiemengMinuteBarsByDailyDumpWithBudget(day, codes, deadline); warmErr != nil {
 			logger.SugaredLogger.Warnf("warmup diemeng daily_dump for gap failed: date=%s err=%v", dayKey, warmErr)
+			if isManualMinuteWarmupTimeout(warmErr) {
+				_ = updateManualMinuteWarmupStatus(runtime.meta.ID, "分钟线缺口预热超时，直接进入正式下载")
+				return
+			}
 		}
 	}
 	if !runtime.inTrading {
@@ -781,6 +795,45 @@ func warmManualAiRecommendMinuteData(reason string, runtime *aiRecommendYieldRec
 			logger.SugaredLogger.Warnf("warmup sina intraday minute bars failed: %v", warmErr2)
 		}
 	}
+}
+
+func warmupDiemengMinuteBarsByDailyDumpWithBudget(tradeDate time.Time, codes []string, deadline time.Time) error {
+	timeout := time.Until(deadline)
+	if timeout <= 0 {
+		return fmt.Errorf("%w: budget exhausted", errManualMinuteWarmupTimeout)
+	}
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- warmupDiemengMinuteBarsByDailyDump(tradeDate, codes)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-resultCh:
+		return err
+	case <-timer.C:
+		return fmt.Errorf("%w after %s", errManualMinuteWarmupTimeout, timeout.Round(time.Second))
+	}
+}
+
+func isManualMinuteWarmupTimeout(err error) bool {
+	return err != nil && strings.Contains(err.Error(), errManualMinuteWarmupTimeout.Error())
+}
+
+func updateManualMinuteWarmupStatus(metaID uint, message string) error {
+	if metaID == 0 {
+		return nil
+	}
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
+			"download_in_progress": true,
+			"download_total":       1,
+			"download_done":        0,
+			"download_progress":    1,
+			"last_download_error":  strings.TrimSpace(message),
+			"updated_at":           time.Now(),
+		}).Error
+	})
 }
 
 func manualMinuteGapWarmupPlan(targetCodes []string) map[string][]string {
