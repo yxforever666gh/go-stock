@@ -155,6 +155,13 @@ func startManualAiRecommendMinuteDownload() (map[string]any, error) {
 }
 
 func loadScopeCodesForManualDownload() ([]string, error) {
+	if err := markV132VWAPScaleDirtyCodes(aiRecommendYieldModeStrict); err != nil {
+		return nil, err
+	}
+	loaders := []func() ([]string, error){
+		loadManualDownloadScopeCodesByCoverage,
+		loadManualDownloadScopeCodesByRecoverablePlans,
+	}
 	dirtyCodes, err := loadDirtyAiRecommendYieldCodes(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
@@ -165,10 +172,12 @@ func loadScopeCodesForManualDownload() ([]string, error) {
 			return nil, filterErr
 		}
 		if len(filtered) > 0 {
-			return filtered, nil
+			loaders = append([]func() ([]string, error){
+				func() ([]string, error) { return filtered, nil },
+			}, loaders...)
 		}
 	}
-	return mergeManualDownloadScopeCodes(loadManualDownloadScopeCodesByCoverage, loadManualDownloadScopeCodesByRecoverablePlans)
+	return mergeManualDownloadScopeCodes(loaders...)
 }
 
 func mergeManualDownloadScopeCodes(loaders ...func() ([]string, error)) ([]string, error) {
@@ -222,6 +231,10 @@ func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
 			resultSet[code] = struct{}{}
 			continue
 		}
+		if state, ok := recordStateMap[rec.ID]; ok && shouldRecalcV132VWAPScaleState(rec, state) {
+			resultSet[code] = struct{}{}
+			continue
+		}
 		if !shouldDisplayRecommendInYield(&rec) {
 			continue
 		}
@@ -242,6 +255,31 @@ func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
 		resultSet[code] = struct{}{}
 	}
 	return keysFromScopeMap(resultSet), nil
+}
+
+func shouldRecalcV132VWAPScaleState(rec models.AiRecommendStocks, state *models.AiRecommendYieldRecordState) bool {
+	if !isV132Recommend(rec) {
+		return false
+	}
+	stateReason := ""
+	if state != nil {
+		stateReason = state.DataStatusReason
+	}
+	reason := strings.TrimSpace(firstNonEmptyText(stateReason, rec.ActivationInvalidReason))
+	return reasonIndicatesV132VWAPScaleBug(reason)
+}
+
+func reasonIndicatesV132VWAPScaleBug(reason string) bool {
+	reason = strings.TrimSpace(reason)
+	if !strings.Contains(reason, "V1.3.2强弱过滤未通过") || !strings.Contains(reason, "VWAP") {
+		return false
+	}
+	activationPrice := 0.0
+	vwap := 0.0
+	if _, err := fmt.Sscanf(reason, "V1.3.2强弱过滤未通过：激活价 %f 低于 VWAP %f", &activationPrice, &vwap); err != nil {
+		return false
+	}
+	return activationPrice > 0 && vwap > activationPrice*20
 }
 
 func shouldIncludeRecoverableMarketDataGapInManualDownload(rec models.AiRecommendStocks) bool {
@@ -437,7 +475,7 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 	}
 	rows := make([]struct {
 		StockCode          string
-		SignalAt           time.Time
+		SignalAt           string
 		ActivationRuleJSON string
 		StateReason        string
 		RecordReason       string
@@ -461,8 +499,9 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 		if code == "" {
 			continue
 		}
+		signalAt, _ := parseSQLiteDateTimeText(row.SignalAt)
 		reason := strings.TrimSpace(firstNonEmptyText(row.StateReason, row.RecordReason))
-		if reasonIndicatesActivationWindowPolicyBug(reason, row.SignalAt) || activationRuleHasBreakoutPathMissingThresholdMax(row.ActivationRuleJSON) {
+		if reasonIndicatesActivationWindowPolicyBug(reason, signalAt) || activationRuleHasBreakoutPathMissingThresholdMax(row.ActivationRuleJSON) {
 			scope[code] = struct{}{}
 		}
 	}
@@ -472,6 +511,49 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 	return markAiRecommendYieldDirtyCodes(
 		keysFromScopeMap(scope),
 		"激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
+		mode,
+	)
+}
+
+func markV132VWAPScaleDirtyCodes(mode string) error {
+	if db.Dao == nil {
+		return nil
+	}
+	rows := make([]struct {
+		StockCode               string
+		DataStatusReason        string
+		ActivationInvalidReason string
+	}, 0, 16)
+	err := db.Dao.Table("ai_recommend_stocks AS r").
+		Select("r.stock_code, COALESCE(s.data_status_reason, '') AS data_status_reason, COALESCE(r.activation_invalid_reason, '') AS activation_invalid_reason").
+		Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
+		Where("r.deleted_at IS NULL").
+		Where("r.summary_version = ?", marketSummaryVersionV132).
+		Where("(COALESCE(s.data_status_reason, '') LIKE ? OR COALESCE(r.activation_invalid_reason, '') LIKE ?)", "%VWAP%", "%VWAP%").
+		Find(&rows).Error
+	if err != nil {
+		if isSQLiteNoSuchTable(err) {
+			return nil
+		}
+		return err
+	}
+	scope := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if code == "" {
+			continue
+		}
+		reason := strings.TrimSpace(firstNonEmptyText(row.DataStatusReason, row.ActivationInvalidReason))
+		if reasonIndicatesV132VWAPScaleBug(reason) {
+			scope[code] = struct{}{}
+		}
+	}
+	if len(scope) == 0 {
+		return nil
+	}
+	return markAiRecommendYieldDirtyCodes(
+		keysFromScopeMap(scope),
+		"V1.3.2 VWAP 单位归一化规则已修复，等待 strict 重算",
 		mode,
 	)
 }

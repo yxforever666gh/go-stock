@@ -297,6 +297,87 @@ func TestExecuteMinuteProviderPlan_ReturnsPartialBarsWithoutWaitingForSlowHedge(
 	}
 }
 
+func TestExecuteMinuteProviderPlanStrict_WaitsForCompleteHedge(t *testing.T) {
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	defer func() {
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	}()
+
+	loc := cnLocation()
+	start := time.Date(2026, 4, 2, 9, 31, 0, 0, loc)
+	end := time.Date(2026, 4, 2, 9, 33, 0, 0, loc)
+	partialBars := []minuteBar{{TradeTime: start, Close: 9.9}}
+	completeBars := []minuteBar{
+		{TradeTime: start, Close: 9.9},
+		{TradeTime: start.Add(time.Minute), Close: 10.0},
+		{TradeTime: end, Close: 10.1},
+	}
+	fetchMinuteBarsWithSinaFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		return partialBars, "sina", nil
+	}
+	fetchMinuteBarsWithDiemengFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		time.Sleep(120 * time.Millisecond)
+		return completeBars, "diemeng", nil
+	}
+
+	started := time.Now()
+	bars, source, err := executeMinuteProviderPlanStrict(
+		"603019.SH",
+		start,
+		end,
+		[]minuteProviderAttempt{{Provider: "sina"}, {Provider: "diemeng"}},
+		nil,
+		time.Second,
+	)
+	elapsed := time.Since(started)
+	if err != nil {
+		t.Fatalf("expected nil err, got %v", err)
+	}
+	if source != "diemeng" {
+		t.Fatalf("expected diemeng source, got %s", source)
+	}
+	if len(bars) != len(completeBars) {
+		t.Fatalf("expected %d bars, got %d", len(completeBars), len(bars))
+	}
+	if elapsed < 100*time.Millisecond {
+		t.Fatalf("strict provider plan returned before complete hedge: elapsed=%s", elapsed)
+	}
+}
+
+func TestExecuteMinuteProviderPlanStrict_ReturnsPartialWithIncompleteError(t *testing.T) {
+	oldSina := fetchMinuteBarsWithSinaFn
+	defer func() {
+		fetchMinuteBarsWithSinaFn = oldSina
+	}()
+
+	start := time.Date(2026, 4, 2, 9, 31, 0, 0, cnLocation())
+	end := time.Date(2026, 4, 2, 10, 30, 0, 0, cnLocation())
+	wantBars := []minuteBar{{TradeTime: start, Close: 9.9}}
+	fetchMinuteBarsWithSinaFn = func(tsCode string, gotStart, gotEnd time.Time) ([]minuteBar, string, error) {
+		return wantBars, "sina", nil
+	}
+
+	bars, source, err := executeMinuteProviderPlanStrict(
+		"603019.SH",
+		start,
+		end,
+		[]minuteProviderAttempt{{Provider: "sina"}},
+		nil,
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), "未完整覆盖") {
+		t.Fatalf("expected incomplete coverage error, got %v", err)
+	}
+	if source != "sina" {
+		t.Fatalf("expected sina source, got %s", source)
+	}
+	if len(bars) != len(wantBars) {
+		t.Fatalf("expected %d partial bars, got %d", len(wantBars), len(bars))
+	}
+}
+
 func TestExecuteMinuteProviderPlan_TimesOutSlowFallback(t *testing.T) {
 	oldSina := fetchMinuteBarsWithSinaFn
 	oldDiemeng := fetchMinuteBarsWithDiemengFn

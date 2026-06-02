@@ -69,12 +69,13 @@ func (m *aiRecommendYieldRecalcManager) run(force bool, reason string, scope map
 }
 
 type aiRecommendYieldRecalcRuntime struct {
-	meta        *models.AiRecommendYieldMeta
-	now         time.Time
-	inTrading   bool
-	latestDate  time.Time
-	ctx         yieldBuildContext
-	manualAudit *aiRecommendYieldManualAudit
+	meta                  *models.AiRecommendYieldMeta
+	now                   time.Time
+	inTrading             bool
+	latestDate            time.Time
+	ctx                   yieldBuildContext
+	manualAudit           *aiRecommendYieldManualAudit
+	manualDownloadWarning string
 }
 
 type aiRecommendYieldTargets struct {
@@ -119,6 +120,19 @@ type aiRecommendYieldCalcResult struct {
 }
 
 const manualYieldCalcTaskTimeout = 12 * time.Second
+
+var (
+	manualMinuteCoverageRetryBudget   = 15 * time.Minute
+	manualMinuteCoverageRetryBackoffs = []time.Duration{
+		10 * time.Second,
+		20 * time.Second,
+		40 * time.Second,
+		80 * time.Second,
+		120 * time.Second,
+	}
+	manualMinuteCoverageNow   = time.Now
+	manualMinuteCoverageSleep = time.Sleep
+)
 
 type aiRecommendYieldManualAudit struct {
 	StartedAt          time.Time
@@ -380,9 +394,16 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 	if runtime.manualAudit != nil {
 		runtime.manualAudit.markPrefetchStart(time.Now())
 	}
-	prefetchAiRecommendMinuteCoverage(runtime, targets)
+	prefetchErr := prefetchAiRecommendMinuteCoverage(runtime, targets)
 	if runtime.manualAudit != nil {
 		runtime.manualAudit.markPrefetchDone(time.Now())
+	}
+	if prefetchErr != nil {
+		err = prefetchErr
+		markAiRecommendYieldRecalcError(runtime.meta.ID, err)
+		return err
+	}
+	if runtime.manualAudit != nil {
 		runtime.manualAudit.markRecalcStart(time.Now())
 	}
 	if err = processAiRecommendYieldTargets(runtime, targets, writer); err != nil {
@@ -408,6 +429,9 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 			return err
 		}
 	}
+	if reason == "manual_minute_download" {
+		runtime.manualDownloadWarning = buildManualDownloadCoverageWarning(runtime.meta, 5)
+	}
 
 	go sendYieldXLSXEmailIfEnabled(reason, fullRecalc)
 	return nil
@@ -424,6 +448,67 @@ func isFullAiRecommendYieldRecalc(force bool, scope map[string]struct{}, targets
 		return false
 	}
 	return len(targets.targetCodes) == len(targets.allCodes) && len(targets.targetRecords) == len(targets.records)
+}
+
+func buildManualDownloadCoverageWarning(meta *models.AiRecommendYieldMeta, limit int) string {
+	if limit <= 0 {
+		limit = 5
+	}
+	stats, issues := computeMinuteDownloadCoverageStatsWithIssues(meta, limit)
+	if stats.Pending <= 0 {
+		return ""
+	}
+	return formatManualDownloadCoverageStatus("仍有待覆盖", stats.Pending, manualCoverageIssueParts(issues, "待覆盖", limit))
+}
+
+func buildManualDownloadCoverageFailure(meta *models.AiRecommendYieldMeta, limit int) string {
+	if limit <= 0 {
+		limit = 5
+	}
+	stats, issues := computeMinuteDownloadCoverageStatsWithIssues(meta, limit)
+	parts := make([]string, 0, 2)
+	if stats.Pending > 0 {
+		parts = append(parts, formatManualDownloadCoverageStatus("仍有待覆盖", stats.Pending, manualCoverageIssueParts(issues, "待覆盖", limit)))
+	}
+	if stats.Uncoverable > 0 {
+		parts = append(parts, formatManualDownloadCoverageStatus("不可覆盖", stats.Uncoverable, manualCoverageIssueParts(issues, "不可覆盖", limit)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "；")
+}
+
+func manualCoverageIssueParts(issues []minuteCoverageIssue, status string, limit int) []string {
+	parts := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		if strings.TrimSpace(issue.Status) != status {
+			continue
+		}
+		code := normalizeRecommendStockCode(issue.StockCode)
+		if code == "" {
+			code = strings.TrimSpace(issue.StockCode)
+		}
+		reason := strings.TrimSpace(issue.RawReason)
+		if reason == "" {
+			reason = "分钟线缺口未补齐"
+		}
+		parts = append(parts, fmt.Sprintf("%s %s", code, reason))
+		if len(parts) >= limit {
+			break
+		}
+	}
+	return parts
+}
+
+func formatManualDownloadCoverageStatus(label string, count int, parts []string) string {
+	if len(parts) == 0 {
+		return fmt.Sprintf("%s %d 条", label, count)
+	}
+	if count > len(parts) {
+		return fmt.Sprintf("%s %d 条：%s 等", label, count, strings.Join(parts, "；"))
+	}
+	return fmt.Sprintf("%s %d 条：%s", label, count, strings.Join(parts, "；"))
 }
 
 func beginAiRecommendYieldRecalc(force bool, reason string) (*aiRecommendYieldRecalcRuntime, func(*error), error) {
@@ -452,7 +537,7 @@ func beginAiRecommendYieldRecalc(force bool, reason string) (*aiRecommendYieldRe
 		if runtime.manualAudit != nil {
 			runtime.manualAudit.markFinished(time.Now())
 		}
-		finishAiRecommendYieldRecalc(meta.ID, runtime.now, *runErr)
+		finishAiRecommendYieldRecalc(meta.ID, runtime.now, *runErr, runtime.manualDownloadWarning)
 		if runtime.manualAudit != nil {
 			_ = persistManualYieldAudit(meta.ID, runtime.manualAudit)
 			clearActiveManualYieldAudit(runtime.manualAudit)
@@ -494,7 +579,7 @@ func startAiRecommendYieldHeartbeat(metaID uint) chan struct{} {
 	return heartbeatStop
 }
 
-func finishAiRecommendYieldRecalc(metaID uint, startedAt time.Time, runErr error) {
+func finishAiRecommendYieldRecalc(metaID uint, startedAt time.Time, runErr error, downloadWarning string) {
 	updateMap := map[string]any{
 		"recalc_in_progress": false,
 		"updated_at":         time.Now(),
@@ -506,7 +591,7 @@ func finishAiRecommendYieldRecalc(metaID uint, startedAt time.Time, runErr error
 		updateMap["download_in_progress"] = false
 		updateMap["download_done"] = gorm.Expr("CASE WHEN download_total > 0 THEN download_total ELSE download_done END")
 		updateMap["download_progress"] = 100
-		updateMap["last_download_error"] = ""
+		updateMap["last_download_error"] = strings.TrimSpace(downloadWarning)
 	} else {
 		updateMap["download_in_progress"] = false
 		updateMap["last_download_error"] = runErr.Error()
@@ -1147,35 +1232,100 @@ func groupRecommendRecordsByCode(records []models.AiRecommendStocks) map[string]
 	return grouped
 }
 
-func prefetchAiRecommendMinuteCoverage(runtime *aiRecommendYieldRecalcRuntime, targets *aiRecommendYieldTargets) {
+func prefetchAiRecommendMinuteCoverage(runtime *aiRecommendYieldRecalcRuntime, targets *aiRecommendYieldTargets) error {
 	tasks := buildAiRecommendMinuteCoverageTasks(runtime, targets)
 	if len(tasks) == 0 {
 		_ = updateYieldDownloadProgress(runtime.meta.ID, 0, 0)
-		return
+		return nil
 	}
 
-	seenForced := make(map[string]struct{}, len(tasks))
-	for _, task := range tasks {
-		if task.Forced {
-			seenForced[minuteCoverageTaskKey(task)] = struct{}{}
-		}
-	}
 	runAiRecommendMinuteCoverageTasks(runtime, tasks)
 
 	if runtime.ctx.Reason != "manual_minute_download" {
-		return
+		return nil
 	}
-	codeSet := buildMinuteCoverageCodeSet(targets)
-	for round := 0; round < 5; round++ {
-		nextTasks := filterNewForcedMinuteCoverageTasks(buildManualMinuteGapCoverageTasks(codeSet), seenForced)
+	return closeManualMinuteCoverageGaps(runtime, buildMinuteCoverageCodeSet(targets))
+}
+
+func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeSet map[string]struct{}) error {
+	if runtime == nil || runtime.meta == nil || len(codeSet) == 0 {
+		return nil
+	}
+	deadline := manualMinuteCoverageNow().Add(manualMinuteCoverageRetryBudget)
+	round := 0
+	for {
+		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, -1)
+		if stats.Pending == 0 && stats.Uncoverable == 0 {
+			_ = runWithSQLiteBusyRetry(func() error {
+				return db.Dao.Model(&models.AiRecommendYieldMeta{}).
+					Where("id = ?", runtime.meta.ID).
+					Update("last_download_error", "").Error
+			})
+			return nil
+		}
+		if !manualMinuteCoverageNow().Before(deadline) {
+			failure := buildManualDownloadCoverageFailure(runtime.meta, 5)
+			if failure == "" {
+				failure = "分钟线缺口未补齐"
+			}
+			return fmt.Errorf("分钟线补齐失败：15分钟内仍未全部连续覆盖；%s", failure)
+		}
+
+		nextTasks := buildManualMinuteGapCoverageTasks(codeSet)
 		if len(nextTasks) == 0 {
-			return
+			failure := buildManualDownloadCoverageFailure(runtime.meta, 5)
+			if failure == "" {
+				failure = "存在覆盖问题，但没有可执行的缺口下载任务"
+			}
+			return fmt.Errorf("分钟线补齐失败：%s", failure)
 		}
-		for _, task := range nextTasks {
-			seenForced[minuteCoverageTaskKey(task)] = struct{}{}
-		}
+
+		round++
+		_ = updateManualMinuteCoverageRetryStatus(runtime.meta.ID, round, stats, issues)
 		runAiRecommendMinuteCoverageTasks(runtime, nextTasks)
+
+		stats, _ = computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, 0)
+		if stats.Pending == 0 && stats.Uncoverable == 0 {
+			continue
+		}
+		if wait := manualMinuteCoverageRetryBackoff(round - 1); wait > 0 {
+			if remaining := deadline.Sub(manualMinuteCoverageNow()); remaining > 0 && wait > remaining {
+				wait = remaining
+			}
+			if wait > 0 {
+				manualMinuteCoverageSleep(wait)
+			}
+		}
 	}
+}
+
+func updateManualMinuteCoverageRetryStatus(metaID uint, round int, stats minuteCoverageStats, issues []minuteCoverageIssue) error {
+	if metaID == 0 {
+		return nil
+	}
+	parts := manualCoverageIssueParts(issues, "待覆盖", 3)
+	message := fmt.Sprintf("正在重试分钟线缺口（第%d轮，待覆盖:%d，不可覆盖:%d）", round, stats.Pending, stats.Uncoverable)
+	if len(parts) > 0 {
+		message += "：" + strings.Join(parts, "；")
+	}
+	return runWithSQLiteBusyRetry(func() error {
+		return db.Dao.Model(&models.AiRecommendYieldMeta{}).
+			Where("id = ?", metaID).
+			Update("last_download_error", message).Error
+	})
+}
+
+func manualMinuteCoverageRetryBackoff(round int) time.Duration {
+	if len(manualMinuteCoverageRetryBackoffs) == 0 {
+		return 0
+	}
+	if round < 0 {
+		round = 0
+	}
+	if round >= len(manualMinuteCoverageRetryBackoffs) {
+		return manualMinuteCoverageRetryBackoffs[len(manualMinuteCoverageRetryBackoffs)-1]
+	}
+	return manualMinuteCoverageRetryBackoffs[round]
 }
 
 func runAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime, tasks []aiRecommendMinuteCoverageTask) {
@@ -1205,8 +1355,10 @@ func runAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime, t
 				var info minuteSyncInfo
 				if task.Forced {
 					_, info = syncMinuteBarsForcedWindow(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout)
+				} else if runtime.ctx.Reason == "manual_minute_download" {
+					_, info = syncMinuteBarsStrict(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout, true)
 				} else {
-					_, info = syncMinuteBars(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout, runtime.ctx.Reason == "manual_minute_download")
+					_, info = syncMinuteBars(task.StockCode, task.Start, task.End, runtime.ctx.CrawlTimeout, false)
 				}
 				if info.SyncErr != nil {
 					logger.SugaredLogger.Warnf("prefetch minute coverage failed: code=%s start=%s end=%s err=%v", task.StockCode, task.Start.In(cnLocation()).Format("2006-01-02 15:04:05"), task.End.In(cnLocation()).Format("2006-01-02 15:04:05"), info.SyncErr)
@@ -1329,35 +1481,6 @@ func buildMinuteCoverageCodeSet(targets *aiRecommendYieldTargets) map[string]str
 		codeSet[code] = struct{}{}
 	}
 	return codeSet
-}
-
-func minuteCoverageTaskKey(task aiRecommendMinuteCoverageTask) string {
-	return strings.Join([]string{
-		normalizeRecommendStockCode(task.StockCode),
-		normalizeMinuteTime(task.Start).Format(time.RFC3339Nano),
-		normalizeMinuteTime(task.End).Format(time.RFC3339Nano),
-	}, "|")
-}
-
-func filterNewForcedMinuteCoverageTasks(tasks []aiRecommendMinuteCoverageTask, seen map[string]struct{}) []aiRecommendMinuteCoverageTask {
-	if len(tasks) == 0 {
-		return nil
-	}
-	out := make([]aiRecommendMinuteCoverageTask, 0, len(tasks))
-	for _, task := range tasks {
-		if !task.Forced {
-			continue
-		}
-		key := minuteCoverageTaskKey(task)
-		if key == "||" {
-			continue
-		}
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		out = append(out, task)
-	}
-	return out
 }
 
 func buildManualMinuteGapCoverageTasks(codeSet map[string]struct{}) []aiRecommendMinuteCoverageTask {

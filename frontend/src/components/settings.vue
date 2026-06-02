@@ -83,6 +83,8 @@ const settingsLoaded = ref(false)
 const autoSaveState = ref('idle')
 const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
+const aiConfigDragSourceIndex = ref(null)
+const aiConfigDragTargetIndex = ref(null)
 const minuteProviderModeOptions = [
   {label: '公共源优先', value: 'public'},
   {label: '私人分钟线来源', value: 'private'},
@@ -111,6 +113,8 @@ const aiProtocolOptions = [
 ]
 let activeSavePromise = null
 let queuedAutoSave = false
+let nextAiConfigLocalKey = 1
+const aiConfigLocalKeys = new WeakMap()
 
 function normalizeAiProtocol(value) {
   const text = String(value || '').trim()
@@ -123,9 +127,30 @@ function normalizeAiProtocol(value) {
 function normalizeAiConfigs(configs) {
   return (configs || []).map((item, index) => ({
     ...item,
-    sort: item?.sort || index + 1,
+    sort: index + 1,
     apiProtocol: normalizeAiProtocol(item?.apiProtocol),
   }))
+}
+
+function aiConfigRowKey(aiConfig) {
+  if (aiConfig?.ID) {
+    return `id-${aiConfig.ID}`
+  }
+  if (!aiConfig || typeof aiConfig !== 'object') {
+    return `new-${nextAiConfigLocalKey++}`
+  }
+  if (!aiConfigLocalKeys.has(aiConfig)) {
+    aiConfigLocalKeys.set(aiConfig, `new-${nextAiConfigLocalKey++}`)
+  }
+  return aiConfigLocalKeys.get(aiConfig)
+}
+
+function renumberAiConfigSorts() {
+  const configs = formValue.value.openAI.aiConfigs || []
+  configs.forEach((item, index) => {
+    item.sort = index + 1
+    item.apiProtocol = normalizeAiProtocol(item.apiProtocol)
+  })
 }
 
 // 添加一个新的AI配置到列表
@@ -143,6 +168,7 @@ function addAiConfig() {
     httpProxy:"",
     httpProxyEnabled:false,
   }));
+  renumberAiConfigSorts()
   queueAutoSave()
 }
 
@@ -150,7 +176,125 @@ function addAiConfig() {
 function removeAiConfig(index) {
   // 使用filter创建新数组确保响应式更新
   formValue.value.openAI.aiConfigs = formValue.value.openAI.aiConfigs.filter((_, i) => i !== index);
+  renumberAiConfigSorts()
   queueAutoSave()
+}
+
+function moveAiConfig(sourceIndex, targetIndex) {
+  const configs = formValue.value.openAI.aiConfigs || []
+  if (
+      sourceIndex === null ||
+      targetIndex === null ||
+      sourceIndex === targetIndex ||
+      sourceIndex < 0 ||
+      targetIndex < 0 ||
+      sourceIndex >= configs.length ||
+      targetIndex >= configs.length
+  ) {
+    return false
+  }
+  const [moved] = configs.splice(sourceIndex, 1)
+  configs.splice(targetIndex, 0, moved)
+  renumberAiConfigSorts()
+  return true
+}
+
+function handleAiConfigDragStart(event, index) {
+  aiConfigDragSourceIndex.value = index
+  aiConfigDragTargetIndex.value = index
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', String(index))
+}
+
+function handleAiConfigDragOver(event, index) {
+  event.preventDefault()
+  aiConfigDragTargetIndex.value = index
+  event.dataTransfer.dropEffect = 'move'
+}
+
+function handleAiConfigDragEnter(event, index) {
+  event.preventDefault()
+  aiConfigDragTargetIndex.value = index
+}
+
+function handleAiConfigDrop(event, index) {
+  event.preventDefault()
+  const rawSource = aiConfigDragSourceIndex.value ?? Number(event.dataTransfer.getData('text/plain'))
+  const moved = moveAiConfig(Number(rawSource), index)
+  aiConfigDragSourceIndex.value = null
+  aiConfigDragTargetIndex.value = null
+  if (moved) {
+    queueAutoSave()
+  }
+}
+
+function handleAiConfigDragEnd() {
+  aiConfigDragSourceIndex.value = null
+  aiConfigDragTargetIndex.value = null
+}
+
+function resolveAiConfigRowIndexFromPoint(clientX, clientY) {
+  const target = document.elementFromPoint(clientX, clientY)
+  const row = target?.closest?.('.ai-config-row')
+  const rawIndex = row?.getAttribute?.('data-ai-config-index')
+  const index = Number(rawIndex)
+  return Number.isInteger(index) ? index : null
+}
+
+function cleanupAiConfigPointerDrag() {
+  window.removeEventListener('pointermove', handleAiConfigPointerMove)
+  window.removeEventListener('pointerup', handleAiConfigPointerUp)
+  window.removeEventListener('pointercancel', handleAiConfigPointerCancel)
+}
+
+function handleAiConfigPointerDown(event, index) {
+  if (event.button !== 0) {
+    return
+  }
+  aiConfigDragSourceIndex.value = index
+  aiConfigDragTargetIndex.value = index
+  cleanupAiConfigPointerDrag()
+  window.addEventListener('pointermove', handleAiConfigPointerMove)
+  window.addEventListener('pointerup', handleAiConfigPointerUp, {once: true})
+  window.addEventListener('pointercancel', handleAiConfigPointerCancel, {once: true})
+  event.preventDefault()
+}
+
+function handleAiConfigPointerMove(event) {
+  if (aiConfigDragSourceIndex.value === null) {
+    return
+  }
+  const index = resolveAiConfigRowIndexFromPoint(event.clientX, event.clientY)
+  if (index !== null) {
+    aiConfigDragTargetIndex.value = index
+  }
+}
+
+function handleAiConfigPointerUp(event) {
+  const fallbackTarget = aiConfigDragTargetIndex.value
+  const pointTarget = resolveAiConfigRowIndexFromPoint(event.clientX, event.clientY)
+  const targetIndex = pointTarget ?? fallbackTarget
+  const moved = moveAiConfig(Number(aiConfigDragSourceIndex.value), Number(targetIndex))
+  aiConfigDragSourceIndex.value = null
+  aiConfigDragTargetIndex.value = null
+  cleanupAiConfigPointerDrag()
+  if (moved) {
+    queueAutoSave()
+  }
+}
+
+function handleAiConfigPointerCancel() {
+  aiConfigDragSourceIndex.value = null
+  aiConfigDragTargetIndex.value = null
+  cleanupAiConfigPointerDrag()
+}
+
+function aiConfigRowClass(index) {
+  return {
+    'ai-config-row': true,
+    'ai-config-row-dragging': aiConfigDragSourceIndex.value === index,
+    'ai-config-row-drag-over': aiConfigDragTargetIndex.value === index && aiConfigDragSourceIndex.value !== index,
+  }
 }
 
 function formatSaveTime(date = new Date()) {
@@ -236,9 +380,11 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   message.destroyAll()
+  cleanupAiConfigPointerDrag()
 })
 
 function buildConfigPayload() {
+  renumberAiConfigSorts()
   return new data.SettingConfig({
     ID: formValue.value.ID,
     dingPushEnable: false,
@@ -296,7 +442,7 @@ function buildConfigPayload() {
 }
 
 function aiConfigTestKey(aiConfig, index) {
-  return String(aiConfig?.ID || `new-${index}`)
+  return aiConfigRowKey(aiConfig) || `new-${index}`
 }
 
 function aiConfigTestState(aiConfig, index) {
@@ -1039,7 +1185,7 @@ function deletePrompt(ID) {
                   <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1320px;">
                     <thead>
                     <tr>
-                      <th style="width: 92px;">序号</th>
+                      <th style="width: 92px;">排序</th>
                       <th style="width: 170px;">名称</th>
                       <th>Base URL</th>
                       <th style="width: 210px;">Model</th>
@@ -1050,11 +1196,23 @@ function deletePrompt(ID) {
                     </tr>
                     </thead>
                     <tbody>
-                    <template v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="aiConfig.ID || index">
-                      <tr>
+                    <template v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="aiConfigRowKey(aiConfig)">
+                      <tr :class="aiConfigRowClass(index)"
+                          :data-ai-config-index="index"
+                          @dragover="handleAiConfigDragOver($event, index)"
+                          @dragenter="handleAiConfigDragEnter($event, index)"
+                          @drop="handleAiConfigDrop($event, index)"
+                          @dragend="handleAiConfigDragEnd">
                         <td>
-                          <n-input-number v-model:value="aiConfig.sort" :min="1" :show-button="false"
-                                          placeholder="序号" @update:value="handleImmediateFieldChange"/>
+                          <div class="ai-config-drag-handle"
+                               draggable="true"
+                               title="拖动调整模型顺序"
+                               @pointerdown="handleAiConfigPointerDown($event, index)"
+                               @dragstart="handleAiConfigDragStart($event, index)"
+                               @dragend="handleAiConfigDragEnd">
+                            <span class="ai-config-drag-icon">≡</span>
+                            <span>{{ index + 1 }}</span>
+                          </div>
                         </td>
                         <td>
                           <n-input v-model:value="aiConfig.name" type="text" placeholder="名称" clearable
@@ -1172,5 +1330,36 @@ function deletePrompt(ID) {
   font-size: 16px;
   font-weight: bold;
   color: red;
+}
+
+.ai-config-row {
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+}
+
+.ai-config-row-dragging {
+  opacity: 0.58;
+}
+
+.ai-config-row-drag-over > td {
+  background-color: rgba(24, 160, 88, 0.08);
+  border-top: 2px dashed #18a058;
+}
+
+.ai-config-drag-handle {
+  align-items: center;
+  color: #18a058;
+  cursor: move;
+  display: inline-flex;
+  font-weight: 600;
+  gap: 8px;
+  justify-content: center;
+  min-width: 54px;
+  user-select: none;
+}
+
+.ai-config-drag-icon {
+  color: #8a8f99;
+  font-size: 18px;
+  line-height: 1;
 }
 </style>

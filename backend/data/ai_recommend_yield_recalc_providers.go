@@ -28,8 +28,12 @@ func syncMinuteBars(tsCode string, start, end time.Time, crawlTimeout int64, all
 	return syncMinuteBarsWithFetch(tsCode, start, end, crawlTimeout, allowHeadBackfill, true)
 }
 
+func syncMinuteBarsStrict(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool) ([]minuteBar, minuteSyncInfo) {
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, true, false, true)
+}
+
 func syncMinuteBarsForcedWindow(tsCode string, start, end time.Time, crawlTimeout int64) ([]minuteBar, minuteSyncInfo) {
-	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, false, true, true)
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, false, true, true, true)
 }
 
 func syncMinuteBarsFromCacheOnly(tsCode string, start, end time.Time) ([]minuteBar, minuteSyncInfo) {
@@ -37,10 +41,10 @@ func syncMinuteBarsFromCacheOnly(tsCode string, start, end time.Time) ([]minuteB
 }
 
 func syncMinuteBarsWithFetch(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool) ([]minuteBar, minuteSyncInfo) {
-	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, allowFetch, false)
+	return syncMinuteBarsWithOptions(tsCode, start, end, crawlTimeout, allowHeadBackfill, allowFetch, false, false)
 }
 
-func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool, forceWindowFetch bool) ([]minuteBar, minuteSyncInfo) {
+func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout int64, allowHeadBackfill bool, allowFetch bool, forceWindowFetch bool, requireComplete bool) ([]minuteBar, minuteSyncInfo) {
 	info := minuteSyncInfo{}
 	start = normalizeMinuteTime(start)
 	end = normalizeMinuteTime(end)
@@ -65,7 +69,14 @@ func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout
 			if window.Start.After(window.End) {
 				continue
 			}
-			fetched, source, fetchErr := fetchMinuteBarsFromProviders(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+			var fetched []minuteBar
+			var source string
+			var fetchErr error
+			if requireComplete {
+				fetched, source, fetchErr = fetchMinuteBarsFromProvidersStrict(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+			} else {
+				fetched, source, fetchErr = fetchMinuteBarsFromProviders(tsCode, window.Start, window.End, minuteProviderAttemptTimeout(crawlTimeout))
+			}
 			if audit := currentActiveManualYieldAudit(); audit != nil && source != "" {
 				audit.recordProvider(source)
 			}
@@ -118,7 +129,11 @@ func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout
 	if info.CacheStart != nil && info.CacheEnd != nil {
 		startCovered := minuteStartCovered(start, *info.CacheStart)
 		endCovered := !info.CacheEnd.Before(end)
-		info.CoverageOK = startCovered && endCovered
+		info.CoverageOK = startCovered && endCovered && minuteBarsCoverRange(bars, start, end)
+		if info.CoverageOK {
+			sessions := buildMinuteCoverageSessions(start, end)
+			info.CoverageOK = computeMinuteCoverageContinuityIssue(bars, sessions).Reason == ""
+		}
 	}
 	return bars, info
 }
@@ -260,6 +275,14 @@ func mergeSyncErr(base, current error) error {
 }
 
 func fetchMinuteBarsFromProviders(tsCode string, start, end time.Time, timeout time.Duration) ([]minuteBar, string, error) {
+	return fetchMinuteBarsFromProvidersWithMode(tsCode, start, end, timeout, false)
+}
+
+func fetchMinuteBarsFromProvidersStrict(tsCode string, start, end time.Time, timeout time.Duration) ([]minuteBar, string, error) {
+	return fetchMinuteBarsFromProvidersWithMode(tsCode, start, end, timeout, true)
+}
+
+func fetchMinuteBarsFromProvidersWithMode(tsCode string, start, end time.Time, timeout time.Duration, requireComplete bool) ([]minuteBar, string, error) {
 	provider := appconfig.Load().Minute.Provider
 	switch provider {
 	case "public", "diemeng", "akshare", "auto", "sina", "tencent":
@@ -271,7 +294,7 @@ func fetchMinuteBarsFromProviders(tsCode string, start, end time.Time, timeout t
 	if err != nil {
 		return []minuteBar{}, "", err
 	}
-	return executeMinuteProviderPlan(tsCode, start, end, hedgedPlan, fallbackPlan, timeout)
+	return executeMinuteProviderPlanWithMode(tsCode, start, end, hedgedPlan, fallbackPlan, timeout, requireComplete)
 }
 
 func minuteAkshareFallbackEnabled() bool {
@@ -343,6 +366,14 @@ func currentMinuteProviderMode() string {
 }
 
 func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan []minuteProviderAttempt, fallbackPlan []string, timeout time.Duration) ([]minuteBar, string, error) {
+	return executeMinuteProviderPlanWithMode(tsCode, start, end, hedgedPlan, fallbackPlan, timeout, false)
+}
+
+func executeMinuteProviderPlanStrict(tsCode string, start, end time.Time, hedgedPlan []minuteProviderAttempt, fallbackPlan []string, timeout time.Duration) ([]minuteBar, string, error) {
+	return executeMinuteProviderPlanWithMode(tsCode, start, end, hedgedPlan, fallbackPlan, timeout, true)
+}
+
+func executeMinuteProviderPlanWithMode(tsCode string, start, end time.Time, hedgedPlan []minuteProviderAttempt, fallbackPlan []string, timeout time.Duration, requireComplete bool) ([]minuteBar, string, error) {
 	if len(hedgedPlan) == 0 {
 		return []minuteBar{}, "", fmt.Errorf("当前分钟线配置不可用，请检查数据源设置")
 	}
@@ -393,7 +424,7 @@ func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan [
 		if res.Err != nil {
 			mergedErr = mergeSyncErr(mergedErr, res.Err)
 		}
-		if hasBest && len(best.Bars) > 0 {
+		if !requireComplete && hasBest && len(best.Bars) > 0 {
 			return best.Bars, best.Source, mergedErr
 		}
 	}
@@ -421,9 +452,23 @@ func executeMinuteProviderPlan(tsCode string, start, end time.Time, hedgedPlan [
 	}
 
 	if hasBest {
+		if requireComplete && !best.Complete {
+			mergedErr = mergeSyncErr(mergedErr, incompleteMinuteCoverageError(tsCode, start, end, best))
+		}
 		return best.Bars, best.Source, mergeSyncErr(mergedErr, best.Err)
 	}
 	return []minuteBar{}, "", mergedErr
+}
+
+func incompleteMinuteCoverageError(tsCode string, start, end time.Time, result minuteProviderResult) error {
+	loc := cnLocation()
+	return fmt.Errorf("分钟线未完整覆盖：code=%s source=%s bars=%d target=%s~%s",
+		normalizeRecommendStockCode(tsCode),
+		strings.TrimSpace(result.Source),
+		len(result.Bars),
+		normalizeMinuteTime(start).In(loc).Format("2006-01-02 15:04:05"),
+		normalizeMinuteTime(end).In(loc).Format("2006-01-02 15:04:05"),
+	)
 }
 
 func buildMinuteProviderPlan(provider string, start, end time.Time) ([]minuteProviderAttempt, []string, error) {

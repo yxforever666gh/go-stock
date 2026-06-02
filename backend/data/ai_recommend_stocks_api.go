@@ -558,6 +558,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	downloadProgress := 0
 	downloadDone := 0
 	downloadTotal := 0
+	lastDownloadError := ""
 	manualCooldownUntil := ""
 	manualCooldownRemainSec := 0
 	diemengHealthStatus := ""
@@ -595,6 +596,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		downloadProgress = meta.DownloadProgress
 		downloadDone = meta.DownloadDone
 		downloadTotal = meta.DownloadTotal
+		lastDownloadError = strings.TrimSpace(meta.LastDownloadError)
 		if meta.LastFullRecalcAt != nil {
 			dataAsOf = meta.LastFullRecalcAt.Format("2006-01-02 15:04:05")
 		}
@@ -670,6 +672,9 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	if err := markInvalidActivationExitPlanDirtyCodes(aiRecommendYieldModeStrict); err != nil {
 		logger.SugaredLogger.Warnf("mark invalid activation exit plan dirty codes failed: %v", err)
 	}
+	if err := markV132VWAPScaleDirtyCodes(aiRecommendYieldModeStrict); err != nil {
+		logger.SugaredLogger.Warnf("mark v1.3.2 VWAP scale dirty codes failed: %v", err)
+	}
 	if err := markActivationWindowPolicyBugDirtyCodes(aiRecommendYieldModeStrict); err != nil {
 		logger.SugaredLogger.Warnf("mark activation window policy bug dirty codes failed: %v", err)
 	}
@@ -731,6 +736,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			DownloadProgress:          downloadProgress,
 			DownloadDone:              downloadDone,
 			DownloadTotal:             downloadTotal,
+			LastDownloadError:         lastDownloadError,
 			MinuteDownloadDone:        minuteDone,
 			MinuteDownloadTotal:       minuteTotal,
 			MinuteDownloadPending:     minutePending,
@@ -870,6 +876,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		DownloadProgress:           downloadProgress,
 		DownloadDone:               downloadDone,
 		DownloadTotal:              downloadTotal,
+		LastDownloadError:          lastDownloadError,
 		MinuteDownloadDone:         minuteDone,
 		MinuteDownloadTotal:        minuteTotal,
 		MinuteDownloadPending:      minutePending,
@@ -1396,6 +1403,17 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 		}
 		return t.In(loc).Format("2006-01-02 15:04:05")
 	}
+	missingWindow := func(reason, kind string, start, end time.Time) minuteCoverageContinuityIssueResult {
+		start = normalizeMinuteTime(start)
+		end = normalizeMinuteTime(end)
+		if start.IsZero() || end.IsZero() {
+			return minuteCoverageContinuityIssueResult{Reason: reason, Kind: kind}
+		}
+		if end.Before(start) {
+			end = start
+		}
+		return minuteCoverageContinuityIssueFromWindow(reason, kind, start, end)
+	}
 	issueCap := 0
 	if issueLimit > 0 {
 		issueCap = issueLimit
@@ -1475,22 +1493,28 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 		}
 		cacheStart, cacheEnd, hasScope := resolveMinuteCoverageScope(statePtr, code, cacheRanges)
 		if !hasScope {
+			detail := missingWindow("", "no_cache", requiredStart, requiredEnd)
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
 				reason := strings.TrimSpace(state.DataStatusReason)
 				if reason == "" {
 					reason = fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd))
 				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, minuteCoverageContinuityIssueResult{})
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, detail)
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖",
-					fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd)), minuteCoverageContinuityIssueResult{})
+					fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd)), detail)
 			}
 			continue
 		}
 
 		if !minuteStartCovered(requiredStart, cacheStart) {
+			missingEnd := normalizeMinuteTime(cacheStart).Add(-time.Minute)
+			if missingEnd.After(requiredEnd) {
+				missingEnd = requiredEnd
+			}
+			detail := missingWindow("", "range_start", requiredStart, missingEnd)
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
 				reason := strings.TrimSpace(state.DataStatusReason)
@@ -1498,16 +1522,21 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 					reason = fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
 						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
 				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, minuteCoverageContinuityIssueResult{})
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, detail)
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖",
 					fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), minuteCoverageContinuityIssueResult{})
+						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), detail)
 			}
 			continue
 		}
 		if cacheEnd.Before(requiredEnd) {
+			missingStart := normalizeMinuteTime(cacheEnd).Add(time.Minute)
+			if missingStart.Before(requiredStart) {
+				missingStart = requiredStart
+			}
+			detail := missingWindow("", "range_end", missingStart, requiredEnd)
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
 				reason := strings.TrimSpace(state.DataStatusReason)
@@ -1515,12 +1544,12 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 					reason = fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
 						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
 				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, minuteCoverageContinuityIssueResult{})
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, detail)
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖",
 					fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), minuteCoverageContinuityIssueResult{})
+						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), detail)
 			}
 			continue
 		}
@@ -3947,6 +3976,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 			DataAsOf:                  dataAsOf,
 			RecalcInProgress:          recalcInProgress,
 			RecalcProgress:            recalcProgress,
+			LastDownloadError:         strings.TrimSpace(meta.LastDownloadError),
 			MinuteDownloadDone:        stats.Done,
 			MinuteDownloadTotal:       stats.Total,
 			MinuteDownloadPending:     stats.Pending,
@@ -4057,6 +4087,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           true,
 		RecalcProgress:             recalcProgress,
+		LastDownloadError:          strings.TrimSpace(meta.LastDownloadError),
 		MinuteDownloadDone:         stats.Done,
 		MinuteDownloadTotal:        stats.Total,
 		MinuteDownloadPending:      stats.Pending,
@@ -4277,6 +4308,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		DataAsOf:                   dataAsOf,
 		RecalcInProgress:           recalcInProgress,
 		RecalcProgress:             recalcProgress,
+		LastDownloadError:          strings.TrimSpace(meta.LastDownloadError),
 		MinuteDownloadDone:         minuteDone,
 		MinuteDownloadTotal:        minuteTotal,
 		MinuteDownloadPending:      minutePending,

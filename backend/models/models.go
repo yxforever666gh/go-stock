@@ -1305,6 +1305,7 @@ type AiRecommendStocksYieldPageData struct {
 	DownloadProgress           int                          `json:"downloadProgress"`
 	DownloadDone               int                          `json:"downloadDone"`
 	DownloadTotal              int                          `json:"downloadTotal"`
+	LastDownloadError          string                       `json:"lastDownloadError,omitempty"`
 	MinuteDownloadDone         int                          `json:"minuteDownloadDone"`
 	MinuteDownloadTotal        int                          `json:"minuteDownloadTotal"`
 	MinuteDownloadPending      int                          `json:"minuteDownloadPending"`

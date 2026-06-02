@@ -80,3 +80,62 @@ func TestEvaluateV132ActivationGateBlocksWeakRewardRisk(t *testing.T) {
 		t.Fatalf("gate reason = %q, want reward/risk reason", gate.Reason)
 	}
 }
+
+func TestV132VWAPNormalizesHandVolumeAmount(t *testing.T) {
+	bars := []minuteBar{
+		{Open: 110.6, Close: 110.8, Volume: 100, Amount: 1108000},
+		{Open: 111.0, Close: 111.2, Volume: 200, Amount: 2224000},
+	}
+
+	got := v132VWAP(bars)
+	if got < 110.9 || got > 111.1 {
+		t.Fatalf("v132VWAP=%f, want price-level VWAP near 111", got)
+	}
+}
+
+func TestV132VWAPKeepsShareVolumeAmount(t *testing.T) {
+	bars := []minuteBar{
+		{Open: 110.6, Close: 110.8, Volume: 10000, Amount: 1108000},
+		{Open: 111.0, Close: 111.2, Volume: 20000, Amount: 2224000},
+	}
+
+	got := v132VWAP(bars)
+	if got < 110.9 || got > 111.1 {
+		t.Fatalf("v132VWAP=%f, want existing price-level VWAP near 111", got)
+	}
+}
+
+func TestV132VWAPFallsBackForUnusableAmountVolumeScale(t *testing.T) {
+	bars := []minuteBar{
+		{Open: 9.9, Close: 10.0, Volume: 1, Amount: 999999},
+		{Open: 10.1, Close: 10.2, Volume: 1, Amount: 999999},
+	}
+
+	got := v132VWAP(bars)
+	if got < 10.0 || got > 10.2 {
+		t.Fatalf("v132VWAP=%f, want fallback price average near 10.1", got)
+	}
+}
+
+func TestEvaluateV132ActivationGateUsesNormalizedVWAP(t *testing.T) {
+	activationTime := time.Date(2026, 5, 25, 10, 0, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersionV132,
+		RecommendStopProfitPriceMin: 130,
+		RecommendStopProfitPrice:    "130",
+		RecommendStopLossPrice:      "106",
+		StockCurrentPrice:           "110",
+	}
+	bars := []minuteBar{{
+		TradeTime: activationTime.Add(-time.Minute),
+		Open:      110.6,
+		Close:     110.8,
+		Volume:    100,
+		Amount:    1108000,
+	}}
+
+	gate := evaluateV132ActivationGate(rec, activationTime, 111, bars)
+	if !gate.Allowed {
+		t.Fatalf("normalized VWAP should allow activation, got blocked: %s", gate.Reason)
+	}
+}

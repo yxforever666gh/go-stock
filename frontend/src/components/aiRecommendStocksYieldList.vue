@@ -17,14 +17,15 @@ const rangeReadyRef = ref(false)
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
-  { label: 'V1.3.1', value: 'current' },
+  { label: 'V1.3.2', value: 'current' },
+  { label: 'V1.3.1', value: 'phase3-v4' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
   { label: 'Legacy', value: 'legacy' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.3.1',
-  'v1.3.2': 'V1.3.1',
-  '1.3.2': 'V1.3.1',
+  current: 'V1.3.2',
+  'v1.3.2': 'V1.3.2',
+  '1.3.2': 'V1.3.2',
   'phase3-v4': 'V1.3.1',
   '1.3.1': 'V1.3.1',
   v4: 'V1.3.1',
@@ -54,6 +55,7 @@ const downloadInProgressRef = ref(false)
 const downloadProgressRef = ref(0)
 const downloadDoneRef = ref(0)
 const downloadTotalRef = ref(0)
+const lastDownloadErrorRef = ref("")
 const minuteDownloadDoneRef = ref(0)
 const minuteDownloadTotalRef = ref(0)
 const minuteDownloadPendingRef = ref(0)
@@ -551,6 +553,7 @@ function query({
         downloadProgress: Number(res.downloadProgress || 0),
         downloadDone: Number(res.downloadDone || 0),
         downloadTotal: Number(res.downloadTotal || 0),
+        lastDownloadError: res.lastDownloadError || "",
         minuteDownloadDone: Number(res.minuteDownloadDone || 0),
         minuteDownloadTotal: Number(res.minuteDownloadTotal || 0),
         minuteDownloadPending: Number(res.minuteDownloadPending || 0),
@@ -613,6 +616,7 @@ function fetchYieldList(page, options = {}) {
     downloadProgressRef.value = Number(data.downloadProgress || 0)
     downloadDoneRef.value = Number(data.downloadDone || 0)
     downloadTotalRef.value = Number(data.downloadTotal || 0)
+    lastDownloadErrorRef.value = data.lastDownloadError || ""
     minuteDownloadDoneRef.value = Number(data.minuteDownloadDone || 0)
     minuteDownloadTotalRef.value = Number(data.minuteDownloadTotal || 0)
     minuteDownloadPendingRef.value = Number(data.minuteDownloadPending || 0)
@@ -958,14 +962,18 @@ function taskProgressText() {
 function taskStatusHintText() {
   const pending = Number(minuteDownloadPendingRef.value || 0)
   const uncoverable = Number(minuteDownloadUncoverableRef.value || 0)
+  const lastDownloadError = String(lastDownloadErrorRef.value || '').trim()
   if (downloadInProgressRef.value) {
-    return "后台正在下载分钟线"
+    return lastDownloadError || "后台正在下载分钟线"
   }
   if (recalcInProgressRef.value) {
-    return "后台正在回算收益率（覆盖进度不等于任务进度）"
+    return lastDownloadError || "后台正在回算收益率（覆盖进度不等于任务进度）"
+  }
+  if (lastDownloadError) {
+    return lastDownloadError
   }
   if (pending > 0 || uncoverable > 0) {
-    return "后台任务已结束，但仍有待覆盖/不可覆盖记录"
+    return "后台任务未能补齐全部真实分钟线"
   }
   return "后台任务已结束，覆盖已完成"
 }
@@ -1393,7 +1401,7 @@ function replayMarkerSummaryText() {
   </n-input-group>
   <div style="margin-top: 8px;">
     <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">默认查看全部阶段；可切换 V1.3.1 或历史阶段对比不同策略阶段。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">默认查看全部阶段；可切换 V1.3.2、V1.3.1 或历史阶段对比不同策略阶段。</n-text>
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">当前口径：严格回算</n-text>

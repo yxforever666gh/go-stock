@@ -52,14 +52,15 @@ const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
-  { label: 'V1.3.1', value: 'current' },
+  { label: 'V1.3.2', value: 'current' },
+  { label: 'V1.3.1', value: 'phase3-v4' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
   { label: 'Legacy', value: 'legacy' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.3.1',
-  'v1.3.2': 'V1.3.1',
-  '1.3.2': 'V1.3.1',
+  current: 'V1.3.2',
+  'v1.3.2': 'V1.3.2',
+  '1.3.2': 'V1.3.2',
   'phase3-v4': 'V1.3.1',
   '1.3.1': 'V1.3.1',
   v4: 'V1.3.1',
@@ -384,7 +385,7 @@ function dailyOverviewWarningText() {
           </n-button>
         </n-input-group>
         <div class="yield-stats-toolbar-hint">
-          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.3.1 或历史阶段对比不同策略阶段。</n-text>
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.3.2、V1.3.1 或历史阶段对比不同策略阶段。</n-text>
         </div>
         <div class="yield-stats-toolbar-hint">
           <n-text depth="3">当前页专注收益率统计与可视化；个股明细、分钟回放和手动补算仍保留在“股票收益率”栏目。</n-text>
@@ -609,7 +610,7 @@ function dailyOverviewWarningText() {
               <n-text depth="3">{{ analysisOnlyRateTextRef }}</n-text>
             </div>
             <div class="detail-row">
-              <span class="detail-label">V1.3.1硬规则拦截</span>
+              <span class="detail-label">V1.3.2硬规则拦截</span>
               <n-text depth="3">{{ v132GateBlockedCountRef }}</n-text>
             </div>
             <div class="detail-row">
@@ -634,7 +635,7 @@ function dailyOverviewWarningText() {
             </div>
             <div class="detail-row">
               <span class="detail-label">解读重点</span>
-              <n-text depth="3">同日激活率越高越说明信号新鲜；V1.3.1 会额外用强弱过滤、盈亏比和止损冷却控制交易质量。</n-text>
+              <n-text depth="3">同日激活率越高越说明信号新鲜；V1.3.2 会额外用强弱过滤、盈亏比和止损冷却控制交易质量。</n-text>
             </div>
           </n-card>
         </n-grid-item>

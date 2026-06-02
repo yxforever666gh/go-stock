@@ -168,13 +168,34 @@ func v132VWAP(bars []minuteBar) float64 {
 			fallbackCount++
 		}
 	}
+	reference := 0.0
 	if totalAmount > 0 && totalVolume > 0 {
-		return totalAmount / totalVolume
+		if fallbackCount > 0 {
+			reference = fallbackSum / float64(fallbackCount)
+		}
+		return normalizeV132VWAP(totalAmount/totalVolume, reference)
 	}
 	if fallbackCount > 0 {
 		return fallbackSum / float64(fallbackCount)
 	}
 	return 0
+}
+
+func normalizeV132VWAP(raw float64, reference float64) float64 {
+	if raw <= 0 {
+		return 0
+	}
+	if reference <= 0 {
+		return raw
+	}
+	value := raw
+	if value > reference*20 {
+		value = value / 100
+	}
+	if value > reference*20 || value < reference/20 {
+		return reference
+	}
+	return value
 }
 
 func resolveV132AnchorPrice(rec models.AiRecommendStocks, bars []minuteBar) float64 {

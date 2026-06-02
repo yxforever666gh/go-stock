@@ -212,6 +212,325 @@ func TestMergeMinuteCoverageTasks_MergesAdjacentForcedWindows(t *testing.T) {
 	}
 }
 
+func TestBuildManualMinuteGapCoverageTasks_IncludesRangeStartGap(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-gap-range-start.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	t.Cleanup(func() { timeNow = oldNow })
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	if err := db.Dao.Create(&models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+
+	recordTime := time.Date(2026, 5, 28, 14, 30, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "301293.SZ",
+		StockName:                   "三博脑科",
+		RecommendBuyPrice:           "10-10.5",
+		RecommendStopProfitPrice:    "11-12",
+		RecommendStopLossPrice:      "9.6",
+		RecommendStatus:             "valid",
+		RecommendCategory:           recommendExecutionImmediate,
+		ActivationStatus:            "pending",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.5,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPriceMax: 12,
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create recommend failed: %v", err)
+	}
+	for _, tradeTime := range []time.Time{
+		time.Date(2026, 5, 29, 11, 0, 0, 0, loc),
+		time.Date(2026, 5, 29, 15, 0, 0, 0, loc),
+	} {
+		if err := db.Dao.Create(&models.AiRecommendMinuteBar{
+			StockCode: "301293.SZ",
+			TradeTime: tradeTime,
+			Open:      10,
+			High:      10,
+			Low:       10,
+			Close:     10,
+			Source:    "test",
+		}).Error; err != nil {
+			t.Fatalf("create minute bar failed: %v", err)
+		}
+	}
+
+	tasks := buildManualMinuteGapCoverageTasks(map[string]struct{}{"301293.SZ": struct{}{}})
+	if len(tasks) == 0 {
+		t.Fatal("expected forced gap task for range start gap")
+	}
+	got := tasks[0]
+	if got.StockCode != "301293.SZ" || !got.Forced {
+		t.Fatalf("unexpected task: %#v", got)
+	}
+	wantStart := time.Date(2026, 5, 27, 9, 31, 0, 0, loc)
+	if !got.Start.Equal(wantStart) {
+		t.Fatalf("task start=%v, want %v", got.Start, wantStart)
+	}
+	wantEnd := time.Date(2026, 5, 29, 10, 59, 0, 0, loc)
+	if !got.End.Equal(wantEnd) {
+		t.Fatalf("task end=%v, want %v", got.End, wantEnd)
+	}
+	warning := buildManualDownloadCoverageWarning(&models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}, 5)
+	if !strings.Contains(warning, "仍有待覆盖 1 条") || !strings.Contains(warning, "301293.SZ") {
+		t.Fatalf("unexpected warning: %q", warning)
+	}
+}
+
+func TestLoadScopeCodesForManualDownload_MergesDirtyAndCoverageScopes(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-scope-merge.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldDirtyCode{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	t.Cleanup(func() { timeNow = oldNow })
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	if err := db.Dao.Create(&models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+
+	dirtyRecordTime := time.Date(2026, 5, 29, 9, 30, 0, 0, loc)
+	coverageRecordTime := time.Date(2026, 5, 28, 14, 30, 0, 0, loc)
+	rows := []models.AiRecommendStocks{
+		{
+			DataTime:                    &dirtyRecordTime,
+			StockCode:                   "300001.SZ",
+			StockName:                   "特锐德",
+			RecommendBuyPrice:           "10-10.5",
+			RecommendStopProfitPrice:    "11-12",
+			RecommendStopLossPrice:      "9.6",
+			RecommendStatus:             "valid",
+			RecommendCategory:           recommendExecutionImmediate,
+			ExecutionState:              recommendExecutionImmediate,
+			ActivationStatus:            "pending",
+			RecommendBuyPriceMin:        10,
+			RecommendBuyPriceMax:        10.5,
+			RecommendStopProfitPriceMin: 11,
+			RecommendStopProfitPriceMax: 12,
+		},
+		{
+			DataTime:                    &coverageRecordTime,
+			StockCode:                   "301293.SZ",
+			StockName:                   "三博脑科",
+			RecommendBuyPrice:           "20-20.5",
+			RecommendStopProfitPrice:    "22-23",
+			RecommendStopLossPrice:      "19.2",
+			RecommendStatus:             "valid",
+			RecommendCategory:           recommendExecutionImmediate,
+			ExecutionState:              recommendExecutionImmediate,
+			ActivationStatus:            "pending",
+			RecommendBuyPriceMin:        20,
+			RecommendBuyPriceMax:        20.5,
+			RecommendStopProfitPriceMin: 22,
+			RecommendStopProfitPriceMax: 23,
+		},
+	}
+	for _, row := range rows {
+		if err := db.Dao.Create(&row).Error; err != nil {
+			t.Fatalf("create recommend failed: %v", err)
+		}
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldDirtyCode{
+		StockCode:  "300001.SZ",
+		Reason:     "等待 strict 重算",
+		ModeNeeded: aiRecommendYieldModeStrict,
+	}).Error; err != nil {
+		t.Fatalf("create dirty code failed: %v", err)
+	}
+	for _, tradeTime := range []time.Time{
+		time.Date(2026, 5, 29, 11, 0, 0, 0, loc),
+		time.Date(2026, 5, 29, 15, 0, 0, 0, loc),
+	} {
+		if err := db.Dao.Create(&models.AiRecommendMinuteBar{
+			StockCode: "301293.SZ",
+			TradeTime: tradeTime,
+			Open:      20,
+			High:      20,
+			Low:       20,
+			Close:     20,
+			Source:    "test",
+		}).Error; err != nil {
+			t.Fatalf("create minute bar failed: %v", err)
+		}
+	}
+
+	got, err := loadScopeCodesForManualDownload()
+	if err != nil {
+		t.Fatalf("loadScopeCodesForManualDownload failed: %v", err)
+	}
+	gotSet := normalizeScopeCodes(got)
+	for _, code := range []string{"300001.SZ", "301293.SZ"} {
+		if _, ok := gotSet[code]; !ok {
+			t.Fatalf("expected scope to include %s, got %#v", code, got)
+		}
+	}
+}
+
+func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-gap-close-retry.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	oldManualNow := manualMinuteCoverageNow
+	oldManualSleep := manualMinuteCoverageSleep
+	oldBackoffs := manualMinuteCoverageRetryBackoffs
+	oldBudget := manualMinuteCoverageRetryBudget
+	oldTencent := fetchMinuteBarsWithTencentFn
+	oldAkshare := fetchMinuteBarsWithAkShareFn
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	t.Cleanup(func() {
+		timeNow = oldNow
+		manualMinuteCoverageNow = oldManualNow
+		manualMinuteCoverageSleep = oldManualSleep
+		manualMinuteCoverageRetryBackoffs = oldBackoffs
+		manualMinuteCoverageRetryBudget = oldBudget
+		fetchMinuteBarsWithTencentFn = oldTencent
+		fetchMinuteBarsWithAkShareFn = oldAkshare
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	})
+
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	manualMinuteCoverageNow = func() time.Time { return now }
+	manualMinuteCoverageSleep = func(time.Duration) {}
+	manualMinuteCoverageRetryBackoffs = []time.Duration{0}
+	manualMinuteCoverageRetryBudget = time.Minute
+
+	meta := models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}
+	if err := db.Dao.Create(&meta).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "301293.SZ",
+		StockName:                   "三博脑科",
+		RecommendBuyPrice:           "10-10.5",
+		RecommendStopProfitPrice:    "11-12",
+		RecommendStopLossPrice:      "9.6",
+		RecommendStatus:             "valid",
+		RecommendCategory:           recommendExecutionImmediate,
+		ActivationStatus:            "pending",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.5,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPriceMax: 12,
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create recommend failed: %v", err)
+	}
+	for _, bar := range minuteBarsForSessions(
+		time.Date(2026, 5, 28, 10, 30, 0, 0, loc),
+		time.Date(2026, 5, 29, 15, 0, 0, 0, loc),
+	) {
+		if bar.TradeTime.Before(time.Date(2026, 5, 29, 10, 30, 0, 0, loc)) {
+			continue
+		}
+		if err := db.Dao.Create(&models.AiRecommendMinuteBar{
+			StockCode: "301293.SZ",
+			TradeTime: bar.TradeTime,
+			Open:      bar.Open,
+			High:      bar.High,
+			Low:       bar.Low,
+			Close:     bar.Close,
+			Volume:    bar.Volume,
+			Amount:    bar.Amount,
+			Source:    "seed",
+		}).Error; err != nil {
+			t.Fatalf("create seed minute bar failed: %v", err)
+		}
+	}
+
+	providerCalls := 0
+	fetch := func(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+		providerCalls++
+		if providerCalls <= 4 {
+			return []minuteBar{}, "test", nil
+		}
+		return minuteBarsForSessions(start, end), "test", nil
+	}
+	fetchMinuteBarsWithTencentFn = fetch
+	fetchMinuteBarsWithAkShareFn = fetch
+	fetchMinuteBarsWithSinaFn = fetch
+	fetchMinuteBarsWithDiemengFn = fetch
+
+	stats, _ := computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending == 0 {
+		t.Fatal("expected pending gap before retry closure")
+	}
+	err := closeManualMinuteCoverageGaps(&aiRecommendYieldRecalcRuntime{meta: &meta}, map[string]struct{}{"301293.SZ": struct{}{}})
+	if err != nil {
+		t.Fatalf("closeManualMinuteCoverageGaps failed: %v", err)
+	}
+	stats, _ = computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending != 0 || stats.Uncoverable != 0 || stats.Done != stats.Total {
+		t.Fatalf("coverage stats after retry = %#v, want full coverage", stats)
+	}
+	if providerCalls <= 4 {
+		t.Fatalf("expected retry after incomplete provider responses, calls=%d", providerCalls)
+	}
+}
+
+func minuteBarsForSessions(start, end time.Time) []minuteBar {
+	sessions := buildMinuteCoverageSessions(start, end)
+	bars := make([]minuteBar, 0, 256)
+	for _, session := range sessions {
+		for ts := session.Start; !ts.After(session.End); ts = ts.Add(time.Minute) {
+			bars = append(bars, minuteBar{
+				TradeTime: ts,
+				Open:      10,
+				High:      10,
+				Low:       10,
+				Close:     10,
+				Volume:    100,
+				Amount:    1000,
+			})
+		}
+	}
+	return bars
+}
+
 func TestBuildAiRecommendMinuteCoverageTasks_ManualDownloadExtendsStartForPrevDayActivity(t *testing.T) {
 	loc := cnLocation()
 	now := time.Date(2026, 3, 10, 15, 10, 0, 0, loc)
@@ -501,6 +820,22 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 			Remarks:                  "等待激活；激活条件：pullback：价格进入10.00-10.50区间，5分钟成交额不低于近5个5分钟平均成交额的1.15倍；止盈区间：11.20-11.80；止损位：9.60",
 			DataTime:                 &now,
 		},
+		{
+			StockCode:                "300005.SZ",
+			StockName:                "探路者",
+			SummaryVersion:           marketSummaryVersionV132,
+			RecommendCategory:        "conditional",
+			ExecutionState:           recommendExecutionConditional,
+			RecommendBuyPrice:        "20.00-20.20",
+			BuySignal:                "价格触发：回到20.00-20.20主买入区；量能触发：5分钟成交额不低于100万",
+			SellSignal:               "触及22.50止盈区间卖出；若跌破19.50止损位立即止损",
+			InvalidSignal:            "时间失效：未来5个交易日内仍未触发主买入区",
+			ActivationRuleJSON:       ruleJSON,
+			RecommendStopLossPrice:   "19.50",
+			RecommendStopProfitPrice: "22.50",
+			ActivationStatus:         "skipped",
+			DataTime:                 &now,
+		},
 	}
 	for _, row := range rows {
 		if err := db.Dao.Create(&row).Error; err != nil {
@@ -516,12 +851,21 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 	}).Error; err != nil {
 		t.Fatalf("create skipped record state failed: %v", err)
 	}
+	if err := db.Dao.Create(&models.AiRecommendYieldRecordState{
+		RecommendID:      5,
+		StockCode:        "300005.SZ",
+		ActivationStatus: "skipped",
+		DataStatus:       "已跳过",
+		DataStatusReason: "V1.3.2强弱过滤未通过：激活价 20.10 低于 VWAP 2010.00",
+	}).Error; err != nil {
+		t.Fatalf("create v132 skipped record state failed: %v", err)
+	}
 
-	got, err := filterManualDownloadScopeCodes([]string{"300001.SZ", "300002.SZ", "300003.SZ", "300004.SZ"})
+	got, err := filterManualDownloadScopeCodes([]string{"300001.SZ", "300002.SZ", "300003.SZ", "300004.SZ", "300005.SZ"})
 	if err != nil {
 		t.Fatalf("filterManualDownloadScopeCodes failed: %v", err)
 	}
-	if len(got) != 2 || got[0] != "300003.SZ" || got[1] != "300004.SZ" {
+	if len(got) != 3 || got[0] != "300003.SZ" || got[1] != "300004.SZ" || got[2] != "300005.SZ" {
 		t.Fatalf("unexpected filtered scope: %#v", got)
 	}
 }
