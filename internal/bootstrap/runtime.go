@@ -58,12 +58,18 @@ func EnsureRuntimeDirs(cfg appconfig.AppConfig) {
 	checkDir(cfg.RuntimePath("logs"))
 	checkDir(cfg.ExportBaseDir())
 	dbFilePath := strings.TrimSpace(cfg.DBFilePath())
-	if dbFilePath == "" || dbFilePath == ":memory:" {
-		return
+	if dbFilePath != "" && dbFilePath != ":memory:" {
+		dbDir := filepath.Dir(dbFilePath)
+		if dbDir != "." && dbDir != "" {
+			checkDir(dbDir)
+		}
 	}
-	dbDir := filepath.Dir(dbFilePath)
-	if dbDir != "." && dbDir != "" {
-		checkDir(dbDir)
+	minuteDBFilePath := strings.TrimSpace(cfg.MinuteDBFilePath())
+	if minuteDBFilePath != "" && minuteDBFilePath != ":memory:" {
+		minuteDBDir := filepath.Dir(minuteDBFilePath)
+		if minuteDBDir != "." && minuteDBDir != "" {
+			checkDir(minuteDBDir)
+		}
 	}
 }
 

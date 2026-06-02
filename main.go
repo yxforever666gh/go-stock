@@ -5,9 +5,11 @@ import (
 	"embed"
 	"flag"
 	"go-stock/backend/data"
+	"go-stock/backend/db"
 	log "go-stock/backend/logger"
 	"go-stock/internal/bootstrap"
 	appconfig "go-stock/internal/config"
+	"os"
 	"runtime/debug"
 )
 
@@ -44,6 +46,10 @@ var BuildKey string
 
 func main() {
 	cfg := appconfig.Load()
+	if len(os.Args) > 1 && os.Args[1] == "migrate-minute-db" {
+		runMinuteDBMigration(cfg)
+		return
+	}
 	webMode := flag.Bool("web", false, "run localhost web mode")
 	webListenAddr := flag.String("web-addr", cfg.Web.ListenAddr, "web mode listen address")
 	flag.Parse()
@@ -84,4 +90,17 @@ func main() {
 	if err := runDesktopApp(app); err != nil {
 		log.SugaredLogger.Fatal(err)
 	}
+}
+
+func runMinuteDBMigration(cfg appconfig.AppConfig) {
+	bootstrap.EnsureRuntimeDirs(cfg)
+	db.Init(cfg.DB.Path)
+	summary, err := data.MigrateMinuteCacheToMinuteDB()
+	if err != nil {
+		log.SugaredLogger.Fatalf("minute db migration failed: %v", err)
+	}
+	if err := data.OptimizeMinuteCacheDB(); err != nil {
+		log.SugaredLogger.Warnf("minute db optimize failed: %v", err)
+	}
+	log.SugaredLogger.Infof("minute db migration completed: legacyRows=%d minuteDBRows=%d migratedRows=%d stockCount=%d", summary.LegacyRows, summary.MinuteDBRows, summary.MigratedRows, summary.StockCount)
 }

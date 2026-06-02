@@ -449,7 +449,7 @@ make build-desktop
 
 当前版本：
 
-- `1.3.2`
+- `1.3.5`
 
 建议发布新版本时至少同步以下文件：
 
@@ -514,6 +514,14 @@ go build -o build/bin/go-stock .
 - 如果你准备发布版本，优先同步更新 `CHANGELOG.md`、`README.md` 与 `wails.json`
 
 ## 版本更新日志
+
+### 1.3.5
+
+- 分钟线缓存拆分到独立的 `data/minute.db`，新下载分钟线默认不再写入主库 `data/stock.db`，降低全量下载后的主库膨胀。
+- 新增瘦表 `minute_bar`，使用 `(stock_code, trade_time)` 主键和 Unix milliseconds 时间戳，减少分钟线存储冗余。
+- 分钟线读取优先使用新库；新库无命中时回退旧表 `ai_recommend_minute_bar`，不改变 AI 分析、strict 回测和收益率统计口径。
+- 新增源码迁移入口 `go run . migrate-minute-db`，可幂等迁移旧分钟线缓存到 `minute.db`，迁移不会删除旧表。
+- 支持 `GO_STOCK_MINUTE_DB_PATH`、`GO_STOCK_MINUTE_DB_BUSY_TIMEOUT_MS` 和临时兼容开关 `GO_STOCK_MINUTE_DUAL_WRITE`。
 
 ### 1.3.2
 

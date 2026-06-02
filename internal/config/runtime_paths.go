@@ -20,6 +20,16 @@ func resolveDBPath(runtimeDir string) string {
 	return resolveDSNPath(runtimeDir, DefaultDBPath)
 }
 
+func resolveMinuteDBPath(runtimeDir string) string {
+	if value := strings.TrimSpace(os.Getenv("GO_STOCK_MINUTE_DB_PATH")); value != "" {
+		return value
+	}
+	if runtimeDir == "" {
+		return DefaultMinuteDBPath
+	}
+	return resolveDSNPath(runtimeDir, DefaultMinuteDBPath)
+}
+
 func resolveDSNPath(runtimeDir string, raw string) string {
 	base := strings.TrimSpace(raw)
 	if base == "" {
@@ -56,6 +66,10 @@ func (c AppConfig) RuntimePath(parts ...string) string {
 
 func (c AppConfig) DBFilePath() string {
 	return dbFilePath(c.DB.Path)
+}
+
+func (c AppConfig) MinuteDBFilePath() string {
+	return dbFilePath(c.DB.MinutePath)
 }
 
 func (c AppConfig) LogFilePath(name string) string {

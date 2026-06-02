@@ -6,6 +6,16 @@
 
 - 设置页 AI 模型服务配置改为拖拽排序：不再手动填写“序号”，可直接拖动左侧排序手柄调整大模型优先级；新增、删除、拖动后会自动重排 `sort` 并沿用现有自动保存逻辑持久化。
 
+## 1.3.5 - 2026-06-02
+
+### 重点更新
+
+- 分钟线缓存从主库 `data/stock.db` 拆分到独立行情库 `data/minute.db`，新下载分钟线默认只写新库，避免全量下载继续推高主库体积。
+- 新增瘦表 `minute_bar`，使用 `(stock_code, trade_time)` 主键和 Unix milliseconds 时间戳，减少旧表 `id / created_at / deleted_at` 等字段带来的额外体积。
+- 分钟线读取改为优先查 `minute.db`，新库无命中时回退旧表 `ai_recommend_minute_bar`，保留历史数据兼容，不改变 AI 分析和 strict 回测口径。
+- 新增源码迁移入口 `go run . migrate-minute-db`，可将旧分钟线表批量迁移到 `minute.db`，迁移过程幂等且不会删除旧表。
+- 新增分钟线存储单元测试，覆盖默认只写新库、旧表 fallback、临时 dual write、删除清理和迁移幂等。
+
 ## 1.3.2 - 2026-05-25
 
 ### 重点更新

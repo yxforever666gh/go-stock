@@ -11,6 +11,7 @@ import (
 const (
 	DefaultWebListenAddr   = "127.0.0.1:34115"
 	DefaultDBPath          = "data/stock.db?cache_size=-524288&journal_mode=WAL"
+	DefaultMinuteDBPath    = "data/minute.db?cache_size=-524288&journal_mode=WAL"
 	DefaultDBBusyTimeoutMS = 5000
 	DefaultDBLogLevel      = "info"
 	DefaultLogLevel        = "debug"
@@ -62,9 +63,11 @@ type WebConfig struct {
 }
 
 type DBConfig struct {
-	Path          string `json:"path"`
-	BusyTimeoutMS int    `json:"busyTimeoutMs"`
-	LogLevel      string `json:"logLevel"`
+	Path                string `json:"path"`
+	MinutePath          string `json:"minutePath"`
+	BusyTimeoutMS       int    `json:"busyTimeoutMs"`
+	MinuteBusyTimeoutMS int    `json:"minuteBusyTimeoutMs"`
+	LogLevel            string `json:"logLevel"`
 }
 
 type LogConfig struct {
@@ -130,9 +133,11 @@ func Load() AppConfig {
 			ListenAddr: stringOrDefault("GO_STOCK_WEB_ADDR", DefaultWebListenAddr),
 		},
 		DB: DBConfig{
-			Path:          resolveDBPath(runtimeDir),
-			BusyTimeoutMS: intOrDefault("GO_STOCK_DB_BUSY_TIMEOUT_MS", DefaultDBBusyTimeoutMS, noMinLimit, noMaxLimit),
-			LogLevel:      enumOrDefault("GO_STOCK_DB_LOG_LEVEL", DefaultDBLogLevel, "silent", "error", "warn", "warning", "info"),
+			Path:                resolveDBPath(runtimeDir),
+			MinutePath:          resolveMinuteDBPath(runtimeDir),
+			BusyTimeoutMS:       intOrDefault("GO_STOCK_DB_BUSY_TIMEOUT_MS", DefaultDBBusyTimeoutMS, noMinLimit, noMaxLimit),
+			MinuteBusyTimeoutMS: intOrDefault("GO_STOCK_MINUTE_DB_BUSY_TIMEOUT_MS", DefaultDBBusyTimeoutMS, noMinLimit, noMaxLimit),
+			LogLevel:            enumOrDefault("GO_STOCK_DB_LOG_LEVEL", DefaultDBLogLevel, "silent", "error", "warn", "warning", "info"),
 		},
 		Log: LogConfig{
 			Level: enumOrDefault("GO_STOCK_LOG_LEVEL", DefaultLogLevel, "silent", "error", "warn", "warning", "info", "debug"),
@@ -191,9 +196,11 @@ func (c AppConfig) StartupSummary() string {
 			"listenAddr": c.Web.ListenAddr,
 		},
 		"db": map[string]any{
-			"path":          c.DB.Path,
-			"busyTimeoutMs": c.DB.BusyTimeoutMS,
-			"logLevel":      c.DB.LogLevel,
+			"path":                c.DB.Path,
+			"minutePath":          c.DB.MinutePath,
+			"busyTimeoutMs":       c.DB.BusyTimeoutMS,
+			"minuteBusyTimeoutMs": c.DB.MinuteBusyTimeoutMS,
+			"logLevel":            c.DB.LogLevel,
 		},
 		"log": map[string]any{
 			"level": c.Log.Level,

@@ -1,6 +1,7 @@
 package data
 
 import (
+	"os"
 	"strings"
 	"time"
 
@@ -23,11 +24,42 @@ type minuteBar struct {
 	SlotWindow int
 }
 
+type minuteCacheDBBar struct {
+	StockCode string  `gorm:"column:stock_code;primaryKey"`
+	TradeTime int64   `gorm:"column:trade_time;primaryKey"`
+	Open      float64 `gorm:"column:open"`
+	High      float64 `gorm:"column:high"`
+	Low       float64 `gorm:"column:low"`
+	Close     float64 `gorm:"column:close"`
+	Volume    float64 `gorm:"column:volume"`
+	Amount    float64 `gorm:"column:amount"`
+	Source    string  `gorm:"column:source"`
+	UpdatedAt int64   `gorm:"column:updated_at"`
+}
+
+func (minuteCacheDBBar) TableName() string {
+	return "minute_bar"
+}
+
 func normalizeMinuteTime(t time.Time) time.Time {
 	if t.IsZero() {
 		return t
 	}
 	return t.Truncate(time.Minute)
+}
+
+func minuteTimeMillis(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return normalizeMinuteTime(t).UnixMilli()
+}
+
+func minuteTimeFromMillis(ms int64) time.Time {
+	if ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms).In(cnLocation())
 }
 
 func listMinuteBarsFromCache(stockCode string, start, end time.Time) ([]minuteBar, error) {
@@ -39,6 +71,47 @@ func listMinuteBarsFromCache(stockCode string, start, end time.Time) ([]minuteBa
 		return []minuteBar{}, nil
 	}
 
+	bars, err := listMinuteBarsFromMinuteDB(code, start, end)
+	if err != nil {
+		return nil, err
+	}
+	if len(bars) > 0 {
+		return bars, nil
+	}
+	return listMinuteBarsFromLegacyCache(code, start, end)
+}
+
+func listMinuteBarsFromMinuteDB(code string, start, end time.Time) ([]minuteBar, error) {
+	if db.MinuteDao == nil {
+		return []minuteBar{}, nil
+	}
+	rows := make([]minuteCacheDBBar, 0)
+	err := db.MinuteDao.Model(&minuteCacheDBBar{}).
+		Where("stock_code = ? AND trade_time >= ? AND trade_time <= ?", code, minuteTimeMillis(start), minuteTimeMillis(end)).
+		Order("trade_time ASC").
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	bars := make([]minuteBar, 0, len(rows))
+	for _, row := range rows {
+		bars = append(bars, minuteBar{
+			TradeTime: minuteTimeFromMillis(row.TradeTime),
+			Open:      row.Open,
+			High:      row.High,
+			Low:       row.Low,
+			Close:     row.Close,
+			Volume:    row.Volume,
+			Amount:    row.Amount,
+		})
+	}
+	return bars, nil
+}
+
+func listMinuteBarsFromLegacyCache(code string, start, end time.Time) ([]minuteBar, error) {
+	if !legacyMinuteBarTableAvailable() {
+		return []minuteBar{}, nil
+	}
 	rows := make([]models.AiRecommendMinuteBar, 0)
 	err := db.Dao.Model(&models.AiRecommendMinuteBar{}).
 		Where("stock_code = ? AND trade_time >= ? AND trade_time <= ?", code, start, end).
@@ -90,6 +163,65 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 		return 0, nil
 	}
 
+	if err := upsertMinuteBarsToMinuteDB(rows); err != nil {
+		return 0, err
+	}
+	if !minuteCacheDualWriteEnabled() {
+		return len(rows), nil
+	}
+	if !legacyMinuteBarTableAvailable() {
+		if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
+			return 0, err
+		}
+	}
+	if err := upsertMinuteBarsToLegacyCache(rows); err != nil {
+		return 0, err
+	}
+	return len(rows), nil
+}
+
+func upsertMinuteBarsToMinuteDB(rows []models.AiRecommendMinuteBar) error {
+	if db.MinuteDao == nil {
+		return nil
+	}
+	now := time.Now().UnixMilli()
+	dbRows := make([]minuteCacheDBBar, 0, len(rows))
+	for _, row := range rows {
+		if row.TradeTime.IsZero() {
+			continue
+		}
+		dbRows = append(dbRows, minuteCacheDBBar{
+			StockCode: row.StockCode,
+			TradeTime: minuteTimeMillis(row.TradeTime),
+			Open:      row.Open,
+			High:      row.High,
+			Low:       row.Low,
+			Close:     row.Close,
+			Volume:    row.Volume,
+			Amount:    row.Amount,
+			Source:    strings.TrimSpace(row.Source),
+			UpdatedAt: now,
+		})
+	}
+	if len(dbRows) == 0 {
+		return nil
+	}
+	return db.MinuteDao.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "stock_code"}, {Name: "trade_time"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"open":       gorm.Expr("excluded.open"),
+			"high":       gorm.Expr("excluded.high"),
+			"low":        gorm.Expr("excluded.low"),
+			"close":      gorm.Expr("excluded.close"),
+			"volume":     gorm.Expr("excluded.volume"),
+			"amount":     gorm.Expr("excluded.amount"),
+			"source":     gorm.Expr("excluded.source"),
+			"updated_at": gorm.Expr("excluded.updated_at"),
+		}),
+	}).CreateInBatches(dbRows, 800).Error
+}
+
+func upsertMinuteBarsToLegacyCache(rows []models.AiRecommendMinuteBar) error {
 	err := db.Dao.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "stock_code"}, {Name: "trade_time"}},
 		DoUpdates: clause.Assignments(map[string]any{
@@ -103,11 +235,7 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 			"updated_at": time.Now(),
 		}),
 	}).CreateInBatches(rows, 800).Error
-	if err != nil {
-		return 0, err
-	}
-
-	return len(rows), nil
+	return err
 }
 
 func getMinuteCacheRange(stockCode string) (*time.Time, *time.Time, error) {
@@ -116,6 +244,44 @@ func getMinuteCacheRange(stockCode string) (*time.Time, *time.Time, error) {
 		return nil, nil, nil
 	}
 
+	start, end, found, err := getMinuteCacheRangeFromMinuteDB(code)
+	if err != nil {
+		return nil, nil, err
+	}
+	if found {
+		return start, end, nil
+	}
+	return getMinuteCacheRangeFromLegacyCache(code)
+}
+
+func getMinuteCacheRangeFromMinuteDB(code string) (*time.Time, *time.Time, bool, error) {
+	if db.MinuteDao == nil {
+		return nil, nil, false, nil
+	}
+	type scopeRow struct {
+		Start *int64 `gorm:"column:start_time"`
+		End   *int64 `gorm:"column:end_time"`
+	}
+	row := scopeRow{}
+	err := db.MinuteDao.Model(&minuteCacheDBBar{}).
+		Select("MIN(trade_time) AS start_time, MAX(trade_time) AS end_time").
+		Where("stock_code = ?", code).
+		Scan(&row).Error
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if row.Start == nil || row.End == nil {
+		return nil, nil, false, nil
+	}
+	start := minuteTimeFromMillis(*row.Start)
+	end := minuteTimeFromMillis(*row.End)
+	return &start, &end, true, nil
+}
+
+func getMinuteCacheRangeFromLegacyCache(code string) (*time.Time, *time.Time, error) {
+	if !legacyMinuteBarTableAvailable() {
+		return nil, nil, nil
+	}
 	type scopeRow struct {
 		Start string `gorm:"column:start_time"`
 		End   string `gorm:"column:end_time"`
@@ -176,11 +342,6 @@ func loadMinuteCacheRangeMap() (map[string]minuteCacheRange, error) {
 }
 
 func loadMinuteCacheRangeMapByCodes(codes []string) (map[string]minuteCacheRange, error) {
-	type row struct {
-		StockCode string `gorm:"column:stock_code"`
-		Start     string `gorm:"column:start_time"`
-		End       string `gorm:"column:end_time"`
-	}
 	normalizedCodes := make([]string, 0, len(codes))
 	seen := make(map[string]struct{}, len(codes))
 	for _, code := range codes {
@@ -194,6 +355,72 @@ func loadMinuteCacheRangeMapByCodes(codes []string) (map[string]minuteCacheRange
 		seen[normalized] = struct{}{}
 		normalizedCodes = append(normalizedCodes, normalized)
 	}
+
+	out, err := loadMinuteCacheRangeMapFromMinuteDB(normalizedCodes)
+	if err != nil {
+		return nil, err
+	}
+	legacyCodes := missingMinuteCacheRangeCodes(normalizedCodes, out)
+	legacyOut, err := loadMinuteCacheRangeMapFromLegacyCache(legacyCodes)
+	if err != nil {
+		return nil, err
+	}
+	for code, r := range legacyOut {
+		if _, ok := out[code]; ok {
+			continue
+		}
+		out[code] = r
+	}
+	return out, nil
+}
+
+func loadMinuteCacheRangeMapFromMinuteDB(normalizedCodes []string) (map[string]minuteCacheRange, error) {
+	type row struct {
+		StockCode string `gorm:"column:stock_code"`
+		Start     *int64 `gorm:"column:start_time"`
+		End       *int64 `gorm:"column:end_time"`
+	}
+	out := make(map[string]minuteCacheRange)
+	if db.MinuteDao == nil {
+		return out, nil
+	}
+	rows := make([]row, 0)
+	q := db.MinuteDao.Model(&minuteCacheDBBar{})
+	if len(normalizedCodes) > 0 {
+		q = q.Where("stock_code IN ?", normalizedCodes)
+	}
+	err := q.
+		Select("stock_code, MIN(trade_time) AS start_time, MAX(trade_time) AS end_time").
+		Group("stock_code").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		code := strings.ToUpper(strings.TrimSpace(r.StockCode))
+		if code == "" || r.Start == nil || r.End == nil {
+			continue
+		}
+		start := minuteTimeFromMillis(*r.Start)
+		end := minuteTimeFromMillis(*r.End)
+		if start.IsZero() || end.IsZero() {
+			continue
+		}
+		out[code] = minuteCacheRange{Start: &start, End: &end}
+	}
+	return out, nil
+}
+
+func loadMinuteCacheRangeMapFromLegacyCache(normalizedCodes []string) (map[string]minuteCacheRange, error) {
+	type row struct {
+		StockCode string `gorm:"column:stock_code"`
+		Start     string `gorm:"column:start_time"`
+		End       string `gorm:"column:end_time"`
+	}
+	out := make(map[string]minuteCacheRange)
+	if !legacyMinuteBarTableAvailable() {
+		return out, nil
+	}
 	rows := make([]row, 0)
 	q := db.Dao.Model(&models.AiRecommendMinuteBar{})
 	if len(normalizedCodes) > 0 {
@@ -206,7 +433,6 @@ func loadMinuteCacheRangeMapByCodes(codes []string) (map[string]minuteCacheRange
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]minuteCacheRange, len(rows))
 	for _, r := range rows {
 		code := strings.ToUpper(strings.TrimSpace(r.StockCode))
 		if code == "" {
@@ -217,11 +443,23 @@ func loadMinuteCacheRangeMapByCodes(codes []string) (map[string]minuteCacheRange
 		if !okStart || !okEnd {
 			continue
 		}
-		s := start
-		e := end
-		out[code] = minuteCacheRange{Start: &s, End: &e}
+		out[code] = minuteCacheRange{Start: &start, End: &end}
 	}
 	return out, nil
+}
+
+func missingMinuteCacheRangeCodes(normalizedCodes []string, existing map[string]minuteCacheRange) []string {
+	if len(normalizedCodes) == 0 {
+		return nil
+	}
+	missing := make([]string, 0, len(normalizedCodes))
+	for _, code := range normalizedCodes {
+		if _, ok := existing[code]; ok {
+			continue
+		}
+		missing = append(missing, code)
+	}
+	return missing
 }
 
 func deleteMinuteBarsCache(stockCode string) error {
@@ -229,12 +467,28 @@ func deleteMinuteBarsCache(stockCode string) error {
 	if code == "" {
 		return nil
 	}
-	return db.Dao.Where("stock_code = ?", code).Delete(&models.AiRecommendMinuteBar{}).Error
+	if db.MinuteDao != nil {
+		if err := db.MinuteDao.Where("stock_code = ?", code).Delete(&minuteCacheDBBar{}).Error; err != nil {
+			return err
+		}
+	}
+	if legacyMinuteBarTableAvailable() {
+		return db.Dao.Where("stock_code = ?", code).Delete(&models.AiRecommendMinuteBar{}).Error
+	}
+	return nil
 }
 
 func cleanMinuteCacheForTrackedCodes(codes []string) error {
 	if len(codes) == 0 {
-		return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error
+		if db.MinuteDao != nil {
+			if err := db.MinuteDao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&minuteCacheDBBar{}).Error; err != nil {
+				return err
+			}
+		}
+		if legacyMinuteBarTableAvailable() {
+			return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error
+		}
+		return nil
 	}
 	normalized := make([]string, 0, len(codes))
 	for _, code := range codes {
@@ -245,7 +499,35 @@ func cleanMinuteCacheForTrackedCodes(codes []string) error {
 		normalized = append(normalized, c)
 	}
 	if len(normalized) == 0 {
-		return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error
+		if db.MinuteDao != nil {
+			if err := db.MinuteDao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&minuteCacheDBBar{}).Error; err != nil {
+				return err
+			}
+		}
+		if legacyMinuteBarTableAvailable() {
+			return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error
+		}
+		return nil
 	}
-	return db.Dao.Where("stock_code NOT IN ?", normalized).Delete(&models.AiRecommendMinuteBar{}).Error
+	if db.MinuteDao != nil {
+		if err := db.MinuteDao.Where("stock_code NOT IN ?", normalized).Delete(&minuteCacheDBBar{}).Error; err != nil {
+			return err
+		}
+	}
+	if legacyMinuteBarTableAvailable() {
+		return db.Dao.Where("stock_code NOT IN ?", normalized).Delete(&models.AiRecommendMinuteBar{}).Error
+	}
+	return nil
+}
+
+func minuteCacheDualWriteEnabled() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("GO_STOCK_MINUTE_DUAL_WRITE")))
+	return value == "1" || value == "true" || value == "yes" || value == "on"
+}
+
+func legacyMinuteBarTableAvailable() bool {
+	if db.Dao == nil {
+		return false
+	}
+	return db.Dao.Migrator().HasTable(&models.AiRecommendMinuteBar{})
 }
