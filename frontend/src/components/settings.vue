@@ -15,6 +15,9 @@ import {
 import {NTag, useMessage} from "naive-ui";
 import {data, models} from "../../wailsjs/go/models";
 import {EventsEmit} from "../../wailsjs/runtime";
+import MinuteProviderSettings from "./settings/MinuteProviderSettings.vue";
+import EmailSettings from "./settings/EmailSettings.vue";
+import AiConfigSettings from "./settings/AiConfigSettings.vue";
 
 const message = useMessage()
 
@@ -83,8 +86,6 @@ const settingsLoaded = ref(false)
 const autoSaveState = ref('idle')
 const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
-const aiConfigDragSourceIndex = ref(null)
-const aiConfigDragTargetIndex = ref(null)
 const minuteProviderModeOptions = [
   {label: '公共源优先', value: 'public'},
   {label: '私人分钟线来源', value: 'private'},
@@ -199,101 +200,10 @@ function moveAiConfig(sourceIndex, targetIndex) {
   return true
 }
 
-function handleAiConfigDragStart(event, index) {
-  aiConfigDragSourceIndex.value = index
-  aiConfigDragTargetIndex.value = index
-  event.dataTransfer.effectAllowed = 'move'
-  event.dataTransfer.setData('text/plain', String(index))
-}
-
-function handleAiConfigDragOver(event, index) {
-  event.preventDefault()
-  aiConfigDragTargetIndex.value = index
-  event.dataTransfer.dropEffect = 'move'
-}
-
-function handleAiConfigDragEnter(event, index) {
-  event.preventDefault()
-  aiConfigDragTargetIndex.value = index
-}
-
-function handleAiConfigDrop(event, index) {
-  event.preventDefault()
-  const rawSource = aiConfigDragSourceIndex.value ?? Number(event.dataTransfer.getData('text/plain'))
-  const moved = moveAiConfig(Number(rawSource), index)
-  aiConfigDragSourceIndex.value = null
-  aiConfigDragTargetIndex.value = null
+function handleAiConfigMove(sourceIndex, targetIndex) {
+  const moved = moveAiConfig(sourceIndex, targetIndex)
   if (moved) {
     queueAutoSave()
-  }
-}
-
-function handleAiConfigDragEnd() {
-  aiConfigDragSourceIndex.value = null
-  aiConfigDragTargetIndex.value = null
-}
-
-function resolveAiConfigRowIndexFromPoint(clientX, clientY) {
-  const target = document.elementFromPoint(clientX, clientY)
-  const row = target?.closest?.('.ai-config-row')
-  const rawIndex = row?.getAttribute?.('data-ai-config-index')
-  const index = Number(rawIndex)
-  return Number.isInteger(index) ? index : null
-}
-
-function cleanupAiConfigPointerDrag() {
-  window.removeEventListener('pointermove', handleAiConfigPointerMove)
-  window.removeEventListener('pointerup', handleAiConfigPointerUp)
-  window.removeEventListener('pointercancel', handleAiConfigPointerCancel)
-}
-
-function handleAiConfigPointerDown(event, index) {
-  if (event.button !== 0) {
-    return
-  }
-  aiConfigDragSourceIndex.value = index
-  aiConfigDragTargetIndex.value = index
-  cleanupAiConfigPointerDrag()
-  window.addEventListener('pointermove', handleAiConfigPointerMove)
-  window.addEventListener('pointerup', handleAiConfigPointerUp, {once: true})
-  window.addEventListener('pointercancel', handleAiConfigPointerCancel, {once: true})
-  event.preventDefault()
-}
-
-function handleAiConfigPointerMove(event) {
-  if (aiConfigDragSourceIndex.value === null) {
-    return
-  }
-  const index = resolveAiConfigRowIndexFromPoint(event.clientX, event.clientY)
-  if (index !== null) {
-    aiConfigDragTargetIndex.value = index
-  }
-}
-
-function handleAiConfigPointerUp(event) {
-  const fallbackTarget = aiConfigDragTargetIndex.value
-  const pointTarget = resolveAiConfigRowIndexFromPoint(event.clientX, event.clientY)
-  const targetIndex = pointTarget ?? fallbackTarget
-  const moved = moveAiConfig(Number(aiConfigDragSourceIndex.value), Number(targetIndex))
-  aiConfigDragSourceIndex.value = null
-  aiConfigDragTargetIndex.value = null
-  cleanupAiConfigPointerDrag()
-  if (moved) {
-    queueAutoSave()
-  }
-}
-
-function handleAiConfigPointerCancel() {
-  aiConfigDragSourceIndex.value = null
-  aiConfigDragTargetIndex.value = null
-  cleanupAiConfigPointerDrag()
-}
-
-function aiConfigRowClass(index) {
-  return {
-    'ai-config-row': true,
-    'ai-config-row-dragging': aiConfigDragSourceIndex.value === index,
-    'ai-config-row-drag-over': aiConfigDragTargetIndex.value === index && aiConfigDragSourceIndex.value !== index,
   }
 }
 
@@ -380,7 +290,6 @@ onMounted(() => {
 })
 onBeforeUnmount(() => {
   message.destroyAll()
-  cleanupAiConfigPointerDrag()
 })
 
 function buildConfigPayload() {
@@ -711,63 +620,6 @@ async function runMarketSummaryCompatFixAction() {
   }
 }
 
-function formatDateTime(value) {
-  if (!value) {
-    return "-"
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return String(value)
-  }
-  const pad = (n) => String(n).padStart(2, "0")
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
-}
-
-function formatSendType(value) {
-  switch (String(value || "").trim()) {
-    case "test":
-      return "测试邮件"
-    case "xlsx":
-      return "收益率 XLSX"
-    case "csv":
-      return "收益率 CSV（旧版）"
-    case "manual_ai":
-      return "手动 AI 报告"
-    case "cron_ai":
-      return "定时 AI 报告"
-    case "manual_summary":
-      return "手动 AI 总结"
-    case "cron_summary":
-      return "定时 AI 总结"
-    default:
-      return value || "-"
-  }
-}
-
-function formatAttachmentText(item) {
-  const count = Number(item?.attachmentCount || 0)
-  if (count <= 0) {
-    return "-"
-  }
-  const names = String(item?.attachmentNames || "").trim()
-  if (!names) {
-    return `${count} 个附件`
-  }
-  return `${names} (${count} 个)`
-}
-
-function formatReportText(item) {
-  const name = String(item?.reportStockName || "").trim()
-  const code = String(item?.reportStockCode || "").trim()
-  if (name && code) {
-    return `${name} [${code}]`
-  }
-  if (name || code) {
-    return name || code
-  }
-  return "-"
-}
-
 async function refreshEmailSendLogs(pageNo = emailSendLogPage.value) {
   emailSendLogsLoading.value = true
   try {
@@ -968,170 +820,35 @@ function deletePrompt(ID) {
           </n-grid>
         </n-card>
 
-        <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => '分钟线数据源')" size="small">
-          <n-grid :cols="24" :x-gap="24" style="text-align: left">
-            <n-form-item-gi :span="24">
-              <n-alert type="info" :show-icon="false">
-                公共源更适合实时与短周期分钟线。若要覆盖更长时间的历史分钟线，请切换到私人分钟线来源并填写调用 URL 与 API Key。
-              </n-alert>
-            </n-form-item-gi>
+        <MinuteProviderSettings
+            :form-value="formValue"
+            :minute-provider-mode-options="minuteProviderModeOptions"
+            :akshare-minute-source-options="akshareMinuteSourceOptions"
+            :private-minute-proxy-mode-options="privateMinuteProxyModeOptions"
+            :private-minute-level-options="privateMinuteLevelOptions"
+            @immediate-change="handleImmediateFieldChange"
+            @text-blur="handleTextFieldBlur"
+        />
 
-            <n-form-item-gi :span="8" label="分钟线模式：" path="minuteProviderMode">
-              <n-radio-group v-model:value="formValue.minuteProviderMode" @update:value="handleImmediateFieldChange">
-                <n-space>
-                  <n-radio-button
-                      v-for="item in minuteProviderModeOptions"
-                      :key="item.value"
-                      :value="item.value"
-                  >
-                    {{ item.label }}
-                  </n-radio-button>
-                </n-space>
-              </n-radio-group>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" label="AKShare 来源偏好：" path="akshareMinuteSourceMode">
-              <n-select
-                  v-model:value="formValue.akshareMinuteSourceMode"
-                  :options="akshareMinuteSourceOptions"
-                  :disabled="!formValue.akshareEnabled"
-                  @update:value="handleImmediateFieldChange"
-              />
-            </n-form-item-gi>
-
-            <n-form-item-gi :span="4" label="AKShare：" path="akshareEnabled">
-              <n-switch v-model:value="formValue.akshareEnabled" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="4" label="新浪分钟线：" path="sinaMinuteEnabled">
-              <n-switch v-model:value="formValue.sinaMinuteEnabled" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="4" label="腾讯分钟线：" path="tencentMinuteEnabled">
-              <n-switch v-model:value="formValue.tencentMinuteEnabled" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="24">
-              <n-alert type="warning" :show-icon="false">
-                私人分钟线来源不会在页面中展示具体服务商名称；这里只提供通用 URL 与 API Key 配置入口。
-              </n-alert>
-            </n-form-item-gi>
-
-            <n-form-item-gi :span="4" label="启用私人来源：" path="privateMinute.enabled">
-              <n-switch v-model:value="formValue.privateMinute.enabled" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="10" label="调用 URL：" path="privateMinute.baseUrl">
-              <n-input
-                  type="text"
-                  placeholder="例如 https://example.com/api"
-                  v-model:value="formValue.privateMinute.baseUrl"
-                  clearable
-                  @blur="handleTextFieldBlur"
-              />
-            </n-form-item-gi>
-            <n-form-item-gi :span="10" label="API Key：" path="privateMinute.apiKey">
-              <n-input
-                  type="password"
-                  placeholder="私人分钟线来源 API Key"
-                  v-model:value="formValue.privateMinute.apiKey"
-                  show-password-on="click"
-                  clearable
-                  @blur="handleTextFieldBlur"
-              />
-            </n-form-item-gi>
-            <n-form-item-gi :span="6" label="超时(秒)：" path="privateMinute.timeoutSec">
-              <n-input-number :min="1" v-model:value="formValue.privateMinute.timeoutSec" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="6" label="最小间隔(ms)：" path="privateMinute.minIntervalMs">
-              <n-input-number :min="0" v-model:value="formValue.privateMinute.minIntervalMs" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="6" label="代理模式：" path="privateMinute.proxyMode">
-              <n-select v-model:value="formValue.privateMinute.proxyMode" :options="privateMinuteProxyModeOptions" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="6" label="分钟级别：" path="privateMinute.level">
-              <n-select v-model:value="formValue.privateMinute.level" :options="privateMinuteLevelOptions" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-          </n-grid>
-        </n-card>
-
-        <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => '通知设置')" size="small">
-          <n-grid :cols="24" :x-gap="24" style="text-align: left">
-            <n-form-item-gi :span="4" label="邮箱推送收益率：" path="yieldEmail.enable">
-              <n-switch v-model:value="formValue.yieldEmail.enable" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-
-            <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">
-              <n-alert type="info" :show-icon="false">
-                支持多个收件邮箱。邮件不会再单独按时间定时发送；现在改为市场资讯 AI 总结在“定时执行完成后”立即发邮件。手动点击“再次总结”不会自动发，如需手动发，请到 AI 总结弹窗里点“发送邮件”。
-              </n-alert>
-            </n-form-item-gi>
-            <n-form-item-gi :span="12" v-if="formValue.yieldEmail.enable" label="收件邮箱：" path="yieldEmail.to">
-              <n-input placeholder="多个收件邮箱用英文逗号分隔" v-model:value="formValue.yieldEmail.to" clearable @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="12" v-if="formValue.yieldEmail.enable" label="发件邮箱：" path="yieldEmail.from">
-              <n-input placeholder="用于 SMTP 登录的发件邮箱" v-model:value="formValue.yieldEmail.from" clearable @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" v-if="formValue.yieldEmail.enable" label="SMTP 主机：" path="yieldEmail.smtpHost">
-              <n-input placeholder="可留空，按发件邮箱自动推断" v-model:value="formValue.yieldEmail.smtpHost" clearable @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="4" v-if="formValue.yieldEmail.enable" label="SMTP 端口：" path="yieldEmail.smtpPort">
-              <n-input-number v-model:value="formValue.yieldEmail.smtpPort" :min="1" :max="65535" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="6" v-if="formValue.yieldEmail.enable" label="SMTP 用户名：" path="yieldEmail.smtpUsername">
-              <n-input placeholder="可留空，默认使用发件邮箱" v-model:value="formValue.yieldEmail.smtpUsername" clearable @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="6" v-if="formValue.yieldEmail.enable" label="SMTP 授权码：" path="yieldEmail.smtpPassword">
-              <n-input type="password" placeholder="邮箱 SMTP 授权码/密码" v-model:value="formValue.yieldEmail.smtpPassword" show-password-on="click" clearable @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" v-if="formValue.yieldEmail.enable" label="定时AI总结后自动发邮件：" path="marketSummaryEmailEnabled">
-              <n-switch v-model:value="formValue.marketSummaryEmailEnabled" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">
-              <n-space vertical>
-                <n-space>
-                  <n-button type="primary" :loading="yieldEmailTestSending" @click="sendYieldEmailTest">发送“你好”测试邮件</n-button>
-                  <n-button type="success" :loading="yieldEmailXlsxSending" @click="sendYieldEmailXLSXNowAction">立刻发送收益率 XLSX</n-button>
-                  <n-button tertiary :loading="marketSummaryCompatFixing" @click="runMarketSummaryCompatFixAction">修复历史 AI 总结备注</n-button>
-                  <n-button tertiary @click="refreshEmailSendLogs" :loading="emailSendLogsLoading">刷新发送日志</n-button>
-                </n-space>
-                <n-text depth="3">收益率 XLSX 会单独发送与网页收益率列表一致的全量表格，不受页面 100 条分页限制，并保留主要状态颜色。若开启上面的开关，只有“市场资讯 AI 总结定时任务”完成后才会自动发邮件；手动总结不会自动发。</n-text>
-                <n-text depth="3">“修复历史 AI 总结备注”会一次性把旧报告和旧推荐备注里的 `activationRuleJson` 转成人话，不影响机器侧 strict 规则。</n-text>
-              </n-space>
-            </n-form-item-gi>
-            <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">
-              <n-card size="small" title="最近邮件发送日志">
-                <n-data-table
-                    :loading="emailSendLogsLoading"
-                    :bordered="false"
-                    :single-line="false"
-                    size="small"
-                    :columns="[
-                      { title: '触发时间', key: 'triggeredAt', width: 168, render: (row) => formatDateTime(row.triggeredAt || row.CreatedAt) },
-                      { title: '类型', key: 'sendType', width: 120, render: (row) => formatSendType(row.sendType) },
-                      { title: '状态', key: 'status', width: 90, render: (row) => row.status === 'success' ? h(NTag, { type: 'success', bordered: false }, () => '成功') : h(NTag, { type: 'error', bordered: false }, () => '失败') },
-                      { title: '收件人', key: 'recipients', width: 220, ellipsis: { tooltip: true } },
-                      { title: '主题', key: 'subject', width: 260, ellipsis: { tooltip: true } },
-                      { title: '报告', key: 'report', width: 180, render: (row) => formatReportText(row) },
-                      { title: '附件', key: 'attachmentNames', width: 220, render: (row) => formatAttachmentText(row), ellipsis: { tooltip: true } },
-                      { title: '摘要', key: 'extraSummary', width: 220, ellipsis: { tooltip: true } },
-                      { title: '错误信息', key: 'errorMessage', minWidth: 260, ellipsis: { tooltip: true }, render: (row) => row.errorMessage || '-' }
-                    ]"
-                    :data="emailSendLogs"
-                    :pagination="false"
-                />
-                <n-flex justify="space-between" align="center" style="margin-top: 12px;">
-                  <n-text depth="3">
-                    第 {{ emailSendLogPage }} / {{ emailSendLogTotalPages }} 页，共 {{ emailSendLogTotal }} 条
-                  </n-text>
-                  <n-space>
-                    <n-button size="small" @click="prevEmailSendLogPage" :disabled="emailSendLogPage <= 1 || emailSendLogsLoading">
-                      上一页
-                    </n-button>
-                    <n-button size="small" @click="nextEmailSendLogPage" :disabled="emailSendLogPage >= emailSendLogTotalPages || emailSendLogsLoading">
-                      下一页
-                    </n-button>
-                  </n-space>
-                </n-flex>
-              </n-card>
-            </n-form-item-gi>
-          </n-grid>
-        </n-card>
+        <EmailSettings
+            :form-value="formValue"
+            :yield-email-test-sending="yieldEmailTestSending"
+            :yield-email-xlsx-sending="yieldEmailXlsxSending"
+            :market-summary-compat-fixing="marketSummaryCompatFixing"
+            :email-send-logs-loading="emailSendLogsLoading"
+            :email-send-logs="emailSendLogs"
+            :email-send-log-page="emailSendLogPage"
+            :email-send-log-total-pages="emailSendLogTotalPages"
+            :email-send-log-total="emailSendLogTotal"
+            @immediate-change="handleImmediateFieldChange"
+            @text-blur="handleTextFieldBlur"
+            @send-test="sendYieldEmailTest"
+            @send-xlsx="sendYieldEmailXLSXNowAction"
+            @run-compat-fix="runMarketSummaryCompatFixAction"
+            @refresh-logs="refreshEmailSendLogs"
+            @prev-page="prevEmailSendLogPage"
+            @next-page="nextEmailSendLogPage"
+        />
 
         <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => 'AI设置')" size="small">
           <n-grid :cols="24" :x-gap="24" style="text-align: left;">
@@ -1176,94 +893,18 @@ function deletePrompt(ID) {
                        :autosize="{ minRows: 4, maxRows: 8 }" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
 
-            <n-gi :span="24" v-if="formValue.openAI.enable">
-              <n-divider title-placement="left">AI模型服务配置</n-divider>
-            </n-gi>
-            <n-gi :span="24" v-if="formValue.openAI.enable">
-              <n-space vertical>
-                <n-scrollbar x-scrollable>
-                  <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1320px;">
-                    <thead>
-                    <tr>
-                      <th style="width: 92px;">排序</th>
-                      <th style="width: 170px;">名称</th>
-                      <th>Base URL</th>
-                      <th style="width: 210px;">Model</th>
-                      <th style="width: 190px;">API 格式</th>
-                      <th style="width: 260px;">API Key</th>
-                      <th style="width: 110px;">测试</th>
-                      <th style="width: 90px;">删除</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    <template v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="aiConfigRowKey(aiConfig)">
-                      <tr :class="aiConfigRowClass(index)"
-                          :data-ai-config-index="index"
-                          @dragover="handleAiConfigDragOver($event, index)"
-                          @dragenter="handleAiConfigDragEnter($event, index)"
-                          @drop="handleAiConfigDrop($event, index)"
-                          @dragend="handleAiConfigDragEnd">
-                        <td>
-                          <div class="ai-config-drag-handle"
-                               draggable="true"
-                               title="拖动调整模型顺序"
-                               @pointerdown="handleAiConfigPointerDown($event, index)"
-                               @dragstart="handleAiConfigDragStart($event, index)"
-                               @dragend="handleAiConfigDragEnd">
-                            <span class="ai-config-drag-icon">≡</span>
-                            <span>{{ index + 1 }}</span>
-                          </div>
-                        </td>
-                        <td>
-                          <n-input v-model:value="aiConfig.name" type="text" placeholder="名称" clearable
-                                   @blur="handleTextFieldBlur"/>
-                        </td>
-                        <td>
-                          <n-input v-model:value="aiConfig.baseUrl" type="text" placeholder="https://api.example.com/v1"
-                                   clearable @blur="handleTextFieldBlur"/>
-                        </td>
-                        <td>
-                          <n-input v-model:value="aiConfig.modelName" type="text" placeholder="模型名称" clearable
-                                   @blur="handleTextFieldBlur"/>
-                        </td>
-                        <td>
-                          <n-select v-model:value="aiConfig.apiProtocol" :options="aiProtocolOptions"
-                                    @update:value="handleImmediateFieldChange"/>
-                        </td>
-                        <td>
-                          <n-input v-model:value="aiConfig.apiKey" type="password" placeholder="API Key" clearable
-                                   show-password-on="click" @blur="handleTextFieldBlur"/>
-                        </td>
-                        <td>
-                          <n-button size="small" type="primary" ghost
-                                    :loading="aiConfigTestState(aiConfig, index).loading"
-                                    @click="testAiConfig(index)">测试</n-button>
-                        </td>
-                        <td>
-                          <n-button type="error" size="small" ghost @click="removeAiConfig(index)">删除</n-button>
-                        </td>
-                      </tr>
-                      <tr v-if="aiConfigTestState(aiConfig, index).result">
-                        <td colspan="8">
-                          <n-alert :type="aiConfigTestState(aiConfig, index).result.success ? 'success' : 'error'"
-                                   :bordered="false">
-                            {{ aiConfigTestState(aiConfig, index).result.message }}
-                            <template v-if="aiConfigTestState(aiConfig, index).result.success">
-                              ：{{ aiConfigTestState(aiConfig, index).result.protocol }} /
-                              {{ aiConfigTestState(aiConfig, index).result.model }} /
-                              {{ aiConfigTestState(aiConfig, index).result.latencyMs }}ms /
-                              {{ aiConfigTestState(aiConfig, index).result.contentPreview }}
-                            </template>
-                          </n-alert>
-                        </td>
-                      </tr>
-                    </template>
-                    </tbody>
-                  </n-table>
-                </n-scrollbar>
-                <n-button type="primary" dashed @click="addAiConfig" style="width: 100%;">+ 添加AI配置</n-button>
-              </n-space>
-            </n-gi>
+            <AiConfigSettings
+                :form-value="formValue"
+                :ai-protocol-options="aiProtocolOptions"
+                :ai-config-row-key="aiConfigRowKey"
+                :ai-config-test-state="aiConfigTestState"
+                @immediate-change="handleImmediateFieldChange"
+                @text-blur="handleTextFieldBlur"
+                @add-ai-config="addAiConfig"
+                @remove-ai-config="removeAiConfig"
+                @test-ai-config="testAiConfig"
+                @move-ai-config="handleAiConfigMove"
+            />
 
             <n-gi :span="24">
               <n-divider/>
@@ -1330,36 +971,5 @@ function deletePrompt(ID) {
   font-size: 16px;
   font-weight: bold;
   color: red;
-}
-
-.ai-config-row {
-  transition: background-color 0.12s ease, opacity 0.12s ease;
-}
-
-.ai-config-row-dragging {
-  opacity: 0.58;
-}
-
-.ai-config-row-drag-over > td {
-  background-color: rgba(24, 160, 88, 0.08);
-  border-top: 2px dashed #18a058;
-}
-
-.ai-config-drag-handle {
-  align-items: center;
-  color: #18a058;
-  cursor: move;
-  display: inline-flex;
-  font-weight: 600;
-  gap: 8px;
-  justify-content: center;
-  min-width: 54px;
-  user-select: none;
-}
-
-.ai-config-drag-icon {
-  color: #8a8f99;
-  font-size: 18px;
-  line-height: 1;
 }
 </style>
