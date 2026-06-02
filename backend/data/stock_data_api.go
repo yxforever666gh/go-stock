@@ -18,6 +18,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -42,6 +43,7 @@ const txStockUrl = "http://qt.gtimg.cn/?_=%d&q=%s"
 const tushareApiUrl = "https://api.tushare.pro"
 
 var ErrInvalidDataFormat = errors.New("invalid data format")
+var realtimeStockInfoPersisting atomic.Bool
 
 type StockDataApi struct {
 	client *resty.Client
@@ -360,15 +362,6 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 				continue
 			}
 			stockInfos = append(stockInfos, *stockData)
-			go func() {
-				var count int64
-				db.Dao.Model(&StockInfo{}).Where("code = ?", stockData.Code).Count(&count)
-				if count == 0 {
-					db.Dao.Model(&StockInfo{}).Create(stockData)
-				} else {
-					db.Dao.Model(&StockInfo{}).Where("code = ?", stockData.Code).Updates(stockData)
-				}
-			}()
 		}
 	}
 
@@ -387,6 +380,7 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 	})
 
 	if strings.TrimSpace(codes) == "" {
+		persistRealtimeStockInfosAsync(stockInfos)
 		return &stockInfos, nil
 	}
 
@@ -421,19 +415,60 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 		}
 		stockInfos = append(stockInfos, *stockData)
 
-		go func() {
-			var count int64
-			db.Dao.Model(&StockInfo{}).Where("code = ?", stockData.Code).Count(&count)
-			if count == 0 {
-				db.Dao.Model(&StockInfo{}).Create(stockData)
-			} else {
-				db.Dao.Model(&StockInfo{}).Where("code = ?", stockData.Code).Updates(stockData)
-			}
-		}()
-
 	}
 
+	persistRealtimeStockInfosAsync(stockInfos)
 	return &stockInfos, err
+}
+
+func persistRealtimeStockInfosAsync(stockInfos []StockInfo) {
+	if len(stockInfos) == 0 {
+		return
+	}
+	if !realtimeStockInfoPersisting.CompareAndSwap(false, true) {
+		return
+	}
+	rows := make([]StockInfo, 0, len(stockInfos))
+	seen := make(map[string]struct{}, len(stockInfos))
+	for _, info := range stockInfos {
+		code := strings.TrimSpace(info.Code)
+		if code == "" {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		seen[code] = struct{}{}
+		rows = append(rows, info)
+	}
+	if len(rows) == 0 {
+		realtimeStockInfoPersisting.Store(false)
+		return
+	}
+
+	go func() {
+		defer realtimeStockInfoPersisting.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		err := db.Dao.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			for idx := range rows {
+				row := rows[idx]
+				result := tx.Model(&StockInfo{}).Where("code = ?", row.Code).Updates(&row)
+				if result.Error != nil {
+					return result.Error
+				}
+				if result.RowsAffected == 0 {
+					if err := tx.Create(&row).Error; err != nil {
+						return err
+					}
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			logErrorEvery("StockDataApi.persistRealtimeStockInfos", 30*time.Second, "persist realtime stock info failed: %v", err)
+		}
+	}()
 }
 
 func (receiver StockDataApi) Follow(stockCode string) string {

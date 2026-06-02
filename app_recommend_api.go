@@ -3,6 +3,7 @@ package main
 import (
 	"time"
 
+	"go-stock/backend/logger"
 	"go-stock/backend/models"
 )
 
@@ -67,9 +68,50 @@ func (a *App) GetAiRecommendStocksDateRange() map[string]string {
 func (a *App) GetAiRecommendStocksYieldList(query models.AiRecommendStocksQuery) *models.AiRecommendStocksYieldPageData {
 	page, err := a.services.Recommend.GetAiRecommendStocksYieldList(&query)
 	if err != nil {
-		return &models.AiRecommendStocksYieldPageData{}
+		logger.SugaredLogger.Warnf("GetAiRecommendStocksYieldList failed: %v", err)
+		return emptyAiRecommendStocksYieldPage(query)
 	}
+	if page == nil {
+		return emptyAiRecommendStocksYieldPage(query)
+	}
+	normalizeAiRecommendStocksYieldPage(page, query)
 	return page
+}
+
+func emptyAiRecommendStocksYieldPage(query models.AiRecommendStocksQuery) *models.AiRecommendStocksYieldPageData {
+	page := &models.AiRecommendStocksYieldPageData{}
+	normalizeAiRecommendStocksYieldPage(page, query)
+	page.TotalYieldRateText = "--"
+	page.BenchmarkRateText = "--"
+	page.ExcessYieldRateText = "--"
+	page.StrategyXirrText = "--"
+	page.BenchmarkXirrText = "--"
+	page.ExcessXirrText = "--"
+	page.MaxDrawdownText = "--"
+	page.WinRateVsBenchmarkText = "--"
+	page.MedianExcessYieldRateText = "--"
+	return page
+}
+
+func normalizeAiRecommendStocksYieldPage(page *models.AiRecommendStocksYieldPageData, query models.AiRecommendStocksQuery) {
+	if page == nil {
+		return
+	}
+	if page.List == nil {
+		page.List = []models.AiRecommendStocksYieldItem{}
+	}
+	if page.Page <= 0 {
+		page.Page = query.Page
+	}
+	if page.Page <= 0 {
+		page.Page = 1
+	}
+	if page.PageSize <= 0 {
+		page.PageSize = query.PageSize
+	}
+	if page.PageSize <= 0 || page.PageSize > 100 {
+		page.PageSize = 100
+	}
 }
 
 func (a *App) GetAiRecommendYieldMinuteChart(recommendID uint) *models.AiRecommendYieldMinuteChartData {
