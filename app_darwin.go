@@ -1,5 +1,5 @@
-//go:build darwin
-// +build darwin
+//go:build darwin && !webonly
+// +build darwin,!webonly
 
 package main
 

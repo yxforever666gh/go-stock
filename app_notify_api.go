@@ -12,7 +12,6 @@ import (
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/mathutil"
 	"github.com/duke-git/lancet/v2/strutil"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) SendDingDingMessage(message string, stockCode string) string {
@@ -104,7 +103,7 @@ func getMsgTypeName(msgType int) string {
 //	@receiver a
 //	@param url
 func (a *App) OpenURL(url string) {
-	runtime.BrowserOpenURL(a.ctx, url)
+	openExternalURL(a.ctx, url)
 }
 
 // SaveImage
@@ -115,10 +114,10 @@ func (a *App) OpenURL(url string) {
 //	@param base64Data
 //	@return error
 func (a *App) SaveImage(name, base64Data string) string {
-	filePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	filePath, err := saveFileWithDialog(a.ctx, runtimeSaveFileOptions{
 		Title:           "保存图片",
 		DefaultFilename: name + "AI分析.png",
-		Filters: []runtime.FileFilter{
+		Filters: []runtimeFileFilter{
 			{
 				DisplayName: "PNG 图片",
 				Pattern:     "*.png",
@@ -149,10 +148,10 @@ func (a *App) SaveImage(name, base64Data string) string {
 //	@param base64Data
 //	@return error
 func (a *App) SaveWordFile(filename string, base64Data string) string {
-	filePath, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	filePath, err := saveFileWithDialog(a.ctx, runtimeSaveFileOptions{
 		Title:           "保存 Word 文件",
 		DefaultFilename: filename,
-		Filters: []runtime.FileFilter{
+		Filters: []runtimeFileFilter{
 			{DisplayName: "Word 文件", Pattern: "*.docx"},
 		},
 	})

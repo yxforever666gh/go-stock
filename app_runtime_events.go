@@ -1,3 +1,6 @@
+//go:build !webonly
+// +build !webonly
+
 package main
 
 import (

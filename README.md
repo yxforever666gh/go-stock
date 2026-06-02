@@ -171,7 +171,36 @@ npm install
 
 ## 运行方式
 
-### 1. Linux 桌面开发模式
+### 1. 本地 Web 源码开发模式
+
+日常开发优先使用该模式，不启动桌面壳，也不执行 Wails 打包。
+
+```bash
+make dev
+```
+
+等价于：
+
+```bash
+./scripts/dev-web.sh
+```
+
+默认：
+
+- 后端 API：`http://127.0.0.1:34115`
+- 前端开发服务：`http://127.0.0.1:5173`
+
+### 2. 只启动后端 Web 服务
+
+适合只调后端接口或配合已有前端开发服务。
+
+```bash
+make run-web
+```
+
+### 3. Linux 桌面开发模式
+
+仅在需要验证 Wails 桌面壳时使用。
 
 ```bash
 ./scripts/dev-linux.sh
@@ -187,20 +216,7 @@ npm install
 wails dev -m -s
 ```
 
-### 2. 本地 Web 联调模式
-
-适合前后端联调，前端走 Vite 热更新。
-
-```bash
-./scripts/dev-web.sh
-```
-
-默认：
-
-- 后端 API：`http://127.0.0.1:34115`
-- 前端开发服务：`http://127.0.0.1:5173`
-
-### 3. 本地 Web 常驻模式
+### 4. 本地 Web 常驻模式
 
 适合本机浏览器访问，不启动桌面壳。
 
@@ -395,18 +411,25 @@ NODE_OPTIONS=--max-old-space-size=4096 ./scripts/build-linux.sh
 make test
 make lint
 make build-web
+make build-web-binary
+make dev
 make dev-web
+make run-web
 make build-desktop
 ```
 
 说明：
 
 - `make test`
-  - 运行 `go test ./...`
+  - 运行 Go 测试，并排除 `frontend/node_modules`
 - `make lint`
   - 运行 Go 静态检查与前端 ESLint
 - `make build-web`
   - 构建前端静态资源
+- `make build-web-binary`
+  - 使用 `webonly` tag 构建 Web 模式二进制
+- `make dev`
+  - 默认 Web 源码开发入口
 
 ## 前端结构约定
 

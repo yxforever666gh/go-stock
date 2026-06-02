@@ -1,5 +1,5 @@
-//go:build linux
-// +build linux
+//go:build linux && !webonly
+// +build linux,!webonly
 
 package main
 

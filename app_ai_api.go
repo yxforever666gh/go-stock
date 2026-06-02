@@ -13,7 +13,6 @@ import (
 	appconfig "go-stock/internal/config"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) NewChatStream(stock, stockCode, question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) {
@@ -223,10 +222,10 @@ func (a *App) SaveAsMarkdown(stockCode, stockName string) string {
 		return "分析结果异常,无法保存。"
 	}
 	analysisTime := res.CreatedAt.Format("2006-01-02_15_04_05")
-	file, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	file, err := saveFileWithDialog(a.ctx, runtimeSaveFileOptions{
 		Title:           "保存为Markdown",
 		DefaultFilename: fmt.Sprintf("%s[%s]AI分析结果_%s.md", stockName, stockCode, analysisTime),
-		Filters: []runtime.FileFilter{
+		Filters: []runtimeFileFilter{
 			{
 				DisplayName: "Markdown",
 				Pattern:     "*.md;*.markdown",

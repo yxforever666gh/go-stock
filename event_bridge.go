@@ -4,8 +4,6 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 var runtimeEventsEnabled atomic.Bool
@@ -25,7 +23,7 @@ func setWebEventHub(hub *WebEventHub) {
 
 func emitEvent(ctx context.Context, eventName string, payload any) {
 	if runtimeEventsEnabled.Load() && ctx != nil {
-		runtime.EventsEmit(ctx, eventName, payload)
+		emitDesktopEvent(ctx, eventName, payload)
 	}
 
 	webEventHubMu.RLock()

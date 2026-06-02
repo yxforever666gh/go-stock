@@ -12,7 +12,6 @@ import (
 	"go-stock/backend/logger"
 
 	"github.com/samber/lo"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 func (a *App) UpdateConfig(settingConfig *data.SettingConfig) string {
@@ -41,7 +40,7 @@ func (a *App) GetConfig() *data.SettingConfig {
 
 func (a *App) ExportConfig() string {
 	config := a.services.Config.ExportConfig()
-	file, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{
+	file, err := saveFileWithDialog(a.ctx, runtimeSaveFileOptions{
 		Title:                "导出配置文件",
 		CanCreateDirectories: true,
 		DefaultFilename:      "config.json",

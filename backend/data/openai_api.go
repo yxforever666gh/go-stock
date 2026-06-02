@@ -25,7 +25,6 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // @Author spark
@@ -49,6 +48,26 @@ type OpenAi struct {
 	BrowserPath      string  `json:"browser_path"`
 	HttpProxy        string  `json:"httpProxy"`
 	HttpProxyEnabled bool    `json:"httpProxyEnabled"`
+}
+
+var runtimeEventEmitter struct {
+	mu sync.RWMutex
+	fn func(context.Context, string, any)
+}
+
+func SetRuntimeEventEmitter(fn func(context.Context, string, any)) {
+	runtimeEventEmitter.mu.Lock()
+	defer runtimeEventEmitter.mu.Unlock()
+	runtimeEventEmitter.fn = fn
+}
+
+func EmitRuntimeEvent(ctx context.Context, eventName string, payload any) {
+	runtimeEventEmitter.mu.RLock()
+	fn := runtimeEventEmitter.fn
+	runtimeEventEmitter.mu.RUnlock()
+	if fn != nil {
+		fn(ctx, eventName, payload)
+	}
 }
 
 func (o OpenAi) String() string {
@@ -924,7 +943,7 @@ func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptI
 					"question":     question,
 					"extraContent": "***❗获取股票价格失败,分析结果可能不准确***<hr>",
 				}
-				go runtime.EventsEmit(o.ctx, "warnMsg", "❗获取股票价格失败,分析结果可能不准确")
+				go EmitRuntimeEvent(o.ctx, "warnMsg", "❗获取股票价格失败,分析结果可能不准确")
 				return
 			}
 			price := ""
@@ -960,7 +979,7 @@ func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptI
 					"question":     question,
 					"extraContent": "***❗获取股票财报失败,分析结果可能不准确***<hr>",
 				}
-				go runtime.EventsEmit(o.ctx, "warnMsg", "❗获取股票财报失败,分析结果可能不准确")
+				go EmitRuntimeEvent(o.ctx, "warnMsg", "❗获取股票财报失败,分析结果可能不准确")
 				return
 			}
 			msg = append(msg, map[string]interface{}{

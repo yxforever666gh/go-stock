@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"go-stock/backend/data"
 	log "go-stock/backend/logger"
 	"go-stock/internal/bootstrap"
 	appconfig "go-stock/internal/config"
@@ -56,6 +57,7 @@ func main() {
 	}()
 
 	appRuntime := bootstrap.InitApplication(cfg)
+	data.SetRuntimeEventEmitter(emitEvent)
 
 	log.SugaredLogger.Info("starting...")
 	log.SugaredLogger.Info(startupBanner(cfg, *webMode))
