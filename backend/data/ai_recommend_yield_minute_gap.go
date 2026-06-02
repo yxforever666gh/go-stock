@@ -48,7 +48,7 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 		}
 
 		round++
-		_ = updateManualMinuteCoverageRetryStatus(runtime.meta.ID, round, stats, issues)
+		_ = updateManualMinuteCoverageRetryStatus(runtime.meta.ID, round, deadline, stats, issues)
 		runAiRecommendMinuteCoverageTasks(runtime, nextTasks)
 
 		stats, issues = computeMinuteDownloadCoverageStatsWithIssues(runtime.meta, -1)
@@ -185,7 +185,7 @@ func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.Ai
 	return db.Dao.Create(&state).Error
 }
 
-func updateManualMinuteCoverageRetryStatus(metaID uint, round int, stats minuteCoverageStats, issues []minuteCoverageIssue) error {
+func updateManualMinuteCoverageRetryStatus(metaID uint, round int, deadline time.Time, stats minuteCoverageStats, issues []minuteCoverageIssue) error {
 	if metaID == 0 {
 		return nil
 	}
@@ -197,8 +197,36 @@ func updateManualMinuteCoverageRetryStatus(metaID uint, round int, stats minuteC
 	return runWithSQLiteBusyRetry(func() error {
 		return db.Dao.Model(&models.AiRecommendYieldMeta{}).
 			Where("id = ?", metaID).
-			Update("last_download_error", message).Error
+			Updates(map[string]any{
+				"last_download_error": message,
+				"recalc_progress":     manualMinuteCoverageRetryProgress(round, deadline),
+				"updated_at":          time.Now(),
+			}).Error
 	})
+}
+
+func manualMinuteCoverageRetryProgress(round int, deadline time.Time) int {
+	if round <= 0 {
+		return 5
+	}
+	progress := 5 + round*12
+	if !deadline.IsZero() && manualMinuteCoverageRetryBudget > 0 {
+		startedAt := deadline.Add(-manualMinuteCoverageRetryBudget)
+		elapsed := manualMinuteCoverageNow().Sub(startedAt)
+		if elapsed > 0 {
+			elapsedProgress := 5 + int(elapsed*85/manualMinuteCoverageRetryBudget)
+			if elapsedProgress > progress {
+				progress = elapsedProgress
+			}
+		}
+	}
+	if progress < 5 {
+		return 5
+	}
+	if progress > 90 {
+		return 90
+	}
+	return progress
 }
 
 func manualMinuteCoverageRetryBackoff(round int) time.Duration {

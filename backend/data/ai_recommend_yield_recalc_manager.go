@@ -415,6 +415,12 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 		markAiRecommendYieldRecalcError(runtime.meta.ID, err)
 		return err
 	}
+	if reason == "manual_minute_download" {
+		if err = closeManualMinuteCoverageGaps(runtime, buildMinuteCoverageCodeSet(targets)); err != nil {
+			markAiRecommendYieldRecalcError(runtime.meta.ID, err)
+			return err
+		}
+	}
 	if err = clearAiRecommendYieldDirtyCodes(targets.targetCodes); err != nil {
 		markAiRecommendYieldRecalcError(runtime.meta.ID, err)
 		return err

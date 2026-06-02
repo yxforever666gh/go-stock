@@ -346,6 +346,125 @@ func TestCloseManualMinuteCoverageGaps_MarksUncoverableAfterRetryExhausted(t *te
 	}
 }
 
+func TestCloseManualMinuteCoverageGaps_MarksContinuityGapUncoverableAfterRetryExhausted(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-gap-continuity-uncoverable.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	oldManualNow := manualMinuteCoverageNow
+	oldManualSleep := manualMinuteCoverageSleep
+	oldBackoffs := manualMinuteCoverageRetryBackoffs
+	oldBudget := manualMinuteCoverageRetryBudget
+	oldMaxRetryRounds := manualMinuteCoverageMaxRetryRounds
+	oldTencent := fetchMinuteBarsWithTencentFn
+	oldAkshare := fetchMinuteBarsWithAkShareFn
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	t.Cleanup(func() {
+		timeNow = oldNow
+		manualMinuteCoverageNow = oldManualNow
+		manualMinuteCoverageSleep = oldManualSleep
+		manualMinuteCoverageRetryBackoffs = oldBackoffs
+		manualMinuteCoverageRetryBudget = oldBudget
+		manualMinuteCoverageMaxRetryRounds = oldMaxRetryRounds
+		fetchMinuteBarsWithTencentFn = oldTencent
+		fetchMinuteBarsWithAkShareFn = oldAkshare
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	})
+
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	manualMinuteCoverageNow = func() time.Time { return now }
+	manualMinuteCoverageSleep = func(time.Duration) {}
+	manualMinuteCoverageRetryBackoffs = []time.Duration{0}
+	manualMinuteCoverageRetryBudget = time.Minute
+	manualMinuteCoverageMaxRetryRounds = 2
+
+	meta := models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}
+	if err := db.Dao.Create(&meta).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "301293.SZ",
+		StockName:                   "三博脑科",
+		RecommendBuyPrice:           "10-10.5",
+		RecommendStopProfitPrice:    "11-12",
+		RecommendStopLossPrice:      "9.6",
+		RecommendStatus:             "valid",
+		RecommendCategory:           recommendExecutionImmediate,
+		ActivationStatus:            "pending",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.5,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPriceMax: 12,
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create recommend failed: %v", err)
+	}
+
+	gapStart := time.Date(2026, 5, 29, 10, 0, 0, 0, loc)
+	gapEnd := time.Date(2026, 5, 29, 10, 10, 0, 0, loc)
+	for _, bar := range minuteBarsForSessions(
+		time.Date(2026, 5, 28, 9, 31, 0, 0, loc),
+		time.Date(2026, 5, 29, 15, 0, 0, 0, loc),
+	) {
+		if !bar.TradeTime.Before(gapStart) && !bar.TradeTime.After(gapEnd) {
+			continue
+		}
+		if err := db.Dao.Create(&models.AiRecommendMinuteBar{
+			StockCode: "301293.SZ",
+			TradeTime: bar.TradeTime,
+			Open:      bar.Open,
+			High:      bar.High,
+			Low:       bar.Low,
+			Close:     bar.Close,
+			Volume:    bar.Volume,
+			Amount:    bar.Amount,
+			Source:    "seed",
+		}).Error; err != nil {
+			t.Fatalf("create seed minute bar failed: %v", err)
+		}
+	}
+
+	fetch := func(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+		return []minuteBar{}, "empty-test", nil
+	}
+	fetchMinuteBarsWithTencentFn = fetch
+	fetchMinuteBarsWithAkShareFn = fetch
+	fetchMinuteBarsWithSinaFn = fetch
+	fetchMinuteBarsWithDiemengFn = fetch
+
+	stats, issues := computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending != 1 || stats.Uncoverable != 0 {
+		t.Fatalf("coverage stats before exhausted retry = %#v issues=%#v, want pending=1 uncoverable=0", stats, issues)
+	}
+	err := closeManualMinuteCoverageGaps(&aiRecommendYieldRecalcRuntime{meta: &meta}, map[string]struct{}{"301293.SZ": {}})
+	if err != nil {
+		t.Fatalf("closeManualMinuteCoverageGaps failed: %v", err)
+	}
+	stats, issues = computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending != 0 || stats.Uncoverable != 1 {
+		t.Fatalf("coverage stats after exhausted continuity retry = %#v issues=%#v, want pending=0 uncoverable=1", stats, issues)
+	}
+	if len(issues) != 1 || !strings.Contains(issues[0].RawReason, "连续2轮重试") {
+		t.Fatalf("unexpected continuity issues after exhausted retry: %#v", issues)
+	}
+}
+
 func minuteBarsForSessions(start, end time.Time) []minuteBar {
 	sessions := buildMinuteCoverageSessions(start, end)
 	bars := make([]minuteBar, 0, 256)

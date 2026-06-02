@@ -1564,9 +1564,18 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 			continuityIssueCache[continuityKey] = continuityDetail
 		}
 		if strings.TrimSpace(continuityDetail.Reason) != "" {
-			pending++
-			appendIssue(rec, recordTime, code, "待覆盖",
-				fmt.Sprintf("%s（目标 %s~%s）", strings.TrimSpace(continuityDetail.Reason), formatTs(requiredStart), formatTs(requiredEnd)), continuityDetail)
+			continuityReason := fmt.Sprintf("%s（目标 %s~%s）", strings.TrimSpace(continuityDetail.Reason), formatTs(requiredStart), formatTs(requiredEnd))
+			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
+				uncoverable++
+				reason := strings.TrimSpace(state.DataStatusReason)
+				if reason == "" {
+					reason = continuityReason
+				}
+				appendIssue(rec, recordTime, code, "不可覆盖", reason, continuityDetail)
+			} else {
+				pending++
+				appendIssue(rec, recordTime, code, "待覆盖", continuityReason, continuityDetail)
+			}
 			continue
 		}
 		done++
@@ -3731,6 +3740,65 @@ func shiftToPrevWeekday(day time.Time) time.Time {
 // StartAiRecommendMinuteDownload 手动触发分钟线下载+收益重算（全持仓）
 func (s *AiRecommendStocksService) StartAiRecommendMinuteDownload() (map[string]any, error) {
 	return startManualAiRecommendMinuteDownload()
+}
+
+// GetAiRecommendYieldTaskStatus 返回收益率任务轻量状态，不构建收益率列表。
+func (s *AiRecommendStocksService) GetAiRecommendYieldTaskStatus() (*models.AiRecommendStocksYieldPageData, error) {
+	if err := ensureYieldMetaSchema(); err != nil {
+		return nil, err
+	}
+	meta, err := getOrCreateYieldMeta()
+	if err != nil {
+		return nil, err
+	}
+	dataAsOf := ""
+	if meta.LastFullRecalcAt != nil {
+		dataAsOf = meta.LastFullRecalcAt.In(cnLocation()).Format("2006-01-02 15:04:05")
+	}
+	stats, _ := computeMinuteDownloadCoverageStatsWithIssues(meta, -1)
+	manualCooldownUntil, manualCooldownRemainSec := resolveManualCooldownInfo(meta.ManualCooldownUntil)
+	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
+
+	return &models.AiRecommendStocksYieldPageData{
+		List:                      []models.AiRecommendStocksYieldItem{},
+		CalcMode:                  aiRecommendYieldModeStrict,
+		DataAsOf:                  dataAsOf,
+		RecalcInProgress:          meta.RecalcInProgress,
+		RecalcProgress:            clampPercent(meta.RecalcProgress),
+		DownloadInProgress:        meta.DownloadInProgress,
+		DownloadProgress:          clampPercent(meta.DownloadProgress),
+		DownloadDone:              meta.DownloadDone,
+		DownloadTotal:             meta.DownloadTotal,
+		LastDownloadError:         yieldLastDownloadMessage(meta.LastDownloadError),
+		MinuteDownloadDone:        stats.Done,
+		MinuteDownloadTotal:       stats.Total,
+		MinuteDownloadPending:     stats.Pending,
+		MinuteDownloadUncoverable: stats.Uncoverable,
+		ManualCooldownUntil:       manualCooldownUntil,
+		ManualCooldownRemainSec:   manualCooldownRemainSec,
+		LastManualStartedAt:       formatOptionalYieldMetaTime(meta.LastManualDownloadAt),
+		LastManualFinishedAt:      formatOptionalYieldMetaTime(meta.LastManualFinishedAt),
+		LastManualScopeCount:      meta.LastManualScopeCount,
+		LastManualPrefetchMs:      meta.LastManualPrefetchMs,
+		LastManualRecalcMs:        meta.LastManualRecalcMs,
+		LastManualTotalMs:         meta.LastManualTotalMs,
+		LastManualSqliteBusyCount: meta.LastManualSqliteBusyCount,
+		LastManualProviderSummary: strings.TrimSpace(meta.LastManualProviderSummary),
+		LastManualAuditReady:      meta.LastManualFinishedAt != nil,
+		DiemengHealthStatus:       diemengHealthStatus,
+		DiemengHealthSummary:      diemengHealthSummary,
+		DiemengHealthCheckedAt:    diemengHealthCheckedAt,
+	}, nil
+}
+
+func clampPercent(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
 }
 
 // GetAiRecommendYieldErrorLogs 获取股票收益率相关错误日志（已做中文可读化）

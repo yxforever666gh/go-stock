@@ -51,6 +51,10 @@ func (s RecommendService) StartAiRecommendMinuteDownload() (map[string]any, erro
 	return data.NewAiRecommendStocksService().StartAiRecommendMinuteDownload()
 }
 
+func (s RecommendService) GetAiRecommendYieldTaskStatus() (*models.AiRecommendStocksYieldPageData, error) {
+	return data.NewAiRecommendStocksService().GetAiRecommendYieldTaskStatus()
+}
+
 func (s RecommendService) GetAiRecommendYieldErrorLogs(limit int) ([]map[string]string, error) {
 	return data.NewAiRecommendStocksService().GetAiRecommendYieldErrorLogs(limit)
 }

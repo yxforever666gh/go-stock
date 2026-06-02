@@ -152,6 +152,19 @@ func (a *App) StartAiRecommendMinuteDownload() map[string]any {
 	return resp
 }
 
+func (a *App) GetAiRecommendYieldTaskStatus() *models.AiRecommendStocksYieldPageData {
+	page, err := a.services.Recommend.GetAiRecommendYieldTaskStatus()
+	if err != nil {
+		logger.SugaredLogger.Warnf("GetAiRecommendYieldTaskStatus failed: %v", err)
+		return emptyAiRecommendStocksYieldPage(models.AiRecommendStocksQuery{})
+	}
+	if page == nil {
+		return emptyAiRecommendStocksYieldPage(models.AiRecommendStocksQuery{})
+	}
+	normalizeAiRecommendStocksYieldPage(page, models.AiRecommendStocksQuery{})
+	return page
+}
+
 func (a *App) GetAiRecommendYieldErrorLogs(limit int) []map[string]string {
 	resp, err := a.services.Recommend.GetAiRecommendYieldErrorLogs(limit)
 	if err != nil {

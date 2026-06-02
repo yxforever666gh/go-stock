@@ -4,6 +4,7 @@ import {
   GetAiRecommendStocksYieldList,
   GetAiRecommendYieldMinuteChart,
   GetAiRecommendYieldErrorLogs,
+  GetAiRecommendYieldTaskStatus,
   StartAiRecommendMinuteDownload
 } from "../services/app-api";
 import {NBadge, NText, useMessage} from "naive-ui";
@@ -83,6 +84,7 @@ const replayModalLoadingRef = ref(false)
 const replayChartDataRef = ref(null)
 const replayModalTitleRef = ref("")
 let pollTimer = null
+let pollInFlight = false
 let cooldownTimer = null
 let manualCooldownUntilMs = 0
 
@@ -577,6 +579,69 @@ function query({
   })
 }
 
+function normalizeYieldTaskPayload(res = {}) {
+  return {
+    dataAsOf: res.dataAsOf || "",
+    recalcInProgress: !!res.recalcInProgress,
+    recalcProgress: Number(res.recalcProgress || 0),
+    downloadInProgress: !!res.downloadInProgress,
+    downloadProgress: Number(res.downloadProgress || 0),
+    downloadDone: Number(res.downloadDone || 0),
+    downloadTotal: Number(res.downloadTotal || 0),
+    lastDownloadError: res.lastDownloadError || "",
+    minuteDownloadDone: Number(res.minuteDownloadDone || 0),
+    minuteDownloadTotal: Number(res.minuteDownloadTotal || 0),
+    minuteDownloadPending: Number(res.minuteDownloadPending || 0),
+    minuteDownloadUncoverable: Number(res.minuteDownloadUncoverable || 0),
+    diemengHealthStatus: res.diemengHealthStatus || "",
+    diemengHealthSummary: res.diemengHealthSummary || "",
+    diemengHealthCheckedAt: res.diemengHealthCheckedAt || "",
+    lastManualStartedAt: res.lastManualStartedAt || "",
+    lastManualFinishedAt: res.lastManualFinishedAt || "",
+    lastManualScopeCount: Number(res.lastManualScopeCount || 0),
+    lastManualPrefetchMs: Number(res.lastManualPrefetchMs || 0),
+    lastManualRecalcMs: Number(res.lastManualRecalcMs || 0),
+    lastManualTotalMs: Number(res.lastManualTotalMs || 0),
+    lastManualSqliteBusyCount: Number(res.lastManualSqliteBusyCount || 0),
+    lastManualProviderSummary: res.lastManualProviderSummary || "",
+    lastManualAuditReady: !!res.lastManualAuditReady,
+    manualCooldownUntil: res.manualCooldownUntil || "",
+    manualCooldownRemainSec: Number(res.manualCooldownRemainSec || 0)
+  }
+}
+
+function applyYieldTaskStatus(data) {
+  dataAsOfRef.value = data.dataAsOf
+  recalcInProgressRef.value = data.recalcInProgress
+  recalcProgressRef.value = Number(data.recalcProgress || 0)
+  downloadInProgressRef.value = data.downloadInProgress
+  downloadProgressRef.value = Number(data.downloadProgress || 0)
+  downloadDoneRef.value = Number(data.downloadDone || 0)
+  downloadTotalRef.value = Number(data.downloadTotal || 0)
+  lastDownloadErrorRef.value = data.lastDownloadError || ""
+  minuteDownloadDoneRef.value = Number(data.minuteDownloadDone || 0)
+  minuteDownloadTotalRef.value = Number(data.minuteDownloadTotal || 0)
+  minuteDownloadPendingRef.value = Number(data.minuteDownloadPending || 0)
+  minuteDownloadUncoverableRef.value = Number(data.minuteDownloadUncoverable || 0)
+  diemengHealthStatusRef.value = data.diemengHealthStatus || ""
+  diemengHealthSummaryRef.value = data.diemengHealthSummary || "尚未执行自检"
+  diemengHealthCheckedAtRef.value = data.diemengHealthCheckedAt || ""
+  lastManualStartedAtRef.value = data.lastManualStartedAt || ""
+  lastManualFinishedAtRef.value = data.lastManualFinishedAt || ""
+  lastManualScopeCountRef.value = Number(data.lastManualScopeCount || 0)
+  lastManualPrefetchMsRef.value = Number(data.lastManualPrefetchMs || 0)
+  lastManualRecalcMsRef.value = Number(data.lastManualRecalcMs || 0)
+  lastManualTotalMsRef.value = Number(data.lastManualTotalMs || 0)
+  lastManualSqliteBusyCountRef.value = Number(data.lastManualSqliteBusyCount || 0)
+  lastManualProviderSummaryRef.value = data.lastManualProviderSummary || ""
+  lastManualAuditReadyRef.value = !!data.lastManualAuditReady
+  applyManualCooldown(data.manualCooldownUntil, data.manualCooldownRemainSec)
+}
+
+function isYieldTaskRunning() {
+  return !!recalcInProgressRef.value || !!downloadInProgressRef.value
+}
+
 function normalizePickerDate(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) {
@@ -609,32 +674,8 @@ function fetchYieldList(page, options = {}) {
     paginationReactive.page = page
     paginationReactive.pageCount = data.pageCount
     paginationReactive.itemCount = data.total
-    dataAsOfRef.value = data.dataAsOf
-    recalcInProgressRef.value = data.recalcInProgress
-    recalcProgressRef.value = Number(data.recalcProgress || 0)
-    downloadInProgressRef.value = data.downloadInProgress
-    downloadProgressRef.value = Number(data.downloadProgress || 0)
-    downloadDoneRef.value = Number(data.downloadDone || 0)
-    downloadTotalRef.value = Number(data.downloadTotal || 0)
-    lastDownloadErrorRef.value = data.lastDownloadError || ""
-    minuteDownloadDoneRef.value = Number(data.minuteDownloadDone || 0)
-    minuteDownloadTotalRef.value = Number(data.minuteDownloadTotal || 0)
-    minuteDownloadPendingRef.value = Number(data.minuteDownloadPending || 0)
-    minuteDownloadUncoverableRef.value = Number(data.minuteDownloadUncoverable || 0)
-    diemengHealthStatusRef.value = data.diemengHealthStatus || ""
-    diemengHealthSummaryRef.value = data.diemengHealthSummary || "尚未执行自检"
-    diemengHealthCheckedAtRef.value = data.diemengHealthCheckedAt || ""
-    lastManualStartedAtRef.value = data.lastManualStartedAt || ""
-    lastManualFinishedAtRef.value = data.lastManualFinishedAt || ""
-    lastManualScopeCountRef.value = Number(data.lastManualScopeCount || 0)
-    lastManualPrefetchMsRef.value = Number(data.lastManualPrefetchMs || 0)
-    lastManualRecalcMsRef.value = Number(data.lastManualRecalcMs || 0)
-    lastManualTotalMsRef.value = Number(data.lastManualTotalMs || 0)
-    lastManualSqliteBusyCountRef.value = Number(data.lastManualSqliteBusyCount || 0)
-    lastManualProviderSummaryRef.value = data.lastManualProviderSummary || ""
-    lastManualAuditReadyRef.value = !!data.lastManualAuditReady
-    applyManualCooldown(data.manualCooldownUntil, data.manualCooldownRemainSec)
-    if (recalcInProgressRef.value) {
+    applyYieldTaskStatus(data)
+    if (isYieldTaskRunning()) {
       ensureAutoRefresh()
     } else {
       stopAutoRefresh()
@@ -643,11 +684,36 @@ function fetchYieldList(page, options = {}) {
       loadingRef.value = false
     }
   }).catch((e) => {
-    console.error("fetchYieldList failed", e)
+    if (silent) {
+      console.warn("fetchYieldList poll refresh failed", e)
+    } else {
+      console.error("fetchYieldList failed", e)
+    }
     if (!silent) {
       loadingRef.value = false
     }
   })
+}
+
+function fetchYieldTaskStatus() {
+  return GetAiRecommendYieldTaskStatus()
+    .then((res) => normalizeYieldTaskPayload(res || {}))
+    .then((data) => {
+      const wasRunning = isYieldTaskRunning()
+      applyYieldTaskStatus(data)
+      if (isYieldTaskRunning()) {
+        ensureAutoRefresh()
+        return data
+      }
+      stopAutoRefresh()
+      if (wasRunning) {
+        fetchYieldList(paginationReactive.page, {silent: true})
+      }
+      return data
+    })
+    .catch((e) => {
+      console.warn("fetchYieldTaskStatus failed", e)
+    })
 }
 
 watch(researchDateRangeKey, async (nextKey, prevKey) => {
@@ -707,8 +773,9 @@ async function handleManualDownload() {
     applyManualCooldown(result?.cooldownUntil || "", Number(result?.cooldownRemainSec || 0))
     if (result?.inProgress) {
       recalcInProgressRef.value = true
+      downloadInProgressRef.value = true
       ensureAutoRefresh()
-      await fetchYieldList(paginationReactive.page, {silent: true})
+      await fetchYieldTaskStatus()
     }
   } catch (e) {
     console.error("handleManualDownload failed", e)
@@ -894,11 +961,11 @@ function manualDownloadButtonText() {
 }
 
 function isManualDownloadBusy() {
-  return manualDownloadLoadingRef.value || recalcInProgressRef.value
+  return manualDownloadLoadingRef.value || recalcInProgressRef.value || downloadInProgressRef.value
 }
 
 function ensureAutoRefresh() {
-  if (!recalcInProgressRef.value) {
+  if (!isYieldTaskRunning()) {
     stopAutoRefresh()
     return
   }
@@ -906,10 +973,13 @@ function ensureAutoRefresh() {
     return
   }
   pollTimer = window.setInterval(() => {
-    if (loadingRef.value) {
+    if (loadingRef.value || pollInFlight) {
       return
     }
-    fetchYieldList(paginationReactive.page, {silent: true})
+    pollInFlight = true
+    fetchYieldTaskStatus().finally(() => {
+      pollInFlight = false
+    })
   }, 3000)
 }
 
