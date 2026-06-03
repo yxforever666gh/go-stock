@@ -2,6 +2,7 @@ package data
 
 import (
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -75,10 +76,14 @@ func listMinuteBarsFromCache(stockCode string, start, end time.Time) ([]minuteBa
 	if err != nil {
 		return nil, err
 	}
-	if len(bars) > 0 {
+	if len(bars) > 0 && minuteBarsCoverTradingSessions(bars, start, end) {
 		return bars, nil
 	}
-	return listMinuteBarsFromLegacyCache(code, start, end)
+	legacyBars, err := listMinuteBarsFromLegacyCache(code, start, end)
+	if err != nil {
+		return nil, err
+	}
+	return mergeMinuteBars(bars, legacyBars), nil
 }
 
 func listMinuteBarsFromMinuteDB(code string, start, end time.Time) ([]minuteBar, error) {
@@ -134,6 +139,42 @@ func listMinuteBarsFromLegacyCache(code string, start, end time.Time) ([]minuteB
 		})
 	}
 	return bars, nil
+}
+
+func mergeMinuteBars(primary, legacy []minuteBar) []minuteBar {
+	if len(primary) == 0 {
+		return append([]minuteBar(nil), legacy...)
+	}
+	if len(legacy) == 0 {
+		return append([]minuteBar(nil), primary...)
+	}
+	byMinute := make(map[int64]minuteBar, len(primary)+len(legacy))
+	for _, bar := range legacy {
+		if bar.TradeTime.IsZero() {
+			continue
+		}
+		bar.TradeTime = normalizeMinuteTime(bar.TradeTime.In(cnLocation()))
+		byMinute[minuteTimeMillis(bar.TradeTime)] = bar
+	}
+	for _, bar := range primary {
+		if bar.TradeTime.IsZero() {
+			continue
+		}
+		bar.TradeTime = normalizeMinuteTime(bar.TradeTime.In(cnLocation()))
+		byMinute[minuteTimeMillis(bar.TradeTime)] = bar
+	}
+	keys := make([]int64, 0, len(byMinute))
+	for key := range byMinute {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return keys[i] < keys[j]
+	})
+	out := make([]minuteBar, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, byMinute[key])
+	}
+	return out
 }
 
 func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) (int, error) {
@@ -246,14 +287,23 @@ func getMinuteCacheRange(stockCode string) (*time.Time, *time.Time, error) {
 		return nil, nil, nil
 	}
 
-	start, end, found, err := getMinuteCacheRangeFromMinuteDB(code)
+	minuteStart, minuteEnd, found, err := getMinuteCacheRangeFromMinuteDB(code)
 	if err != nil {
 		return nil, nil, err
 	}
+	rng := minuteCacheRange{}
 	if found {
-		return start, end, nil
+		rng = mergeMinuteCacheRange(rng, minuteCacheRange{Start: minuteStart, End: minuteEnd})
 	}
-	return getMinuteCacheRangeFromLegacyCache(code)
+	legacyStart, legacyEnd, err := getMinuteCacheRangeFromLegacyCache(code)
+	if err != nil {
+		return nil, nil, err
+	}
+	rng = mergeMinuteCacheRange(rng, minuteCacheRange{Start: legacyStart, End: legacyEnd})
+	if rng.Start == nil || rng.End == nil {
+		return nil, nil, nil
+	}
+	return rng.Start, rng.End, nil
 }
 
 func getMinuteCacheRangeFromMinuteDB(code string) (*time.Time, *time.Time, bool, error) {
@@ -339,6 +389,36 @@ type minuteCacheRange struct {
 	End   *time.Time
 }
 
+func mergeMinuteCacheRange(base, next minuteCacheRange) minuteCacheRange {
+	if next.Start != nil {
+		start := normalizeMinuteTime(next.Start.In(cnLocation()))
+		if !start.IsZero() && (base.Start == nil || start.Before(*base.Start)) {
+			base.Start = &start
+		}
+	}
+	if next.End != nil {
+		end := normalizeMinuteTime(next.End.In(cnLocation()))
+		if !end.IsZero() && (base.End == nil || end.After(*base.End)) {
+			base.End = &end
+		}
+	}
+	return base
+}
+
+func mergeMinuteCacheRangeMaps(base, next map[string]minuteCacheRange) map[string]minuteCacheRange {
+	if base == nil {
+		base = make(map[string]minuteCacheRange, len(next))
+	}
+	for code, rng := range next {
+		code = strings.ToUpper(strings.TrimSpace(code))
+		if code == "" {
+			continue
+		}
+		base[code] = mergeMinuteCacheRange(base[code], rng)
+	}
+	return base
+}
+
 func loadMinuteCacheRangeMap() (map[string]minuteCacheRange, error) {
 	return loadMinuteCacheRangeMapByCodes(nil)
 }
@@ -362,18 +442,11 @@ func loadMinuteCacheRangeMapByCodes(codes []string) (map[string]minuteCacheRange
 	if err != nil {
 		return nil, err
 	}
-	legacyCodes := missingMinuteCacheRangeCodes(normalizedCodes, out)
-	legacyOut, err := loadMinuteCacheRangeMapFromLegacyCache(legacyCodes)
+	legacyOut, err := loadMinuteCacheRangeMapFromLegacyCache(normalizedCodes)
 	if err != nil {
 		return nil, err
 	}
-	for code, r := range legacyOut {
-		if _, ok := out[code]; ok {
-			continue
-		}
-		out[code] = r
-	}
-	return out, nil
+	return mergeMinuteCacheRangeMaps(out, legacyOut), nil
 }
 
 func loadMinuteCacheRangeMapFromMinuteDB(normalizedCodes []string) (map[string]minuteCacheRange, error) {

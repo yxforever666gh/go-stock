@@ -37,13 +37,13 @@ func TestResolveMinuteCoverageScope_FallbackToStockCacheRange(t *testing.T) {
 	}
 }
 
-func TestResolveMinuteCoverageScope_PreferRecordScope(t *testing.T) {
+func TestResolveMinuteCoverageScope_MergesRecordAndStockScope(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Shanghai")
 	if loc == nil {
 		loc = time.Local
 	}
 	recordStart := time.Date(2026, 3, 11, 9, 30, 0, 0, loc)
-	recordEnd := time.Date(2026, 3, 11, 15, 0, 0, 0, loc)
+	recordEnd := time.Date(2026, 3, 12, 15, 0, 0, 0, loc)
 	stockStart := time.Date(2026, 3, 10, 9, 30, 0, 0, loc)
 	stockEnd := time.Date(2026, 3, 11, 15, 0, 0, 0, loc)
 	state := &models.AiRecommendYieldRecordState{
@@ -60,13 +60,13 @@ func TestResolveMinuteCoverageScope_PreferRecordScope(t *testing.T) {
 
 	start, end, ok := resolveMinuteCoverageScope(state, state.StockCode, cacheRanges)
 	if !ok {
-		t.Fatalf("expected record cache scope")
+		t.Fatalf("expected merged cache scope")
 	}
-	if !start.Equal(recordStart) {
-		t.Fatalf("expected record cache start, got %v", start)
+	if !start.Equal(stockStart) {
+		t.Fatalf("expected merged cache start, got %v", start)
 	}
 	if !end.Equal(recordEnd) {
-		t.Fatalf("expected record cache end, got %v", end)
+		t.Fatalf("expected merged cache end, got %v", end)
 	}
 }
 

@@ -107,12 +107,26 @@ func buildAiRecommendMinuteCoverageTasks(runtime *aiRecommendYieldRecalcRuntime,
 	sort.Strings(codes)
 
 	tasks := make([]aiRecommendMinuteCoverageTask, 0, len(codes))
+	manualGapCodes := map[string]struct{}{}
 	if runtime.ctx.Reason == "manual_minute_download" {
-		tasks = append(tasks, buildManualMinuteGapCoverageTasks(codeSet)...)
+		gapTasks := buildManualMinuteGapCoverageTasks(codeSet)
+		tasks = append(tasks, gapTasks...)
+		for _, task := range gapTasks {
+			code := normalizeRecommendStockCode(task.StockCode)
+			if code == "" {
+				continue
+			}
+			manualGapCodes[code] = struct{}{}
+		}
 	}
 	for _, code := range codes {
 		if !isAShareTsCode(code) {
 			continue
+		}
+		if runtime.ctx.Reason == "manual_minute_download" {
+			if _, ok := manualGapCodes[code]; ok {
+				continue
+			}
 		}
 		start := time.Time{}
 		requirePrevDayActivityPrefetch := false

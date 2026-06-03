@@ -126,6 +126,83 @@ func TestMinuteCacheFallbackReadsLegacyTable(t *testing.T) {
 	}
 }
 
+func TestMinuteCacheMergesMinuteDBAndLegacyRows(t *testing.T) {
+	initMinuteCacheTestDB(t, "minute-cache-merge-rows.db")
+	legacyTime := normalizeMinuteTime(testMinuteTime(9, 31))
+	overlapTime := normalizeMinuteTime(testMinuteTime(9, 32))
+	primaryTime := normalizeMinuteTime(testMinuteTime(9, 33))
+
+	legacyRows := []models.AiRecommendMinuteBar{
+		{StockCode: "300007.SZ", TradeTime: legacyTime, Open: 1, High: 1, Low: 1, Close: 1, Source: "legacy"},
+		{StockCode: "300007.SZ", TradeTime: overlapTime, Open: 2, High: 2, Low: 2, Close: 2, Source: "legacy"},
+	}
+	if err := db.Dao.Create(&legacyRows).Error; err != nil {
+		t.Fatalf("insert legacy rows failed: %v", err)
+	}
+	if _, err := upsertMinuteBarsToCache("300007.SZ", []minuteBar{
+		{TradeTime: overlapTime, Open: 20, High: 20, Low: 20, Close: 20},
+		{TradeTime: primaryTime, Open: 3, High: 3, Low: 3, Close: 3},
+	}, "minute-db"); err != nil {
+		t.Fatalf("upsert minute rows failed: %v", err)
+	}
+
+	bars, err := listMinuteBarsFromCache("300007.SZ", legacyTime, primaryTime)
+	if err != nil {
+		t.Fatalf("list merged bars failed: %v", err)
+	}
+	if len(bars) != 3 {
+		t.Fatalf("len(bars) = %d, want 3: %+v", len(bars), bars)
+	}
+	if !bars[0].TradeTime.Equal(legacyTime) || bars[0].Close != 1 {
+		t.Fatalf("legacy-only row mismatch: %+v", bars[0])
+	}
+	if !bars[1].TradeTime.Equal(overlapTime) || bars[1].Close != 20 {
+		t.Fatalf("overlap row should prefer minute-db data: %+v", bars[1])
+	}
+	if !bars[2].TradeTime.Equal(primaryTime) || bars[2].Close != 3 {
+		t.Fatalf("minute-db-only row mismatch: %+v", bars[2])
+	}
+}
+
+func TestMinuteCacheRangeMergesMinuteDBAndLegacyRange(t *testing.T) {
+	initMinuteCacheTestDB(t, "minute-cache-merge-range.db")
+	legacyStart := normalizeMinuteTime(testMinuteTime(9, 31).AddDate(0, 0, -2))
+	legacyEnd := normalizeMinuteTime(testMinuteTime(9, 32).AddDate(0, 0, -1))
+	primaryStart := normalizeMinuteTime(testMinuteTime(9, 33))
+	primaryEnd := normalizeMinuteTime(testMinuteTime(9, 34))
+
+	legacyRows := []models.AiRecommendMinuteBar{
+		{StockCode: "300008.SZ", TradeTime: legacyStart, Open: 1, High: 1, Low: 1, Close: 1, Source: "legacy"},
+		{StockCode: "300008.SZ", TradeTime: legacyEnd, Open: 2, High: 2, Low: 2, Close: 2, Source: "legacy"},
+	}
+	if err := db.Dao.Create(&legacyRows).Error; err != nil {
+		t.Fatalf("insert legacy rows failed: %v", err)
+	}
+	if _, err := upsertMinuteBarsToCache("300008.SZ", []minuteBar{
+		{TradeTime: primaryStart, Open: 3, High: 3, Low: 3, Close: 3},
+		{TradeTime: primaryEnd, Open: 4, High: 4, Low: 4, Close: 4},
+	}, "minute-db"); err != nil {
+		t.Fatalf("upsert minute rows failed: %v", err)
+	}
+
+	start, end, err := getMinuteCacheRange("300008.SZ")
+	if err != nil {
+		t.Fatalf("get merged range failed: %v", err)
+	}
+	if start == nil || end == nil || !start.Equal(legacyStart) || !end.Equal(primaryEnd) {
+		t.Fatalf("range = %v %v, want %s %s", start, end, legacyStart, primaryEnd)
+	}
+
+	ranges, err := loadMinuteCacheRangeMapByCodes([]string{"300008.SZ"})
+	if err != nil {
+		t.Fatalf("load range map failed: %v", err)
+	}
+	rng := ranges["300008.SZ"]
+	if rng.Start == nil || rng.End == nil || !rng.Start.Equal(legacyStart) || !rng.End.Equal(primaryEnd) {
+		t.Fatalf("range map = %+v, want %s %s", rng, legacyStart, primaryEnd)
+	}
+}
+
 func TestMinuteCacheDualWrite(t *testing.T) {
 	t.Setenv("GO_STOCK_MINUTE_DUAL_WRITE", "1")
 	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")

@@ -1176,14 +1176,21 @@ func computeMinuteDownloadCoverageStats(meta *models.AiRecommendYieldMeta) minut
 }
 
 func resolveMinuteCoverageScope(state *models.AiRecommendYieldRecordState, stockCode string, cacheRanges map[string]minuteCacheRange) (time.Time, time.Time, bool) {
-	if state != nil && state.MinuteCacheStart != nil && state.MinuteCacheEnd != nil {
-		return normalizeMinuteTime(state.MinuteCacheStart.In(cnLocation())), normalizeMinuteTime(state.MinuteCacheEnd.In(cnLocation())), true
-	}
 	code := normalizeRecommendStockCode(stockCode)
 	if code == "" {
 		return time.Time{}, time.Time{}, false
 	}
-	if rng, ok := cacheRanges[code]; ok && rng.Start != nil && rng.End != nil {
+	rng := minuteCacheRange{}
+	if globalRange, ok := cacheRanges[code]; ok {
+		rng = mergeMinuteCacheRange(rng, globalRange)
+	}
+	if state != nil && state.MinuteCacheStart != nil && state.MinuteCacheEnd != nil {
+		rng = mergeMinuteCacheRange(rng, minuteCacheRange{
+			Start: state.MinuteCacheStart,
+			End:   state.MinuteCacheEnd,
+		})
+	}
+	if rng.Start != nil && rng.End != nil {
 		return normalizeMinuteTime(rng.Start.In(cnLocation())), normalizeMinuteTime(rng.End.In(cnLocation())), true
 	}
 	return time.Time{}, time.Time{}, false
@@ -1519,6 +1526,58 @@ func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendY
 		cacheRanges = m
 	}
 	continuityIssueCache := make(map[string]minuteCoverageContinuityIssueResult)
+	type minuteCoverageBarCacheEntry struct {
+		Start time.Time
+		End   time.Time
+		Bars  []minuteBar
+	}
+	barCache := make(map[string]minuteCoverageBarCacheEntry)
+	filterBars := func(bars []minuteBar, start, end time.Time) []minuteBar {
+		if len(bars) == 0 {
+			return nil
+		}
+		out := make([]minuteBar, 0, len(bars))
+		start = normalizeMinuteTime(start)
+		end = normalizeMinuteTime(end)
+		for _, bar := range bars {
+			ts := normalizeMinuteTime(bar.TradeTime.In(loc))
+			if ts.Before(start) || ts.After(end) {
+				continue
+			}
+			bar.TradeTime = ts
+			out = append(out, bar)
+		}
+		return out
+	}
+	resolveContinuityDetail := func(code string, start, end time.Time) (minuteCoverageContinuityIssueResult, error) {
+		sessions := buildMinuteCoverageSessions(start, end)
+		if len(sessions) == 0 {
+			return minuteCoverageContinuityIssueResult{}, nil
+		}
+		loadStart := sessions[0].Start
+		loadEnd := sessions[len(sessions)-1].End
+		if cached, ok := barCache[code]; ok {
+			if !loadStart.Before(cached.Start) && !loadEnd.After(cached.End) {
+				return computeMinuteCoverageContinuityIssueForStockWithSuspensionFetch(code, filterBars(cached.Bars, loadStart, loadEnd), sessions, allowSuspensionFetch), nil
+			}
+			if cached.Start.Before(loadStart) {
+				loadStart = cached.Start
+			}
+			if cached.End.After(loadEnd) {
+				loadEnd = cached.End
+			}
+		}
+		bars, err := listMinuteBarsFromCache(code, loadStart, loadEnd)
+		if err != nil {
+			return minuteCoverageContinuityIssueResult{}, err
+		}
+		barCache[code] = minuteCoverageBarCacheEntry{
+			Start: loadStart,
+			End:   loadEnd,
+			Bars:  bars,
+		}
+		return computeMinuteCoverageContinuityIssueForStockWithSuspensionFetch(code, filterBars(bars, sessions[0].Start, sessions[len(sessions)-1].End), sessions, allowSuspensionFetch), nil
+	}
 
 	formatTs := func(t time.Time) string {
 		if t.IsZero() {
@@ -1691,7 +1750,7 @@ func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendY
 		continuityKey := strings.Join([]string{code, requiredStart.Format(time.RFC3339Nano), requiredEnd.Format(time.RFC3339Nano)}, "|")
 		continuityDetail, checked := continuityIssueCache[continuityKey]
 		if !checked {
-			if detail, err := resolveMinuteCoverageContinuityIssueDetailWithSuspensionFetch(code, requiredStart, requiredEnd, allowSuspensionFetch); err != nil {
+			if detail, err := resolveContinuityDetail(code, requiredStart, requiredEnd); err != nil {
 				continuityDetail = minuteCoverageContinuityIssueResult{Reason: fmt.Sprintf("分钟线连续性检查失败（目标 %s~%s）：%v", formatTs(requiredStart), formatTs(requiredEnd), err)}
 			} else {
 				continuityDetail = detail

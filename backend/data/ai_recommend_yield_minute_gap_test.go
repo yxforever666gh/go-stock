@@ -101,6 +101,34 @@ func TestBuildManualMinuteGapCoverageTasks_IncludesRangeStartGap(t *testing.T) {
 	if !strings.Contains(warning, "仍有待覆盖 1 条") || !strings.Contains(warning, "301293.SZ") {
 		t.Fatalf("unexpected warning: %q", warning)
 	}
+
+	targets := &aiRecommendYieldTargets{
+		aggrMap:     map[string]*aiRecommendYieldAggregate{},
+		targetCodes: []string{"301293.SZ"},
+		targetRecords: []models.AiRecommendStocks{
+			rec,
+		},
+	}
+	runtime := &aiRecommendYieldRecalcRuntime{
+		now:        now,
+		inTrading:  false,
+		latestDate: time.Date(2026, 5, 29, 0, 0, 0, 0, loc),
+		ctx: yieldBuildContext{
+			Reason:           "manual_minute_download",
+			Now:              now,
+			InTradingSession: false,
+			LatestTradeDate:  time.Date(2026, 5, 29, 0, 0, 0, 0, loc),
+		},
+	}
+	coverageTasks := buildAiRecommendMinuteCoverageTasks(runtime, targets)
+	if len(coverageTasks) != len(tasks) {
+		t.Fatalf("manual coverage tasks len=%d, want gap-only len=%d: %#v", len(coverageTasks), len(tasks), coverageTasks)
+	}
+	for _, task := range coverageTasks {
+		if !task.Forced {
+			t.Fatalf("manual gap task should not include unforced full-range task: %#v", task)
+		}
+	}
 }
 
 func TestMinuteProviderResultCompletesOvernightNonTradingWindow(t *testing.T) {
