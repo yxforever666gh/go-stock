@@ -58,6 +58,7 @@ type activationOpeningPolicy struct {
 
 type activationScanResult struct {
 	Triggered bool
+	Blocked   bool
 	Reason    string
 	Time      time.Time
 	Price     float64
@@ -769,6 +770,57 @@ func resolveActivationRuleScan(rec models.AiRecommendStocks, bars []minuteBar) a
 		return best
 	}
 	return activationScanResult{Reason: firstNonEmptyText(strings.Join(dedupeNonEmptyStrings(reasons, 3), "；"), "未触发结构化激活规则")}
+}
+
+func resolveActivationRuleScanWithActivationGate(rec models.AiRecommendStocks, bars []minuteBar) activationScanResult {
+	remaining := bars
+	reasons := make([]string, 0, 4)
+	for len(remaining) > 0 {
+		scan := resolveActivationRuleScan(rec, remaining)
+		if !scan.Triggered {
+			if strings.TrimSpace(scan.Reason) != "" {
+				reasons = append(reasons, scan.Reason)
+			}
+			break
+		}
+		gate := evaluateV132ActivationGate(rec, scan.Time, scan.Price, bars)
+		if gate.Allowed {
+			return scan
+		}
+		if shouldContinueActivationScanAfterGate(rec, gate) {
+			reasons = append(reasons, gate.Reason)
+			next := minuteBarsAfterTime(remaining, scan.Time)
+			if len(next) >= len(remaining) {
+				break
+			}
+			remaining = next
+			continue
+		}
+		scan.Triggered = false
+		scan.Blocked = true
+		scan.Reason = gate.Reason
+		return scan
+	}
+	return activationScanResult{Reason: firstNonEmptyText(strings.Join(dedupeNonEmptyStrings(reasons, 3), "；"), "未触发结构化激活规则")}
+}
+
+func shouldContinueActivationScanAfterGate(rec models.AiRecommendStocks, gate v132ActivationGateResult) bool {
+	if !isV136Recommend(rec) {
+		return false
+	}
+	return strings.TrimSpace(gate.Kind) == "strength"
+}
+
+func minuteBarsAfterTime(bars []minuteBar, cutoff time.Time) []minuteBar {
+	if cutoff.IsZero() {
+		return nil
+	}
+	for idx, bar := range bars {
+		if bar.TradeTime.After(cutoff) {
+			return bars[idx:]
+		}
+	}
+	return nil
 }
 
 func resolveSingleActivationRuleScan(rec models.AiRecommendStocks, rule *activationRule, bars []minuteBar) activationScanResult {

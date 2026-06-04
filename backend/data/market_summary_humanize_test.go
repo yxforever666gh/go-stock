@@ -40,18 +40,20 @@ func TestHumanizeMarketSummaryReportSupportsFullwidthColonAndBackticks(t *testin
 }
 
 func TestEnsureMarketSummaryRecommendStocksSavedHumanizesRemarks(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-humanize-save.db"))
-	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
-		t.Fatalf("auto migrate failed: %v", err)
-	}
+	setupMarketSummaryRecommendBackfillRealtimeEnv(t, "market-summary-humanize-save.db")
+	startedAt := time.Date(2026, 4, 8, 10, 0, 0, 0, cnLocation())
+	seedMinuteBars(t, "300308.SZ", []minuteBar{
+		{TradeTime: startedAt.Add(-time.Minute), Open: 168.2, High: 168.6, Low: 168.1, Close: 168.4, Volume: 1200, Amount: 202080},
+		{TradeTime: startedAt, Open: 168.4, High: 168.8, Low: 168.3, Close: 168.5, Volume: 1500, Amount: 252750},
+	})
 
 	summary := `# 推荐股票池
 | 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 价格触发：股价进入168-169区间；量能触发：5分钟成交额不低于近5个5分钟均额的1.2倍 | 时间失效：未来5个交易日内未触发；价格失效：跌破159 | 高位波动风险较大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 activationRuleJson: ` + testActivationRuleJSON + ` |
+| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 184-192 | 164 | 价格触发：股价进入168-169区间；量能触发：5分钟成交额不低于近5个5分钟均额的1.2倍 | 时间失效：未来5个交易日内未触发；价格失效：跌破164 | 高位波动风险较大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 activationRuleJson: ` + testActivationRuleJSON + ` |
 `
 
-	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "TestProvider", "test-model", time.Date(2026, 4, 8, 10, 0, 0, 0, time.Local))
+	saved, err := EnsureMarketSummaryRecommendStocksSaved(summary, "TestProvider", "test-model", startedAt)
 	if err != nil {
 		t.Fatalf("EnsureMarketSummaryRecommendStocksSaved failed: %v", err)
 	}

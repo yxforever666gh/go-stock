@@ -52,13 +52,16 @@ const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
-  { label: 'V1.3.2', value: 'current' },
+  { label: 'V1.3.6', value: 'current' },
+  { label: 'V1.3.2', value: 'v1.3.2' },
   { label: 'V1.3.1', value: 'phase3-v4' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
   { label: 'Legacy', value: 'legacy' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.3.2',
+  current: 'V1.3.6',
+  '1.3.6': 'V1.3.6',
+  'v1.3.6': 'V1.3.6',
   'v1.3.2': 'V1.3.2',
   '1.3.2': 'V1.3.2',
   'phase3-v4': 'V1.3.1',

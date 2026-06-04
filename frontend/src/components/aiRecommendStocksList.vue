@@ -33,6 +33,7 @@ const tableScrollX = 2500
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.3.6', value: '1.3.6' },
   { label: 'V1.3.2', value: 'v1.3.2' },
   { label: 'V1.3.1', value: 'phase3-v4' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
@@ -496,7 +497,7 @@ function deleteAiRecommendStocks(id) {
   </n-input-group>
   <div style="margin-top: 8px;">
     <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">推荐记录页默认看全量历史；可切换 V1.3.2 或 V1.3.1 对比不同阶段记录。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">推荐记录页默认看全量历史；可切换 V1.3.6、V1.3.2 或 V1.3.1 对比不同阶段记录。</n-text>
   </div>
 
   <n-data-table

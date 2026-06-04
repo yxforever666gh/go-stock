@@ -256,17 +256,11 @@ func TestSelectMarketSummaryFinalCandidates(t *testing.T) {
 	}
 
 	selected := selectMarketSummaryFinalCandidates(verified, excluded, window, logState, 3)
-	if len(selected) != 3 {
-		t.Fatalf("selected len = %d, want 3", len(selected))
+	if len(selected) != 1 {
+		t.Fatalf("selected len = %d, want 1", len(selected))
 	}
 	if selected[0].StockCode != "300502.SZ" {
 		t.Fatalf("selected[0] = %s, want 300502.SZ", selected[0].StockCode)
-	}
-	if selected[1].StockCode != "002463.SZ" {
-		t.Fatalf("selected[1] = %s, want 002463.SZ", selected[1].StockCode)
-	}
-	if selected[2].StockCode != "688256.SH" {
-		t.Fatalf("selected[2] = %s, want 688256.SH", selected[2].StockCode)
 	}
 	for _, item := range selected {
 		if item.StockCode == "300308.SZ" {
@@ -275,6 +269,9 @@ func TestSelectMarketSummaryFinalCandidates(t *testing.T) {
 	}
 	if !containsAll(stringsJoin(logState.DroppedCandidates, "\n"), []string{"同日已推荐排除:中际旭创(300308.SZ)"}) {
 		t.Fatalf("expected exclusion note in dropped candidates, got %+v", logState.DroppedCandidates)
+	}
+	if !containsAll(stringsJoin(logState.DroppedCandidates, "\n"), []string{"源头质量门槛未通过:沪电股份(002463.SZ)", "源头质量门槛未通过:寒武纪(688256.SH)"}) {
+		t.Fatalf("expected quality gate notes in dropped candidates, got %+v", logState.DroppedCandidates)
 	}
 }
 

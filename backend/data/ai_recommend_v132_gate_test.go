@@ -13,6 +13,9 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		raw  string
 		want string
 	}{
+		{name: "current136", raw: "1.3.6", want: marketSummaryVersion136},
+		{name: "v136", raw: "v1.3.6", want: marketSummaryVersion136},
+		{name: "short136", raw: "136", want: marketSummaryVersion136},
 		{name: "v132", raw: "v1.3.2", want: marketSummaryVersionV132},
 		{name: "plain132", raw: "1.3.2", want: marketSummaryVersionV132},
 		{name: "v131", raw: "1.3.1", want: marketSummaryPhase4Version},
@@ -27,8 +30,8 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		})
 	}
 
-	if marketSummaryCurrentVersion != marketSummaryVersionV132 {
-		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersionV132)
+	if marketSummaryCurrentVersion != marketSummaryVersion136 {
+		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion136)
 	}
 }
 
@@ -137,5 +140,89 @@ func TestEvaluateV132ActivationGateUsesNormalizedVWAP(t *testing.T) {
 	gate := evaluateV132ActivationGate(rec, activationTime, 111, bars)
 	if !gate.Allowed {
 		t.Fatalf("normalized VWAP should allow activation, got blocked: %s", gate.Reason)
+	}
+}
+
+func TestEvaluateV136ActivationGateAllowsRewardRiskGrayZoneWithStrengthConfirm(t *testing.T) {
+	activationTime := time.Date(2026, 5, 25, 10, 0, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersion136,
+		RecommendStopProfitPriceMin: 10.1,
+		RecommendStopProfitPrice:    "10.1",
+		RecommendStopLossPrice:      "9.9",
+		StockCurrentPrice:           "10",
+	}
+	bars := make([]minuteBar, 0, 20)
+	for i := 20; i > 0; i-- {
+		bars = append(bars, minuteBar{
+			TradeTime: activationTime.Add(-time.Duration(i) * time.Minute),
+			Open:      10,
+			Close:     10,
+			Volume:    100,
+			Amount:    1000,
+		})
+	}
+
+	gate := evaluateV132ActivationGate(rec, activationTime, 10, bars)
+	if !gate.Allowed {
+		t.Fatalf("v1.3.6 gray reward/risk should pass after strength confirm, got blocked: %s", gate.Reason)
+	}
+}
+
+func TestEvaluateV136ActivationGateBlocksBelowHardRewardRiskFloor(t *testing.T) {
+	activationTime := time.Date(2026, 5, 25, 10, 0, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersion136,
+		RecommendStopProfitPriceMin: 10.05,
+		RecommendStopProfitPrice:    "10.05",
+		RecommendStopLossPrice:      "9.9",
+		StockCurrentPrice:           "10",
+	}
+	bars := make([]minuteBar, 0, 20)
+	for i := 20; i > 0; i-- {
+		bars = append(bars, minuteBar{
+			TradeTime: activationTime.Add(-time.Duration(i) * time.Minute),
+			Open:      10,
+			Close:     10,
+			Volume:    100,
+			Amount:    1000,
+		})
+	}
+
+	gate := evaluateV132ActivationGate(rec, activationTime, 10, bars)
+	if gate.Allowed {
+		t.Fatalf("v1.3.6 record should be blocked below hard reward/risk floor")
+	}
+	if !strings.Contains(gate.Reason, "硬底线") {
+		t.Fatalf("gate reason = %q, want hard floor reason", gate.Reason)
+	}
+}
+
+func TestEvaluateV136ActivationGateRequiresTwentyMinuteStrengthConfirm(t *testing.T) {
+	activationTime := time.Date(2026, 5, 25, 10, 0, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersion136,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPrice:    "11",
+		RecommendStopLossPrice:      "9.8",
+		StockCurrentPrice:           "10",
+	}
+	bars := make([]minuteBar, 0, 19)
+	for i := 19; i > 0; i-- {
+		bars = append(bars, minuteBar{
+			TradeTime: activationTime.Add(-time.Duration(i) * time.Minute),
+			Open:      10,
+			Close:     10,
+			Volume:    100,
+			Amount:    1000,
+		})
+	}
+
+	gate := evaluateV132ActivationGate(rec, activationTime, 10, bars)
+	if gate.Allowed {
+		t.Fatalf("v1.3.6 record should wait for at least 20 same-day bars")
+	}
+	if !strings.Contains(gate.Reason, "少于20根") {
+		t.Fatalf("gate reason = %q, want 20-bar confirm reason", gate.Reason)
 	}
 }

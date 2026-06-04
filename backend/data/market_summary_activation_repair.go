@@ -430,7 +430,7 @@ func loadMarketSummaryRecommendDraftFromStoredReport(rec models.AiRecommendStock
 		if !strings.Contains(report.Content, rec.StockCode) && !strings.Contains(report.Content, rec.StockName) {
 			continue
 		}
-		drafts := parseMarketSummaryRecommendStockDrafts(report.Content, report.ProviderName, report.ModelName, *rec.DataTime)
+		drafts := parseMarketSummaryRecommendStockDraftsWithVersion(report.Content, report.ProviderName, report.ModelName, *rec.DataTime, rec.SummaryVersion)
 		for _, draft := range drafts {
 			if draft == nil || normalizeRecommendStockCode(draft.StockCode) != code {
 				continue

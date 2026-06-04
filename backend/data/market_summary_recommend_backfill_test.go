@@ -20,6 +20,35 @@ func setupMarketSummaryRecommendBackfillRealtimeEnv(t *testing.T, dbName string)
 	}
 }
 
+func TestMarketSummaryDraftProductionRejectionReason_V136RejectsWeakWorstEntryRewardRisk(t *testing.T) {
+	draft := &marketSummaryRecommendDraft{
+		StockCode:                   "300001.SZ",
+		StockName:                   "测试股份",
+		StockCurrentPrice:           "10.1",
+		StockPrice:                  "10.1",
+		RecommendBuyPrice:           "10.00-10.20",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.2,
+		RecommendStopProfitPrice:    "10.25",
+		RecommendStopProfitPriceMin: 10.25,
+		RecommendStopProfitPriceMax: 10.25,
+		RecommendStopLossPrice:      "10.00",
+		ExecutionState:              recommendExecutionConditional,
+		EventStrength:               80,
+		CapitalConfirmation:         80,
+		FundamentalFit:              80,
+		TechnicalFit:                80,
+		ActivationRuleJSON:          `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":10.0,"thresholdMax":10.2,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
+		ActivationRuleSource:        "market_summary",
+		SummaryVersion:              marketSummaryVersion136,
+	}
+
+	reason := marketSummaryDraftProductionRejectionReason(draft)
+	if !strings.Contains(reason, "最差成交价盈亏比") {
+		t.Fatalf("reason = %q, want worst-entry reward/risk rejection", reason)
+	}
+}
+
 func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 	setupMarketSummaryRecommendBackfillRealtimeEnv(t, "market-summary-structured-table.db")
 	loc := cnLocation()
@@ -47,7 +76,7 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 # 推荐股票池
 | 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
+| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 184-192 | 164 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破164或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
 	items := parseMarketSummaryRecommendStocks(summary, "TestProvider", "test-model", dataTime)
 	if len(items) != 1 {
@@ -75,10 +104,10 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 	if item.BuySignalDetail != "" {
 		t.Fatalf("expected no extra buy detail in compact trade-plan row, got: %s", item.BuySignalDetail)
 	}
-	if item.SellSignal == "" || !strings.Contains(item.SellSignal, "178-185") {
+	if item.SellSignal == "" || !strings.Contains(item.SellSignal, "184-192") {
 		t.Fatalf("unexpected sell signal: %s", item.SellSignal)
 	}
-	if item.InvalidSignal == "" || !strings.Contains(item.InvalidSignal, "159") {
+	if item.InvalidSignal == "" || !strings.Contains(item.InvalidSignal, "164") {
 		t.Fatalf("unexpected invalid signal: %s", item.InvalidSignal)
 	}
 	if item.CoreCatalyst != "光模块景气持续" {
@@ -87,7 +116,7 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 	if item.RiskRemarks != "高位波动大" {
 		t.Fatalf("unexpected risk remarks: %s", item.RiskRemarks)
 	}
-	if item.InvalidCondition == "" || !strings.Contains(item.InvalidCondition, "跌破159") {
+	if item.InvalidCondition == "" || !strings.Contains(item.InvalidCondition, "跌破164") {
 		t.Fatalf("unexpected invalid condition: %s", item.InvalidCondition)
 	}
 	if item.FocusPrice != "" {
@@ -108,7 +137,7 @@ func TestParseMarketSummaryRecommendStocksStructuredTable(t *testing.T) {
 	if item.Remarks != "仅在量价共振时右侧跟随" {
 		t.Fatalf("unexpected remarks: %s", item.Remarks)
 	}
-	if item.RecommendReason == "" || !containsAll(item.RecommendReason, []string{"核心催化：光模块景气持续", "买入区间：168-169", "买入依据：股价回到168-169区间并在前高附近5分钟放量站稳后分批买入", "失效条件：跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效"}) {
+	if item.RecommendReason == "" || !containsAll(item.RecommendReason, []string{"核心催化：光模块景气持续", "买入区间：168-169", "买入依据：股价回到168-169区间并在前高附近5分钟放量站稳后分批买入", "失效条件：跌破164或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效"}) {
 		t.Fatalf("unexpected recommend reason: %s", item.RecommendReason)
 	}
 	if !strings.Contains(item.EvidenceSources, "市场资讯") || !strings.Contains(item.EvidenceSources, "技术/资金/形态") {
@@ -128,7 +157,7 @@ func TestParseMarketSummaryRecommendStockDraftsAndToRecommendStock(t *testing.T)
 	summary := `# 推荐股票池
 | 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 178-185 | 159 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破159或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
+| 中际旭创(300308.SZ) | AI算力 | 光模块景气持续 | [市场资讯] 板块强度高；[技术/资金/形态] 光模块方向5分钟放量突破前高 | 168.5 | 168-169 | 184-192 | 164 | 股价回到168-169区间并在前高附近5分钟放量站稳后分批买入 | 跌破164或AI算力板块5分钟成交额较前一日同时段明显走弱则本次交易逻辑失效 | 高位波动大 | 1-2周 | 90 | 85 | 78 | 88 | 仅在量价共振时右侧跟随 |
 `
 	drafts := parseMarketSummaryRecommendStockDrafts(summary, "TestProvider", "test-model", dataTime)
 	if len(drafts) != 1 {
@@ -359,27 +388,19 @@ func TestEnsureMarketSummaryRecommendStocksSavedFromRuntimeReport20260407_1130(t
 		if row.SummaryVersion != marketSummaryCurrentVersion {
 			t.Fatalf("unexpected summary version for %s: %s", row.StockCode, row.SummaryVersion)
 		}
-		switch row.StockCode {
-		case "300124.SZ":
-			if row.ExecutionState != recommendExecutionAnalysisOnly {
-				t.Fatalf("expected analysis_only execution state for %s, got %s", row.StockCode, row.ExecutionState)
-			}
-			if row.ActivationRuleJSON != "" {
-				t.Fatalf("expected downgraded record to clear activation rule for %s", row.StockCode)
-			}
-			if row.RecommendBuyPrice != "" || row.RecommendStopProfitPrice != "" || row.RecommendStopLossPrice != "" {
-				t.Fatalf("expected downgraded record to clear trade plan for %s", row.StockCode)
-			}
-			if !strings.Contains(row.InvalidCondition, "最多2只生产候选") {
-				t.Fatalf("expected downgrade reason recorded for %s, got %s", row.StockCode, row.InvalidCondition)
-			}
-		default:
-			if row.ActivationRuleJSON == "" {
-				t.Fatalf("expected activation rule for %s", row.StockCode)
-			}
-			if row.ExecutionState != recommendExecutionConditional {
-				t.Fatalf("expected conditional execution state for %s, got %s", row.StockCode, row.ExecutionState)
-			}
+		if row.ExecutionState != recommendExecutionAnalysisOnly {
+			t.Fatalf("expected analysis_only execution state for %s, got %s", row.StockCode, row.ExecutionState)
+		}
+		if row.ActivationRuleJSON != "" {
+			t.Fatalf("expected downgraded record to clear activation rule for %s", row.StockCode)
+		}
+		if row.RecommendBuyPrice != "" || row.RecommendStopProfitPrice != "" || row.RecommendStopLossPrice != "" {
+			t.Fatalf("expected downgraded record to clear trade plan for %s", row.StockCode)
+		}
+		if !strings.Contains(row.InvalidCondition, "V1.3.6源头质量门槛未通过") &&
+			!strings.Contains(row.InvalidCondition, "缺少真实价格/量能数据") &&
+			!strings.Contains(row.InvalidCondition, "超出当次市场总结最多2只生产候选上限") {
+			t.Fatalf("expected downgrade reason recorded for %s, got %s", row.StockCode, row.InvalidCondition)
 		}
 	}
 }

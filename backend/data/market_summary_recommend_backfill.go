@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strconv"
@@ -476,7 +477,72 @@ func marketSummaryDraftProductionRejectionReason(item *marketSummaryRecommendDra
 		item.TechnicalFit < marketSummaryProductionScoreFloor {
 		return "四维评分未全部达到60分，已降级为仅分析"
 	}
+	if strings.TrimSpace(item.SummaryVersion) == marketSummaryVersion136 {
+		if reason := marketSummaryDraftV136TradePlanRejectionReason(item); reason != "" {
+			return reason
+		}
+	}
 	return ""
+}
+
+func marketSummaryDraftV136TradePlanRejectionReason(item *marketSummaryRecommendDraft) string {
+	rec := item.toPreviewRecommend()
+	if rec == nil {
+		return "V1.3.6源头质量门槛未通过：推荐草稿为空"
+	}
+	if item.RecommendBuyPriceMin <= 0 || item.RecommendBuyPriceMax <= 0 {
+		return "V1.3.6源头质量门槛未通过：缺少有效买入区间"
+	}
+	stopProfit, profitOK := parseStopProfitPrice(*rec)
+	stopLoss, lossOK := parseStopLossPrice(*rec)
+	if !profitOK || !lossOK || stopProfit <= 0 || stopLoss <= 0 {
+		return "V1.3.6源头质量门槛未通过：缺少有效止盈止损"
+	}
+	worstEntry := resolveMarketSummaryWorstEntryPriceForGate(item)
+	if worstEntry <= 0 {
+		return "V1.3.6源头质量门槛未通过：缺少最差可成交价"
+	}
+	if stopProfit <= worstEntry || stopLoss >= worstEntry {
+		return "V1.3.6源头质量门槛未通过：止盈止损与最差可成交价位置无效"
+	}
+	downside := worstEntry - stopLoss
+	if downside <= 0 {
+		return "V1.3.6源头质量门槛未通过：下行风险无效"
+	}
+	ratio := (stopProfit - worstEntry) / downside
+	if ratio < 0.8 {
+		return fmt.Sprintf("V1.3.6源头质量门槛未通过：最差成交价盈亏比 %.2f 低于 0.80", round2(ratio))
+	}
+	downsidePct := downside / worstEntry * 100
+	if downsidePct > v132MaxDownsideRiskPct {
+		return fmt.Sprintf("V1.3.6源头质量门槛未通过：止损空间 %.2f%% 超过 %.2f%%", round2(downsidePct), v132MaxDownsideRiskPct)
+	}
+	if anchor, ok := parseBuyPrice(firstNonEmptyText(item.StockCurrentPrice, item.ObservePrice, item.StockPrice)); ok && anchor > 0 {
+		for _, price := range []float64{item.RecommendBuyPriceMin, item.RecommendBuyPriceMax, stopProfit, stopLoss, worstEntry} {
+			if price <= 0 {
+				continue
+			}
+			if math.Abs(price-anchor)/anchor > 0.2 {
+				return fmt.Sprintf("V1.3.6源头质量门槛未通过：关键价位 %.2f 与价格锚点 %.2f 偏离超过20%%", round2(price), round2(anchor))
+			}
+		}
+	}
+	return ""
+}
+
+func resolveMarketSummaryWorstEntryPriceForGate(item *marketSummaryRecommendDraft) float64 {
+	if item == nil {
+		return 0
+	}
+	worst := item.RecommendBuyPriceMax
+	if rule, err := parseActivationRuleJSON(item.ActivationRuleJSON); err == nil && rule != nil {
+		for _, path := range activationRulePaths(rule) {
+			if path.ThresholdMax > worst {
+				worst = path.ThresholdMax
+			}
+		}
+	}
+	return round2(worst)
 }
 
 func containsMarketSummaryObservationPhrase(texts ...string) bool {
@@ -808,6 +874,10 @@ type marketSummaryRow struct {
 }
 
 func parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName string, dataTime time.Time) []*marketSummaryRecommendDraft {
+	return parseMarketSummaryRecommendStockDraftsWithVersion(summaryText, providerName, modelName, dataTime, marketSummaryCurrentVersion)
+}
+
+func parseMarketSummaryRecommendStockDraftsWithVersion(summaryText, providerName, modelName string, dataTime time.Time, summaryVersion string) []*marketSummaryRecommendDraft {
 	section := extractMarkdownSection(summaryText, "推荐股票池")
 	if strings.TrimSpace(section) == "" {
 		section = summaryText
@@ -819,7 +889,7 @@ func parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName
 
 	drafts := make([]*marketSummaryRecommendDraft, 0, len(rows))
 	for _, row := range rows {
-		draft := buildRecommendStockDraftFromRow(row, providerName, modelName, dataTime)
+		draft := buildRecommendStockDraftFromRow(row, providerName, modelName, dataTime, summaryVersion)
 		if draft == nil {
 			continue
 		}
@@ -1167,10 +1237,14 @@ func normalizeMarkdownCell(cell string) string {
 	return text
 }
 
-func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelName string, dataTime time.Time) *marketSummaryRecommendDraft {
+func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelName string, dataTime time.Time, summaryVersion string) *marketSummaryRecommendDraft {
 	stockName, stockCode := parseMarketSummaryStockCell(row.stockCell)
 	if stockName == "" {
 		return nil
+	}
+	summaryVersion = strings.TrimSpace(summaryVersion)
+	if summaryVersion == "" {
+		summaryVersion = marketSummaryCurrentVersion
 	}
 	resolvedCode, resolvedName := resolveMarketSummaryStockIdentity(stockName, stockCode)
 	if resolvedName != "" {
@@ -1290,7 +1364,7 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelNa
 		ActivationRuleVersion:       activationRuleVersionV1,
 		ActivationRuleSource:        "market_summary",
 		RecommendStatus:             "valid",
-		SummaryVersion:              marketSummaryCurrentVersion,
+		SummaryVersion:              summaryVersion,
 		RiskRemarks:                 risk,
 		Remarks:                     remarks,
 	}

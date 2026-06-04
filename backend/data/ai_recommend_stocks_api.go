@@ -4436,10 +4436,10 @@ func calculateYieldDiagnosticSummary(records []models.AiRecommendStocks, items [
 	for _, item := range items {
 		if strings.TrimSpace(item.ActivationStatus) != "activated" {
 			reason := strings.TrimSpace(item.DataStatusReason)
-			if strings.Contains(reason, "V1.3.2") {
+			if strings.Contains(reason, "V1.3.2") || strings.Contains(reason, "V1.3.6") {
 				result.V132GateBlockedCount++
 				switch {
-				case strings.Contains(reason, "强弱过滤"):
+				case strings.Contains(reason, "强弱过滤") || strings.Contains(reason, "强弱二次确认"):
 					result.V132StrengthBlockedCount++
 				case strings.Contains(reason, "盈亏比"):
 					result.V132RewardRiskBlockedCount++

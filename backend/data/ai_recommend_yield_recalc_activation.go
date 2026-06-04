@@ -884,13 +884,13 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 						preBars, postBars := splitMinuteBarsByCutoff(bars, bufferUntil)
 						sameDayBars := filterMinuteBarsByCNTradeDate(preBars, recordTime)
 						// 1. 先检查推荐当日是否已激活
-						if scan := resolveActivationRuleScan(rec, sameDayBars); scan.Triggered {
-							scan.Time = clampRecordActivationTime(recordTime, scan.Time)
-							if gate := evaluateV132ActivationGate(rec, scan.Time, scan.Price, sameDayBars); !gate.Allowed {
+						if scan := resolveActivationRuleScanWithActivationGate(rec, sameDayBars); scan.Triggered || scan.Blocked {
+							if scan.Blocked {
 								info.DataStatus = "已跳过"
-								info.DataStatusReason = gate.Reason
+								info.DataStatusReason = scan.Reason
 								return nil, 0, info
 							}
+							scan.Time = clampRecordActivationTime(recordTime, scan.Time)
 							t := scan.Time
 							info.ActivationTime = &t
 							info.ActivationPrice = scan.Price
@@ -930,18 +930,18 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 			return &t, activationPrice, info
 		}
 	} else {
-		scan := resolveActivationRuleScan(rec, bars)
+		scan := resolveActivationRuleScanWithActivationGate(rec, bars)
 		if scan.Triggered {
 			scan.Time = clampRecordActivationTime(recordTime, scan.Time)
-			if gate := evaluateV132ActivationGate(rec, scan.Time, scan.Price, bars); !gate.Allowed {
-				info.DataStatus = "已跳过"
-				info.DataStatusReason = gate.Reason
-				return nil, 0, info
-			}
 			t := scan.Time
 			info.ActivationTime = &t
 			info.ActivationPrice = scan.Price
 			return &t, scan.Price, info
+		}
+		if scan.Blocked {
+			info.DataStatus = "已跳过"
+			info.DataStatusReason = scan.Reason
+			return nil, 0, info
 		}
 		if strings.TrimSpace(scan.Reason) != "" {
 			info.DataStatus = "待激活"

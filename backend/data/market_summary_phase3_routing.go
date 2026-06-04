@@ -20,6 +20,7 @@ const (
 )
 
 const marketSummaryFinalCandidateLimit = 2
+const marketSummaryMinFinalCandidateScore = 85
 
 type marketSummaryTimeWindow struct {
 	Slot  marketSummaryRunSlot
@@ -199,7 +200,14 @@ func selectMarketSummaryFinalCandidates(verified []marketSummaryVerifiedCandidat
 				continue
 			}
 		}
-		scored = append(scored, scoreMarketSummaryVerifiedCandidate(candidate, window))
+		score := scoreMarketSummaryVerifiedCandidate(candidate, window)
+		if reason := marketSummaryCandidateQualityRejectionReason(score); reason != "" {
+			if logState != nil {
+				logState.DroppedCandidates = append(logState.DroppedCandidates, fmt.Sprintf("源头质量门槛未通过:%s(%s) score=%d reason=%s", candidate.StockName, code, score.TotalScore, reason))
+			}
+			continue
+		}
+		scored = append(scored, score)
 	}
 	sort.SliceStable(scored, func(i, j int) bool {
 		if scored[i].TotalScore != scored[j].TotalScore {
@@ -226,6 +234,32 @@ func selectMarketSummaryFinalCandidates(verified []marketSummaryVerifiedCandidat
 		}
 	}
 	return result
+}
+
+func marketSummaryCandidateQualityRejectionReason(score marketSummaryCandidateScore) string {
+	candidate := score.Candidate
+	if score.DistinctEvidenceCt < 2 {
+		return fmt.Sprintf("证据类别不足%d类", score.DistinctEvidenceCt)
+	}
+	if score.HighTrustEvidenceCt <= 0 {
+		return "缺少高信任证据"
+	}
+	if strings.TrimSpace(candidate.MinutePrice) == "" && strings.TrimSpace(candidate.CurrentPrice) == "" && strings.TrimSpace(candidate.AuctionPrice) == "" {
+		return "缺少有效价格锚点"
+	}
+	if strings.TrimSpace(candidate.TechnicalSnapshot) == "" && strings.TrimSpace(candidate.MinuteAmount) == "" && strings.TrimSpace(candidate.AuctionAmount) == "" {
+		return "缺少技术/资金确认"
+	}
+	if len(candidate.NegativeSignals) >= 2 {
+		return "反向证据过多"
+	}
+	if score.WindowEvidenceCt == 0 {
+		return "当前筛选窗口内无新证据"
+	}
+	if score.TotalScore < marketSummaryMinFinalCandidateScore {
+		return fmt.Sprintf("综合质量分%d低于%d", score.TotalScore, marketSummaryMinFinalCandidateScore)
+	}
+	return ""
 }
 
 func scoreMarketSummaryVerifiedCandidate(candidate marketSummaryVerifiedCandidate, window marketSummaryTimeWindow) marketSummaryCandidateScore {
