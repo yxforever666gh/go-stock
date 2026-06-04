@@ -35,9 +35,7 @@ const strategyCohortOptions = [
   { label: 'All', value: 'all' },
   { label: 'V1.3.6', value: '1.3.6' },
   { label: 'V1.3.2', value: 'v1.3.2' },
-  { label: 'V1.3.1', value: 'phase3-v4' },
-  { label: 'Phase3-v3', value: 'phase3-v3' },
-  { label: 'Legacy', value: 'legacy' }
+  { label: 'V1.3.1', value: 'phase3-v4' }
 ]
 
 onBeforeMount(() => {
