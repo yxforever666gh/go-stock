@@ -299,7 +299,13 @@ const defaultColumns = [
         return h(NText, {type: textType}, {default: () => "未纳入回测"})
       }
       if (activationStatus === 'invalid') {
-        return h(NText, {type: textType}, {default: () => "无法回算"})
+        const reason = invalidDisplayReason(row)
+        return h("div", {style: "line-height: 1.35;"}, [
+          h(NText, {type: textType}, {default: () => "无法回算"}),
+          h("div", {
+            style: "font-size: 12px; color: #666; margin-top: 2px; white-space: normal; word-break: break-word;"
+          }, reason)
+        ])
       }
       if (activationStatus !== 'activated') {
         return h(NText, {type: textType}, {default: () => "待激活"})
@@ -1322,13 +1328,13 @@ function dataSyncReason(row) {
     return reason || row?.backtestEligibilityReason || "该推荐未形成可机械执行交易计划，未纳入回测统计"
   }
   if (status === "已跳过") {
-    return "未激活结果已同步"
+    return reason || "未激活结果已同步"
   }
   if (status === "已过期") {
-    return "过期未触发结果已同步"
+    return reason || "过期未触发结果已同步"
   }
   if (status === "已失效") {
-    return "失效结果已同步"
+    return reason || "失效结果已同步"
   }
   if (isDataFullySynced(row)) {
     return "分钟线交易时段连续性已校验，数据已更新"
@@ -1354,6 +1360,14 @@ function skippedDisplayReason(row) {
     return reason
   }
   return "未激活，已按规则跳过"
+}
+
+function invalidDisplayReason(row) {
+  const reason = String(row?.dataStatusReason || row?.activationInvalidReason || row?.backtestEligibilityReason || '').trim()
+  if (reason) {
+    return reason
+  }
+  return "激活条件未成立或已先触发失效条件"
 }
 
 function openingReviewActionText(review) {
