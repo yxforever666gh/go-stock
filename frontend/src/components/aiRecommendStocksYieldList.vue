@@ -18,7 +18,7 @@ const rangeReadyRef = ref(false)
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
-  { label: 'V1.3.6', value: 'current' },
+  { label: 'V1.3.6', value: '1.3.6' },
   { label: 'V1.3.2', value: 'v1.3.2' },
   { label: 'V1.3.1', value: 'phase3-v4' },
   { label: 'Phase3-v3', value: 'phase3-v3' },
@@ -1488,7 +1488,7 @@ function replayMarkerSummaryText() {
   </n-input-group>
   <div style="margin-top: 8px;">
     <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
-    <n-text depth="3" style="margin-left: 12px;">默认查看全部阶段；可切换 V1.3.2、V1.3.1 或历史阶段对比不同策略阶段。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">默认查看全部阶段；可切换 V1.3.6、V1.3.2、V1.3.1 或历史阶段对比不同策略阶段。</n-text>
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">当前口径：严格回算</n-text>
