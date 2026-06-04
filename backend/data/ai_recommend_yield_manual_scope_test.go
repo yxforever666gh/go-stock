@@ -109,3 +109,70 @@ func TestLoadScopeCodesForManualDownload_MergesDirtyAndCoverageScopes(t *testing
 		}
 	}
 }
+
+func TestLoadManualDownloadScopeCodesByCoverage_IncludesUncoverable(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-scope-uncoverable.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	t.Cleanup(func() { timeNow = oldNow })
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	if err := db.Dao.Create(&models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+
+	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "301293.SZ",
+		StockName:                   "三博脑科",
+		RecommendBuyPrice:           "10-10.5",
+		RecommendStopProfitPrice:    "11-12",
+		RecommendStopLossPrice:      "9.6",
+		RecommendStatus:             "valid",
+		RecommendCategory:           recommendExecutionImmediate,
+		ExecutionState:              recommendExecutionImmediate,
+		ActivationStatus:            "pending",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.5,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPriceMax: 12,
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create recommend failed: %v", err)
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldRecordState{
+		RecommendID:      rec.ID,
+		StockCode:        "301293.SZ",
+		StockName:        "三博脑科",
+		RecommendTime:    &recordTime,
+		ActivationStatus: "pending",
+		PositionStatus:   "待激活",
+		YieldRateText:    "--",
+		DataStatus:       "无法判定",
+		DataStatusReason: "分钟线数据源连续2轮重试后仍未补齐缺口",
+	}).Error; err != nil {
+		t.Fatalf("create record state failed: %v", err)
+	}
+
+	got, err := loadManualDownloadScopeCodesByCoverage()
+	if err != nil {
+		t.Fatalf("loadManualDownloadScopeCodesByCoverage failed: %v", err)
+	}
+	gotSet := normalizeScopeCodes(got)
+	if _, ok := gotSet["301293.SZ"]; !ok {
+		t.Fatalf("expected uncoverable code in manual coverage scope, got %#v", got)
+	}
+}

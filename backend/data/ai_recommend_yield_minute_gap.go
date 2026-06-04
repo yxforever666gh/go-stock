@@ -20,31 +20,29 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 	round := 0
 	for {
 		stats, issues := computeMinuteDownloadCoverageStatsWithSuspensionFetch(runtime.meta, -1)
-		if stats.Pending == 0 {
-			if stats.Uncoverable == 0 {
-				_ = runWithSQLiteBusyRetry(func() error {
-					return db.Dao.Model(&models.AiRecommendYieldMeta{}).
-						Where("id = ?", runtime.meta.ID).
-						Update("last_download_error", "").Error
-				})
-			} else {
-				runtime.manualDownloadWarning = buildManualDownloadCoverageFailure(runtime.meta, 5)
-			}
+		if stats.Pending == 0 && stats.Uncoverable == 0 {
+			_ = runWithSQLiteBusyRetry(func() error {
+				return db.Dao.Model(&models.AiRecommendYieldMeta{}).
+					Where("id = ?", runtime.meta.ID).
+					Update("last_download_error", "").Error
+			})
 			return nil
 		}
 		if !manualMinuteCoverageNow().Before(deadline) {
-			if err := markPendingMinuteCoverageIssuesUncoverable(runtime.meta, issues, "分钟线数据源在重试时间内仍未补齐缺口"); err != nil {
+			if err := markMinuteCoverageIssuesUncoverable(runtime.meta, issues, "分钟线数据源在重试时间内仍未补齐缺口"); err != nil {
 				return err
 			}
-			continue
+			runtime.manualDownloadWarning = buildManualDownloadCoverageFailure(runtime.meta, 5)
+			return nil
 		}
 
 		nextTasks := buildManualMinuteGapCoverageTasks(codeSet)
 		if len(nextTasks) == 0 {
-			if err := markPendingMinuteCoverageIssuesUncoverable(runtime.meta, issues, "存在覆盖问题，但没有可执行的缺口下载任务"); err != nil {
+			if err := markMinuteCoverageIssuesUncoverable(runtime.meta, issues, "存在覆盖问题，但没有可执行的缺口下载任务"); err != nil {
 				return err
 			}
-			continue
+			runtime.manualDownloadWarning = buildManualDownloadCoverageFailure(runtime.meta, 5)
+			return nil
 		}
 
 		round++
@@ -53,13 +51,16 @@ func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeS
 
 		stats, issues = computeMinuteDownloadCoverageStatsWithSuspensionFetch(runtime.meta, -1)
 		if stats.Pending == 0 {
-			continue
+			if stats.Uncoverable == 0 {
+				continue
+			}
 		}
 		if manualMinuteCoverageMaxRetryRounds > 0 && round >= manualMinuteCoverageMaxRetryRounds {
-			if err := markPendingMinuteCoverageIssuesUncoverable(runtime.meta, issues, fmt.Sprintf("分钟线数据源连续%d轮重试后仍未补齐缺口", round)); err != nil {
+			if err := markMinuteCoverageIssuesUncoverable(runtime.meta, issues, fmt.Sprintf("分钟线数据源连续%d轮重试后仍未补齐缺口", round)); err != nil {
 				return err
 			}
-			continue
+			runtime.manualDownloadWarning = buildManualDownloadCoverageFailure(runtime.meta, 5)
+			return nil
 		}
 		if wait := manualMinuteCoverageRetryBackoff(round - 1); wait > 0 {
 			if remaining := deadline.Sub(manualMinuteCoverageNow()); remaining > 0 && wait > remaining {
@@ -82,6 +83,10 @@ func minuteCoverageGapNeedsHistoricalSource(start, end time.Time) bool {
 }
 
 func markPendingMinuteCoverageIssuesUncoverable(meta *models.AiRecommendYieldMeta, issues []minuteCoverageIssue, prefix string) error {
+	return markMinuteCoverageIssuesUncoverable(meta, issues, prefix)
+}
+
+func markMinuteCoverageIssuesUncoverable(meta *models.AiRecommendYieldMeta, issues []minuteCoverageIssue, prefix string) error {
 	if meta == nil || len(issues) == 0 {
 		return nil
 	}
@@ -89,7 +94,8 @@ func markPendingMinuteCoverageIssuesUncoverable(meta *models.AiRecommendYieldMet
 	recordIDs := make([]uint, 0, len(issues))
 	seen := map[uint]struct{}{}
 	for _, issue := range issues {
-		if strings.TrimSpace(issue.Status) != "待覆盖" || issue.RecordID == 0 {
+		status := strings.TrimSpace(issue.Status)
+		if (status != "待覆盖" && status != "不可覆盖") || issue.RecordID == 0 {
 			continue
 		}
 		pending = append(pending, issue)

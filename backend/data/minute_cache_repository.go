@@ -548,8 +548,11 @@ func deleteMinuteBarsCache(stockCode string) error {
 		}
 	}
 	if legacyMinuteBarTableAvailable() {
-		return db.Dao.Where("stock_code = ?", code).Delete(&models.AiRecommendMinuteBar{}).Error
+		if err := db.Dao.Where("stock_code = ?", code).Delete(&models.AiRecommendMinuteBar{}).Error; err != nil {
+			return err
+		}
 	}
+	clearMinuteCoverageStatsCache()
 	return nil
 }
 
@@ -561,8 +564,11 @@ func cleanMinuteCacheForTrackedCodes(codes []string) error {
 			}
 		}
 		if legacyMinuteBarTableAvailable() {
-			return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error
+			if err := db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error; err != nil {
+				return err
+			}
 		}
+		clearMinuteCoverageStatsCache()
 		return nil
 	}
 	normalized := make([]string, 0, len(codes))
@@ -580,8 +586,11 @@ func cleanMinuteCacheForTrackedCodes(codes []string) error {
 			}
 		}
 		if legacyMinuteBarTableAvailable() {
-			return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error
+			if err := db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error; err != nil {
+				return err
+			}
 		}
+		clearMinuteCoverageStatsCache()
 		return nil
 	}
 	if db.MinuteDao != nil {
@@ -590,8 +599,11 @@ func cleanMinuteCacheForTrackedCodes(codes []string) error {
 		}
 	}
 	if legacyMinuteBarTableAvailable() {
-		return db.Dao.Where("stock_code NOT IN ?", normalized).Delete(&models.AiRecommendMinuteBar{}).Error
+		if err := db.Dao.Where("stock_code NOT IN ?", normalized).Delete(&models.AiRecommendMinuteBar{}).Error; err != nil {
+			return err
+		}
 	}
+	clearMinuteCoverageStatsCache()
 	return nil
 }
 

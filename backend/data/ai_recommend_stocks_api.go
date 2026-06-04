@@ -1072,8 +1072,9 @@ type minuteCoverageIssue struct {
 }
 
 var (
-	minuteCoverageStatsCacheMu sync.Mutex
-	minuteCoverageStatsCache   minuteCoverageStatsCacheEntry
+	minuteCoverageStatsCacheMu   sync.Mutex
+	minuteCoverageStatsCache     minuteCoverageStatsCacheEntry
+	minuteCoverageStatsComputeMu sync.Mutex
 )
 
 const minuteCoverageStatsCacheTTL = 30 * time.Second
@@ -1417,6 +1418,19 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 	}
 	minuteCoverageStatsCacheMu.Unlock()
 
+	minuteCoverageStatsComputeMu.Lock()
+	defer minuteCoverageStatsComputeMu.Unlock()
+
+	now = time.Now()
+	minuteCoverageStatsCacheMu.Lock()
+	if minuteCoverageStatsCache.Key == key && minuteCoverageStatsCache.IssueLimit == issueLimit && now.Before(minuteCoverageStatsCache.ExpireAt) {
+		stats := minuteCoverageStatsCache.Stats
+		issues := append([]minuteCoverageIssue(nil), minuteCoverageStatsCache.Issues...)
+		minuteCoverageStatsCacheMu.Unlock()
+		return stats, issues
+	}
+	minuteCoverageStatsCacheMu.Unlock()
+
 	stats, issues := computeMinuteDownloadCoverageStatsWithIssuesFresh(meta, issueLimit, false)
 	minuteCoverageStatsCacheMu.Lock()
 	minuteCoverageStatsCache = minuteCoverageStatsCacheEntry{
@@ -1432,12 +1446,13 @@ func computeMinuteDownloadCoverageStatsWithIssues(meta *models.AiRecommendYieldM
 
 func minuteCoverageStatsCacheKey(meta *models.AiRecommendYieldMeta, issueLimit int) string {
 	if meta == nil {
-		return fmt.Sprintf("nil|%d", issueLimit)
+		return fmt.Sprintf("%p|%p|nil|%d", db.Dao, db.MinuteDao, issueLimit)
 	}
-	return fmt.Sprintf("%d|%s|%s|%d|%d|%d|%d",
+	return fmt.Sprintf("%p|%p|%d|%s|%d|%d|%d|%d",
+		db.Dao,
+		db.MinuteDao,
 		meta.ID,
 		meta.CurrentTradeDate,
-		meta.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		boolCacheKey(meta.RecalcInProgress),
 		boolCacheKey(meta.DownloadInProgress),
 		meta.DownloadDone,
@@ -1675,22 +1690,18 @@ func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendY
 		}
 		cacheStart, cacheEnd, hasScope := resolveMinuteCoverageScope(statePtr, code, cacheRanges)
 		if !hasScope {
-			detail := missingWindow("", "no_cache", requiredStart, requiredEnd)
+			coverageReason := fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd))
+			detail := missingWindow(coverageReason, "no_cache", requiredStart, requiredEnd)
 			if minuteCoverageGapCoveredBySuspensionWithFetch(code, detail.MissingStart, detail.MissingEnd, allowSuspensionFetch) {
 				done++
 				continue
 			}
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
-				reason := strings.TrimSpace(state.DataStatusReason)
-				if reason == "" {
-					reason = fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd))
-				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, detail)
+				appendIssue(rec, recordTime, code, "不可覆盖", coverageReason, detail)
 			} else {
 				pending++
-				appendIssue(rec, recordTime, code, "待覆盖",
-					fmt.Sprintf("无缓存范围（目标 %s~%s）", formatTs(requiredStart), formatTs(requiredEnd)), detail)
+				appendIssue(rec, recordTime, code, "待覆盖", coverageReason, detail)
 			}
 			continue
 		}
@@ -1705,19 +1716,14 @@ func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendY
 				done++
 				continue
 			}
+			coverageReason := fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
+				formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
-				reason := strings.TrimSpace(state.DataStatusReason)
-				if reason == "" {
-					reason = fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
-				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, detail)
+				appendIssue(rec, recordTime, code, "不可覆盖", coverageReason, detail)
 			} else {
 				pending++
-				appendIssue(rec, recordTime, code, "待覆盖",
-					fmt.Sprintf("起点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), detail)
+				appendIssue(rec, recordTime, code, "待覆盖", coverageReason, detail)
 			}
 			continue
 		}
@@ -1731,19 +1737,14 @@ func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendY
 				done++
 				continue
 			}
+			coverageReason := fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
+				formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
-				reason := strings.TrimSpace(state.DataStatusReason)
-				if reason == "" {
-					reason = fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd))
-				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, detail)
+				appendIssue(rec, recordTime, code, "不可覆盖", coverageReason, detail)
 			} else {
 				pending++
-				appendIssue(rec, recordTime, code, "待覆盖",
-					fmt.Sprintf("终点未覆盖（缓存 %s~%s，目标 %s~%s）",
-						formatTs(cacheStart), formatTs(cacheEnd), formatTs(requiredStart), formatTs(requiredEnd)), detail)
+				appendIssue(rec, recordTime, code, "待覆盖", coverageReason, detail)
 			}
 			continue
 		}
@@ -1761,11 +1762,7 @@ func computeMinuteDownloadCoverageStatsWithIssuesFresh(meta *models.AiRecommendY
 			continuityReason := fmt.Sprintf("%s（目标 %s~%s）", strings.TrimSpace(continuityDetail.Reason), formatTs(requiredStart), formatTs(requiredEnd))
 			if hasState && strings.TrimSpace(state.DataStatus) == "无法判定" {
 				uncoverable++
-				reason := strings.TrimSpace(state.DataStatusReason)
-				if reason == "" {
-					reason = continuityReason
-				}
-				appendIssue(rec, recordTime, code, "不可覆盖", reason, continuityDetail)
+				appendIssue(rec, recordTime, code, "不可覆盖", continuityReason, continuityDetail)
 			} else {
 				pending++
 				appendIssue(rec, recordTime, code, "待覆盖", continuityReason, continuityDetail)

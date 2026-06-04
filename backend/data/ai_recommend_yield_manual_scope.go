@@ -175,7 +175,7 @@ func loadManualDownloadScopeCodesByCoverage() ([]string, error) {
 	scopeSet := make(map[string]struct{}, len(issues))
 	for _, issue := range issues {
 		status := strings.TrimSpace(issue.Status)
-		if status != "待覆盖" {
+		if status != "待覆盖" && status != "不可覆盖" {
 			continue
 		}
 		code := normalizeRecommendStockCode(issue.StockCode)

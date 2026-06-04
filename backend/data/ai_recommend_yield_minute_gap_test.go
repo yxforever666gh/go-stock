@@ -468,8 +468,130 @@ func TestCloseManualMinuteCoverageGaps_MarksUncoverableAfterRetryExhausted(t *te
 	if stats.Pending != 0 || stats.Uncoverable != 1 {
 		t.Fatalf("coverage stats after exhausted retry = %#v issues=%#v, want pending=0 uncoverable=1", stats, issues)
 	}
-	if len(issues) != 1 || !strings.Contains(issues[0].RawReason, "连续2轮重试") {
+	if len(issues) != 1 || !strings.Contains(issues[0].RawReason, "无缓存范围") {
 		t.Fatalf("unexpected issues after exhausted retry: %#v", issues)
+	}
+	stored := models.AiRecommendYieldRecordState{}
+	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).Where("recommend_id = ?", rec.ID).First(&stored).Error; err != nil {
+		t.Fatalf("load stored record state failed: %v", err)
+	}
+	if !strings.Contains(stored.DataStatusReason, "连续2轮重试") {
+		t.Fatalf("stored reason should keep retry exhaustion detail, got %q", stored.DataStatusReason)
+	}
+}
+
+func TestCloseManualMinuteCoverageGaps_RetriesExistingUncoverableGap(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "manual-gap-retry-uncoverable.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldOverride{},
+		&Settings{},
+	); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	oldNow := timeNow
+	oldManualNow := manualMinuteCoverageNow
+	oldManualSleep := manualMinuteCoverageSleep
+	oldBackoffs := manualMinuteCoverageRetryBackoffs
+	oldBudget := manualMinuteCoverageRetryBudget
+	oldMaxRetryRounds := manualMinuteCoverageMaxRetryRounds
+	oldTencent := fetchMinuteBarsWithTencentFn
+	oldAkshare := fetchMinuteBarsWithAkShareFn
+	oldSina := fetchMinuteBarsWithSinaFn
+	oldDiemeng := fetchMinuteBarsWithDiemengFn
+	t.Cleanup(func() {
+		timeNow = oldNow
+		manualMinuteCoverageNow = oldManualNow
+		manualMinuteCoverageSleep = oldManualSleep
+		manualMinuteCoverageRetryBackoffs = oldBackoffs
+		manualMinuteCoverageRetryBudget = oldBudget
+		manualMinuteCoverageMaxRetryRounds = oldMaxRetryRounds
+		fetchMinuteBarsWithTencentFn = oldTencent
+		fetchMinuteBarsWithAkShareFn = oldAkshare
+		fetchMinuteBarsWithSinaFn = oldSina
+		fetchMinuteBarsWithDiemengFn = oldDiemeng
+	})
+
+	loc := cnLocation()
+	now := time.Date(2026, 5, 29, 15, 30, 0, 0, loc)
+	timeNow = func() time.Time { return now }
+	manualMinuteCoverageNow = func() time.Time { return now }
+	manualMinuteCoverageSleep = func(time.Duration) {}
+	manualMinuteCoverageRetryBackoffs = []time.Duration{0}
+	manualMinuteCoverageRetryBudget = time.Minute
+	manualMinuteCoverageMaxRetryRounds = 2
+
+	meta := models.AiRecommendYieldMeta{CurrentTradeDate: "2026-05-29"}
+	if err := db.Dao.Create(&meta).Error; err != nil {
+		t.Fatalf("create meta failed: %v", err)
+	}
+	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
+	rec := models.AiRecommendStocks{
+		DataTime:                    &recordTime,
+		StockCode:                   "301293.SZ",
+		StockName:                   "三博脑科",
+		RecommendBuyPrice:           "10-10.5",
+		RecommendStopProfitPrice:    "11-12",
+		RecommendStopLossPrice:      "9.6",
+		RecommendStatus:             "valid",
+		RecommendCategory:           recommendExecutionImmediate,
+		ActivationStatus:            "pending",
+		RecommendBuyPriceMin:        10,
+		RecommendBuyPriceMax:        10.5,
+		RecommendStopProfitPriceMin: 11,
+		RecommendStopProfitPriceMax: 12,
+	}
+	if err := db.Dao.Create(&rec).Error; err != nil {
+		t.Fatalf("create recommend failed: %v", err)
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldRecordState{
+		RecommendID:      rec.ID,
+		StockCode:        "301293.SZ",
+		StockName:        "三博脑科",
+		RecommendTime:    &recordTime,
+		ActivationStatus: "pending",
+		PositionStatus:   "待激活",
+		YieldRateText:    "--",
+		DataStatus:       "无法判定",
+		DataStatusReason: "分钟线数据源连续2轮重试后仍未补齐缺口：旧原因",
+	}).Error; err != nil {
+		t.Fatalf("create stale record state failed: %v", err)
+	}
+
+	providerCalls := 0
+	fetch := func(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+		providerCalls++
+		return minuteBarsForSessions(start, end), "test", nil
+	}
+	fetchMinuteBarsWithTencentFn = fetch
+	fetchMinuteBarsWithAkShareFn = fetch
+	fetchMinuteBarsWithSinaFn = fetch
+	fetchMinuteBarsWithDiemengFn = fetch
+
+	stats, issues := computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending != 0 || stats.Uncoverable != 1 {
+		t.Fatalf("coverage stats before retry = %#v issues=%#v, want existing uncoverable", stats, issues)
+	}
+	tasks := buildManualMinuteGapCoverageTasks(map[string]struct{}{"301293.SZ": {}})
+	if len(tasks) == 0 {
+		t.Fatalf("expected uncoverable gap to create retry tasks, issues=%#v", issues)
+	}
+
+	err := closeManualMinuteCoverageGaps(&aiRecommendYieldRecalcRuntime{meta: &meta}, map[string]struct{}{"301293.SZ": {}})
+	if err != nil {
+		t.Fatalf("closeManualMinuteCoverageGaps failed: %v", err)
+	}
+	if providerCalls == 0 {
+		t.Fatal("expected provider to be called for existing uncoverable gap")
+	}
+	stats, issues = computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+	if stats.Pending != 0 || stats.Uncoverable != 0 || stats.Done != stats.Total {
+		t.Fatalf("coverage stats after retry = %#v issues=%#v, want full coverage", stats, issues)
 	}
 }
 
@@ -587,8 +709,15 @@ func TestCloseManualMinuteCoverageGaps_MarksContinuityGapUncoverableAfterRetryEx
 	if stats.Pending != 0 || stats.Uncoverable != 1 {
 		t.Fatalf("coverage stats after exhausted continuity retry = %#v issues=%#v, want pending=0 uncoverable=1", stats, issues)
 	}
-	if len(issues) != 1 || !strings.Contains(issues[0].RawReason, "连续2轮重试") {
+	if len(issues) != 1 || !strings.Contains(issues[0].RawReason, "分钟线交易时段缺口") {
 		t.Fatalf("unexpected continuity issues after exhausted retry: %#v", issues)
+	}
+	stored := models.AiRecommendYieldRecordState{}
+	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).Where("recommend_id = ?", rec.ID).First(&stored).Error; err != nil {
+		t.Fatalf("load stored record state failed: %v", err)
+	}
+	if !strings.Contains(stored.DataStatusReason, "连续2轮重试") {
+		t.Fatalf("stored reason should keep retry exhaustion detail, got %q", stored.DataStatusReason)
 	}
 }
 
