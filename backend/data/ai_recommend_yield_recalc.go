@@ -170,8 +170,31 @@ func keysFromScopeMap(scope map[string]struct{}) []string {
 	return codes
 }
 
+var (
+	yieldDirtySchemaMu sync.Mutex
+	yieldDirtySchemaDB *gorm.DB
+)
+
 func ensureYieldDirtySchema() error {
-	return db.Dao.AutoMigrate(&models.AiRecommendYieldDirtyCode{})
+	if db.Dao == nil {
+		return nil
+	}
+	yieldDirtySchemaMu.Lock()
+	defer yieldDirtySchemaMu.Unlock()
+	if yieldDirtySchemaDB == db.Dao {
+		return nil
+	}
+	if err := db.Dao.Exec("DROP INDEX IF EXISTS idx_ai_recommend_yield_dirty_code_stock_code").Error; err != nil {
+		return err
+	}
+	if err := db.Dao.AutoMigrate(&models.AiRecommendYieldDirtyCode{}); err != nil {
+		return err
+	}
+	if err := cleanupLegacyRuleFixCodeLevelDirtyRows(); err != nil {
+		return err
+	}
+	yieldDirtySchemaDB = db.Dao
+	return nil
 }
 
 func markAiRecommendYieldDirtyCodes(scopeCodes []string, reason string, mode string) error {
@@ -185,15 +208,83 @@ func markAiRecommendYieldDirtyCodes(scopeCodes []string, reason string, mode str
 	rows := make([]models.AiRecommendYieldDirtyCode, 0, len(normalized))
 	for code := range normalized {
 		rows = append(rows, models.AiRecommendYieldDirtyCode{
-			StockCode:  code,
-			Reason:     strings.TrimSpace(reason),
-			ModeNeeded: normalizeAiRecommendYieldMode(mode),
+			StockCode:   code,
+			RecommendID: 0,
+			Reason:      strings.TrimSpace(reason),
+			ModeNeeded:  normalizeAiRecommendYieldMode(mode),
 		})
 	}
+	return upsertAiRecommendYieldDirtyRows(rows)
+}
+
+func markAiRecommendYieldDirtyRecords(recommendIDs []uint, reason string, mode string) error {
+	if schemaErr := ensureYieldDirtySchema(); schemaErr != nil {
+		return schemaErr
+	}
+	idSet := make(map[uint]struct{}, len(recommendIDs))
+	ids := make([]uint, 0, len(recommendIDs))
+	for _, id := range recommendIDs {
+		if id == 0 {
+			continue
+		}
+		if _, ok := idSet[id]; ok {
+			continue
+		}
+		idSet[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	rows := make([]struct {
+		ID        uint
+		StockCode string
+	}, 0, len(ids))
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Select("id, stock_code").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	dirtyRows := make([]models.AiRecommendYieldDirtyCode, 0, len(rows))
+	for _, row := range rows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if row.ID == 0 || code == "" {
+			continue
+		}
+		dirtyRows = append(dirtyRows, models.AiRecommendYieldDirtyCode{
+			StockCode:   code,
+			RecommendID: row.ID,
+			Reason:      strings.TrimSpace(reason),
+			ModeNeeded:  normalizeAiRecommendYieldMode(mode),
+		})
+	}
+	return upsertAiRecommendYieldDirtyRows(dirtyRows)
+}
+
+func upsertAiRecommendYieldDirtyRows(rows []models.AiRecommendYieldDirtyCode) error {
+	if len(rows) == 0 {
+		return nil
+	}
 	return db.Dao.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "stock_code"}},
-		DoUpdates: clause.AssignmentColumns([]string{"updated_at", "reason", "mode_needed"}),
+		Columns: []clause.Column{
+			{Name: "stock_code"},
+			{Name: "recommend_id"},
+			{Name: "mode_needed"},
+		},
+		DoUpdates: clause.AssignmentColumns([]string{"updated_at", "reason"}),
 	}).CreateInBatches(rows, 100).Error
+}
+
+func cleanupLegacyRuleFixCodeLevelDirtyRows() error {
+	return db.Dao.Model(&models.AiRecommendYieldDirtyCode{}).
+		Where("recommend_id = 0 OR recommend_id IS NULL").
+		Where("reason IN ?", []string{
+			"激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
+			"V1.3.2 VWAP 单位归一化规则已修复，等待 strict 重算",
+			"买入价不低于止盈价，等待按突破追价上限规则重算",
+		}).
+		Delete(&models.AiRecommendYieldDirtyCode{}).Error
 }
 
 func loadDirtyAiRecommendYieldCodes(mode string) ([]string, error) {
@@ -212,21 +303,39 @@ func loadDirtyAiRecommendYieldCodes(mode string) ([]string, error) {
 		}
 		return nil, err
 	}
-	codes := make([]string, 0, len(rows))
+	codeSet := make(map[string]struct{}, len(rows))
 	for _, row := range rows {
 		code := normalizeRecommendStockCode(row.StockCode)
 		if code == "" {
 			continue
 		}
+		codeSet[code] = struct{}{}
+	}
+	codes := make([]string, 0, len(codeSet))
+	for code := range codeSet {
 		codes = append(codes, code)
 	}
+	sort.Strings(codes)
 	return codes, nil
 }
 
+type aiRecommendYieldDirtyScope struct {
+	Code   map[string]models.AiRecommendYieldDirtyCode
+	Record map[uint]models.AiRecommendYieldDirtyCode
+}
+
 func loadDirtyAiRecommendYieldCodeSet(mode string) (map[string]models.AiRecommendYieldDirtyCode, error) {
+	scope, err := loadDirtyAiRecommendYieldScope(mode)
+	if err != nil {
+		return nil, err
+	}
+	return scope.Code, nil
+}
+
+func loadDirtyAiRecommendYieldScope(mode string) (aiRecommendYieldDirtyScope, error) {
 	rows := make([]models.AiRecommendYieldDirtyCode, 0, 64)
 	if schemaErr := ensureYieldDirtySchema(); schemaErr != nil {
-		return nil, schemaErr
+		return aiRecommendYieldDirtyScope{}, schemaErr
 	}
 	q := db.Dao.Model(&models.AiRecommendYieldDirtyCode{})
 	mode = normalizeAiRecommendYieldMode(mode)
@@ -235,17 +344,26 @@ func loadDirtyAiRecommendYieldCodeSet(mode string) (map[string]models.AiRecommen
 	}
 	if err := q.Find(&rows).Error; err != nil {
 		if isSQLiteNoSuchTable(err) {
-			return map[string]models.AiRecommendYieldDirtyCode{}, nil
+			return aiRecommendYieldDirtyScope{
+				Code:   map[string]models.AiRecommendYieldDirtyCode{},
+				Record: map[uint]models.AiRecommendYieldDirtyCode{},
+			}, nil
 		}
-		return nil, err
+		return aiRecommendYieldDirtyScope{}, err
 	}
-	result := make(map[string]models.AiRecommendYieldDirtyCode, len(rows))
+	result := aiRecommendYieldDirtyScope{
+		Code:   make(map[string]models.AiRecommendYieldDirtyCode, len(rows)),
+		Record: make(map[uint]models.AiRecommendYieldDirtyCode, len(rows)),
+	}
 	for _, row := range rows {
 		code := normalizeRecommendStockCode(row.StockCode)
-		if code == "" {
+		if row.RecommendID > 0 {
+			result.Record[row.RecommendID] = row
+		}
+		if code == "" || row.RecommendID > 0 {
 			continue
 		}
-		result[code] = row
+		result.Code[code] = row
 	}
 	return result, nil
 }
@@ -255,6 +373,7 @@ func markInvalidActivationExitPlanDirtyCodes(mode string) error {
 		return nil
 	}
 	scope := make(map[string]struct{})
+	recordIDs := make([]uint, 0, 16)
 	stateRows := make([]models.AiRecommendYieldState, 0, 16)
 	if err := db.Dao.Model(&models.AiRecommendYieldState{}).
 		Where("activation_status = ? AND buy_amount > 0 AND stop_profit_amount IS NOT NULL AND buy_amount >= stop_profit_amount", "activated").
@@ -274,19 +393,15 @@ func markInvalidActivationExitPlanDirtyCodes(mode string) error {
 		return err
 	}
 	for _, row := range recordRows {
-		code := normalizeRecommendStockCode(row.StockCode)
-		if code != "" {
-			scope[code] = struct{}{}
+		if row.RecommendID != 0 {
+			recordIDs = append(recordIDs, row.RecommendID)
 		}
 	}
-	if len(scope) == 0 {
-		return nil
+	reason := "买入价不低于止盈价，等待按突破追价上限规则重算"
+	if err := markAiRecommendYieldDirtyRecords(recordIDs, reason, mode); err != nil {
+		return err
 	}
-	return markAiRecommendYieldDirtyCodes(
-		keysFromScopeMap(scope),
-		"买入价不低于止盈价，等待按突破追价上限规则重算",
-		mode,
-	)
+	return markAiRecommendYieldDirtyCodes(keysFromScopeMap(scope), reason, mode)
 }
 
 func markActivationWindowPolicyBugDirtyCodes(mode string) error {
@@ -294,6 +409,7 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 		return nil
 	}
 	rows := make([]struct {
+		RecommendID        uint
 		StockCode          string
 		SignalAt           string
 		ActivationRuleJSON string
@@ -301,7 +417,7 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 		RecordReason       string
 	}, 0, 32)
 	err := db.Dao.Table("ai_recommend_stocks AS r").
-		Select("r.stock_code, COALESCE(r.data_time, r.created_at) AS signal_at, r.activation_rule_json, COALESCE(s.data_status_reason, '') AS state_reason, COALESCE(r.activation_invalid_reason, '') AS record_reason").
+		Select("r.id AS recommend_id, r.stock_code, COALESCE(r.data_time, r.created_at) AS signal_at, r.activation_rule_json, COALESCE(s.data_status_reason, '') AS state_reason, COALESCE(r.activation_invalid_reason, '') AS record_reason").
 		Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
 		Where("r.deleted_at IS NULL").
 		Where("r.activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
@@ -313,23 +429,19 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 		}
 		return err
 	}
-	scope := make(map[string]struct{})
+	recordIDs := make([]uint, 0, len(rows))
 	for _, row := range rows {
-		code := normalizeRecommendStockCode(row.StockCode)
-		if code == "" {
+		if row.RecommendID == 0 {
 			continue
 		}
 		signalAt, _ := parseSQLiteDateTimeText(row.SignalAt)
 		reason := strings.TrimSpace(firstNonEmptyText(row.StateReason, row.RecordReason))
 		if reasonIndicatesActivationWindowPolicyBug(reason, signalAt) || activationRuleHasBreakoutPathMissingThresholdMax(row.ActivationRuleJSON) {
-			scope[code] = struct{}{}
+			recordIDs = append(recordIDs, row.RecommendID)
 		}
 	}
-	if len(scope) == 0 {
-		return nil
-	}
-	return markAiRecommendYieldDirtyCodes(
-		keysFromScopeMap(scope),
+	return markAiRecommendYieldDirtyRecords(
+		recordIDs,
 		"激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
 		mode,
 	)
@@ -340,12 +452,13 @@ func markV132VWAPScaleDirtyCodes(mode string) error {
 		return nil
 	}
 	rows := make([]struct {
+		RecommendID             uint
 		StockCode               string
 		DataStatusReason        string
 		ActivationInvalidReason string
 	}, 0, 16)
 	err := db.Dao.Table("ai_recommend_stocks AS r").
-		Select("r.stock_code, COALESCE(s.data_status_reason, '') AS data_status_reason, COALESCE(r.activation_invalid_reason, '') AS activation_invalid_reason").
+		Select("r.id AS recommend_id, r.stock_code, COALESCE(s.data_status_reason, '') AS data_status_reason, COALESCE(r.activation_invalid_reason, '') AS activation_invalid_reason").
 		Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
 		Where("r.deleted_at IS NULL").
 		Where("r.summary_version = ?", marketSummaryVersionV132).
@@ -357,22 +470,18 @@ func markV132VWAPScaleDirtyCodes(mode string) error {
 		}
 		return err
 	}
-	scope := make(map[string]struct{}, len(rows))
+	recordIDs := make([]uint, 0, len(rows))
 	for _, row := range rows {
-		code := normalizeRecommendStockCode(row.StockCode)
-		if code == "" {
+		if row.RecommendID == 0 {
 			continue
 		}
 		reason := strings.TrimSpace(firstNonEmptyText(row.DataStatusReason, row.ActivationInvalidReason))
 		if reasonIndicatesV132VWAPScaleBug(reason) {
-			scope[code] = struct{}{}
+			recordIDs = append(recordIDs, row.RecommendID)
 		}
 	}
-	if len(scope) == 0 {
-		return nil
-	}
-	return markAiRecommendYieldDirtyCodes(
-		keysFromScopeMap(scope),
+	return markAiRecommendYieldDirtyRecords(
+		recordIDs,
 		"V1.3.2 VWAP 单位归一化规则已修复，等待 strict 重算",
 		mode,
 	)

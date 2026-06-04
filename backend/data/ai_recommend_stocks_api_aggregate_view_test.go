@@ -126,7 +126,10 @@ func TestBuildStrictAggregateYieldItems_PreferAggregateLifecycleForListButKeepMe
 		recordStateMap,
 		stateMap,
 		map[uint]models.AiRecommendYieldOverride{},
-		map[string]models.AiRecommendYieldDirtyCode{},
+		aiRecommendYieldDirtyScope{
+			Code:   map[string]models.AiRecommendYieldDirtyCode{},
+			Record: map[uint]models.AiRecommendYieldDirtyCode{},
+		},
 		nil,
 	)
 
@@ -275,7 +278,10 @@ func TestBuildStrictYieldRecordItems_PreserveRecordOrderAndNoFolding(t *testing.
 		recordStateMap,
 		stateMap,
 		map[uint]models.AiRecommendYieldOverride{},
-		map[string]models.AiRecommendYieldDirtyCode{},
+		aiRecommendYieldDirtyScope{
+			Code:   map[string]models.AiRecommendYieldDirtyCode{},
+			Record: map[uint]models.AiRecommendYieldDirtyCode{},
+		},
 		nil,
 	)
 

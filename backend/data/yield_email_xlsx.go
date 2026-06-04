@@ -89,7 +89,7 @@ func loadYieldEmailItems() ([]models.AiRecommendStocksYieldItem, error) {
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
 	records = collapseRecommendRecordsSameDayByCode(records)
 
-	dirtyMap, err := loadDirtyAiRecommendYieldCodeSet(aiRecommendYieldModeStrict)
+	dirtyScope, err := loadDirtyAiRecommendYieldScope(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func loadYieldEmailItems() ([]models.AiRecommendStocksYieldItem, error) {
 		return nil, err
 	}
 
-	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyMap, coverageIssues)
+	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, coverageIssues)
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
 
 	if len(items) == 0 {

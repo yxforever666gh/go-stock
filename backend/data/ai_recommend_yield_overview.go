@@ -83,12 +83,12 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 	if err != nil {
 		return nil, err
 	}
-	dirtyMap, err := loadDirtyAiRecommendYieldCodeSet(aiRecommendYieldModeStrict)
+	dirtyScope, err := loadDirtyAiRecommendYieldScope(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
 	}
 
-	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyMap, nil)
+	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, nil)
 	entries := make([]yieldDailyOverviewEntry, 0, len(items))
 	inactiveSkipped := 0
 	for _, item := range items {

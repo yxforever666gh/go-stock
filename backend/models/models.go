@@ -1531,12 +1531,13 @@ type AiRecommendYieldMeta struct {
 func (AiRecommendYieldMeta) TableName() string { return "ai_recommend_yield_meta" }
 
 type AiRecommendYieldDirtyCode struct {
-	ID         uint      `json:"id" gorm:"primarykey"`
-	CreatedAt  time.Time `json:"createdAt"`
-	UpdatedAt  time.Time `json:"updatedAt"`
-	StockCode  string    `json:"stockCode" gorm:"size:32;uniqueIndex"`
-	Reason     string    `json:"reason"`
-	ModeNeeded string    `json:"modeNeeded" gorm:"size:16;index"`
+	ID          uint      `json:"id" gorm:"primarykey"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+	StockCode   string    `json:"stockCode" gorm:"size:32;index;uniqueIndex:idx_ai_recommend_yield_dirty_scope"`
+	RecommendID uint      `json:"recommendId" gorm:"index;uniqueIndex:idx_ai_recommend_yield_dirty_scope"`
+	Reason      string    `json:"reason"`
+	ModeNeeded  string    `json:"modeNeeded" gorm:"size:16;index;uniqueIndex:idx_ai_recommend_yield_dirty_scope"`
 }
 
 func (AiRecommendYieldDirtyCode) TableName() string { return "ai_recommend_yield_dirty_code" }

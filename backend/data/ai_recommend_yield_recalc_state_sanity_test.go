@@ -562,11 +562,14 @@ func TestSyncRecommendActivationStatusFromRecordStates(t *testing.T) {
 }
 
 func TestApplyStrictPendingStateToYieldItem_DoesNotOverrideTerminalOrAnalysisOnlyState(t *testing.T) {
-	dirtyMap := map[string]models.AiRecommendYieldDirtyCode{
-		"002328.SZ": {
-			StockCode: "002328.SZ",
-			Reason:    "跳过复审覆盖后等待严格模式回算",
+	dirtyScope := aiRecommendYieldDirtyScope{
+		Code: map[string]models.AiRecommendYieldDirtyCode{
+			"002328.SZ": {
+				StockCode: "002328.SZ",
+				Reason:    "跳过复审覆盖后等待严格模式回算",
+			},
 		},
+		Record: map[uint]models.AiRecommendYieldDirtyCode{},
 	}
 
 	invalidItem := models.AiRecommendStocksYieldItem{
@@ -575,7 +578,7 @@ func TestApplyStrictPendingStateToYieldItem_DoesNotOverrideTerminalOrAnalysisOnl
 		ExecutionState:   recommendExecutionConditional,
 		DataStatus:       "无法判定",
 	}
-	applyStrictPendingStateToYieldItem(&invalidItem, dirtyMap)
+	applyStrictPendingStateToYieldItem(&invalidItem, dirtyScope, false)
 	if !invalidItem.StrictReady {
 		t.Fatal("expected invalid terminal item to stay strict-ready")
 	}
@@ -592,7 +595,7 @@ func TestApplyStrictPendingStateToYieldItem_DoesNotOverrideTerminalOrAnalysisOnl
 		ExecutionState:   recommendExecutionAnalysisOnly,
 		DataStatus:       "未结构化",
 	}
-	applyStrictPendingStateToYieldItem(&analysisOnlyItem, dirtyMap)
+	applyStrictPendingStateToYieldItem(&analysisOnlyItem, dirtyScope, false)
 	if !analysisOnlyItem.StrictReady {
 		t.Fatal("expected analysis-only item to stay strict-ready")
 	}
@@ -601,6 +604,159 @@ func TestApplyStrictPendingStateToYieldItem_DoesNotOverrideTerminalOrAnalysisOnl
 	}
 	if analysisOnlyItem.DataStatus != "未结构化" {
 		t.Fatalf("expected analysis-only data status unchanged, got %s", analysisOnlyItem.DataStatus)
+	}
+}
+
+func TestApplyStrictPendingStateToYieldItem_CodeDirtyDoesNotOverrideStrictSnapshot(t *testing.T) {
+	dirtyScope := aiRecommendYieldDirtyScope{
+		Code: map[string]models.AiRecommendYieldDirtyCode{
+			"688017.SH": {
+				StockCode: "688017.SH",
+				Reason:    "激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
+			},
+		},
+		Record: map[uint]models.AiRecommendYieldDirtyCode{},
+	}
+	item := models.AiRecommendStocksYieldItem{
+		RecommendID:      404,
+		StockCode:        "688017.SH",
+		StockName:        "绿的谐波",
+		ActivationStatus: "activated",
+		DataStatus:       "正常",
+		YieldRateText:    "+4.90%",
+	}
+	applyStrictPendingStateToYieldItem(&item, dirtyScope, true)
+	if !item.StrictReady {
+		t.Fatalf("expected code-level dirty not to override ready strict snapshot: %#v", item)
+	}
+	if item.ActivationStatus != "activated" || item.DataStatus != "正常" || item.YieldRateText != "+4.90%" {
+		t.Fatalf("ready strict snapshot should be preserved, got %#v", item)
+	}
+
+	missingSnapshot := item
+	missingSnapshot.StrictReady = false
+	applyStrictPendingStateToYieldItem(&missingSnapshot, dirtyScope, false)
+	if missingSnapshot.StrictReady {
+		t.Fatalf("expected code-level dirty to mark missing snapshot pending: %#v", missingSnapshot)
+	}
+	if missingSnapshot.DataStatus != "待回算" || missingSnapshot.ActivationStatus != "pending" {
+		t.Fatalf("expected missing snapshot to be pending, got %#v", missingSnapshot)
+	}
+}
+
+func TestApplyStrictPendingStateToYieldItem_RecordDirtyOverridesOnlyMatchingRecord(t *testing.T) {
+	dirtyScope := aiRecommendYieldDirtyScope{
+		Code: map[string]models.AiRecommendYieldDirtyCode{},
+		Record: map[uint]models.AiRecommendYieldDirtyCode{
+			312: {
+				StockCode:   "688017.SH",
+				RecommendID: 312,
+				Reason:      "激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
+			},
+		},
+	}
+	readyItem := models.AiRecommendStocksYieldItem{
+		RecommendID:      404,
+		StockCode:        "688017.SH",
+		ActivationStatus: "activated",
+		DataStatus:       "正常",
+	}
+	applyStrictPendingStateToYieldItem(&readyItem, dirtyScope, true)
+	if !readyItem.StrictReady || readyItem.ActivationStatus != "activated" {
+		t.Fatalf("record-level dirty should not affect another recommend id, got %#v", readyItem)
+	}
+
+	dirtyItem := models.AiRecommendStocksYieldItem{
+		RecommendID:      312,
+		StockCode:        "688017.SH",
+		ActivationStatus: "pending",
+		DataStatus:       "待激活",
+	}
+	applyStrictPendingStateToYieldItem(&dirtyItem, dirtyScope, true)
+	if dirtyItem.StrictReady || dirtyItem.DataStatus != "待回算" {
+		t.Fatalf("record-level dirty should mark matching recommend id pending, got %#v", dirtyItem)
+	}
+}
+
+func TestMarkActivationWindowPolicyBugDirtyCodes_UsesRecordLevelDirty(t *testing.T) {
+	db.Init(filepath.Join(t.TempDir(), "yield-record-level-dirty.db"))
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
+		t.Fatalf("auto migrate failed: %v", err)
+	}
+
+	loc := cnLocation()
+	readyTime := time.Date(2026, 6, 1, 11, 30, 0, 0, loc)
+	staleTime := time.Date(2026, 4, 22, 11, 30, 0, 0, loc)
+	readyRec := models.AiRecommendStocks{
+		StockCode:            "688017.SH",
+		StockName:            "绿的谐波",
+		DataTime:             &readyTime,
+		ActivationRuleSource: "market_summary",
+		ActivationRuleJSON:   `{"version":"v3","mode":"any_of","paths":[{"signalType":"price_breakout_with_volume","thresholdValue":296,"thresholdMax":300.44}]}`,
+		ActivationStatus:     "activated",
+	}
+	if err := db.Dao.Create(&readyRec).Error; err != nil {
+		t.Fatalf("seed ready recommend failed: %v", err)
+	}
+	staleRec := models.AiRecommendStocks{
+		StockCode:            "688017.SH",
+		StockName:            "绿的谐波",
+		DataTime:             &staleTime,
+		ActivationRuleSource: "market_summary",
+		ActivationRuleJSON:   "",
+		ActivationStatus:     "pending",
+	}
+	if err := db.Dao.Create(&staleRec).Error; err != nil {
+		t.Fatalf("seed stale recommend failed: %v", err)
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldRecordState{
+		RecommendID:      readyRec.ID,
+		StockCode:        "688017.SH",
+		StockName:        "绿的谐波",
+		ActivationStatus: "activated",
+		DataStatus:       "正常",
+	}).Error; err != nil {
+		t.Fatalf("seed ready state failed: %v", err)
+	}
+	if err := db.Dao.Create(&models.AiRecommendYieldRecordState{
+		RecommendID:      staleRec.ID,
+		StockCode:        "688017.SH",
+		StockName:        "绿的谐波",
+		ActivationStatus: "pending",
+		DataStatus:       "待激活",
+		DataStatusReason: "主买入区尚未进入可扫描窗口",
+	}).Error; err != nil {
+		t.Fatalf("seed stale state failed: %v", err)
+	}
+
+	if err := markActivationWindowPolicyBugDirtyCodes(aiRecommendYieldModeStrict); err != nil {
+		t.Fatalf("markActivationWindowPolicyBugDirtyCodes failed: %v", err)
+	}
+
+	rows := make([]models.AiRecommendYieldDirtyCode, 0)
+	if err := db.Dao.Model(&models.AiRecommendYieldDirtyCode{}).
+		Where("stock_code = ?", "688017.SH").
+		Order("recommend_id ASC").
+		Find(&rows).Error; err != nil {
+		t.Fatalf("load dirty rows failed: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("expected one record-level dirty row, got %#v", rows)
+	}
+	if rows[0].RecommendID != staleRec.ID {
+		t.Fatalf("expected dirty recommend id %d, got %#v", staleRec.ID, rows[0])
+	}
+	if rows[0].RecommendID == readyRec.ID {
+		t.Fatalf("ready record should not be marked dirty: %#v", rows[0])
+	}
+	var codeLevelCount int64
+	if err := db.Dao.Model(&models.AiRecommendYieldDirtyCode{}).
+		Where("stock_code = ? AND recommend_id = 0", "688017.SH").
+		Count(&codeLevelCount).Error; err != nil {
+		t.Fatalf("count code-level dirty failed: %v", err)
+	}
+	if codeLevelCount != 0 {
+		t.Fatalf("expected no code-level dirty pollution, got %d", codeLevelCount)
 	}
 }
 

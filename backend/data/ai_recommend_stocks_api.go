@@ -678,7 +678,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	if err := markActivationWindowPolicyBugDirtyCodes(aiRecommendYieldModeStrict); err != nil {
 		logger.SugaredLogger.Warnf("mark activation window policy bug dirty codes failed: %v", err)
 	}
-	dirtyMap, err := loadDirtyAiRecommendYieldCodeSet(aiRecommendYieldModeStrict)
+	dirtyScope, err := loadDirtyAiRecommendYieldScope(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
 	}
@@ -773,7 +773,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			minuteTotal,
 			minutePending,
 			minuteUncoverable,
-			dirtyMap,
+			dirtyScope,
 			rawRepeatCountMap,
 		)
 	}
@@ -796,7 +796,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	if err != nil {
 		return nil, err
 	}
-	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyMap, coverageIssues)
+	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, coverageIssues)
 	latestPriceMap, latestPriceTimeMap := loadCurrentPriceSnapshotForRecommendRecords(records)
 	applyLatestCurrentPriceSnapshot(items, latestPriceMap, latestPriceTimeMap)
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
@@ -2102,7 +2102,7 @@ func buildStrictAggregateYieldItems(
 	recordStateMap map[uint]models.AiRecommendYieldRecordState,
 	stateMap map[string]models.AiRecommendYieldState,
 	overrideMap map[uint]models.AiRecommendYieldOverride,
-	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	dirtyScope aiRecommendYieldDirtyScope,
 	coverageIssues []minuteCoverageIssue,
 ) ([]models.AiRecommendStocksYieldItem, []models.AiRecommendStocksYieldItem) {
 	if len(records) == 0 {
@@ -2157,7 +2157,7 @@ func buildStrictAggregateYieldItems(
 			item.DataStatus = issue.Status
 			item.DataStatusReason = issue.RawReason
 		}
-		applyStrictPendingStateToYieldItem(&item, dirtyMap)
+		applyStrictPendingStateToYieldItem(&item, dirtyScope, hasStrictSnapshotForRecommendRecord(rec, recordStateMap, stateMap))
 		listItems = append(listItems, item)
 		metricItems = append(metricItems, item)
 	}
@@ -2184,7 +2184,7 @@ func buildStrictAggregateYieldItems(
 				listItem.DataStatus = issue.Status
 				listItem.DataStatusReason = issue.RawReason
 			}
-			applyStrictPendingStateToYieldItem(&listItem, dirtyMap)
+			applyStrictPendingStateToYieldItem(&listItem, dirtyScope, true)
 			listItems = append(listItems, listItem)
 		} else {
 			listItem := mapRecommendRecordToYieldItemWithRecordState(representative, recordStateMap, stateMap)
@@ -2198,7 +2198,7 @@ func buildStrictAggregateYieldItems(
 				listItem.DataStatus = issue.Status
 				listItem.DataStatusReason = issue.RawReason
 			}
-			applyStrictPendingStateToYieldItem(&listItem, dirtyMap)
+			applyStrictPendingStateToYieldItem(&listItem, dirtyScope, hasStrictSnapshotForRecommendRecord(representative, recordStateMap, stateMap))
 			listItems = append(listItems, listItem)
 		}
 
@@ -2220,7 +2220,7 @@ func buildStrictAggregateYieldItems(
 				item.DataStatus = issue.Status
 				item.DataStatusReason = issue.RawReason
 			}
-			applyStrictPendingStateToYieldItem(&item, dirtyMap)
+			applyStrictPendingStateToYieldItem(&item, dirtyScope, hasStrictSnapshotForRecommendRecord(rec, recordStateMap, stateMap))
 			metricItems = append(metricItems, item)
 		}
 	}
@@ -2233,7 +2233,7 @@ func buildStrictYieldRecordItems(
 	recordStateMap map[uint]models.AiRecommendYieldRecordState,
 	stateMap map[string]models.AiRecommendYieldState,
 	overrideMap map[uint]models.AiRecommendYieldOverride,
-	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	dirtyScope aiRecommendYieldDirtyScope,
 	coverageIssues []minuteCoverageIssue,
 ) []models.AiRecommendStocksYieldItem {
 	if len(records) == 0 {
@@ -2260,7 +2260,7 @@ func buildStrictYieldRecordItems(
 			item.DataStatus = issue.Status
 			item.DataStatusReason = issue.RawReason
 		}
-		applyStrictPendingStateToYieldItem(&item, dirtyMap)
+		applyStrictPendingStateToYieldItem(&item, dirtyScope, hasStrictSnapshotForRecommendRecord(rec, recordStateMap, stateMap))
 		items = append(items, item)
 	}
 	applyRecommendRepeatCount(items)
@@ -2345,6 +2345,28 @@ func buildStrictYieldRecordItem(
 		return item
 	}
 	return mapRecommendRecordToYieldItem(rec, map[string]models.AiRecommendYieldState{})
+}
+
+func hasStrictSnapshotForRecommendRecord(
+	rec models.AiRecommendStocks,
+	recordStateMap map[uint]models.AiRecommendYieldRecordState,
+	stateMap map[string]models.AiRecommendYieldState,
+) bool {
+	if rec.ID != 0 {
+		if _, ok := recordStateMap[rec.ID]; ok {
+			return true
+		}
+	}
+	code := normalizeRecommendStockCode(rec.StockCode)
+	if code == "" {
+		return false
+	}
+	state, ok := stateMap[code]
+	if !ok {
+		return false
+	}
+	recordTime := recommendRecordTime(rec)
+	return aggregateYieldStateMatchesRecordTime(state, recordTime) && aggregateYieldStateConsistentForRecordTime(state, recordTime)
 }
 
 func aggregateYieldStateMatchesRecordTime(state models.AiRecommendYieldState, recordTime time.Time) bool {
@@ -4472,7 +4494,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 	minuteTotal int,
 	minutePending int,
 	minuteUncoverable int,
-	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	dirtyScope aiRecommendYieldDirtyScope,
 	rawRepeatCountMap map[string]int,
 ) (*models.AiRecommendStocksYieldPageData, error) {
 	strategyCohort := normalizeStrategyCohort("", strategyCohortCurrent)
@@ -4496,7 +4518,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 
 	items := make([]models.AiRecommendStocksYieldItem, 0, len(records))
 	for _, rec := range records {
-		item := mapRecommendRecordToFastYieldItem(rec, currentPriceMap, currentPriceTimeMap, strictStateMap, dirtyMap)
+		item := mapRecommendRecordToFastYieldItem(rec, currentPriceMap, currentPriceTimeMap, strictStateMap, dirtyScope)
 		if override, ok := overrideMap[rec.ID]; ok {
 			applyYieldOverrideToYieldItem(&item, &override)
 		}
@@ -4669,7 +4691,7 @@ func mapRecommendRecordToFastYieldItem(
 	currentPriceMap map[string]float64,
 	currentPriceTimeMap map[string]string,
 	strictStateMap map[uint]models.AiRecommendYieldRecordState,
-	dirtyMap map[string]models.AiRecommendYieldDirtyCode,
+	dirtyScope aiRecommendYieldDirtyScope,
 ) models.AiRecommendStocksYieldItem {
 	code := normalizeRecommendStockCode(rec.StockCode)
 	recordTime := recommendRecordTime(rec)
@@ -4735,7 +4757,13 @@ func mapRecommendRecordToFastYieldItem(
 	if strictState, ok := strictStateMap[rec.ID]; ok && strings.TrimSpace(strictState.ActivationStatus) != "" {
 		item.StrictReady = true
 	}
-	if dirtyState, ok := dirtyMap[code]; ok {
+	if dirtyState, ok := dirtyScope.Record[rec.ID]; ok {
+		item.StrictReady = false
+		item.StrictPendingReason = strings.TrimSpace(dirtyState.Reason)
+		if item.StrictPendingReason == "" {
+			item.StrictPendingReason = "该股票存在待下载或待回算的严格模式任务"
+		}
+	} else if dirtyState, ok := dirtyScope.Code[code]; ok && !item.StrictReady {
 		item.StrictReady = false
 		item.StrictPendingReason = strings.TrimSpace(dirtyState.Reason)
 		if item.StrictPendingReason == "" {
@@ -4803,7 +4831,7 @@ func mapRecommendRecordToFastYieldItem(
 	return item
 }
 
-func applyStrictPendingStateToYieldItem(item *models.AiRecommendStocksYieldItem, dirtyMap map[string]models.AiRecommendYieldDirtyCode) {
+func applyStrictPendingStateToYieldItem(item *models.AiRecommendStocksYieldItem, dirtyScope aiRecommendYieldDirtyScope, hasStrictSnapshot bool) {
 	if item == nil {
 		return
 	}
@@ -4818,7 +4846,10 @@ func applyStrictPendingStateToYieldItem(item *models.AiRecommendStocksYieldItem,
 		item.StrictPendingReason = ""
 		return
 	}
-	dirty, ok := dirtyMap[normalizeRecommendStockCode(item.StockCode)]
+	dirty, ok := dirtyScope.Record[item.RecommendID]
+	if !ok && !hasStrictSnapshot {
+		dirty, ok = dirtyScope.Code[normalizeRecommendStockCode(item.StockCode)]
+	}
 	if !ok {
 		item.StrictReady = true
 		return
