@@ -257,6 +257,89 @@ func appendRecommendInvalidConditionText(base, invalidCondition string) string {
 	return base + "；失效条件：" + invalid
 }
 
+func normalizeRecommendSkipReasonText(reason string) string {
+	reason = normalizeRecommendText(reason)
+	reason = strings.TrimPrefix(reason, "仅分析（analysis_only）：")
+	reason = strings.TrimPrefix(reason, "仅分析(analysis_only)：")
+	reason = strings.TrimPrefix(reason, "仅分析：")
+	reason = strings.TrimPrefix(reason, "待补分钟线：")
+	return strings.TrimSpace(reason)
+}
+
+func isGenericRecommendSkipReason(reason string) bool {
+	text := normalizeRecommendSkipReasonText(reason)
+	if text == "" {
+		return true
+	}
+	genericFragments := []string{
+		marketSummaryAnalysisOnlySkipReason,
+		marketSummaryPendingMarketDataReason,
+		"缺少真实价格/量能数据",
+		"等待本地分钟线补齐后激活与回测",
+		"已跳过激活与回测",
+	}
+	for _, fragment := range genericFragments {
+		if fragment != "" && strings.Contains(text, fragment) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveRecommendSpecificSkipReason(recommend *models.AiRecommendStocks) string {
+	if recommend == nil {
+		return ""
+	}
+	candidates := []string{
+		recommend.ActivationInvalidReason,
+		recommend.InvalidCondition,
+		recommend.Remarks,
+		recommend.RiskRemarks,
+		recommend.InvalidSignal,
+	}
+	for _, candidate := range candidates {
+		for _, line := range strings.Split(normalizeRecommendText(candidate), "\n") {
+			line = normalizeRecommendSkipReasonText(line)
+			if line == "" || isGenericRecommendSkipReason(line) {
+				continue
+			}
+			return line
+		}
+	}
+	return ""
+}
+
+func formatMarketSummaryPendingMarketDataReason(recommend *models.AiRecommendStocks) string {
+	code := ""
+	if recommend != nil {
+		code = normalizeRecommendStockCode(recommend.StockCode)
+	}
+	if code == "" {
+		code = "该股票"
+	}
+	if recommend != nil {
+		recordTime := recommendRecordTime(*recommend)
+		if !recordTime.IsZero() {
+			loc := cnLocation()
+			recordTime = recordTime.In(loc)
+			start := recordTime.Add(-marketSummaryRefScanWindowBefore)
+			end := recordTime.Add(marketSummaryRefScanWindowAfter)
+			return fmt.Sprintf("待补分钟线：%s %s 至 %s 缺少连续分钟线，等待后台下载/刷新", code, start.Format(time.DateTime), end.Format(time.DateTime))
+		}
+	}
+	return fmt.Sprintf("待补分钟线：%s 缺少连续分钟线，等待后台下载/刷新", code)
+}
+
+func formatRecommendAnalysisOnlyReason(recommend *models.AiRecommendStocks) string {
+	if detail := resolveRecommendSpecificSkipReason(recommend); detail != "" {
+		return "仅分析（analysis_only）：" + detail
+	}
+	if recommend != nil && normalizeRecommendStatus(recommend.RecommendStatus) == "missing_market_data" {
+		return "仅分析（analysis_only）：行情/分钟线数据缺失，未生成可回测交易计划"
+	}
+	return "仅分析（analysis_only）：未生成可交易激活规则，已跳过激活与回测"
+}
+
 func shouldDisplayRecommendInYield(recommend *models.AiRecommendStocks) bool {
 	if recommend == nil {
 		return false
@@ -420,10 +503,10 @@ func resolveRecommendBacktestEligibility(recommend *models.AiRecommendStocks) (s
 		return recommendBacktestIneligible, "推荐记录为空，未纳入回测"
 	}
 	if isPendingMarketDataRecommend(recommend) {
-		return recommendBacktestSkipped, "等待本地分钟线补齐后激活与回测"
+		return recommendBacktestSkipped, formatMarketSummaryPendingMarketDataReason(recommend)
 	}
 	if isAnalysisOnlyRecommend(recommend) {
-		return recommendBacktestSkipped, marketSummaryAnalysisOnlySkipReason
+		return recommendBacktestSkipped, formatRecommendAnalysisOnlyReason(recommend)
 	}
 	_, _, _, reason, skip := resolveRecommendYieldSkipInfo(recommend)
 	if skip {
@@ -484,10 +567,10 @@ func resolveRecommendYieldSkipInfo(recommend *models.AiRecommendStocks) (string,
 
 	status := normalizeRecommendStatus(recommend.RecommendStatus)
 	if status == recommendStatusPendingMarketData || isPendingMarketDataRecommend(recommend) {
-		return recommendActivationPendingData, "待补分钟线", "待补分钟线", "等待本地分钟线补齐后激活与回测", true
+		return recommendActivationPendingData, "待补分钟线", "待补分钟线", formatMarketSummaryPendingMarketDataReason(recommend), true
 	}
 	if status == "missing_market_data" || isAnalysisOnlyRecommend(recommend) {
-		return "skipped", "已跳过", "已跳过", marketSummaryAnalysisOnlySkipReason, true
+		return "skipped", "仅分析", "已跳过", formatRecommendAnalysisOnlyReason(recommend), true
 	}
 	switch status {
 	case "avoid":

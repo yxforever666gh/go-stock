@@ -15,7 +15,7 @@ const (
 	marketSummaryRefScanWindowBefore     = 30 * time.Minute
 	marketSummaryRefScanWindowAfter      = 2 * time.Hour
 	marketSummaryActivationRepairReason  = "market_summary_activation_repair"
-	marketSummaryAnalysisOnlySkipReason  = "缺少真实价格/量能数据，已跳过激活与回测"
+	marketSummaryAnalysisOnlySkipReason  = "未生成可交易激活规则，已跳过激活与回测"
 	marketSummaryPendingMarketDataReason = "等待本地分钟线补齐后激活与回测"
 )
 
@@ -172,9 +172,9 @@ func normalizeMarketSummaryExecutionDataForSaveWithFetch(recommend *models.AiRec
 	snapshot, ok := loadMarketSummaryReferenceSnapshotWithFetch(*recommend, allowFetch)
 	if !ok || snapshot.Price <= 0 || snapshot.Amount <= 0 {
 		if hasRecoverableMarketSummaryTradePlan(*recommend) {
-			markMarketSummaryRecommendPendingMarketData(recommend, marketSummaryPendingMarketDataReason)
+			markMarketSummaryRecommendPendingMarketData(recommend, formatMarketSummaryPendingMarketDataReason(recommend))
 		} else {
-			downgradeMarketSummaryRecommendToAnalysisOnly(recommend, marketSummaryReferenceSnapshot{}, marketSummaryAnalysisOnlySkipReason)
+			downgradeMarketSummaryRecommendToAnalysisOnly(recommend, marketSummaryReferenceSnapshot{}, "行情/分钟线数据缺失，且缺少可恢复的交易计划")
 		}
 		return nil
 	}
@@ -549,7 +549,7 @@ func downgradeMarketSummaryRecommendToAnalysisOnly(recommend *models.AiRecommend
 	recommend.SellSignal = ""
 	recommend.SellSignalDetail = ""
 	recommend.InvalidSignal = ""
-	recommend.InvalidCondition = marketSummaryAnalysisOnlySkipReason
+	recommend.InvalidCondition = reason
 	recommend.ActivationInvalidReason = reason
 	if recommend.Remarks == "" {
 		recommend.Remarks = reason

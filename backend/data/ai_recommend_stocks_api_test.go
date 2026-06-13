@@ -908,6 +908,62 @@ func TestResolveRecommendBacktestEligibility(t *testing.T) {
 	}
 }
 
+func TestResolveRecommendSkipReasonKeepsSpecificAnalysisOnlyCause(t *testing.T) {
+	recordTime := time.Date(2026, 6, 8, 9, 40, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		DataTime:                &recordTime,
+		StockCode:               "300433.SZ",
+		StockName:               "蓝思科技",
+		RecommendStatus:         "missing_market_data",
+		ExecutionState:          recommendExecutionAnalysisOnly,
+		ActivationStatus:        "skipped",
+		ActivationInvalidReason: "V1.3.6源头质量门槛未通过：最差成交价盈亏比 0.71 低于 0.80",
+		InvalidCondition:        marketSummaryAnalysisOnlySkipReason,
+	}
+
+	activationStatus, positionStatus, dataStatus, reason, skip := resolveRecommendYieldSkipInfo(&rec)
+	if !skip {
+		t.Fatal("expected analysis_only recommend to be skipped")
+	}
+	if activationStatus != "skipped" || positionStatus != "仅分析" || dataStatus != "已跳过" {
+		t.Fatalf("unexpected skip state: activation=%s position=%s data=%s", activationStatus, positionStatus, dataStatus)
+	}
+	if !strings.Contains(reason, "仅分析（analysis_only）：V1.3.6源头质量门槛未通过") || !strings.Contains(reason, "盈亏比 0.71 低于 0.80") {
+		t.Fatalf("expected specific analysis_only reason, got %q", reason)
+	}
+
+	eligibility, eligibilityReason := resolveRecommendBacktestEligibility(&rec)
+	if eligibility != recommendBacktestSkipped {
+		t.Fatalf("eligibility = %s, want skipped", eligibility)
+	}
+	if eligibilityReason != reason {
+		t.Fatalf("backtest reason = %q, want yield reason %q", eligibilityReason, reason)
+	}
+}
+
+func TestResolveRecommendSkipReasonDescribesPendingMinuteWindow(t *testing.T) {
+	recordTime := time.Date(2026, 6, 8, 11, 30, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		DataTime:           &recordTime,
+		StockCode:          "600629.SH",
+		StockName:          "华建集团",
+		RecommendStatus:    recommendStatusPendingMarketData,
+		ExecutionState:     recommendExecutionConditional,
+		ActivationStatus:   recommendActivationPendingData,
+		ActivationRuleJSON: `{"trigger":"x"}`,
+	}
+
+	_, _, _, reason, skip := resolveRecommendYieldSkipInfo(&rec)
+	if !skip {
+		t.Fatal("expected pending market data recommend to be skipped")
+	}
+	for _, want := range []string{"待补分钟线：600629.SH", "2026-06-08 11:00:00 至 2026-06-08 13:30:00", "缺少连续分钟线"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("expected pending reason to contain %q, got %q", want, reason)
+		}
+	}
+}
+
 func TestParseEvidenceSourcesFromTextSupportsMultipleTaggedSegments(t *testing.T) {
 	refs := parseEvidenceSourcesFromText("[市场资讯] 板块强度高；[财报/财务] 盈利改善；[技术/资金/形态] 放量突破前高")
 	if len(refs) != 3 {

@@ -1,6 +1,7 @@
 package data
 
 import (
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -137,6 +138,41 @@ func TestLoadSameDayMarketSummaryExcludedStocks(t *testing.T) {
 			RecommendStopLossPrice: "418",
 		},
 		{
+			DataTime:                 &secondTime,
+			StockCode:                "300433.SZ",
+			StockName:                "蓝思科技",
+			SummaryVersion:           marketSummaryVersion136,
+			ActivationRuleSource:     "market_summary",
+			RecommendCategory:        "right_confirm",
+			RecommendStatus:          "missing_market_data",
+			ExecutionState:           recommendExecutionAnalysisOnly,
+			ActivationStatus:         "skipped",
+			ActivationRuleVersion:    "v1",
+			ActivationRuleJSON:       `{"trigger":"analysis-only-should-not-exclude"}`,
+			RecommendBuyPrice:        "24-25",
+			RecommendStopProfitPrice: "27-28",
+			RecommendStopLossPrice:   "23",
+			ActivationInvalidReason:  "V1.3.6源头质量门槛未通过：最差成交价盈亏比 0.71 低于 0.80",
+			InvalidCondition:         "V1.3.6源头质量门槛未通过：最差成交价盈亏比 0.71 低于 0.80",
+		},
+		{
+			DataTime:                 &secondTime,
+			StockCode:                "600629.SH",
+			StockName:                "华建集团",
+			SummaryVersion:           marketSummaryVersion136,
+			ActivationRuleSource:     "market_summary",
+			RecommendCategory:        "right_confirm",
+			RecommendStatus:          recommendStatusPendingMarketData,
+			ExecutionState:           recommendExecutionConditional,
+			ActivationStatus:         recommendActivationPendingData,
+			ActivationRuleVersion:    "v1",
+			ActivationRuleJSON:       `{"trigger":"pending-should-not-exclude"}`,
+			RecommendBuyPrice:        "7.30-7.50",
+			RecommendStopProfitPrice: "8.00-8.20",
+			RecommendStopLossPrice:   "7.00",
+			ActivationInvalidReason:  "待补分钟线：600629.SH 缺少连续分钟线，等待后台下载/刷新",
+		},
+		{
 			DataTime:               &prevDayTime,
 			StockCode:              "688256.SH",
 			StockName:              "寒武纪",
@@ -175,6 +211,12 @@ func TestLoadSameDayMarketSummaryExcludedStocks(t *testing.T) {
 	}
 	if _, ok := index["002371.SZ"]; ok {
 		t.Fatalf("did not expect manual source stock in excluded index, got %+v", index["002371.SZ"])
+	}
+	if _, ok := index["300433.SZ"]; ok {
+		t.Fatalf("did not expect analysis_only stock in excluded index, got %+v", index["300433.SZ"])
+	}
+	if _, ok := index["600629.SH"]; ok {
+		t.Fatalf("did not expect pending market data stock in excluded index, got %+v", index["600629.SH"])
 	}
 }
 
@@ -272,6 +314,70 @@ func TestSelectMarketSummaryFinalCandidates(t *testing.T) {
 	}
 	if !containsAll(stringsJoin(logState.DroppedCandidates, "\n"), []string{"源头质量门槛未通过:沪电股份(002463.SZ)", "源头质量门槛未通过:寒武纪(688256.SH)"}) {
 		t.Fatalf("expected quality gate notes in dropped candidates, got %+v", logState.DroppedCandidates)
+	}
+}
+
+func TestSelectMarketSummaryFinalCandidatesBackfillsToExpandedLimit(t *testing.T) {
+	loc := cnLocation()
+	window := marketSummaryTimeWindow{
+		Slot:  marketSummaryRunSlotEvening,
+		Start: time.Date(2026, 4, 9, 11, 30, 0, 0, loc),
+		End:   time.Date(2026, 4, 9, 14, 32, 0, 0, loc),
+	}
+	logState := newMarketSummaryRouteLog()
+	verified := []marketSummaryVerifiedCandidate{
+		buildMarketSummaryVerifiedCandidateForTest("同日排除", "300001.SZ", 0, window),
+		{
+			StockName:       "弱候选",
+			StockCode:       "300002.SZ",
+			CurrentPrice:    "10.00",
+			EvidenceSources: []aiEvidenceReference{{Type: "市场资讯", TrustLevel: "medium", PublishedAt: "2026-04-09 14:20:00"}},
+		},
+	}
+	for i := 0; i < marketSummaryFinalCandidateLimit; i++ {
+		verified = append(verified, buildMarketSummaryVerifiedCandidateForTest(fmt.Sprintf("合格候选%d", i), fmt.Sprintf("300%03d.SZ", 100+i), i, window))
+	}
+	excluded := map[string]marketSummaryExcludedStock{
+		"300001.SZ": {StockCode: "300001.SZ", StockName: "同日排除", FirstRecommendTime: "2026-04-09 09:40:00"},
+	}
+
+	selected := selectMarketSummaryFinalCandidates(verified, excluded, window, logState, marketSummaryFinalCandidateLimit)
+	if len(selected) != marketSummaryFinalCandidateLimit {
+		t.Fatalf("selected len = %d, want %d", len(selected), marketSummaryFinalCandidateLimit)
+	}
+	for _, item := range selected {
+		if item.StockCode == "300001.SZ" || item.StockCode == "300002.SZ" {
+			t.Fatalf("selected rejected candidate: %+v", item)
+		}
+	}
+	joined := stringsJoin(logState.DroppedCandidates, "\n")
+	if !containsAll(joined, []string{"同日已推荐排除:同日排除(300001.SZ)", "源头质量门槛未通过:弱候选(300002.SZ)"}) {
+		t.Fatalf("expected dropped reasons for excluded and weak candidates, got %+v", logState.DroppedCandidates)
+	}
+}
+
+func buildMarketSummaryVerifiedCandidateForTest(name, code string, idx int, window marketSummaryTimeWindow) marketSummaryVerifiedCandidate {
+	publishedAt := window.End.Add(-time.Duration(idx+1) * time.Minute).Format(time.DateTime)
+	return marketSummaryVerifiedCandidate{
+		StockName:         name,
+		StockCode:         code,
+		MinutePrice:       fmt.Sprintf("%.2f", 20+float64(idx)),
+		MinuteAmount:      fmt.Sprintf("%.2f", 5000+float64(idx)*100),
+		CurrentPrice:      fmt.Sprintf("%.2f", 20.05+float64(idx)),
+		PriceAnchorSource: "minute_bar",
+		TechnicalSnapshot: "当前窗口资金放量，价格站上均线",
+		TechnicalMetrics: marketSummaryTechnicalMetrics{
+			PriceAboveMa5:      true,
+			PriceAboveMa10:     true,
+			Breakout3dHigh:     true,
+			MinuteVolumeVsAvg5: "1.50",
+		},
+		PositiveSignals: []string{"板块共振", "资金确认"},
+		EvidenceSources: []aiEvidenceReference{
+			{Type: "市场资讯", TrustLevel: "high", PublishedAt: publishedAt},
+			{Type: "技术/资金/形态", TrustLevel: "medium", PublishedAt: publishedAt},
+			{Type: "资金结构", TrustLevel: "medium", PublishedAt: publishedAt},
+		},
 	}
 }
 

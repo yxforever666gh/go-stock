@@ -269,13 +269,13 @@ type marketSummaryPriceAnchor struct {
 
 func defaultMarketSummaryRouteBudget() marketSummaryRouteBudget {
 	return marketSummaryRouteBudget{
-		TotalCallLimit:         20,
-		DiscoveryFetchLimit:    5,
+		TotalCallLimit:         40,
+		DiscoveryFetchLimit:    8,
 		DiscoveryModelLimit:    1,
-		CandidateLimit:         8,
+		CandidateLimit:         18,
 		PerStockFetchLimit:     4,
 		GenerateModelLimit:     1,
-		VerificationStockLimit: 6,
+		VerificationStockLimit: 12,
 	}
 }
 
@@ -874,7 +874,7 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 			"role": "system",
 			"content": strings.TrimSpace(`你是A股市场事件发现层分析器。你的职责只有：
 1. 从输入的市场资讯、事件日历、板块热度、龙虎榜摘要中提炼主线与候选方向；
-2. 输出最多8个候选股票；
+2. 输出最多18个候选股票；
 3. 不输出Markdown，不输出解释性废话，只输出一个JSON对象；
 4. 候选股票必须优先A股，代码若不确定可留空；
 5. 不要给买卖建议，不要生成完整推荐正文。`),
@@ -890,7 +890,7 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 }
 
 约束：
-- candidateStocks 最多 8 个；
+- candidateStocks 最多 18 个；
 - 只保留最值得进入证据核验层的标的；
 - 如果证据只支持方向，不支持个股，可减少个股数量；
 - 不得返回 markdown 代码块。 
@@ -1634,6 +1634,10 @@ func minuteVolumeRatio(minuteData []MinuteData, window int) float64 {
 func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput marketSummaryDiscoveryInput, discovery *marketSummaryDiscoveryResult, verified []marketSummaryVerifiedCandidate, excludedToday []marketSummaryExcludedStock, skippedReviews []marketSummarySkippedReviewCandidate, logState *marketSummaryRouteLog) []map[string]any {
 	now := time.Now()
 	currentTiming := fmt.Sprintf("当前本地时间是:%s；市场时段判定:%s", now.Format("2006-01-02 15:04:05"), describeCNMarketTiming(now))
+	droppedCandidates := []string{}
+	if logState != nil && len(logState.DroppedCandidates) > 0 {
+		droppedCandidates = append(droppedCandidates, logState.DroppedCandidates...)
+	}
 	messages := []map[string]any{
 		{"role": "system", "content": sysPrompt},
 		{"role": "user", "content": "当前时间"},
@@ -1644,6 +1648,8 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 		{"role": "assistant", "content": mustJSON(discovery)},
 		{"role": "user", "content": "以下是证据核验层输出(JSON)"},
 		{"role": "assistant", "content": mustJSON(verified)},
+		{"role": "user", "content": "以下是候选过滤/跳过原因(JSON)。这些候选没有进入最终推荐时，必须在正文中说明对应原因，不能笼统写“证据核验层为空”"},
+		{"role": "assistant", "content": mustJSON(droppedCandidates)},
 		{"role": "user", "content": "以下是当日已推荐股票排除池(JSON)"},
 		{"role": "assistant", "content": mustJSON(excludedToday)},
 		{"role": "user", "content": "以下是前三个交易日已跳过股票复审候选池(JSON)"},
@@ -1652,7 +1658,7 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 	instruction := strings.TrimSpace(`请基于上面的“事件发现层”和“证据核验层”结果，完成最终推荐生成层。
 要求：
 1. 只能基于已经进入证据核验层的候选股票生成结论，严禁新增候选股票；
-2. “推荐股票池”最多输出 2 只股票，只保留证据最完整、评分最高、最接近可执行交易计划的两只；不足 2 只时宁缺毋滥；
+2. “推荐股票池”最多输出 6 只股票，只保留证据完整、评分靠前、最接近可执行交易计划的候选；其中最多 4 只可作为可交易生产候选，剩余候选若强度不足必须写清仅分析/观察原因；
 3. 同日已出现在“当日已推荐股票排除池(JSON)”里的股票，禁止再次写入“推荐股票池”，也不要在正文里重复展示；
 4. 本次推荐只允许使用当前时间窗口内的新催化、新证据、新量价确认，不允许用前一时段已推荐股票反复充数；
 5. 若排除同日已推荐股票后，没有新的高质量候选标的，必须在“推荐股票池”明确写“暂无新增高质量候选标的”，不能复用旧票凑数；
@@ -1660,6 +1666,8 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 7. 对每只候选股执行“正向证据 + 反向证据”平衡判断；
 8. 证据不足(<2类)或不存在高信任证据时，直接不要把该股票写进推荐股票池；
 9. 若存在冲突证据，必须明确写出争议，并把该股票从推荐股票池中剔除；
+9.1. 若证据核验层最终为空，必须读取“候选过滤/跳过原因(JSON)”并逐项说明为空的根因；禁止只写“证据核验层为空”“缺少真实数据”这类无根因结论；
+9.2. 若股票为 analysis_only，只能解释为“仅分析”，并写清具体原因，例如质量门槛、行情缺失、激活规则缺失、同日排除或当前窗口无新证据；
 10. 输出必须兼容研究中心：保持 Markdown，必须包含固定 7 个一级标题，并在“推荐股票池”和“跳过复审”中使用标准结构化表格；
 11. “关键证据”栏必须显式保留证据标签，如：[市场资讯] [一级披露] [互动易] [财报/财务] [行业研报] [技术/资金/形态] [资金结构]；
 12. 若没有足够可交易标的，只允许在表格中写“暂无新增高质量候选标的”，不得编造；

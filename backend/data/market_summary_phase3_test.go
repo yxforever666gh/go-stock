@@ -1,6 +1,8 @@
 package data
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -16,16 +18,16 @@ func TestExtractJSONPayloadFromCodeFence(t *testing.T) {
 
 func TestSanitizeMarketSummaryDiscoveryResultLimitsAndResolves(t *testing.T) {
 	result := &marketSummaryDiscoveryResult{
-		CandidateStocks: []marketSummaryRouteCandidate{
+		CandidateStocks: append([]marketSummaryRouteCandidate{
 			{StockName: "中际旭创", StockCode: "300308.SZ", Direction: "AI算力"},
 			{StockName: "中际旭创", StockCode: "300308.SZ", Direction: "AI算力"},
 			{StockName: "腾讯控股", StockCode: "00700.HK", Direction: "港股"},
 			{StockName: "新易盛", StockCode: "300502.SZ", Direction: "AI算力"},
-		},
+		}, buildMarketSummaryRouteCandidatesForTest(20)...),
 	}
 	sanitizeMarketSummaryDiscoveryResult(result)
-	if len(result.CandidateStocks) != 2 {
-		t.Fatalf("expected 2 candidates, got %d", len(result.CandidateStocks))
+	if len(result.CandidateStocks) != defaultMarketSummaryRouteBudget().CandidateLimit {
+		t.Fatalf("expected %d candidates, got %d", defaultMarketSummaryRouteBudget().CandidateLimit, len(result.CandidateStocks))
 	}
 	if result.CandidateStocks[0].StockCode != "300308.SZ" {
 		t.Fatalf("unexpected first code: %s", result.CandidateStocks[0].StockCode)
@@ -35,7 +37,40 @@ func TestSanitizeMarketSummaryDiscoveryResultLimitsAndResolves(t *testing.T) {
 	}
 }
 
+func TestDefaultMarketSummaryRouteBudgetExpandsV136Candidates(t *testing.T) {
+	budget := defaultMarketSummaryRouteBudget()
+	if budget.CandidateLimit != 18 {
+		t.Fatalf("CandidateLimit = %d, want 18", budget.CandidateLimit)
+	}
+	if budget.VerificationStockLimit != 12 {
+		t.Fatalf("VerificationStockLimit = %d, want 12", budget.VerificationStockLimit)
+	}
+	if marketSummaryFinalCandidateLimit != 6 {
+		t.Fatalf("marketSummaryFinalCandidateLimit = %d, want 6", marketSummaryFinalCandidateLimit)
+	}
+	if marketSummaryMaxProductionCandidates != 4 {
+		t.Fatalf("marketSummaryMaxProductionCandidates = %d, want 4", marketSummaryMaxProductionCandidates)
+	}
+}
+
+func buildMarketSummaryRouteCandidatesForTest(count int) []marketSummaryRouteCandidate {
+	result := make([]marketSummaryRouteCandidate, 0, count)
+	for i := 0; i < count; i++ {
+		code := fmt.Sprintf("%06d.SZ", 100000+i)
+		result = append(result, marketSummaryRouteCandidate{
+			StockName: fmt.Sprintf("测试股票%d", i),
+			StockCode: code,
+			Direction: "测试方向",
+		})
+	}
+	return result
+}
+
 func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
+	logState := newMarketSummaryRouteLog()
+	logState.DroppedCandidates = append(logState.DroppedCandidates,
+		"源头质量门槛未通过:蓝思科技(300433.SZ) score=83 reason=最差成交价盈亏比 0.71 低于 0.80",
+	)
 	messages := buildPhase3FinalMessages(
 		"system prompt",
 		"总结市场机会",
@@ -67,15 +102,27 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 			RecommendBuyPrice: "34.5-35.2",
 			SkipReason:        "旧逻辑跳过，需要复审",
 		}},
-		newMarketSummaryRouteLog(),
+		logState,
 	)
 	if len(messages) == 0 {
 		t.Fatal("expected non-empty messages")
 	}
 	last := messages[len(messages)-1]["content"].(string)
-	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "暂无新增高质量候选标的", "本次筛选窗口"}) {
+	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "最多输出 6 只", "最多 4 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
 		t.Fatalf("unexpected final instruction: %s", last)
 	}
+	if !messagesContainText(messages, "最差成交价盈亏比 0.71 低于 0.80") {
+		t.Fatalf("expected dropped candidate reason in messages: %+v", messages)
+	}
+}
+
+func messagesContainText(messages []map[string]any, needle string) bool {
+	for _, message := range messages {
+		if strings.Contains(fmt.Sprint(message["content"]), needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildMarketSummaryTechnicalMetrics(t *testing.T) {

@@ -19,7 +19,7 @@ const (
 	marketSummaryRunSlotEvening marketSummaryRunSlot = "evening"
 )
 
-const marketSummaryFinalCandidateLimit = 2
+const marketSummaryFinalCandidateLimit = 6
 const marketSummaryMinFinalCandidateScore = 85
 
 type marketSummaryTimeWindow struct {
@@ -160,6 +160,9 @@ func loadSameDayMarketSummaryExcludedStocks(now time.Time) ([]marketSummaryExclu
 	result := make([]marketSummaryExcludedStock, 0, len(rows))
 	index := make(map[string]marketSummaryExcludedStock, len(rows))
 	for _, row := range rows {
+		if !shouldExcludeSameDayMarketSummaryRecommend(row) {
+			continue
+		}
 		code := normalizeRecommendStockCode(row.StockCode)
 		if code == "" {
 			continue
@@ -177,6 +180,29 @@ func loadSameDayMarketSummaryExcludedStocks(now time.Time) ([]marketSummaryExclu
 		result = append(result, item)
 	}
 	return result, index, nil
+}
+
+func shouldExcludeSameDayMarketSummaryRecommend(row models.AiRecommendStocks) bool {
+	if !isMarketSummaryActivationSource(row.ActivationRuleSource) {
+		return false
+	}
+	if isPendingMarketDataRecommend(&row) {
+		return false
+	}
+	if normalizeRecommendExecutionState(row.ExecutionState) == recommendExecutionAnalysisOnly {
+		return false
+	}
+	status := normalizeRecommendStatus(row.RecommendStatus)
+	if status == "missing_market_data" || status == "avoid" || status == "insufficient_evidence" || status == "controversial" {
+		return false
+	}
+	if normalizeRecommendCategory(row.RecommendCategory) == "avoid" {
+		return false
+	}
+	if !hasRecoverableMarketSummaryTradePlan(row) {
+		return false
+	}
+	return true
 }
 
 func selectMarketSummaryFinalCandidates(verified []marketSummaryVerifiedCandidate, excluded map[string]marketSummaryExcludedStock, window marketSummaryTimeWindow, logState *marketSummaryRouteLog, limit int) []marketSummaryVerifiedCandidate {

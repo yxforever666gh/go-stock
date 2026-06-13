@@ -1,6 +1,7 @@
 package data
 
 import (
+	"fmt"
 	"go-stock/backend/models"
 	"path/filepath"
 	"strconv"
@@ -46,6 +47,65 @@ func TestMarketSummaryDraftProductionRejectionReason_V136RejectsWeakWorstEntryRe
 	reason := marketSummaryDraftProductionRejectionReason(draft)
 	if !strings.Contains(reason, "最差成交价盈亏比") {
 		t.Fatalf("reason = %q, want worst-entry reward/risk rejection", reason)
+	}
+}
+
+func TestApplyMarketSummaryProductionSelectionKeepsFourTradableCandidates(t *testing.T) {
+	items := make([]*marketSummaryRecommendDraft, 0, 6)
+	for i := 0; i < 6; i++ {
+		items = append(items, buildMarketSummaryProductionDraftForTest(i))
+	}
+
+	applyMarketSummaryProductionSelection(items)
+
+	tradable := 0
+	analysisOnly := 0
+	for idx, item := range items {
+		if normalizeRecommendExecutionState(item.ExecutionState) == recommendExecutionAnalysisOnly {
+			analysisOnly++
+			if !strings.Contains(item.InvalidCondition, "最多4只生产候选上限") {
+				t.Fatalf("item %d analysis_only reason = %q, want production limit reason", idx, item.InvalidCondition)
+			}
+			continue
+		}
+		tradable++
+		if item.ActivationRuleJSON == "" {
+			t.Fatalf("item %d should keep activation rule", idx)
+		}
+	}
+	if tradable != marketSummaryMaxProductionCandidates {
+		t.Fatalf("tradable count = %d, want %d", tradable, marketSummaryMaxProductionCandidates)
+	}
+	if analysisOnly != 2 {
+		t.Fatalf("analysis_only count = %d, want 2", analysisOnly)
+	}
+}
+
+func buildMarketSummaryProductionDraftForTest(idx int) *marketSummaryRecommendDraft {
+	price := 10.0 + float64(idx)
+	return &marketSummaryRecommendDraft{
+		StockCode:                   fmt.Sprintf("300%03d.SZ", idx),
+		StockName:                   fmt.Sprintf("测试股份%d", idx),
+		StockCurrentPrice:           formatRecommendPrice(price),
+		StockPrice:                  formatRecommendPrice(price),
+		RecommendBuyPrice:           fmt.Sprintf("%.2f-%.2f", price, price+0.1),
+		RecommendBuyPriceMin:        price,
+		RecommendBuyPriceMax:        price + 0.1,
+		RecommendStopProfitPrice:    formatRecommendPrice(price + 1.6),
+		RecommendStopProfitPriceMin: price + 1.6,
+		RecommendStopProfitPriceMax: price + 1.6,
+		RecommendStopLossPrice:      formatRecommendPrice(price - 0.4),
+		RecommendCategory:           recommendExecutionConditional,
+		ExecutionState:              recommendExecutionConditional,
+		BuySignal:                   "价格触发：进入买入区；量能触发：5分钟成交额达标",
+		InvalidSignal:               "时间失效：未来5个交易日未触发；价格失效：跌破止损",
+		EventStrength:               90 - idx,
+		CapitalConfirmation:         90 - idx,
+		FundamentalFit:              90 - idx,
+		TechnicalFit:                90 - idx,
+		ActivationRuleJSON:          fmt.Sprintf(`{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":%.2f,"thresholdMax":%.2f,"volumeRatio":1.2,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`, price, price+0.1),
+		ActivationRuleSource:        "market_summary",
+		SummaryVersion:              marketSummaryVersion136,
 	}
 }
 
@@ -398,8 +458,8 @@ func TestEnsureMarketSummaryRecommendStocksSavedFromRuntimeReport20260407_1130(t
 			t.Fatalf("expected downgraded record to clear trade plan for %s", row.StockCode)
 		}
 		if !strings.Contains(row.InvalidCondition, "V1.3.6源头质量门槛未通过") &&
-			!strings.Contains(row.InvalidCondition, "缺少真实价格/量能数据") &&
-			!strings.Contains(row.InvalidCondition, "超出当次市场总结最多2只生产候选上限") {
+			!strings.Contains(row.InvalidCondition, "行情/分钟线数据缺失") &&
+			!strings.Contains(row.InvalidCondition, "超出当次市场总结最多4只生产候选上限") {
 			t.Fatalf("expected downgrade reason recorded for %s, got %s", row.StockCode, row.InvalidCondition)
 		}
 	}

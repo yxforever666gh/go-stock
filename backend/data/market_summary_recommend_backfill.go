@@ -22,7 +22,7 @@ var (
 )
 
 const marketSummaryProductionScoreFloor = 60
-const marketSummaryMaxProductionCandidates = 2
+const marketSummaryMaxProductionCandidates = 4
 
 var marketSummaryObservationPhrases = []string{
 	"仅观察",
@@ -444,7 +444,7 @@ func applyMarketSummaryProductionSelection(items []*marketSummaryRecommendDraft)
 		return strings.TrimSpace(left.StockCode) < strings.TrimSpace(right.StockCode)
 	})
 	for idx := marketSummaryMaxProductionCandidates; idx < len(productionIndexes); idx++ {
-		downgradeMarketSummaryDraftToAnalysisOnly(items[productionIndexes[idx]], "超出当次市场总结最多2只生产候选上限，已降级为仅分析")
+		downgradeMarketSummaryDraftToAnalysisOnly(items[productionIndexes[idx]], fmt.Sprintf("超出当次市场总结最多%d只生产候选上限，已降级为仅分析", marketSummaryMaxProductionCandidates))
 	}
 }
 
