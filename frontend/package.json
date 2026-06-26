@@ -37,7 +37,7 @@
     "@vicons/ionicons5": "^0.13.0",
     "@vicons/material": "^0.13.0",
     "@vicons/tabler": "^0.13.0",
-    "@vitejs/plugin-vue": "^6.0.2",
+    "@vitejs/plugin-vue": "^6.0.7",
     "eslint": "^9.39.3",
     "html-docx-js-typescript": "^0.1.5",
     "less": "^4.4.0",
@@ -46,7 +46,7 @@
     "unplugin-auto-import": "^20.0.0",
     "unplugin-vue-components": "^29.0.0",
     "vfonts": "^0.0.3",
-    "vite": "^7.3.2",
+    "vite": "^8.1.0",
     "vue-eslint-parser": "^10.4.0"
   },
   "keywords": [
