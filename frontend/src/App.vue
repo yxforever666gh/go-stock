@@ -1,6 +1,7 @@
 <script setup>
 import 'md-editor-v3/lib/style.css'
 import {
+  Quit,
   WindowFullscreen,
   WindowUnfullscreen,
   WindowSetTitle,
@@ -31,6 +32,8 @@ const realtimeProfit = ref(0)
 const groupList = ref([])
 const officialStatement = ref('')
 const menuOptions = ref([])
+const shuttingDown = ref(false)
+const shutdownMessage = ref('')
 let cleanupRuntimeEvents = () => {}
 
 function toggleFullscreen(e) {
@@ -75,6 +78,34 @@ function syncFeatureFlags(res) {
     enableAgent: res.enableAgent,
   })
   enableDarkTheme.value = res.darkTheme ? darkTheme : null
+}
+
+async function requestShutdown() {
+  shuttingDown.value = true
+  try {
+    const response = await fetch('/api/shutdown', { method: 'POST' })
+    if (!response.ok) {
+      throw new Error(`shutdown failed: ${response.status}`)
+    }
+    shutdownMessage.value = '项目已退出，可以关闭此页面'
+    window.setTimeout(() => {
+      window.close()
+    }, 600)
+  } catch (error) {
+    console.warn('[go-stock] web shutdown failed, falling back to runtime quit', error)
+    try {
+      Quit()
+    } catch (_) {
+      shutdownMessage.value = '退出失败，请关闭启动脚本或手动停止进程'
+      shuttingDown.value = false
+    }
+  }
+}
+
+function confirmShutdown() {
+  if (window.confirm('确定要停止 go-stock 本地服务并退出项目吗？')) {
+    requestShutdown()
+  }
 }
 
 onBeforeMount(() => {
@@ -136,6 +167,14 @@ onMounted(() => {
                 :y-offset="150"
                 :rotate="-15"
             >
+              <n-alert
+                  v-if="shutdownMessage"
+                  type="success"
+                  class="app-shutdown-message"
+                  :show-icon="false"
+              >
+                {{ shutdownMessage }}
+              </n-alert>
               <n-flex>
                 <n-grid x-gap="12" :cols="1">
                   <n-gi>
@@ -151,12 +190,24 @@ onMounted(() => {
                   </n-gi>
                   <n-gi style="position: fixed;bottom:0;z-index: 9;width: 100%;">
                     <n-card size="small" style="--wails-draggable:no-drag">
+                      <div class="app-bottom-bar">
                       <n-menu style="font-size: 18px;"
                               v-model:value="activeKey"
                               mode="horizontal"
                               :options="menuOptions"
                               responsive
                       />
+                        <n-button
+                            tertiary
+                            type="error"
+                            size="small"
+                            :loading="shuttingDown"
+                            class="app-exit-button"
+                            @click="confirmShutdown"
+                        >
+                          退出
+                        </n-button>
+                      </div>
                     </n-card>
                   </n-gi>
                 </n-grid>
@@ -169,5 +220,27 @@ onMounted(() => {
   </n-config-provider>
 </template>
 <style>
+.app-bottom-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
 
+.app-bottom-bar .n-menu {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-exit-button {
+  flex: 0 0 auto;
+  margin-right: 12px;
+}
+
+.app-shutdown-message {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+  max-width: min(360px, calc(100vw - 32px));
+}
 </style>

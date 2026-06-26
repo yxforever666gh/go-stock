@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -167,6 +168,7 @@ func (h *WebEventHub) Emit(event string, payload any) {
 
 func runWebMode(app *App, addr string, hub *WebEventHub) error {
 	mux := http.NewServeMux()
+	var server *http.Server
 
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -174,6 +176,36 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			"mode":    "web",
 			"version": Version,
 		})
+	})
+
+	mux.HandleFunc("/api/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+			return
+		}
+		if !isLocalRequest(r) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "shutdown is only allowed from localhost"})
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":      true,
+			"message": "shutdown requested",
+		})
+
+		go func() {
+			time.Sleep(300 * time.Millisecond)
+			if app.cron != nil {
+				app.cron.Stop()
+			}
+			if server != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if err := server.Shutdown(ctx); err != nil {
+					log.SugaredLogger.Warnf("web shutdown failed: %v", err)
+				}
+			}
+		}()
 	})
 
 	mux.HandleFunc("/api/rpc", func(w http.ResponseWriter, r *http.Request) {
@@ -352,7 +384,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 	}
 	mux.Handle("/", spaFileServer(staticFS))
 
-	server := &http.Server{
+	server = &http.Server{
 		Addr:              addr,
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
@@ -362,7 +394,31 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 		MaxHeaderBytes:    1 << 20,
 	}
 	log.SugaredLogger.Infof("web mode listening on http://%s", addr)
-	return server.ListenAndServe()
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	return nil
+}
+
+func isLocalRequest(r *http.Request) bool {
+	host := r.Host
+	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
+		host = forwardedHost
+	}
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(strings.ToLower(host), "[]")
+	if host != "127.0.0.1" && host != "::1" && host != "localhost" {
+		return false
+	}
+
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		remoteHost = r.RemoteAddr
+	}
+	remoteHost = strings.Trim(strings.ToLower(remoteHost), "[]")
+	return remoteHost == "127.0.0.1" || remoteHost == "::1" || remoteHost == "localhost"
 }
 
 func invokeAppMethod(app *App, methodName string, args []json.RawMessage) (any, error) {

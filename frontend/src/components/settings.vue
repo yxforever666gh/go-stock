@@ -893,18 +893,20 @@ function deletePrompt(ID) {
                        :autosize="{ minRows: 4, maxRows: 8 }" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
 
-            <AiConfigSettings
-                :form-value="formValue"
-                :ai-protocol-options="aiProtocolOptions"
-                :ai-config-row-key="aiConfigRowKey"
-                :ai-config-test-state="aiConfigTestState"
-                @immediate-change="handleImmediateFieldChange"
-                @text-blur="handleTextFieldBlur"
-                @add-ai-config="addAiConfig"
-                @remove-ai-config="removeAiConfig"
-                @test-ai-config="testAiConfig"
-                @move-ai-config="handleAiConfigMove"
-            />
+            <n-gi :span="24">
+              <AiConfigSettings
+                  :form-value="formValue"
+                  :ai-protocol-options="aiProtocolOptions"
+                  :ai-config-row-key="aiConfigRowKey"
+                  :ai-config-test-state="aiConfigTestState"
+                  @immediate-change="handleImmediateFieldChange"
+                  @text-blur="handleTextFieldBlur"
+                  @add-ai-config="addAiConfig"
+                  @remove-ai-config="removeAiConfig"
+                  @test-ai-config="testAiConfig"
+                  @move-ai-config="handleAiConfigMove"
+              />
+            </n-gi>
 
             <n-gi :span="24">
               <n-divider/>

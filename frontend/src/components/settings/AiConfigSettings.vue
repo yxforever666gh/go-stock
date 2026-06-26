@@ -143,94 +143,90 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <n-gi :span="24" v-if="formValue.openAI.enable">
+  <n-space v-if="formValue.openAI.enable" vertical>
     <n-divider title-placement="left">AI模型服务配置</n-divider>
-  </n-gi>
-  <n-gi :span="24" v-if="formValue.openAI.enable">
-    <n-space vertical>
-      <n-scrollbar x-scrollable>
-        <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1320px;">
-          <thead>
-          <tr>
-            <th style="width: 92px;">排序</th>
-            <th style="width: 170px;">名称</th>
-            <th>Base URL</th>
-            <th style="width: 210px;">Model</th>
-            <th style="width: 190px;">API 格式</th>
-            <th style="width: 260px;">API Key</th>
-            <th style="width: 110px;">测试</th>
-            <th style="width: 90px;">删除</th>
+    <n-scrollbar x-scrollable>
+      <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1320px;">
+        <thead>
+        <tr>
+          <th style="width: 92px;">排序</th>
+          <th style="width: 170px;">名称</th>
+          <th>Base URL</th>
+          <th style="width: 210px;">Model</th>
+          <th style="width: 190px;">API 格式</th>
+          <th style="width: 260px;">API Key</th>
+          <th style="width: 110px;">测试</th>
+          <th style="width: 90px;">删除</th>
+        </tr>
+        </thead>
+        <tbody>
+        <template v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="aiConfigRowKey(aiConfig)">
+          <tr :class="aiConfigRowClass(index)"
+              :data-ai-config-index="index"
+              @dragover="handleAiConfigDragOver($event, index)"
+              @dragenter="handleAiConfigDragEnter($event, index)"
+              @drop="handleAiConfigDrop($event, index)"
+              @dragend="handleAiConfigDragEnd">
+            <td>
+              <div class="ai-config-drag-handle"
+                   draggable="true"
+                   title="拖动调整模型顺序"
+                   @pointerdown="handleAiConfigPointerDown($event, index)"
+                   @dragstart="handleAiConfigDragStart($event, index)"
+                   @dragend="handleAiConfigDragEnd">
+                <span class="ai-config-drag-icon">≡</span>
+                <span>{{ index + 1 }}</span>
+              </div>
+            </td>
+            <td>
+              <n-input v-model:value="aiConfig.name" type="text" placeholder="名称" clearable
+                       @blur="emit('text-blur')"/>
+            </td>
+            <td>
+              <n-input v-model:value="aiConfig.baseUrl" type="text" placeholder="https://api.example.com/v1"
+                       clearable @blur="emit('text-blur')"/>
+            </td>
+            <td>
+              <n-input v-model:value="aiConfig.modelName" type="text" placeholder="模型名称" clearable
+                       @blur="emit('text-blur')"/>
+            </td>
+            <td>
+              <n-select v-model:value="aiConfig.apiProtocol" :options="aiProtocolOptions"
+                        @update:value="emit('immediate-change')"/>
+            </td>
+            <td>
+              <n-input v-model:value="aiConfig.apiKey" type="password" placeholder="API Key" clearable
+                       show-password-on="click" @blur="emit('text-blur')"/>
+            </td>
+            <td>
+              <n-button size="small" type="primary" ghost
+                        :loading="aiConfigTestState(aiConfig, index).loading"
+                        @click="emit('test-ai-config', index)">测试</n-button>
+            </td>
+            <td>
+              <n-button type="error" size="small" ghost @click="emit('remove-ai-config', index)">删除</n-button>
+            </td>
           </tr>
-          </thead>
-          <tbody>
-          <template v-for="(aiConfig, index) in formValue.openAI.aiConfigs" :key="aiConfigRowKey(aiConfig)">
-            <tr :class="aiConfigRowClass(index)"
-                :data-ai-config-index="index"
-                @dragover="handleAiConfigDragOver($event, index)"
-                @dragenter="handleAiConfigDragEnter($event, index)"
-                @drop="handleAiConfigDrop($event, index)"
-                @dragend="handleAiConfigDragEnd">
-              <td>
-                <div class="ai-config-drag-handle"
-                     draggable="true"
-                     title="拖动调整模型顺序"
-                     @pointerdown="handleAiConfigPointerDown($event, index)"
-                     @dragstart="handleAiConfigDragStart($event, index)"
-                     @dragend="handleAiConfigDragEnd">
-                  <span class="ai-config-drag-icon">≡</span>
-                  <span>{{ index + 1 }}</span>
-                </div>
-              </td>
-              <td>
-                <n-input v-model:value="aiConfig.name" type="text" placeholder="名称" clearable
-                         @blur="emit('text-blur')"/>
-              </td>
-              <td>
-                <n-input v-model:value="aiConfig.baseUrl" type="text" placeholder="https://api.example.com/v1"
-                         clearable @blur="emit('text-blur')"/>
-              </td>
-              <td>
-                <n-input v-model:value="aiConfig.modelName" type="text" placeholder="模型名称" clearable
-                         @blur="emit('text-blur')"/>
-              </td>
-              <td>
-                <n-select v-model:value="aiConfig.apiProtocol" :options="aiProtocolOptions"
-                          @update:value="emit('immediate-change')"/>
-              </td>
-              <td>
-                <n-input v-model:value="aiConfig.apiKey" type="password" placeholder="API Key" clearable
-                         show-password-on="click" @blur="emit('text-blur')"/>
-              </td>
-              <td>
-                <n-button size="small" type="primary" ghost
-                          :loading="aiConfigTestState(aiConfig, index).loading"
-                          @click="emit('test-ai-config', index)">测试</n-button>
-              </td>
-              <td>
-                <n-button type="error" size="small" ghost @click="emit('remove-ai-config', index)">删除</n-button>
-              </td>
-            </tr>
-            <tr v-if="aiConfigTestState(aiConfig, index).result">
-              <td colspan="8">
-                <n-alert :type="aiConfigTestState(aiConfig, index).result.success ? 'success' : 'error'"
-                         :bordered="false">
-                  {{ aiConfigTestState(aiConfig, index).result.message }}
-                  <template v-if="aiConfigTestState(aiConfig, index).result.success">
-                    ：{{ aiConfigTestState(aiConfig, index).result.protocol }} /
-                    {{ aiConfigTestState(aiConfig, index).result.model }} /
-                    {{ aiConfigTestState(aiConfig, index).result.latencyMs }}ms /
-                    {{ aiConfigTestState(aiConfig, index).result.contentPreview }}
-                  </template>
-                </n-alert>
-              </td>
-            </tr>
-          </template>
-          </tbody>
-        </n-table>
-      </n-scrollbar>
-      <n-button type="primary" dashed @click="emit('add-ai-config')" style="width: 100%;">+ 添加AI配置</n-button>
-    </n-space>
-  </n-gi>
+          <tr v-if="aiConfigTestState(aiConfig, index).result">
+            <td colspan="8">
+              <n-alert :type="aiConfigTestState(aiConfig, index).result.success ? 'success' : 'error'"
+                       :bordered="false">
+                {{ aiConfigTestState(aiConfig, index).result.message }}
+                <template v-if="aiConfigTestState(aiConfig, index).result.success">
+                  ：{{ aiConfigTestState(aiConfig, index).result.protocol }} /
+                  {{ aiConfigTestState(aiConfig, index).result.model }} /
+                  {{ aiConfigTestState(aiConfig, index).result.latencyMs }}ms /
+                  {{ aiConfigTestState(aiConfig, index).result.contentPreview }}
+                </template>
+              </n-alert>
+            </td>
+          </tr>
+        </template>
+        </tbody>
+      </n-table>
+    </n-scrollbar>
+    <n-button type="primary" dashed @click="emit('add-ai-config')" style="width: 100%;">+ 添加AI配置</n-button>
+  </n-space>
 </template>
 
 <style scoped>
