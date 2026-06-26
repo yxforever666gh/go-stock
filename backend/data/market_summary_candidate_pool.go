@@ -6,6 +6,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-stock/backend/db"
+	"go-stock/backend/models"
 )
 
 const (
@@ -27,6 +30,7 @@ type marketSummaryIndicatorCandidate struct {
 	BkName      string            `json:"bkName,omitempty"`
 	Source      string            `json:"source,omitempty"`
 	Score       int               `json:"score"`
+	ScoreBreakdown map[string]int `json:"scoreBreakdown,omitempty"`
 	Reason      string            `json:"reason,omitempty"`
 	Metrics     map[string]string `json:"metrics,omitempty"`
 	SourceNames []string          `json:"sourceNames,omitempty"`
@@ -83,6 +87,8 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 	wg.Wait()
 
 	index := map[string]*marketSummaryIndicatorCandidate{}
+	sectorStrength := loadMarketSummarySectorStrengthMap()
+	recentFailures := loadMarketSummaryRecentFailurePenaltyMap(10)
 	for _, result := range results {
 		if len(result.rows) == 0 && logState != nil {
 			logState.addNote("indicator template %s returned 0 rows", result.template.Name)
@@ -92,6 +98,7 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 			if candidate.StockCode == "" || candidate.StockName == "" {
 				continue
 			}
+			applyMarketSummaryCandidateQualityScore(&candidate, sectorStrength, recentFailures)
 			existing := index[candidate.StockCode]
 			if existing == nil {
 				index[candidate.StockCode] = &candidate
@@ -191,6 +198,9 @@ func buildMarketSummaryIndicatorCandidate(row map[string]any, tpl marketSummaryI
 		BkName:      strings.TrimSpace(direction),
 		Source:      "indicator_pool",
 		Score:       tpl.Weight,
+		ScoreBreakdown: map[string]int{
+			"base": tpl.Weight,
+		},
 		Metrics:     map[string]string{},
 		SourceNames: []string{tpl.Name},
 	}
@@ -207,7 +217,9 @@ func buildMarketSummaryIndicatorCandidate(row map[string]any, tpl marketSummaryI
 			candidate.Metrics[metric] = text
 		}
 	}
-	candidate.Score += scoreIndicatorCandidateMetrics(candidate.Metrics)
+	metricScore := scoreIndicatorCandidateMetrics(candidate.Metrics)
+	candidate.Score += metricScore
+	candidate.ScoreBreakdown["metrics"] = metricScore
 	candidate.Reason = buildIndicatorCandidateReason(candidate)
 	return candidate
 }
@@ -303,6 +315,117 @@ func scoreIndicatorCandidateMetrics(metrics map[string]string) int {
 		score += 6
 	}
 	return score
+}
+
+func applyMarketSummaryCandidateQualityScore(item *marketSummaryIndicatorCandidate, sectorStrength map[string]int, recentFailures map[string]int) {
+	if item == nil {
+		return
+	}
+	if item.ScoreBreakdown == nil {
+		item.ScoreBreakdown = map[string]int{}
+	}
+	sectorScore := sectorStrength[strings.TrimSpace(firstNonEmptyText(item.BkName, item.Direction))]
+	failurePenalty := recentFailures[normalizeRecommendStockCode(item.StockCode)]
+	completenessScore := scoreMarketSummaryCandidateDataCompleteness(*item)
+	item.ScoreBreakdown["sectorStrength"] = sectorScore
+	item.ScoreBreakdown["recentFailurePenalty"] = failurePenalty
+	item.ScoreBreakdown["dataCompleteness"] = completenessScore
+	item.Score += sectorScore + failurePenalty + completenessScore
+	item.ScoreBreakdown["total"] = item.Score
+}
+
+func scoreMarketSummaryCandidateDataCompleteness(item marketSummaryIndicatorCandidate) int {
+	required := []string{"price", "amount", "volumeRatio", "turnover"}
+	missing := 0
+	for _, key := range required {
+		if strings.TrimSpace(item.Metrics[key]) == "" {
+			missing++
+		}
+	}
+	if strings.TrimSpace(firstNonEmptyText(item.BkName, item.Direction)) == "" {
+		missing++
+	}
+	switch missing {
+	case 0:
+		return 8
+	case 1:
+		return 2
+	case 2:
+		return -6
+	default:
+		return -12
+	}
+}
+
+func loadMarketSummarySectorStrengthMap() map[string]int {
+	result := map[string]int{}
+	raw := runWithTimeout(3*time.Second, map[string]any{"data": []any{}}, func() map[string]any {
+		return NewMarketNewsApi().GetIndustryRank("0", 20)
+	})
+	rows, _ := raw["data"].([]any)
+	for idx, row := range rows {
+		m, ok := row.(map[string]any)
+		if !ok {
+			continue
+		}
+		name := firstNonEmptyText(anyToString(m["industry_name"]), anyToString(m["name"]), anyToString(m["plate_name"]), anyToString(m["bk_name"]))
+		if name == "" {
+			continue
+		}
+		score := 0
+		switch {
+		case idx < 3:
+			score = 14
+		case idx < 8:
+			score = 9
+		case idx < 15:
+			score = 5
+		default:
+			score = 2
+		}
+		if inflow, ok := parseLooseFloat(firstNonEmptyText(anyToString(m["zlje"]), anyToString(m["net_inflow"]), anyToString(m["main_net_inflow"]))); ok && inflow > 0 {
+			score += 4
+		}
+		result[strings.TrimSpace(name)] = score
+	}
+	return result
+}
+
+func loadMarketSummaryRecentFailurePenaltyMap(tradeDays int) map[string]int {
+	if tradeDays <= 0 {
+		tradeDays = 10
+	}
+	result := map[string]int{}
+	since := time.Now().AddDate(0, 0, -tradeDays*2)
+	rows := make([]models.AiRecommendStocks, 0, 128)
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("data_time >= ?", since).
+		Where("(summary_version IN ? OR activation_rule_source IN ?)", marketSummaryKnownVersions(), []string{"market_summary", "market_summary_embedded"}).
+		Find(&rows).Error; err != nil {
+		return result
+	}
+	for _, row := range rows {
+		code := normalizeRecommendStockCode(row.StockCode)
+		if code == "" {
+			continue
+		}
+		penalty := 0
+		if isAnalysisOnlyRecommend(&row) {
+			penalty -= 5
+		}
+		if strings.Contains(row.InvalidCondition, "止损") || strings.Contains(row.ActivationInvalidReason, "止损") {
+			penalty -= 8
+		}
+		if strings.Contains(row.InvalidCondition, "源头质量") || strings.Contains(row.InvalidCondition, "硬校验") ||
+			strings.Contains(row.InvalidCondition, "价格锚点") || strings.Contains(row.InvalidCondition, "盈亏比") {
+			penalty -= 6
+		}
+		result[code] += penalty
+		if result[code] < -24 {
+			result[code] = -24
+		}
+	}
+	return result
 }
 
 func buildIndicatorCandidateReason(item marketSummaryIndicatorCandidate) string {

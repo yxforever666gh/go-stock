@@ -59,6 +59,18 @@ func (s RecommendService) GetAiRecommendYieldErrorLogs(limit int) ([]map[string]
 	return data.NewAiRecommendStocksService().GetAiRecommendYieldErrorLogs(limit)
 }
 
+func (s RecommendService) GetMarketSummaryRunDiagnostics(query models.MarketSummaryRunDiagnosticQuery) (models.MarketSummaryRunDiagnosticSummary, error) {
+	return data.GetMarketSummaryRunDiagnostics(query)
+}
+
+func (s RecommendService) GetMarketSummaryEmptyRunCount(query models.MarketSummaryRunDiagnosticQuery) (int64, error) {
+	return data.GetMarketSummaryEmptyRunCount(query)
+}
+
+func (s RecommendService) GetMarketSummaryBlockedReasonTop(query models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error) {
+	return data.GetMarketSummaryBlockedReasonTop(query)
+}
+
 func (s RecommendService) DeleteAiRecommendStocks(id uint) error {
 	return data.NewAiRecommendStocksService().DeleteAiRecommendStocks(id)
 }

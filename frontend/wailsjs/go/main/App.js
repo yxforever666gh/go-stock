@@ -130,6 +130,18 @@ export function GetAiRecommendYieldMinuteChart(arg1) {
   return window['go']['main']['App']['GetAiRecommendYieldMinuteChart'](arg1);
 }
 
+export function GetMarketSummaryRunDiagnostics(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryRunDiagnostics'](arg1);
+}
+
+export function GetMarketSummaryEmptyRunCount(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryEmptyRunCount'](arg1);
+}
+
+export function GetMarketSummaryBlockedReasonTop(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryBlockedReasonTop'](arg1);
+}
+
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
 }

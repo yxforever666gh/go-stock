@@ -68,6 +68,12 @@ export function GetAiRecommendYieldErrorLogs(arg1:number):Promise<Array<Record<s
 
 export function GetAiRecommendYieldMinuteChart(arg1:number):Promise<models.AiRecommendYieldMinuteChartData>;
 
+export function GetMarketSummaryRunDiagnostics(arg1:any):Promise<any>;
+
+export function GetMarketSummaryEmptyRunCount(arg1:any):Promise<number>;
+
+export function GetMarketSummaryBlockedReasonTop(arg1:any):Promise<Array<any>>;
+
 export function GetConfig():Promise<data.SettingConfig>;
 
 export function GetEmailSendLogList(arg1:models.EmailSendLogQuery):Promise<models.EmailSendLogPageData>;

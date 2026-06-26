@@ -108,6 +108,7 @@ func AutoMigrate() {
 		&models.AiRecommendDailyBar{},
 		&models.CronTaskRun{},
 		&models.EmailSendLog{},
+		&models.MarketSummaryRunDiagnostic{},
 	); err != nil {
 		logger.SugaredLogger.Errorf("auto migrate failed: %v", err)
 		return

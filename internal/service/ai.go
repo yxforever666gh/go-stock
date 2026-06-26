@@ -96,12 +96,20 @@ func (s AIService) NewSummaryStockNewsStreamPhased(ctx context.Context, aiConfig
 	return data.NewDeepSeekOpenAi(ctx, aiConfigID).NewSummaryStockNewsStreamPhased(question, sysPromptID, think)
 }
 
+func (s AIService) GenerateMarketSummarySupplementTable(ctx context.Context, aiConfigID int, req data.MarketSummarySupplementRequest) (string, string, string, error) {
+	return data.NewDeepSeekOpenAi(ctx, aiConfigID).GenerateMarketSummarySupplementTable(req)
+}
+
 func (s AIService) NormalizeMarketSummaryQuestion(question string) string {
 	return data.NormalizeMarketSummaryQuestion(question)
 }
 
 func (s AIService) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
 	return data.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
+}
+
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
+	return data.EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName, startedAt, verifiedCandidates)
 }
 
 func (s AIService) EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {

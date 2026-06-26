@@ -18,13 +18,16 @@ const rangeReadyRef = ref(false)
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.4.1', value: '1.4.1' },
   { label: 'V1.4.0', value: '1.4.0' },
   { label: 'V1.3.6', value: '1.3.6' },
   { label: 'V1.3.2', value: 'v1.3.2' },
   { label: 'V1.3.1', value: 'phase3-v4' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.4.0',
+  current: 'V1.4.1',
+  '1.4.1': 'V1.4.1',
+  'v1.4.1': 'V1.4.1',
   '1.4.0': 'V1.4.0',
   'v1.4.0': 'V1.4.0',
   '1.3.6': 'V1.3.6',

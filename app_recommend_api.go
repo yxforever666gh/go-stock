@@ -183,6 +183,47 @@ func (a *App) GetAiRecommendYieldErrorLogs(limit int) []map[string]string {
 	return resp
 }
 
+func (a *App) GetMarketSummaryRunDiagnostics(query models.MarketSummaryRunDiagnosticQuery) models.MarketSummaryRunDiagnosticSummary {
+	resp, err := a.services.Recommend.GetMarketSummaryRunDiagnostics(query)
+	if err != nil {
+		logger.SugaredLogger.Warnf("GetMarketSummaryRunDiagnostics failed: %v", err)
+		return models.MarketSummaryRunDiagnosticSummary{
+			List:             []models.MarketSummaryRunDiagnostic{},
+			BlockedReasonTop: []models.MarketSummaryBlockedReasonItem{},
+			StrategyCohort:   query.StrategyCohort,
+			SummaryVersion:   query.SummaryVersion,
+		}
+	}
+	if resp.List == nil {
+		resp.List = []models.MarketSummaryRunDiagnostic{}
+	}
+	if resp.BlockedReasonTop == nil {
+		resp.BlockedReasonTop = []models.MarketSummaryBlockedReasonItem{}
+	}
+	return resp
+}
+
+func (a *App) GetMarketSummaryEmptyRunCount(query models.MarketSummaryRunDiagnosticQuery) int64 {
+	count, err := a.services.Recommend.GetMarketSummaryEmptyRunCount(query)
+	if err != nil {
+		logger.SugaredLogger.Warnf("GetMarketSummaryEmptyRunCount failed: %v", err)
+		return 0
+	}
+	return count
+}
+
+func (a *App) GetMarketSummaryBlockedReasonTop(query models.MarketSummaryRunDiagnosticQuery) []models.MarketSummaryBlockedReasonItem {
+	items, err := a.services.Recommend.GetMarketSummaryBlockedReasonTop(query)
+	if err != nil {
+		logger.SugaredLogger.Warnf("GetMarketSummaryBlockedReasonTop failed: %v", err)
+		return []models.MarketSummaryBlockedReasonItem{}
+	}
+	if items == nil {
+		return []models.MarketSummaryBlockedReasonItem{}
+	}
+	return items
+}
+
 func (a *App) DeleteAiRecommendStocks(id uint) string {
 	err := a.services.Recommend.DeleteAiRecommendStocks(id)
 	if err != nil {

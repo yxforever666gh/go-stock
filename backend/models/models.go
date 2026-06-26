@@ -1111,6 +1111,70 @@ type AiRecommendStocksQuery struct {
 	StrategyCohort string `form:"strategyCohort" json:"strategyCohort"` // 策略分层 current/all/legacy/phase3-v3/phase3-v4
 }
 
+type MarketSummaryBlockedReasonItem struct {
+	Reason string `json:"reason"`
+	Count  int    `json:"count"`
+}
+
+type MarketSummaryRecommendSaveResult struct {
+	SavedCount               int                              `json:"savedCount"`
+	ProductionCount          int                              `json:"productionCount"`
+	AnalysisOnlyCount        int                              `json:"analysisOnlyCount"`
+	BlockedCount             int                              `json:"blockedCount"`
+	BlockedReasons           []MarketSummaryBlockedReasonItem `json:"blockedReasons"`
+	UsedStockCodes           []string                         `json:"usedStockCodes"`
+	RemainingCandidateStocks []string                         `json:"remainingCandidateStocks"`
+	AIOutputCount            int                              `json:"aiOutputCount"`
+	AIOutputCountSecond      int                              `json:"aiOutputCountSecond,omitempty"`
+	SupplementTriggered      bool                             `json:"supplementTriggered,omitempty"`
+	SupplementText           string                           `json:"supplementText,omitempty"`
+	SupplementCandidates     []string                         `json:"supplementCandidates,omitempty"`
+}
+
+type MarketSummaryRunDiagnostic struct {
+	gorm.Model
+	RunID                   string    `json:"runId" gorm:"size:64;uniqueIndex"`
+	SummaryVersion          string    `json:"summaryVersion" gorm:"size:32;index"`
+	RunSlot                 string    `json:"runSlot" gorm:"size:32;index"`
+	StartedAt               time.Time `json:"startedAt" gorm:"index"`
+	FinishedAt              time.Time `json:"finishedAt" gorm:"index"`
+	IndicatorCandidateCount int       `json:"indicatorCandidateCount"`
+	IndicatorAIInputCount   int       `json:"indicatorAiInputCount"`
+	DiscoveryCandidateCount int       `json:"discoveryCandidateCount"`
+	VerifiedCandidateCount  int       `json:"verifiedCandidateCount"`
+	AIOutputCountFirst      int       `json:"aiOutputCountFirst"`
+	AIOutputCountSecond     int       `json:"aiOutputCountSecond"`
+	SavedCount              int       `json:"savedCount"`
+	ProductionCount         int       `json:"productionCount"`
+	AnalysisOnlyCount       int       `json:"analysisOnlyCount"`
+	BlockedCount            int       `json:"blockedCount"`
+	BlockedReasonTop        string    `json:"blockedReasonTop" gorm:"type:text"`
+	EmptyRun                bool      `json:"emptyRun" gorm:"index"`
+	NotesJSON               string    `json:"notesJson" gorm:"type:text"`
+}
+
+func (MarketSummaryRunDiagnostic) TableName() string {
+	return "market_summary_run_diagnostics"
+}
+
+type MarketSummaryRunDiagnosticQuery struct {
+	Limit          int    `form:"limit" json:"limit"`
+	StartDate      string `form:"startDate" json:"startDate"`
+	EndDate        string `form:"endDate" json:"endDate"`
+	SummaryVersion string `form:"summaryVersion" json:"summaryVersion"`
+	StrategyCohort string `form:"strategyCohort" json:"strategyCohort"`
+}
+
+type MarketSummaryRunDiagnosticSummary struct {
+	List                     []MarketSummaryRunDiagnostic     `json:"list"`
+	Latest                   *MarketSummaryRunDiagnostic      `json:"latest,omitempty"`
+	BlockedReasonTop         []MarketSummaryBlockedReasonItem `json:"blockedReasonTop"`
+	EmptyRunCount            int64                            `json:"emptyRunCount"`
+	ConsecutiveEmptyRunCount int                              `json:"consecutiveEmptyRunCount"`
+	StrategyCohort           string                           `json:"strategyCohort,omitempty"`
+	SummaryVersion           string                           `json:"summaryVersion,omitempty"`
+}
+
 type AiRecommendStocksPageResp struct {
 	Code    int                       `json:"code"`
 	Message string                    `json:"message"`

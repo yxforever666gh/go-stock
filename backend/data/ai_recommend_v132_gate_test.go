@@ -13,6 +13,9 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		raw  string
 		want string
 	}{
+		{name: "current141", raw: "1.4.1", want: marketSummaryVersion141},
+		{name: "v141", raw: "v1.4.1", want: marketSummaryVersion141},
+		{name: "short141", raw: "141", want: marketSummaryVersion141},
 		{name: "current140", raw: "1.4.0", want: marketSummaryVersion140},
 		{name: "v140", raw: "v1.4.0", want: marketSummaryVersion140},
 		{name: "short140", raw: "140", want: marketSummaryVersion140},
@@ -33,8 +36,8 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		})
 	}
 
-	if marketSummaryCurrentVersion != marketSummaryVersion140 {
-		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion140)
+	if marketSummaryCurrentVersion != marketSummaryVersion141 {
+		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion141)
 	}
 }
 
@@ -224,6 +227,35 @@ func TestEvaluateV140ActivationGateReusesV136HardRules(t *testing.T) {
 	gate := evaluateV132ActivationGate(rec, activationTime, 10, bars)
 	if gate.Allowed {
 		t.Fatalf("v1.4.0 record should reuse v1.3.6 hard reward/risk floor")
+	}
+	if gate.Kind != "reward_risk" {
+		t.Fatalf("gate kind = %q, want reward_risk", gate.Kind)
+	}
+}
+
+func TestEvaluateV141ActivationGateReusesV136HardRules(t *testing.T) {
+	activationTime := time.Date(2026, 5, 25, 10, 0, 0, 0, cnLocation())
+	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersion141,
+		RecommendStopProfitPriceMin: 10.05,
+		RecommendStopProfitPrice:    "10.05",
+		RecommendStopLossPrice:      "9.9",
+		StockCurrentPrice:           "10",
+	}
+	bars := make([]minuteBar, 0, 20)
+	for i := 20; i > 0; i-- {
+		bars = append(bars, minuteBar{
+			TradeTime: activationTime.Add(-time.Duration(i) * time.Minute),
+			Open:      10,
+			Close:     10,
+			Volume:    100,
+			Amount:    1000,
+		})
+	}
+
+	gate := evaluateV132ActivationGate(rec, activationTime, 10, bars)
+	if gate.Allowed {
+		t.Fatalf("v1.4.1 record should reuse v1.3.6 hard reward/risk floor")
 	}
 	if gate.Kind != "reward_risk" {
 		t.Fatalf("gate kind = %q, want reward_risk", gate.Kind)

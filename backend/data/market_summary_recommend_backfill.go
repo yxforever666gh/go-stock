@@ -89,6 +89,84 @@ func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelNam
 	return saved, nil
 }
 
+func EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
+	result := &models.MarketSummaryRecommendSaveResult{
+		BlockedReasons:           []models.MarketSummaryBlockedReasonItem{},
+		UsedStockCodes:           []string{},
+		RemainingCandidateStocks: []string{},
+	}
+	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, startedAt)
+	result.AIOutputCount = len(drafts)
+	if len(drafts) == 0 {
+		result.BlockedCount = 1
+		result.BlockedReasons = []models.MarketSummaryBlockedReasonItem{{Reason: "AI 输出为空", Count: 1}}
+		result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, nil)
+		return result, nil
+	}
+
+	startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
+	existing := make([]models.AiRecommendStocks, 0, len(drafts))
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("data_time >= ? AND data_time < ?", startOfDay, endOfDay).
+		Where("(summary_version IN ? OR activation_rule_source IN ?)", marketSummaryKnownVersions(), []string{"market_summary", "market_summary_embedded"}).
+		Find(&existing).Error; err != nil {
+		return result, err
+	}
+
+	missing := collectMarketSummaryRecommendStocksForSave(drafts, existing)
+	if len(missing) == 0 {
+		result.BlockedCount = len(drafts)
+		result.BlockedReasons = []models.MarketSummaryBlockedReasonItem{{Reason: "同日已推荐排除", Count: len(drafts)}}
+		result.UsedStockCodes = collectMarketSummaryDraftCodes(drafts)
+		result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
+		return result, nil
+	}
+
+	items := make([]*models.AiRecommendStocks, 0, len(missing))
+	failures := make([]string, 0, len(missing))
+	for _, draft := range missing {
+		item, err := draft.toRecommendStock()
+		if err != nil {
+			failures = append(failures, err.Error())
+			result.BlockedCount++
+			continue
+		}
+		items = append(items, item)
+	}
+	if len(items) == 0 {
+		result.BlockedReasons = aggregateMarketSummaryBlockedReasons(failures)
+		result.UsedStockCodes = collectMarketSummaryDraftCodes(missing)
+		result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
+		if len(failures) == 0 {
+			return result, nil
+		}
+		return result, errors.New(strings.Join(failures, "；"))
+	}
+
+	service := NewAiRecommendStocksService()
+	for idx, item := range items {
+		if err := service.CreateAiRecommendStocks(item); err != nil {
+			failures = append(failures, fmt.Sprintf("第%d条推荐记录不完整: %v", idx+1, err))
+			result.BlockedCount++
+			continue
+		}
+		result.SavedCount++
+		result.UsedStockCodes = append(result.UsedStockCodes, normalizeRecommendStockCode(item.StockCode))
+		if isAnalysisOnlyRecommend(item) {
+			result.AnalysisOnlyCount++
+		} else {
+			result.ProductionCount++
+		}
+	}
+	result.UsedStockCodes = dedupeNonEmptyStrings(result.UsedStockCodes, 0)
+	result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
+	result.BlockedReasons = aggregateMarketSummaryBlockedReasons(failures)
+	if len(failures) > 0 {
+		return result, errors.New(strings.Join(failures, "；"))
+	}
+	return result, nil
+}
+
 func EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
 	drafts, err := parseMarketSummaryYieldOverrideDrafts(summaryText, startedAt)
 	if err != nil {
@@ -109,6 +187,67 @@ func EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.T
 		saved++
 	}
 	return saved, nil
+}
+
+func collectMarketSummaryDraftCodes(items []*marketSummaryRecommendDraft) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		result = append(result, normalizeRecommendStockCode(item.StockCode))
+	}
+	return dedupeNonEmptyStrings(result, 0)
+}
+
+func remainingMarketSummaryCandidateCodes(candidates []marketSummaryVerifiedCandidate, usedCodes []string) []string {
+	used := make(map[string]struct{}, len(usedCodes))
+	for _, code := range usedCodes {
+		code = normalizeRecommendStockCode(code)
+		if code != "" {
+			used[code] = struct{}{}
+		}
+	}
+	result := make([]string, 0, len(candidates))
+	for _, item := range candidates {
+		code := normalizeRecommendStockCode(item.StockCode)
+		if code == "" {
+			continue
+		}
+		if _, ok := used[code]; ok {
+			continue
+		}
+		result = append(result, code)
+	}
+	return dedupeNonEmptyStrings(result, 0)
+}
+
+func aggregateMarketSummaryBlockedReasons(rawReasons []string) []models.MarketSummaryBlockedReasonItem {
+	if len(rawReasons) == 0 {
+		return []models.MarketSummaryBlockedReasonItem{}
+	}
+	counts := map[string]int{}
+	for _, raw := range rawReasons {
+		reason := normalizeMarketSummaryBlockedReason(raw)
+		if reason == "" {
+			continue
+		}
+		counts[reason]++
+	}
+	items := make([]models.MarketSummaryBlockedReasonItem, 0, len(counts))
+	for reason, count := range counts {
+		items = append(items, models.MarketSummaryBlockedReasonItem{Reason: reason, Count: count})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Reason < items[j].Reason
+	})
+	if len(items) > 5 {
+		items = items[:5]
+	}
+	return items
 }
 
 func marketSummaryDayBounds(at time.Time) (time.Time, time.Time) {
@@ -478,7 +617,7 @@ func marketSummaryDraftProductionRejectionReason(item *marketSummaryRecommendDra
 		return "四维评分未全部达到60分，已降级为仅分析"
 	}
 	switch strings.TrimSpace(item.SummaryVersion) {
-	case marketSummaryVersion136, marketSummaryVersion140:
+	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141:
 		if reason := marketSummaryDraftV136TradePlanRejectionReason(item); reason != "" {
 			return reason
 		}

@@ -23,7 +23,8 @@ const marketSummaryPhase4Version = "phase3-v4"
 const marketSummaryVersionV132 = "v1.3.2"
 const marketSummaryVersion136 = "1.3.6"
 const marketSummaryVersion140 = "1.4.0"
-const marketSummaryCurrentVersion = marketSummaryVersion140
+const marketSummaryVersion141 = "1.4.1"
+const marketSummaryCurrentVersion = marketSummaryVersion141
 
 const (
 	strategyCohortCurrent = "current"
@@ -38,6 +39,7 @@ func marketSummaryKnownVersions() []string {
 		marketSummaryVersionV132,
 		marketSummaryVersion136,
 		marketSummaryVersion140,
+		marketSummaryVersion141,
 	}
 }
 
@@ -51,6 +53,8 @@ func normalizeStrategyCohort(raw string, defaultCohort string) string {
 		return normalizeStrategyCohort(defaultCohort, "")
 	case strategyCohortCurrent, strategyCohortAll, strategyCohortLegacy:
 		return text
+	case "1.4.1", "v1.4.1", "141", "v141":
+		return marketSummaryVersion141
 	case "1.4.0", "v1.4.0", "140", "v140":
 		return marketSummaryVersion140
 	case "1.3.6", "v1.3.6", "136", "v136":
@@ -80,7 +84,7 @@ func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
 		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
 	case strategyCohortLegacy:
 		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", marketSummaryKnownVersions())
-	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140:
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141:
 		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
 	default:
 		return q
@@ -122,6 +126,8 @@ type marketSummaryRouteLog struct {
 	DroppedCandidates    []string                 `json:"droppedCandidates,omitempty"`
 	Notes                []string                 `json:"notes,omitempty"`
 }
+
+type MarketSummaryRouteLogSnapshot = marketSummaryRouteLog
 
 type marketSummaryDiscoverySnippet struct {
 	Title   string `json:"title"`
@@ -227,6 +233,16 @@ type marketSummaryVerifiedCandidate struct {
 	PositiveSignals   []string                      `json:"positiveSignals,omitempty"`
 	NegativeSignals   []string                      `json:"negativeSignals,omitempty"`
 	VerdictHints      []string                      `json:"verdictHints,omitempty"`
+}
+
+type MarketSummaryVerifiedCandidateSnapshot = marketSummaryVerifiedCandidate
+
+type MarketSummarySupplementRequest struct {
+	FailureSummary    []models.MarketSummaryBlockedReasonItem  `json:"failureSummary,omitempty"`
+	RemainingVerified []MarketSummaryVerifiedCandidateSnapshot `json:"remainingVerified,omitempty"`
+	ExcludedToday     []string                                 `json:"excludedToday,omitempty"`
+	TargetProduction  int                                      `json:"targetProduction,omitempty"`
+	CurrentProduction int                                      `json:"currentProduction,omitempty"`
 }
 
 type marketSummaryTechnicalMetrics struct {
@@ -457,6 +473,12 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 		AskAi(o, messages, ch, displayQuestion, think)
 		emitSummaryToolStatus(ch, "phase3.generate", "success", nil, 0)
 		logState.finish()
+		ch <- map[string]any{
+			"event":              "summaryStockNewsMeta",
+			"code":               1,
+			"routeLog":           logState,
+			"verifiedCandidates": verifiedCandidates,
+		}
 		logger.SugaredLogger.Infof("market summary phase3 route completed: %s", mustJSON(logState))
 		if chatID != "" && modelName != "" {
 			logger.SugaredLogger.Infof("market summary phase3 discovery meta chatId=%s model=%s", chatID, modelName)
@@ -936,6 +958,82 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 	}
 	sanitizeMarketSummaryDiscoveryResult(result)
 	return result, chatID, modelName, nil
+}
+
+func (o *OpenAi) GenerateMarketSummarySupplementTable(req MarketSummarySupplementRequest) (string, string, string, error) {
+	req.RemainingVerified = filterMarketSummaryVerifiedCandidates(req.RemainingVerified, req.ExcludedToday)
+	if len(req.RemainingVerified) == 0 {
+		return "", "", "", nil
+	}
+	if len(req.RemainingVerified) > 24 {
+		req.RemainingVerified = req.RemainingVerified[:24]
+	}
+	if req.TargetProduction <= 0 {
+		req.TargetProduction = 2
+	}
+	payload := mustJSON(req)
+	messages := buildMarketSummarySupplementMessages(payload)
+	return o.CompleteChat(messages, false)
+}
+
+func filterMarketSummaryVerifiedCandidates(candidates []MarketSummaryVerifiedCandidateSnapshot, excludedCodes []string) []MarketSummaryVerifiedCandidateSnapshot {
+	if len(candidates) == 0 {
+		return nil
+	}
+	excluded := make(map[string]struct{}, len(excludedCodes))
+	for _, raw := range excludedCodes {
+		code := normalizeRecommendStockCode(raw)
+		if code != "" {
+			excluded[code] = struct{}{}
+		}
+	}
+	result := make([]MarketSummaryVerifiedCandidateSnapshot, 0, len(candidates))
+	seen := map[string]struct{}{}
+	for _, item := range candidates {
+		code := normalizeRecommendStockCode(item.StockCode)
+		if code == "" {
+			continue
+		}
+		if _, ok := excluded[code]; ok {
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			continue
+		}
+		item.StockCode = code
+		result = append(result, item)
+		seen[code] = struct{}{}
+	}
+	return result
+}
+
+func buildMarketSummarySupplementMessages(payload string) []map[string]any {
+	return []map[string]any{
+		{
+			"role": "system",
+			"content": strings.TrimSpace("你是A股市场总结推荐补位层。你的职责只是在第一轮保存后生产候选不足时，从剩余 verified candidates 中输出补位交易计划表格。\n" +
+				"不要重写市场总结全文，不要新增候选，不要绕过硬规则。"),
+		},
+		{
+			"role": "user",
+			"content": strings.TrimSpace("请只输出 Markdown，包含两个一级标题：\n\n" +
+				"# 推荐股票池\n\n" +
+				"使用标准表格，表头必须为：\n" +
+				"| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |\n\n" +
+				"# 补位说明\n\n" +
+				"要求：\n" +
+				"1. 只允许使用输入里的 remainingVerified 候选，禁止新增股票；\n" +
+				"2. excludedToday 中的股票禁止输出；\n" +
+				"3. 只输出补位交易计划，最多 6 只，优先补足 targetProduction，但不得为了凑数降低质量；\n" +
+				"4. 价格锚点优先使用 auctionPrice，其次 minutePrice，再次 currentPrice；\n" +
+				"5. 买入区间、止盈区间、止损位必须与价格锚点同一数量级，偏离超过20%必须放弃；\n" +
+				"6. 买入依据必须写成“价格触发：...；量能触发：...”；\n" +
+				"7. 失效条件必须写成“时间失效：...；价格失效：...”；\n" +
+				"8. 缺少激活规则、价格锚点或量能证据的候选只能写为仅分析，并在操作备注里说明；\n" +
+				"9. 输出会继续进入保存前硬校验，硬规则不过不会入库，不要声称已通过。\n\n" +
+				"输入JSON：" + payload),
+		},
+	}
 }
 
 func sanitizeMarketSummaryDiscoveryResult(result *marketSummaryDiscoveryResult) {

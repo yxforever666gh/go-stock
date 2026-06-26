@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { GetAiRecommendStocksYieldList, GetAiRecommendYieldDailyOverview } from '../services/app-api'
+import { GetAiRecommendStocksYieldList, GetAiRecommendYieldDailyOverview, GetMarketSummaryRunDiagnostics } from '../services/app-api'
 import { useSharedResearchDateRange } from '../composables/useSharedResearchDateRange'
 import AiRecommendYieldDailyOverviewChart from './AiRecommendYieldDailyOverviewChart.vue'
 
@@ -8,6 +8,7 @@ const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRang
 
 const loadingRef = ref(true)
 const overviewLoadingRef = ref(true)
+const diagnosticLoadingRef = ref(false)
 const rangeReadyRef = ref(false)
 const strategyCohortRef = ref('all')
 
@@ -47,18 +48,23 @@ const v132GateBlockedCountRef = ref(0)
 const v132StrengthBlockedCountRef = ref(0)
 const v132RewardRiskBlockedCountRef = ref(0)
 const v132CooldownBlockedCountRef = ref(0)
+const marketDiagnosticRef = ref(null)
+const marketDiagnosticReasonTopRef = ref([])
 
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.4.1', value: '1.4.1' },
   { label: 'V1.4.0', value: '1.4.0' },
   { label: 'V1.3.6', value: '1.3.6' },
   { label: 'V1.3.2', value: 'v1.3.2' },
   { label: 'V1.3.1', value: 'phase3-v4' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.4.0',
+  current: 'V1.4.1',
+  '1.4.1': 'V1.4.1',
+  'v1.4.1': 'V1.4.1',
   '1.4.0': 'V1.4.0',
   'v1.4.0': 'V1.4.0',
   '1.3.6': 'V1.3.6',
@@ -134,21 +140,21 @@ const endDateModel = computed({
 onMounted(async () => {
   await initSharedResearchDateRange()
   rangeReadyRef.value = true
-  await Promise.all([loadSummary(), loadDailyOverview()])
+  await Promise.all([loadSummary(), loadDailyOverview(), loadMarketSummaryDiagnostic()])
 })
 
 watch(researchDateRangeKey, async (nextKey, prevKey) => {
   if (!rangeReadyRef.value || !prevKey || nextKey === prevKey) {
     return
   }
-  await loadSummary()
+  await Promise.all([loadSummary(), loadMarketSummaryDiagnostic()])
 })
 
 watch(strategyCohortRef, async (nextValue, prevValue) => {
   if (!rangeReadyRef.value || !prevValue || nextValue === prevValue) {
     return
   }
-  await Promise.all([loadSummary(), loadDailyOverview()])
+  await Promise.all([loadSummary(), loadDailyOverview(), loadMarketSummaryDiagnostic()])
 })
 
 function normalizePickerDate(value) {
@@ -258,6 +264,45 @@ async function loadDailyOverview() {
   } finally {
     overviewLoadingRef.value = false
   }
+}
+
+async function loadMarketSummaryDiagnostic() {
+  diagnosticLoadingRef.value = true
+  try {
+    const { startDate, endDate } = currentRangeParams()
+    const result = await GetMarketSummaryRunDiagnostics({
+      limit: 10,
+      startDate,
+      endDate,
+      strategyCohort: strategyCohortRef.value
+    })
+    marketDiagnosticRef.value = result || null
+    marketDiagnosticReasonTopRef.value = Array.isArray(result?.blockedReasonTop) ? result.blockedReasonTop : []
+  } catch (error) {
+    console.error('loadMarketSummaryDiagnostic failed', error)
+    marketDiagnosticRef.value = null
+    marketDiagnosticReasonTopRef.value = []
+  } finally {
+    diagnosticLoadingRef.value = false
+  }
+}
+
+function latestMarketDiagnostic() {
+  return marketDiagnosticRef.value?.latest || null
+}
+
+function diagnosticNumber(value) {
+  const n = Number(value || 0)
+  return Number.isFinite(n) ? n : 0
+}
+
+function diagnosticReasonText() {
+  if (!marketDiagnosticReasonTopRef.value.length) {
+    return '暂无拦截原因'
+  }
+  return marketDiagnosticReasonTopRef.value
+    .map((item) => `${item.reason || '--'} ${Number(item.count || 0)}`)
+    .join(' / ')
 }
 
 function totalYieldTextType() {
@@ -642,6 +687,60 @@ function dailyOverviewWarningText() {
           </n-card>
         </n-grid-item>
       </n-grid>
+
+      <n-card size="small" title="市场总结诊断">
+        <n-spin :show="diagnosticLoadingRef">
+          <template v-if="latestMarketDiagnostic()">
+            <n-grid x-gap="12" y-gap="12" cols="1 s:2 m:4" responsive="screen">
+              <n-grid-item>
+                <div class="detail-row">
+                  <span class="detail-label">候选池 / AI输入</span>
+                  <n-text depth="3">
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.indicatorCandidateCount) }} /
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.indicatorAiInputCount) }}
+                  </n-text>
+                </div>
+              </n-grid-item>
+              <n-grid-item>
+                <div class="detail-row">
+                  <span class="detail-label">发现 / 核验</span>
+                  <n-text depth="3">
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.discoveryCandidateCount) }} /
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.verifiedCandidateCount) }}
+                  </n-text>
+                </div>
+              </n-grid-item>
+              <n-grid-item>
+                <div class="detail-row">
+                  <span class="detail-label">AI输出 / 保存</span>
+                  <n-text depth="3">
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.aiOutputCountFirst) + diagnosticNumber(latestMarketDiagnostic()?.aiOutputCountSecond) }} /
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.savedCount) }}
+                  </n-text>
+                </div>
+              </n-grid-item>
+              <n-grid-item>
+                <div class="detail-row">
+                  <span class="detail-label">生产 / 仅分析</span>
+                  <n-text depth="3">
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.productionCount) }} /
+                    {{ diagnosticNumber(latestMarketDiagnostic()?.analysisOnlyCount) }}
+                  </n-text>
+                </div>
+              </n-grid-item>
+            </n-grid>
+            <div class="detail-row">
+              <span class="detail-label">最近连续空转</span>
+              <n-text depth="3">{{ diagnosticNumber(marketDiagnosticRef?.consecutiveEmptyRunCount) }}</n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">拦截原因 Top 5</span>
+              <n-text depth="3">{{ diagnosticReasonText() }}</n-text>
+            </div>
+          </template>
+          <n-empty v-else description="暂无市场总结诊断数据" />
+        </n-spin>
+      </n-card>
 
       <n-card size="small" title="全库收益走势">
         <template #header-extra>
