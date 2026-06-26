@@ -19,7 +19,7 @@ const (
 	marketSummaryRunSlotEvening marketSummaryRunSlot = "evening"
 )
 
-const marketSummaryFinalCandidateLimit = 6
+const marketSummaryFinalCandidateLimit = 12
 const marketSummaryMinFinalCandidateScore = 85
 
 type marketSummaryTimeWindow struct {
@@ -150,7 +150,7 @@ func loadSameDayMarketSummaryExcludedStocks(now time.Time) ([]marketSummaryExclu
 	var rows []models.AiRecommendStocks
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("COALESCE(data_time, created_at) BETWEEN ? AND ?", start, end).
-		Where("(summary_version = ? OR activation_rule_source IN ?)", marketSummaryPhase3Version, []string{"market_summary", "market_summary_embedded"}).
+		Where("(summary_version IN ? OR activation_rule_source IN ?)", marketSummaryKnownVersions(), []string{"market_summary", "market_summary_embedded"}).
 		Order("COALESCE(data_time, created_at) asc").
 		Find(&rows).Error
 	if err != nil {

@@ -27,7 +27,12 @@ func isV132Recommend(rec models.AiRecommendStocks) bool {
 }
 
 func isV136Recommend(rec models.AiRecommendStocks) bool {
-	return strings.TrimSpace(rec.SummaryVersion) == marketSummaryVersion136
+	switch strings.TrimSpace(rec.SummaryVersion) {
+	case marketSummaryVersion136, marketSummaryVersion140:
+		return true
+	default:
+		return false
+	}
 }
 
 func evaluateV132ActivationGate(rec models.AiRecommendStocks, activationTime time.Time, activationPrice float64, bars []minuteBar) v132ActivationGateResult {

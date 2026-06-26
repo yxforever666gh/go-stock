@@ -37,16 +37,16 @@ func TestSanitizeMarketSummaryDiscoveryResultLimitsAndResolves(t *testing.T) {
 	}
 }
 
-func TestDefaultMarketSummaryRouteBudgetExpandsV136Candidates(t *testing.T) {
+func TestDefaultMarketSummaryRouteBudgetExpandsV140Candidates(t *testing.T) {
 	budget := defaultMarketSummaryRouteBudget()
-	if budget.CandidateLimit != 18 {
-		t.Fatalf("CandidateLimit = %d, want 18", budget.CandidateLimit)
+	if budget.CandidateLimit != 36 {
+		t.Fatalf("CandidateLimit = %d, want 36", budget.CandidateLimit)
 	}
-	if budget.VerificationStockLimit != 12 {
-		t.Fatalf("VerificationStockLimit = %d, want 12", budget.VerificationStockLimit)
+	if budget.VerificationStockLimit != 18 {
+		t.Fatalf("VerificationStockLimit = %d, want 18", budget.VerificationStockLimit)
 	}
-	if marketSummaryFinalCandidateLimit != 6 {
-		t.Fatalf("marketSummaryFinalCandidateLimit = %d, want 6", marketSummaryFinalCandidateLimit)
+	if marketSummaryFinalCandidateLimit != 12 {
+		t.Fatalf("marketSummaryFinalCandidateLimit = %d, want 12", marketSummaryFinalCandidateLimit)
 	}
 	if marketSummaryMaxProductionCandidates != 4 {
 		t.Fatalf("marketSummaryMaxProductionCandidates = %d, want 4", marketSummaryMaxProductionCandidates)
@@ -108,7 +108,7 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 		t.Fatal("expected non-empty messages")
 	}
 	last := messages[len(messages)-1]["content"].(string)
-	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "最多输出 6 只", "最多 4 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
+	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "输出 8 到 12 只", "顺延补位队列", "最多 4 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
 		t.Fatalf("unexpected final instruction: %s", last)
 	}
 	if !messagesContainText(messages, "最差成交价盈亏比 0.71 低于 0.80") {

@@ -48,7 +48,7 @@ func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelNam
 	existing := make([]models.AiRecommendStocks, 0, len(drafts))
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("data_time >= ? AND data_time < ?", startOfDay, endOfDay).
-		Where("(summary_version IN ? OR activation_rule_source IN ?)", []string{marketSummaryPhase3Version, marketSummaryPhase4Version}, []string{"market_summary", "market_summary_embedded"}).
+		Where("(summary_version IN ? OR activation_rule_source IN ?)", marketSummaryKnownVersions(), []string{"market_summary", "market_summary_embedded"}).
 		Find(&existing).Error; err != nil {
 		return 0, err
 	}
@@ -167,7 +167,7 @@ func loadMarketSummaryExistingRecommendCodeSet(startedAt time.Time) (map[string]
 	rows := make([]models.AiRecommendStocks, 0, 16)
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("data_time >= ? AND data_time < ?", startOfDay, endOfDay).
-		Where("(summary_version IN ? OR activation_rule_source IN ?)", []string{marketSummaryPhase3Version, marketSummaryPhase4Version}, []string{"market_summary", "market_summary_embedded"}).
+		Where("(summary_version IN ? OR activation_rule_source IN ?)", marketSummaryKnownVersions(), []string{"market_summary", "market_summary_embedded"}).
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -477,7 +477,8 @@ func marketSummaryDraftProductionRejectionReason(item *marketSummaryRecommendDra
 		item.TechnicalFit < marketSummaryProductionScoreFloor {
 		return "四维评分未全部达到60分，已降级为仅分析"
 	}
-	if strings.TrimSpace(item.SummaryVersion) == marketSummaryVersion136 {
+	switch strings.TrimSpace(item.SummaryVersion) {
+	case marketSummaryVersion136, marketSummaryVersion140:
 		if reason := marketSummaryDraftV136TradePlanRejectionReason(item); reason != "" {
 			return reason
 		}

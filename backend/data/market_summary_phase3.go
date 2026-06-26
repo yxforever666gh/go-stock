@@ -22,13 +22,24 @@ const marketSummaryPhase3Version = "phase3-v3"
 const marketSummaryPhase4Version = "phase3-v4"
 const marketSummaryVersionV132 = "v1.3.2"
 const marketSummaryVersion136 = "1.3.6"
-const marketSummaryCurrentVersion = marketSummaryVersion136
+const marketSummaryVersion140 = "1.4.0"
+const marketSummaryCurrentVersion = marketSummaryVersion140
 
 const (
 	strategyCohortCurrent = "current"
 	strategyCohortAll     = "all"
 	strategyCohortLegacy  = "legacy"
 )
+
+func marketSummaryKnownVersions() []string {
+	return []string{
+		marketSummaryPhase3Version,
+		marketSummaryPhase4Version,
+		marketSummaryVersionV132,
+		marketSummaryVersion136,
+		marketSummaryVersion140,
+	}
+}
 
 func normalizeStrategyCohort(raw string, defaultCohort string) string {
 	text := strings.ToLower(strings.TrimSpace(raw))
@@ -40,6 +51,8 @@ func normalizeStrategyCohort(raw string, defaultCohort string) string {
 		return normalizeStrategyCohort(defaultCohort, "")
 	case strategyCohortCurrent, strategyCohortAll, strategyCohortLegacy:
 		return text
+	case "1.4.0", "v1.4.0", "140", "v140":
+		return marketSummaryVersion140
 	case "1.3.6", "v1.3.6", "136", "v136":
 		return marketSummaryVersion136
 	case "1.3.2", "v132", strings.ToLower(marketSummaryVersionV132):
@@ -66,8 +79,8 @@ func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
 	case strategyCohortCurrent:
 		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
 	case strategyCohortLegacy:
-		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", []string{marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136})
-	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136:
+		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", marketSummaryKnownVersions())
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140:
 		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
 	default:
 		return q
@@ -102,6 +115,8 @@ type marketSummaryRouteLog struct {
 	TotalCalls           int                      `json:"totalCalls"`
 	PerCategoryCalls     map[string]int           `json:"perCategoryCalls"`
 	DiscoveryCandidateCt int                      `json:"discoveryCandidateCount"`
+	IndicatorCandidateCt int                      `json:"indicatorCandidateCount,omitempty"`
+	IndicatorAIInputCt   int                      `json:"indicatorAIInputCount,omitempty"`
 	VerifiedCandidateCt  int                      `json:"verifiedCandidateCount"`
 	ExcludedCandidateCt  int                      `json:"excludedCandidateCount,omitempty"`
 	DroppedCandidates    []string                 `json:"droppedCandidates,omitempty"`
@@ -116,19 +131,20 @@ type marketSummaryDiscoverySnippet struct {
 }
 
 type marketSummaryDiscoveryInput struct {
-	Question       string                                `json:"question"`
-	CurrentTime    string                                `json:"currentTime"`
-	MarketStage    string                                `json:"marketStage,omitempty"`
-	RunSlot        string                                `json:"runSlot,omitempty"`
-	WindowStart    string                                `json:"windowStart,omitempty"`
-	WindowEnd      string                                `json:"windowEnd,omitempty"`
-	Budget         marketSummaryRouteBudget              `json:"budget"`
-	MarketNews     []marketSummaryDiscoverySnippet       `json:"marketNews,omitempty"`
-	EventCalendar  []marketSummaryDiscoverySnippet       `json:"eventCalendar,omitempty"`
-	IndustryHeat   []marketSummaryDiscoverySnippet       `json:"industryHeat,omitempty"`
-	HotStrategies  []marketSummaryDiscoverySnippet       `json:"hotStrategies,omitempty"`
-	LongTigerBrief []marketSummaryDiscoverySnippet       `json:"longTigerBrief,omitempty"`
-	SkippedReviews []marketSummarySkippedReviewCandidate `json:"skippedReviews,omitempty"`
+	Question            string                                `json:"question"`
+	CurrentTime         string                                `json:"currentTime"`
+	MarketStage         string                                `json:"marketStage,omitempty"`
+	RunSlot             string                                `json:"runSlot,omitempty"`
+	WindowStart         string                                `json:"windowStart,omitempty"`
+	WindowEnd           string                                `json:"windowEnd,omitempty"`
+	Budget              marketSummaryRouteBudget              `json:"budget"`
+	MarketNews          []marketSummaryDiscoverySnippet       `json:"marketNews,omitempty"`
+	EventCalendar       []marketSummaryDiscoverySnippet       `json:"eventCalendar,omitempty"`
+	IndustryHeat        []marketSummaryDiscoverySnippet       `json:"industryHeat,omitempty"`
+	HotStrategies       []marketSummaryDiscoverySnippet       `json:"hotStrategies,omitempty"`
+	LongTigerBrief      []marketSummaryDiscoverySnippet       `json:"longTigerBrief,omitempty"`
+	IndicatorCandidates []marketSummaryIndicatorCandidate     `json:"indicatorCandidates,omitempty"`
+	SkippedReviews      []marketSummarySkippedReviewCandidate `json:"skippedReviews,omitempty"`
 }
 
 type marketSummarySkippedReviewCandidate struct {
@@ -272,10 +288,10 @@ func defaultMarketSummaryRouteBudget() marketSummaryRouteBudget {
 		TotalCallLimit:         40,
 		DiscoveryFetchLimit:    8,
 		DiscoveryModelLimit:    1,
-		CandidateLimit:         18,
+		CandidateLimit:         36,
 		PerStockFetchLimit:     4,
 		GenerateModelLimit:     1,
-		VerificationStockLimit: 12,
+		VerificationStockLimit: 18,
 	}
 }
 
@@ -409,7 +425,9 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 			return
 		}
 		emitSummaryToolStatus(ch, "phase3.discovery.model", "success", nil, 0)
+		mergeMarketSummaryDiscoveryCandidates(discoveryResult, discoveryInput.IndicatorCandidates, budget.CandidateLimit)
 		logState.DiscoveryCandidateCt = len(discoveryResult.CandidateStocks)
+		logState.addNote("discovery candidates after indicator merge=%d indicatorPool=%d", len(discoveryResult.CandidateStocks), len(discoveryInput.IndicatorCandidates))
 
 		emitSummaryToolStatus(ch, "phase3.evidence.verify", "running", nil, 0)
 		verifiedCandidates := verifyMarketSummaryCandidates(discoveryInput, discoveryResult, longTigerRaw, budget, logState)
@@ -468,17 +486,19 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 	logState.addCall("industry_heat")
 	logState.addCall("hot_strategy")
 	logState.addCall("long_tiger")
+	logState.addCall("indicator_pool")
 
 	var (
-		news           *[]*models.Telegraph
-		calendar       []any
-		industryRank   map[string]any
-		hotStrategyRaw map[string]any
-		longTigerRaw   []models.LongTigerRankData
+		news                *[]*models.Telegraph
+		calendar            []any
+		industryRank        map[string]any
+		hotStrategyRaw      map[string]any
+		longTigerRaw        []models.LongTigerRankData
+		indicatorCandidates []marketSummaryIndicatorCandidate
 	)
 
 	var wg sync.WaitGroup
-	wg.Add(5)
+	wg.Add(6)
 	go func() {
 		defer wg.Done()
 		news = runWithTimeout(4*time.Second, (*[]*models.Telegraph)(nil), func() *[]*models.Telegraph {
@@ -509,7 +529,14 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 			return fetchLatestLongTigerData()
 		})
 	}()
+	go func() {
+		defer wg.Done()
+		indicatorCandidates = buildMarketSummaryIndicatorCandidatePool(marketSummaryIndicatorCandidateLimit, logState)
+	}()
 	wg.Wait()
+	input.IndicatorCandidates = limitMarketSummaryIndicatorCandidates(indicatorCandidates, marketSummaryIndicatorAIInputLimit)
+	logState.IndicatorCandidateCt = len(indicatorCandidates)
+	logState.IndicatorAIInputCt = len(input.IndicatorCandidates)
 
 	input.MarketNews = make([]marketSummaryDiscoverySnippet, 0, 28)
 	if news != nil {
@@ -610,7 +637,7 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 		})
 	}
 
-	logState.addNote("window filtered discovery counts: news=%d calendar=%d longTiger=%d", len(input.MarketNews), len(input.EventCalendar), len(input.LongTigerBrief))
+	logState.addNote("window filtered discovery counts: news=%d calendar=%d longTiger=%d indicatorPool=%d indicatorAIInput=%d", len(input.MarketNews), len(input.EventCalendar), len(input.LongTigerBrief), len(indicatorCandidates), len(input.IndicatorCandidates))
 	return input, longTigerRaw, window, nil
 }
 
@@ -873,8 +900,8 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 		{
 			"role": "system",
 			"content": strings.TrimSpace(`你是A股市场事件发现层分析器。你的职责只有：
-1. 从输入的市场资讯、事件日历、板块热度、龙虎榜摘要中提炼主线与候选方向；
-2. 输出最多18个候选股票；
+1. 从输入的市场资讯、事件日历、板块热度、龙虎榜摘要和 indicatorCandidates 指标候选池中提炼主线与候选方向；
+2. 输出最多36个候选股票；
 3. 不输出Markdown，不输出解释性废话，只输出一个JSON对象；
 4. 候选股票必须优先A股，代码若不确定可留空；
 5. 不要给买卖建议，不要生成完整推荐正文。`),
@@ -890,7 +917,8 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 }
 
 约束：
-- candidateStocks 最多 18 个；
+- candidateStocks 最多 36 个；
+- indicatorCandidates 已按轻量量价评分截取前 50，只能从其中或其他输入证据明确支持的 A 股中选择；
 - 只保留最值得进入证据核验层的标的；
 - 如果证据只支持方向，不支持个股，可减少个股数量；
 - 不得返回 markdown 代码块。 
@@ -1658,7 +1686,7 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 	instruction := strings.TrimSpace(`请基于上面的“事件发现层”和“证据核验层”结果，完成最终推荐生成层。
 要求：
 1. 只能基于已经进入证据核验层的候选股票生成结论，严禁新增候选股票；
-2. “推荐股票池”最多输出 6 只股票，只保留证据完整、评分靠前、最接近可执行交易计划的候选；其中最多 4 只可作为可交易生产候选，剩余候选若强度不足必须写清仅分析/观察原因；
+2. “推荐股票池”输出 8 到 12 只股票，并按优先级排序形成顺延补位队列；其中最多 4 只可作为可交易生产候选，剩余候选若强度不足必须写清仅分析/观察原因；
 3. 同日已出现在“当日已推荐股票排除池(JSON)”里的股票，禁止再次写入“推荐股票池”，也不要在正文里重复展示；
 4. 本次推荐只允许使用当前时间窗口内的新催化、新证据、新量价确认，不允许用前一时段已推荐股票反复充数；
 5. 若排除同日已推荐股票后，没有新的高质量候选标的，必须在“推荐股票池”明确写“暂无新增高质量候选标的”，不能复用旧票凑数；
