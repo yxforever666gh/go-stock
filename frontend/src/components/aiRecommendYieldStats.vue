@@ -50,11 +50,13 @@ const v132RewardRiskBlockedCountRef = ref(0)
 const v132CooldownBlockedCountRef = ref(0)
 const marketDiagnosticRef = ref(null)
 const marketDiagnosticReasonTopRef = ref([])
+const marketDiagnosticDowngradeReasonTopRef = ref([])
 
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },
   { label: 'V1.4.0', value: '1.4.0' },
   { label: 'V1.3.6', value: '1.3.6' },
@@ -62,7 +64,9 @@ const strategyCohortOptions = [
   { label: 'V1.3.1', value: 'phase3-v4' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.4.1',
+  current: 'V1.4.2',
+  '1.4.2': 'V1.4.2',
+  'v1.4.2': 'V1.4.2',
   '1.4.1': 'V1.4.1',
   'v1.4.1': 'V1.4.1',
   '1.4.0': 'V1.4.0',
@@ -278,10 +282,12 @@ async function loadMarketSummaryDiagnostic() {
     })
     marketDiagnosticRef.value = result || null
     marketDiagnosticReasonTopRef.value = Array.isArray(result?.blockedReasonTop) ? result.blockedReasonTop : []
+    marketDiagnosticDowngradeReasonTopRef.value = Array.isArray(result?.productionDowngradeReasonTop) ? result.productionDowngradeReasonTop : []
   } catch (error) {
     console.error('loadMarketSummaryDiagnostic failed', error)
     marketDiagnosticRef.value = null
     marketDiagnosticReasonTopRef.value = []
+    marketDiagnosticDowngradeReasonTopRef.value = []
   } finally {
     diagnosticLoadingRef.value = false
   }
@@ -301,6 +307,15 @@ function diagnosticReasonText() {
     return '暂无拦截原因'
   }
   return marketDiagnosticReasonTopRef.value
+    .map((item) => `${item.reason || '--'} ${Number(item.count || 0)}`)
+    .join(' / ')
+}
+
+function diagnosticDowngradeReasonText() {
+  if (!marketDiagnosticDowngradeReasonTopRef.value.length) {
+    return '暂无生产降级原因'
+  }
+  return marketDiagnosticDowngradeReasonTopRef.value
     .map((item) => `${item.reason || '--'} ${Number(item.count || 0)}`)
     .join(' / ')
 }
@@ -432,7 +447,7 @@ function dailyOverviewWarningText() {
           </n-button>
         </n-input-group>
         <div class="yield-stats-toolbar-hint">
-          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.3.6、V1.3.2、V1.3.1 对比不同策略阶段。</n-text>
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.4.2、V1.4.1、V1.4.0、V1.3.6、V1.3.2、V1.3.1 对比不同策略阶段。</n-text>
         </div>
         <div class="yield-stats-toolbar-hint">
           <n-text depth="3">当前页专注收益率统计与可视化；个股明细、分钟回放和手动补算仍保留在“股票收益率”栏目。</n-text>
@@ -736,6 +751,10 @@ function dailyOverviewWarningText() {
             <div class="detail-row">
               <span class="detail-label">拦截原因 Top 5</span>
               <n-text depth="3">{{ diagnosticReasonText() }}</n-text>
+            </div>
+            <div class="detail-row">
+              <span class="detail-label">生产降级原因 Top 5</span>
+              <n-text depth="3">{{ diagnosticDowngradeReasonText() }}</n-text>
             </div>
           </template>
           <n-empty v-else description="暂无市场总结诊断数据" />

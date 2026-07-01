@@ -400,33 +400,35 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 		return firstResult
 	}
 	if firstResult.ProductionCount >= marketSummarySupplementProductionTarget {
-		firstResult.SupplementText = buildMarketSummarySupplementNote(false, nil, firstResult.BlockedReasons)
+		firstResult.SupplementText = buildMarketSummarySupplementNote(false, nil, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
 		updateMarketSummaryReportSupplementNote(report, reportText, firstResult.SupplementText)
 		return firstResult
 	}
 	remaining := filterRuntimeVerifiedCandidates(res.verified, firstResult.UsedStockCodes)
-	if len(remaining) == 0 {
-		firstResult.SupplementText = buildMarketSummarySupplementNote(false, nil, firstResult.BlockedReasons)
+	remaining = prioritizeRuntimeFeasibleCandidates(remaining)
+	if len(remaining) == 0 && len(firstResult.RepairableTradePlanFailures) == 0 {
+		firstResult.SupplementText = buildMarketSummarySupplementNote(false, nil, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
 		updateMarketSummaryReportSupplementNote(report, reportText, firstResult.SupplementText)
 		return firstResult
 	}
 	req := data.MarketSummarySupplementRequest{
-		FailureSummary:    firstResult.BlockedReasons,
-		RemainingVerified: remaining,
-		ExcludedToday:     firstResult.UsedStockCodes,
-		TargetProduction:  marketSummarySupplementProductionTarget,
-		CurrentProduction: firstResult.ProductionCount,
+		FailureSummary:     mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons),
+		RemainingVerified:  remaining,
+		ExcludedToday:      firstResult.UsedStockCodes,
+		RepairableFailures: firstResult.RepairableTradePlanFailures,
+		TargetProduction:   marketSummarySupplementProductionTarget,
+		CurrentProduction:  firstResult.ProductionCount,
 	}
 	supplementText, _, modelName, err := a.services.AI.GenerateMarketSummarySupplementTable(a.ctx, res.aiConfigId, req)
 	if err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结二轮补位生成失败: %v", err)
-		firstResult.SupplementText = buildMarketSummarySupplementNote(true, remaining, firstResult.BlockedReasons)
+		firstResult.SupplementText = buildMarketSummarySupplementNote(true, remaining, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
 		updateMarketSummaryReportSupplementNote(report, reportText, firstResult.SupplementText)
 		return firstResult
 	}
 	supplementText = strings.TrimSpace(supplementText)
 	if supplementText == "" {
-		firstResult.SupplementText = buildMarketSummarySupplementNote(true, remaining, firstResult.BlockedReasons)
+		firstResult.SupplementText = buildMarketSummarySupplementNote(true, remaining, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
 		updateMarketSummaryReportSupplementNote(report, reportText, firstResult.SupplementText)
 		return firstResult
 	}
@@ -439,7 +441,7 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 	}
 	mergeMarketSummarySaveResult(firstResult, secondResult)
 	firstResult.SupplementTriggered = true
-	firstResult.SupplementText = buildMarketSummarySupplementNote(true, remaining, firstResult.BlockedReasons)
+	firstResult.SupplementText = buildMarketSummarySupplementNote(true, remaining, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
 	firstResult.SupplementCandidates = collectRuntimeVerifiedCandidateCodes(remaining)
 	updateMarketSummaryReportSupplementNote(report, reportText, firstResult.SupplementText)
 	if secondResult != nil && secondResult.SavedCount > 0 {
@@ -520,6 +522,32 @@ func mergeMarketSummarySaveResult(target, extra *models.MarketSummaryRecommendSa
 	target.UsedStockCodes = mergeRuntimeStringSet(target.UsedStockCodes, extra.UsedStockCodes)
 	target.RemainingCandidateStocks = extra.RemainingCandidateStocks
 	target.BlockedReasons = mergeMarketSummaryBlockedReasons(target.BlockedReasons, extra.BlockedReasons)
+	target.ProductionDowngradeReasons = mergeMarketSummaryBlockedReasons(target.ProductionDowngradeReasons, extra.ProductionDowngradeReasons)
+	target.RepairableTradePlanFailures = append(target.RepairableTradePlanFailures, extra.RepairableTradePlanFailures...)
+}
+
+func prioritizeRuntimeFeasibleCandidates(candidates []data.MarketSummaryVerifiedCandidateSnapshot) []data.MarketSummaryVerifiedCandidateSnapshot {
+	if len(candidates) <= 1 {
+		return candidates
+	}
+	result := append([]data.MarketSummaryVerifiedCandidateSnapshot(nil), candidates...)
+	for i := 0; i < len(result); i++ {
+		for j := i + 1; j < len(result); j++ {
+			if runtimeCandidateHasFeasiblePlan(result[j]) && !runtimeCandidateHasFeasiblePlan(result[i]) {
+				result[i], result[j] = result[j], result[i]
+			}
+		}
+	}
+	return result
+}
+
+func runtimeCandidateHasFeasiblePlan(candidate data.MarketSummaryVerifiedCandidateSnapshot) bool {
+	for _, plan := range candidate.FeasiblePlans {
+		if plan.PassHardGate {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeRuntimeStringSet(left, right []string) []string {
@@ -622,8 +650,10 @@ func (a *App) persistMarketSummaryDiagnostic(res summaryRunResult, startedAt, fi
 		item.AnalysisOnlyCount = saveResult.AnalysisOnlyCount
 		item.BlockedCount = saveResult.BlockedCount
 		item.BlockedReasonTop = data.EncodeMarketSummaryBlockedReasons(saveResult.BlockedReasons)
+		item.ProductionDowngradeReasonTop = data.EncodeMarketSummaryBlockedReasons(saveResult.ProductionDowngradeReasons)
 	} else {
 		item.BlockedReasonTop = "[]"
+		item.ProductionDowngradeReasonTop = "[]"
 	}
 	if item.IndicatorCandidateCount == 0 && item.VerifiedCandidateCount == 0 && item.BlockedCount == 0 && strings.TrimSpace(res.text) == "" {
 		item.BlockedCount = 1

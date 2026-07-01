@@ -37,6 +37,8 @@ type marketSummaryExcludedStock struct {
 type marketSummaryCandidateScore struct {
 	Candidate           marketSummaryVerifiedCandidate
 	TotalScore          int
+	FeasibilityScore    int
+	HasFeasiblePlan     bool
 	WindowEvidenceCt    int
 	HighTrustEvidenceCt int
 	DistinctEvidenceCt  int
@@ -236,6 +238,9 @@ func selectMarketSummaryFinalCandidates(verified []marketSummaryVerifiedCandidat
 		scored = append(scored, score)
 	}
 	sort.SliceStable(scored, func(i, j int) bool {
+		if scored[i].HasFeasiblePlan != scored[j].HasFeasiblePlan {
+			return scored[i].HasFeasiblePlan
+		}
 		if scored[i].TotalScore != scored[j].TotalScore {
 			return scored[i].TotalScore > scored[j].TotalScore
 		}
@@ -256,7 +261,7 @@ func selectMarketSummaryFinalCandidates(verified []marketSummaryVerifiedCandidat
 	for _, item := range scored {
 		result = append(result, item.Candidate)
 		if logState != nil {
-			logState.addNote("verified score %s(%s) score=%d windowEvidence=%d highTrust=%d distinctEvidence=%d", item.Candidate.StockName, item.Candidate.StockCode, item.TotalScore, item.WindowEvidenceCt, item.HighTrustEvidenceCt, item.DistinctEvidenceCt)
+			logState.addNote("verified score %s(%s) score=%d feasibility=%d feasible=%v windowEvidence=%d highTrust=%d distinctEvidence=%d", item.Candidate.StockName, item.Candidate.StockCode, item.TotalScore, item.FeasibilityScore, item.HasFeasiblePlan, item.WindowEvidenceCt, item.HighTrustEvidenceCt, item.DistinctEvidenceCt)
 		}
 	}
 	return result
@@ -290,6 +295,11 @@ func marketSummaryCandidateQualityRejectionReason(score marketSummaryCandidateSc
 
 func scoreMarketSummaryVerifiedCandidate(candidate marketSummaryVerifiedCandidate, window marketSummaryTimeWindow) marketSummaryCandidateScore {
 	score := marketSummaryCandidateScore{Candidate: candidate}
+	feasibility := buildMarketSummaryTradePlanFeasibility(candidate)
+	score.Candidate.FeasiblePlans = feasibility.Plans
+	score.FeasibilityScore = feasibility.Score
+	score.HasFeasiblePlan = feasibility.HasFeasiblePlan
+	score.TotalScore += feasibility.Score
 	distinctEvidence := map[string]struct{}{}
 	for _, ref := range candidate.EvidenceSources {
 		if typeName := strings.TrimSpace(ref.Type); typeName != "" {

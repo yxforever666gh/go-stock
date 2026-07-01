@@ -28,7 +28,7 @@ func isV132Recommend(rec models.AiRecommendStocks) bool {
 
 func isV136Recommend(rec models.AiRecommendStocks) bool {
 	switch strings.TrimSpace(rec.SummaryVersion) {
-	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141:
+	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
 		return true
 	default:
 		return false

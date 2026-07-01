@@ -2,6 +2,13 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
+## 当前版本：1.4.2
+
+- 市场总结推荐升级为“交易计划可行性前置 + AI 自检修正 + 生产降级诊断”。
+- 候选池和 verified candidates 会预计算 `pullback / breakout` 可行路径，只有满足 `rewardRisk >= 0.80` 且 `downsidePct <= 5.00%` 的路径才优先作为生产候选输入。
+- 推荐统计页诊断面板新增生产降级原因 Top 5，便于区分“保存前被拦截”和“保存后降级为 analysis_only”。
+- 前端推荐记录、股票收益率、收益率统计筛选入口均支持 `V1.4.2`，历史 `V1.4.1 / V1.4.0 / V1.3.6 / V1.3.2 / V1.3.1` 保持可选。
+
 基于 Go、Wails、Vue 3 和 Naive UI 的本地优先股票分析工具，支持桌面模式和本地 Web 模式，聚焦于自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告。
 
 [Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [公开检查清单](./PUBLIC_RELEASE_CHECKLIST.md) | [仓库展示信息](./PUBLIC_REPO_METADATA.md)

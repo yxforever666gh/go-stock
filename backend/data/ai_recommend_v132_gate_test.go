@@ -13,6 +13,9 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		raw  string
 		want string
 	}{
+		{name: "current142", raw: "1.4.2", want: marketSummaryVersion142},
+		{name: "v142", raw: "v1.4.2", want: marketSummaryVersion142},
+		{name: "short142", raw: "142", want: marketSummaryVersion142},
 		{name: "current141", raw: "1.4.1", want: marketSummaryVersion141},
 		{name: "v141", raw: "v1.4.1", want: marketSummaryVersion141},
 		{name: "short141", raw: "141", want: marketSummaryVersion141},
@@ -36,8 +39,8 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		})
 	}
 
-	if marketSummaryCurrentVersion != marketSummaryVersion141 {
-		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion141)
+	if marketSummaryCurrentVersion != marketSummaryVersion142 {
+		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion142)
 	}
 }
 

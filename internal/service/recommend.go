@@ -71,6 +71,10 @@ func (s RecommendService) GetMarketSummaryBlockedReasonTop(query models.MarketSu
 	return data.GetMarketSummaryBlockedReasonTop(query)
 }
 
+func (s RecommendService) GetMarketSummaryProductionDowngradeReasonTop(query models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error) {
+	return data.GetMarketSummaryProductionDowngradeReasonTop(query)
+}
+
 func (s RecommendService) DeleteAiRecommendStocks(id uint) error {
 	return data.NewAiRecommendStocksService().DeleteAiRecommendStocks(id)
 }

@@ -24,16 +24,16 @@ type marketSummaryIndicatorTemplate struct {
 }
 
 type marketSummaryIndicatorCandidate struct {
-	StockName   string            `json:"stockName"`
-	StockCode   string            `json:"stockCode"`
-	Direction   string            `json:"direction,omitempty"`
-	BkName      string            `json:"bkName,omitempty"`
-	Source      string            `json:"source,omitempty"`
-	Score       int               `json:"score"`
-	ScoreBreakdown map[string]int `json:"scoreBreakdown,omitempty"`
-	Reason      string            `json:"reason,omitempty"`
-	Metrics     map[string]string `json:"metrics,omitempty"`
-	SourceNames []string          `json:"sourceNames,omitempty"`
+	StockName      string            `json:"stockName"`
+	StockCode      string            `json:"stockCode"`
+	Direction      string            `json:"direction,omitempty"`
+	BkName         string            `json:"bkName,omitempty"`
+	Source         string            `json:"source,omitempty"`
+	Score          int               `json:"score"`
+	ScoreBreakdown map[string]int    `json:"scoreBreakdown,omitempty"`
+	Reason         string            `json:"reason,omitempty"`
+	Metrics        map[string]string `json:"metrics,omitempty"`
+	SourceNames    []string          `json:"sourceNames,omitempty"`
 }
 
 var marketSummaryIndicatorTemplates = []marketSummaryIndicatorTemplate{
@@ -192,12 +192,12 @@ func buildMarketSummaryIndicatorCandidate(row map[string]any, tpl marketSummaryI
 		anyToString(row["所属行业"]),
 	)
 	candidate := marketSummaryIndicatorCandidate{
-		StockName:   strings.TrimSpace(name),
-		StockCode:   code,
-		Direction:   strings.TrimSpace(direction),
-		BkName:      strings.TrimSpace(direction),
-		Source:      "indicator_pool",
-		Score:       tpl.Weight,
+		StockName: strings.TrimSpace(name),
+		StockCode: code,
+		Direction: strings.TrimSpace(direction),
+		BkName:    strings.TrimSpace(direction),
+		Source:    "indicator_pool",
+		Score:     tpl.Weight,
 		ScoreBreakdown: map[string]int{
 			"base": tpl.Weight,
 		},
@@ -327,10 +327,12 @@ func applyMarketSummaryCandidateQualityScore(item *marketSummaryIndicatorCandida
 	sectorScore := sectorStrength[strings.TrimSpace(firstNonEmptyText(item.BkName, item.Direction))]
 	failurePenalty := recentFailures[normalizeRecommendStockCode(item.StockCode)]
 	completenessScore := scoreMarketSummaryCandidateDataCompleteness(*item)
+	feasibilityScore := scoreMarketSummaryIndicatorTradePlanFeasibility(*item)
 	item.ScoreBreakdown["sectorStrength"] = sectorScore
 	item.ScoreBreakdown["recentFailurePenalty"] = failurePenalty
 	item.ScoreBreakdown["dataCompleteness"] = completenessScore
-	item.Score += sectorScore + failurePenalty + completenessScore
+	item.ScoreBreakdown["tradePlanFeasibility"] = feasibilityScore
+	item.Score += sectorScore + failurePenalty + completenessScore + feasibilityScore
 	item.ScoreBreakdown["total"] = item.Score
 }
 

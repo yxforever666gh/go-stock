@@ -7,6 +7,18 @@
 - 设置页 AI 模型服务配置改为拖拽排序：不再手动填写“序号”，可直接拖动左侧排序手柄调整大模型优先级；新增、删除、拖动后会自动重排 `sort` 并沿用现有自动保存逻辑持久化。
 - 手动下载分钟线改为缺口闭环：跨日/上一交易日缺口优先走历史分钟线源，缺口下载与完整性判断按交易时段覆盖而非自然时间窗口判定，多轮重试仍失败时落库为“不可覆盖”并展示明确原因，避免任务结束后长期停留在“待覆盖”。
 
+## 1.4.2 - 2026-07-02
+
+### 重点更新
+
+- 新增策略阶段 `V1.4.2`，`current` 默认切到 `summary_version = 1.4.2`，继续沿用既有 `conditional / analysis_only / activation_status` 语义、激活门控、同日去重和生产候选最多 4 只上限。
+- 候选池和 verified candidates 增加交易计划可行性前置计算，预生成 `pullback / breakout` 两类基础路径，并用 `rewardRisk >= 0.80`、`downsidePct <= 5.00%` 标记 `passHardGate`。
+- 候选评分新增 `tradePlanFeasibility`，`scoreBreakdown` 输出完整评分组成；可行路径候选会优先送入 AI，但不可行候选仍可作为 `analysis_only` 参与诊断。
+- AI 输入新增 `feasiblePlans`，提示词要求只有 `passHardGate=true` 的路径可生成生产候选，并在操作备注中输出 `hardGateSelfCheck / worstEntry / rewardRisk / downsidePct` 自检字段。
+- 二轮补位升级为“补位 + 计划修正”：优先使用剩余可行候选，仅对接近门槛的失败计划允许一次受约束修正，修正后仍必须通过后端硬规则。
+- 市场总结诊断新增 `production_downgrade_reason_top`，统计保存成功但降级为 `analysis_only` 的主要原因，收益统计页同步展示“生产降级原因 Top 5”。
+- 前端推荐记录、股票收益率、收益率统计三个策略筛选入口新增 `V1.4.2`；保留 Web 模式 SPA no-cache 和收益率页 V1.4.1 文案修复作为兼容修复项。
+
 ## 1.4.1 - 2026-06-26
 
 ### 重点更新

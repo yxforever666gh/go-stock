@@ -188,10 +188,11 @@ func (a *App) GetMarketSummaryRunDiagnostics(query models.MarketSummaryRunDiagno
 	if err != nil {
 		logger.SugaredLogger.Warnf("GetMarketSummaryRunDiagnostics failed: %v", err)
 		return models.MarketSummaryRunDiagnosticSummary{
-			List:             []models.MarketSummaryRunDiagnostic{},
-			BlockedReasonTop: []models.MarketSummaryBlockedReasonItem{},
-			StrategyCohort:   query.StrategyCohort,
-			SummaryVersion:   query.SummaryVersion,
+			List:                         []models.MarketSummaryRunDiagnostic{},
+			BlockedReasonTop:             []models.MarketSummaryBlockedReasonItem{},
+			ProductionDowngradeReasonTop: []models.MarketSummaryBlockedReasonItem{},
+			StrategyCohort:               query.StrategyCohort,
+			SummaryVersion:               query.SummaryVersion,
 		}
 	}
 	if resp.List == nil {
@@ -199,6 +200,9 @@ func (a *App) GetMarketSummaryRunDiagnostics(query models.MarketSummaryRunDiagno
 	}
 	if resp.BlockedReasonTop == nil {
 		resp.BlockedReasonTop = []models.MarketSummaryBlockedReasonItem{}
+	}
+	if resp.ProductionDowngradeReasonTop == nil {
+		resp.ProductionDowngradeReasonTop = []models.MarketSummaryBlockedReasonItem{}
 	}
 	return resp
 }
@@ -216,6 +220,18 @@ func (a *App) GetMarketSummaryBlockedReasonTop(query models.MarketSummaryRunDiag
 	items, err := a.services.Recommend.GetMarketSummaryBlockedReasonTop(query)
 	if err != nil {
 		logger.SugaredLogger.Warnf("GetMarketSummaryBlockedReasonTop failed: %v", err)
+		return []models.MarketSummaryBlockedReasonItem{}
+	}
+	if items == nil {
+		return []models.MarketSummaryBlockedReasonItem{}
+	}
+	return items
+}
+
+func (a *App) GetMarketSummaryProductionDowngradeReasonTop(query models.MarketSummaryRunDiagnosticQuery) []models.MarketSummaryBlockedReasonItem {
+	items, err := a.services.Recommend.GetMarketSummaryProductionDowngradeReasonTop(query)
+	if err != nil {
+		logger.SugaredLogger.Warnf("GetMarketSummaryProductionDowngradeReasonTop failed: %v", err)
 		return []models.MarketSummaryBlockedReasonItem{}
 	}
 	if items == nil {

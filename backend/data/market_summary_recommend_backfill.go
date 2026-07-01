@@ -91,9 +91,11 @@ func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelNam
 
 func EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
 	result := &models.MarketSummaryRecommendSaveResult{
-		BlockedReasons:           []models.MarketSummaryBlockedReasonItem{},
-		UsedStockCodes:           []string{},
-		RemainingCandidateStocks: []string{},
+		BlockedReasons:              []models.MarketSummaryBlockedReasonItem{},
+		ProductionDowngradeReasons:  []models.MarketSummaryBlockedReasonItem{},
+		RepairableTradePlanFailures: []models.MarketSummaryTradePlanRepairCandidate{},
+		UsedStockCodes:              []string{},
+		RemainingCandidateStocks:    []string{},
 	}
 	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, startedAt)
 	result.AIOutputCount = len(drafts)
@@ -124,12 +126,21 @@ func EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName
 
 	items := make([]*models.AiRecommendStocks, 0, len(missing))
 	failures := make([]string, 0, len(missing))
+	downgradeReasons := make([]string, 0, len(missing))
+	repairableFailures := make([]models.MarketSummaryTradePlanRepairCandidate, 0, len(missing))
 	for _, draft := range missing {
+		downgradeReason := marketSummaryDraftProductionDowngradeReason(draft)
 		item, err := draft.toRecommendStock()
 		if err != nil {
 			failures = append(failures, err.Error())
 			result.BlockedCount++
 			continue
+		}
+		if downgradeReason != "" {
+			downgradeReasons = append(downgradeReasons, downgradeReason)
+			if repair, ok := buildMarketSummaryTradePlanRepairCandidate(draft, downgradeReason); ok {
+				repairableFailures = append(repairableFailures, repair)
+			}
 		}
 		items = append(items, item)
 	}
@@ -161,6 +172,8 @@ func EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName
 	result.UsedStockCodes = dedupeNonEmptyStrings(result.UsedStockCodes, 0)
 	result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
 	result.BlockedReasons = aggregateMarketSummaryBlockedReasons(failures)
+	result.ProductionDowngradeReasons = aggregateMarketSummaryProductionDowngradeReasons(downgradeReasons)
+	result.RepairableTradePlanFailures = repairableFailures
 	if len(failures) > 0 {
 		return result, errors.New(strings.Join(failures, "；"))
 	}
@@ -248,6 +261,73 @@ func aggregateMarketSummaryBlockedReasons(rawReasons []string) []models.MarketSu
 		items = items[:5]
 	}
 	return items
+}
+
+func aggregateMarketSummaryProductionDowngradeReasons(rawReasons []string) []models.MarketSummaryBlockedReasonItem {
+	if len(rawReasons) == 0 {
+		return []models.MarketSummaryBlockedReasonItem{}
+	}
+	counts := map[string]int{}
+	for _, raw := range rawReasons {
+		reason := normalizeMarketSummaryProductionDowngradeReason(raw)
+		if reason == "" {
+			continue
+		}
+		counts[reason]++
+	}
+	items := make([]models.MarketSummaryBlockedReasonItem, 0, len(counts))
+	for reason, count := range counts {
+		items = append(items, models.MarketSummaryBlockedReasonItem{Reason: reason, Count: count})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Reason < items[j].Reason
+	})
+	if len(items) > 5 {
+		items = items[:5]
+	}
+	return items
+}
+
+func marketSummaryDraftProductionDowngradeReason(item *marketSummaryRecommendDraft) string {
+	return marketSummaryDraftProductionRejectionReason(item)
+}
+
+func buildMarketSummaryTradePlanRepairCandidate(item *marketSummaryRecommendDraft, reason string) (models.MarketSummaryTradePlanRepairCandidate, bool) {
+	if item == nil {
+		return models.MarketSummaryTradePlanRepairCandidate{}, false
+	}
+	rec := item.toPreviewRecommend()
+	if rec == nil {
+		return models.MarketSummaryTradePlanRepairCandidate{}, false
+	}
+	stopProfit, profitOK := parseStopProfitPrice(*rec)
+	stopLoss, lossOK := parseStopLossPrice(*rec)
+	worstEntry := resolveMarketSummaryWorstEntryPriceForGate(item)
+	if !profitOK || !lossOK || stopProfit <= 0 || stopLoss <= 0 || worstEntry <= 0 || stopLoss >= worstEntry {
+		return models.MarketSummaryTradePlanRepairCandidate{}, false
+	}
+	downside := worstEntry - stopLoss
+	if downside <= 0 {
+		return models.MarketSummaryTradePlanRepairCandidate{}, false
+	}
+	rewardRisk := round2((stopProfit - worstEntry) / downside)
+	downsidePct := round2(downside / worstEntry * 100)
+	repairable := (rewardRisk >= 0.50 && rewardRisk < marketSummaryFeasibleRewardRisk) ||
+		(downsidePct > marketSummaryFeasibleDownsidePct && downsidePct <= 6.00)
+	if !repairable || rewardRisk < 0.50 || downsidePct > 6.00 {
+		return models.MarketSummaryTradePlanRepairCandidate{}, false
+	}
+	return models.MarketSummaryTradePlanRepairCandidate{
+		StockCode:   normalizeRecommendStockCode(item.StockCode),
+		StockName:   strings.TrimSpace(item.StockName),
+		Reason:      strings.TrimSpace(reason),
+		RewardRisk:  rewardRisk,
+		DownsidePct: downsidePct,
+		RepairHint:  "仅允许收窄买入区间、上移止盈或微调止损；修正后仍必须满足 rewardRisk>=0.80 且 downsidePct<=5.00%。",
+	}, true
 }
 
 func marketSummaryDayBounds(at time.Time) (time.Time, time.Time) {
@@ -617,7 +697,7 @@ func marketSummaryDraftProductionRejectionReason(item *marketSummaryRecommendDra
 		return "四维评分未全部达到60分，已降级为仅分析"
 	}
 	switch strings.TrimSpace(item.SummaryVersion) {
-	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141:
+	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
 		if reason := marketSummaryDraftV136TradePlanRejectionReason(item); reason != "" {
 			return reason
 		}

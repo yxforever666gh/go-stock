@@ -616,6 +616,7 @@ func spaFileServer(staticFS fs.FS) http.Handler {
 			cleanPath = "index.html"
 		}
 		if _, err := fs.Stat(staticFS, cleanPath); err == nil {
+			setSpaCacheHeaders(w, cleanPath)
 			fileServer.ServeHTTP(w, r)
 			return
 		}
@@ -631,8 +632,22 @@ func spaFileServer(staticFS fs.FS) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		setSpaCacheHeaders(w, "index.html")
 		_, _ = w.Write(content)
 	})
+}
+
+func setSpaCacheHeaders(w http.ResponseWriter, cleanPath string) {
+	if cleanPath == "" || cleanPath == "." || cleanPath == "index.html" || filepath.Ext(cleanPath) == ".html" {
+		w.Header().Set("Cache-Control", "no-store, no-cache, must-revalidate")
+		w.Header().Set("Pragma", "no-cache")
+		w.Header().Set("Expires", "0")
+		return
+	}
+
+	if strings.HasPrefix(cleanPath, "assets/") {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	}
 }
 
 func cleanStaticRequestPath(requestPath string) string {

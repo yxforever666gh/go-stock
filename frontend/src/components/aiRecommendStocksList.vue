@@ -33,6 +33,7 @@ const tableScrollX = 2500
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },
   { label: 'V1.4.0', value: '1.4.0' },
   { label: 'V1.3.6', value: '1.3.6' },

@@ -24,7 +24,8 @@ const marketSummaryVersionV132 = "v1.3.2"
 const marketSummaryVersion136 = "1.3.6"
 const marketSummaryVersion140 = "1.4.0"
 const marketSummaryVersion141 = "1.4.1"
-const marketSummaryCurrentVersion = marketSummaryVersion141
+const marketSummaryVersion142 = "1.4.2"
+const marketSummaryCurrentVersion = marketSummaryVersion142
 
 const (
 	strategyCohortCurrent = "current"
@@ -40,6 +41,7 @@ func marketSummaryKnownVersions() []string {
 		marketSummaryVersion136,
 		marketSummaryVersion140,
 		marketSummaryVersion141,
+		marketSummaryVersion142,
 	}
 }
 
@@ -53,6 +55,8 @@ func normalizeStrategyCohort(raw string, defaultCohort string) string {
 		return normalizeStrategyCohort(defaultCohort, "")
 	case strategyCohortCurrent, strategyCohortAll, strategyCohortLegacy:
 		return text
+	case "1.4.2", "v1.4.2", "142", "v142":
+		return marketSummaryVersion142
 	case "1.4.1", "v1.4.1", "141", "v141":
 		return marketSummaryVersion141
 	case "1.4.0", "v1.4.0", "140", "v140":
@@ -84,7 +88,7 @@ func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
 		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
 	case strategyCohortLegacy:
 		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", marketSummaryKnownVersions())
-	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141:
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
 		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
 	default:
 		return q
@@ -233,16 +237,18 @@ type marketSummaryVerifiedCandidate struct {
 	PositiveSignals   []string                      `json:"positiveSignals,omitempty"`
 	NegativeSignals   []string                      `json:"negativeSignals,omitempty"`
 	VerdictHints      []string                      `json:"verdictHints,omitempty"`
+	FeasiblePlans     []marketSummaryFeasiblePlan   `json:"feasiblePlans,omitempty"`
 }
 
 type MarketSummaryVerifiedCandidateSnapshot = marketSummaryVerifiedCandidate
 
 type MarketSummarySupplementRequest struct {
-	FailureSummary    []models.MarketSummaryBlockedReasonItem  `json:"failureSummary,omitempty"`
-	RemainingVerified []MarketSummaryVerifiedCandidateSnapshot `json:"remainingVerified,omitempty"`
-	ExcludedToday     []string                                 `json:"excludedToday,omitempty"`
-	TargetProduction  int                                      `json:"targetProduction,omitempty"`
-	CurrentProduction int                                      `json:"currentProduction,omitempty"`
+	FailureSummary     []models.MarketSummaryBlockedReasonItem        `json:"failureSummary,omitempty"`
+	RemainingVerified  []MarketSummaryVerifiedCandidateSnapshot       `json:"remainingVerified,omitempty"`
+	ExcludedToday      []string                                       `json:"excludedToday,omitempty"`
+	RepairableFailures []models.MarketSummaryTradePlanRepairCandidate `json:"repairableFailures,omitempty"`
+	TargetProduction   int                                            `json:"targetProduction,omitempty"`
+	CurrentProduction  int                                            `json:"currentProduction,omitempty"`
 }
 
 type marketSummaryTechnicalMetrics struct {
@@ -962,7 +968,7 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 
 func (o *OpenAi) GenerateMarketSummarySupplementTable(req MarketSummarySupplementRequest) (string, string, string, error) {
 	req.RemainingVerified = filterMarketSummaryVerifiedCandidates(req.RemainingVerified, req.ExcludedToday)
-	if len(req.RemainingVerified) == 0 {
+	if len(req.RemainingVerified) == 0 && len(req.RepairableFailures) == 0 {
 		return "", "", "", nil
 	}
 	if len(req.RemainingVerified) > 24 {
@@ -1008,7 +1014,7 @@ func filterMarketSummaryVerifiedCandidates(candidates []MarketSummaryVerifiedCan
 }
 
 func buildMarketSummarySupplementMessages(payload string) []map[string]any {
-	return []map[string]any{
+	messages := []map[string]any{
 		{
 			"role": "system",
 			"content": strings.TrimSpace("你是A股市场总结推荐补位层。你的职责只是在第一轮保存后生产候选不足时，从剩余 verified candidates 中输出补位交易计划表格。\n" +
@@ -1034,6 +1040,15 @@ func buildMarketSummarySupplementMessages(payload string) []map[string]any {
 				"输入JSON：" + payload),
 		},
 	}
+	messages = append(messages, map[string]any{"role": "user", "content": strings.TrimSpace(`
+V1.4.2 补位和计划修正约束：
+1. remainingVerified 中优先使用 feasiblePlans.passHardGate=true 的候选；只有这些路径允许作为 conditional/生产补位。
+2. 无 passHardGate=true 路径的候选只能 analysis_only。
+3. repairableFailures 只允许修正一次，修正范围限于收窄买入区间、上移止盈或微调止损，且修正后必须满足 rewardRisk>=0.80、downsidePct<=5.00%。
+4. rewardRisk<0.50 或 downsidePct>6.00% 的失败计划不得修正为生产候选。
+5. 操作备注末尾必须追加 hardGateSelfCheck=pass/fail; worstEntry=数值; rewardRisk=数值; downsidePct=数值。
+`)})
+	return messages
 }
 
 func sanitizeMarketSummaryDiscoveryResult(result *marketSummaryDiscoveryResult) {
@@ -1822,6 +1837,13 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 35. “# 交易计划说明”中必须明确写出本次筛选窗口，格式示例：本次筛选窗口：2026-04-09 09:30:00 至 2026-04-09 11:32:00；
 36. 不要输出旧版兼容字段，也不要回到标签式分层表达。`) + "\n\n" + BuildMarketSummaryExecutionQuestion(question)
 	messages = append(messages, map[string]any{"role": "user", "content": instruction})
+	messages = append(messages, map[string]any{"role": "user", "content": strings.TrimSpace(`
+V1.4.2 交易计划可行性硬约束：
+1. 证据核验 JSON 中的 feasiblePlans 是后端预计算路径。只有 feasiblePlans[].passHardGate=true 的路径，才允许生成 conditional/生产候选交易计划。
+2. 没有 passHardGate=true 路径的候选，只能写为 analysis_only，并在操作备注说明不可行原因；不得自行扩大止损、虚高止盈或构造低于硬规则的交易计划。
+3. 输出操作备注末尾必须追加自检字段：hardGateSelfCheck=pass/fail; worstEntry=数值; rewardRisk=数值; downsidePct=数值。
+4. 自检字段只用于诊断，最终是否入库仍以后端复算为准；不得降低 rewardRisk>=0.80 和 downsidePct<=5.00% 两条硬门槛。
+`)})
 	logState.addNote("verified candidates payload size=%d", len(verified))
 	return messages
 }

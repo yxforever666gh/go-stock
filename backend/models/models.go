@@ -1117,40 +1117,52 @@ type MarketSummaryBlockedReasonItem struct {
 }
 
 type MarketSummaryRecommendSaveResult struct {
-	SavedCount               int                              `json:"savedCount"`
-	ProductionCount          int                              `json:"productionCount"`
-	AnalysisOnlyCount        int                              `json:"analysisOnlyCount"`
-	BlockedCount             int                              `json:"blockedCount"`
-	BlockedReasons           []MarketSummaryBlockedReasonItem `json:"blockedReasons"`
-	UsedStockCodes           []string                         `json:"usedStockCodes"`
-	RemainingCandidateStocks []string                         `json:"remainingCandidateStocks"`
-	AIOutputCount            int                              `json:"aiOutputCount"`
-	AIOutputCountSecond      int                              `json:"aiOutputCountSecond,omitempty"`
-	SupplementTriggered      bool                             `json:"supplementTriggered,omitempty"`
-	SupplementText           string                           `json:"supplementText,omitempty"`
-	SupplementCandidates     []string                         `json:"supplementCandidates,omitempty"`
+	SavedCount                  int                                     `json:"savedCount"`
+	ProductionCount             int                                     `json:"productionCount"`
+	AnalysisOnlyCount           int                                     `json:"analysisOnlyCount"`
+	BlockedCount                int                                     `json:"blockedCount"`
+	BlockedReasons              []MarketSummaryBlockedReasonItem        `json:"blockedReasons"`
+	ProductionDowngradeReasons  []MarketSummaryBlockedReasonItem        `json:"productionDowngradeReasons,omitempty"`
+	RepairableTradePlanFailures []MarketSummaryTradePlanRepairCandidate `json:"repairableTradePlanFailures,omitempty"`
+	UsedStockCodes              []string                                `json:"usedStockCodes"`
+	RemainingCandidateStocks    []string                                `json:"remainingCandidateStocks"`
+	AIOutputCount               int                                     `json:"aiOutputCount"`
+	AIOutputCountSecond         int                                     `json:"aiOutputCountSecond,omitempty"`
+	SupplementTriggered         bool                                    `json:"supplementTriggered,omitempty"`
+	SupplementText              string                                  `json:"supplementText,omitempty"`
+	SupplementCandidates        []string                                `json:"supplementCandidates,omitempty"`
+}
+
+type MarketSummaryTradePlanRepairCandidate struct {
+	StockCode   string  `json:"stockCode"`
+	StockName   string  `json:"stockName,omitempty"`
+	Reason      string  `json:"reason,omitempty"`
+	RewardRisk  float64 `json:"rewardRisk,omitempty"`
+	DownsidePct float64 `json:"downsidePct,omitempty"`
+	RepairHint  string  `json:"repairHint,omitempty"`
 }
 
 type MarketSummaryRunDiagnostic struct {
 	gorm.Model
-	RunID                   string    `json:"runId" gorm:"size:64;uniqueIndex"`
-	SummaryVersion          string    `json:"summaryVersion" gorm:"size:32;index"`
-	RunSlot                 string    `json:"runSlot" gorm:"size:32;index"`
-	StartedAt               time.Time `json:"startedAt" gorm:"index"`
-	FinishedAt              time.Time `json:"finishedAt" gorm:"index"`
-	IndicatorCandidateCount int       `json:"indicatorCandidateCount"`
-	IndicatorAIInputCount   int       `json:"indicatorAiInputCount"`
-	DiscoveryCandidateCount int       `json:"discoveryCandidateCount"`
-	VerifiedCandidateCount  int       `json:"verifiedCandidateCount"`
-	AIOutputCountFirst      int       `json:"aiOutputCountFirst"`
-	AIOutputCountSecond     int       `json:"aiOutputCountSecond"`
-	SavedCount              int       `json:"savedCount"`
-	ProductionCount         int       `json:"productionCount"`
-	AnalysisOnlyCount       int       `json:"analysisOnlyCount"`
-	BlockedCount            int       `json:"blockedCount"`
-	BlockedReasonTop        string    `json:"blockedReasonTop" gorm:"type:text"`
-	EmptyRun                bool      `json:"emptyRun" gorm:"index"`
-	NotesJSON               string    `json:"notesJson" gorm:"type:text"`
+	RunID                        string    `json:"runId" gorm:"size:64;uniqueIndex"`
+	SummaryVersion               string    `json:"summaryVersion" gorm:"size:32;index"`
+	RunSlot                      string    `json:"runSlot" gorm:"size:32;index"`
+	StartedAt                    time.Time `json:"startedAt" gorm:"index"`
+	FinishedAt                   time.Time `json:"finishedAt" gorm:"index"`
+	IndicatorCandidateCount      int       `json:"indicatorCandidateCount"`
+	IndicatorAIInputCount        int       `json:"indicatorAiInputCount"`
+	DiscoveryCandidateCount      int       `json:"discoveryCandidateCount"`
+	VerifiedCandidateCount       int       `json:"verifiedCandidateCount"`
+	AIOutputCountFirst           int       `json:"aiOutputCountFirst"`
+	AIOutputCountSecond          int       `json:"aiOutputCountSecond"`
+	SavedCount                   int       `json:"savedCount"`
+	ProductionCount              int       `json:"productionCount"`
+	AnalysisOnlyCount            int       `json:"analysisOnlyCount"`
+	BlockedCount                 int       `json:"blockedCount"`
+	BlockedReasonTop             string    `json:"blockedReasonTop" gorm:"type:text"`
+	ProductionDowngradeReasonTop string    `json:"productionDowngradeReasonTop" gorm:"type:text"`
+	EmptyRun                     bool      `json:"emptyRun" gorm:"index"`
+	NotesJSON                    string    `json:"notesJson" gorm:"type:text"`
 }
 
 func (MarketSummaryRunDiagnostic) TableName() string {
@@ -1166,13 +1178,14 @@ type MarketSummaryRunDiagnosticQuery struct {
 }
 
 type MarketSummaryRunDiagnosticSummary struct {
-	List                     []MarketSummaryRunDiagnostic     `json:"list"`
-	Latest                   *MarketSummaryRunDiagnostic      `json:"latest,omitempty"`
-	BlockedReasonTop         []MarketSummaryBlockedReasonItem `json:"blockedReasonTop"`
-	EmptyRunCount            int64                            `json:"emptyRunCount"`
-	ConsecutiveEmptyRunCount int                              `json:"consecutiveEmptyRunCount"`
-	StrategyCohort           string                           `json:"strategyCohort,omitempty"`
-	SummaryVersion           string                           `json:"summaryVersion,omitempty"`
+	List                         []MarketSummaryRunDiagnostic     `json:"list"`
+	Latest                       *MarketSummaryRunDiagnostic      `json:"latest,omitempty"`
+	BlockedReasonTop             []MarketSummaryBlockedReasonItem `json:"blockedReasonTop"`
+	ProductionDowngradeReasonTop []MarketSummaryBlockedReasonItem `json:"productionDowngradeReasonTop"`
+	EmptyRunCount                int64                            `json:"emptyRunCount"`
+	ConsecutiveEmptyRunCount     int                              `json:"consecutiveEmptyRunCount"`
+	StrategyCohort               string                           `json:"strategyCohort,omitempty"`
+	SummaryVersion               string                           `json:"summaryVersion,omitempty"`
 }
 
 type AiRecommendStocksPageResp struct {

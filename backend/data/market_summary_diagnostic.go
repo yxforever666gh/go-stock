@@ -59,13 +59,18 @@ func GetMarketSummaryRunDiagnostics(query models.MarketSummaryRunDiagnosticQuery
 	if err != nil {
 		return models.MarketSummaryRunDiagnosticSummary{}, err
 	}
+	downgradeTop, err := GetMarketSummaryProductionDowngradeReasonTop(query)
+	if err != nil {
+		return models.MarketSummaryRunDiagnosticSummary{}, err
+	}
 	summary := models.MarketSummaryRunDiagnosticSummary{
-		List:                     rows,
-		BlockedReasonTop:         top,
-		EmptyRunCount:            emptyCount,
-		ConsecutiveEmptyRunCount: countConsecutiveMarketSummaryEmptyRuns(rows),
-		StrategyCohort:           normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent),
-		SummaryVersion:           query.SummaryVersion,
+		List:                         rows,
+		BlockedReasonTop:             top,
+		ProductionDowngradeReasonTop: downgradeTop,
+		EmptyRunCount:                emptyCount,
+		ConsecutiveEmptyRunCount:     countConsecutiveMarketSummaryEmptyRuns(rows),
+		StrategyCohort:               normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent),
+		SummaryVersion:               query.SummaryVersion,
 	}
 	if len(rows) > 0 {
 		latest := rows[0]
@@ -96,6 +101,40 @@ func GetMarketSummaryBlockedReasonTop(query models.MarketSummaryRunDiagnosticQue
 	for _, row := range rows {
 		for _, item := range decodeMarketSummaryBlockedReasons(row.BlockedReasonTop) {
 			reason := normalizeMarketSummaryBlockedReason(item.Reason)
+			if reason == "" || item.Count <= 0 {
+				continue
+			}
+			counts[reason] += item.Count
+		}
+	}
+	items := make([]models.MarketSummaryBlockedReasonItem, 0, len(counts))
+	for reason, count := range counts {
+		items = append(items, models.MarketSummaryBlockedReasonItem{Reason: reason, Count: count})
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Count != items[j].Count {
+			return items[i].Count > items[j].Count
+		}
+		return items[i].Reason < items[j].Reason
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func GetMarketSummaryProductionDowngradeReasonTop(query models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error) {
+	query.SummaryVersion = resolveMarketSummaryDiagnosticVersion(query.SummaryVersion, query.StrategyCohort)
+	limit := 5
+	q := applyMarketSummaryDiagnosticQuery(db.Dao.Model(&models.MarketSummaryRunDiagnostic{}), query)
+	rows := make([]models.MarketSummaryRunDiagnostic, 0, 100)
+	if err := q.Order("started_at DESC, id DESC").Limit(100).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	for _, row := range rows {
+		for _, item := range decodeMarketSummaryBlockedReasons(row.ProductionDowngradeReasonTop) {
+			reason := normalizeMarketSummaryProductionDowngradeReason(item.Reason)
 			if reason == "" || item.Count <= 0 {
 				continue
 			}
@@ -239,5 +278,32 @@ func normalizeMarketSummaryBlockedReason(reason string) string {
 		return "数据缺失或分钟线缺失"
 	default:
 		return text
+	}
+}
+
+func normalizeMarketSummaryProductionDowngradeReason(reason string) string {
+	text := strings.TrimSpace(reason)
+	lower := strings.ToLower(text)
+	switch {
+	case text == "":
+		return ""
+	case strings.Contains(text, "盈亏比") || strings.Contains(text, "鐩堜簭姣?") ||
+		strings.Contains(text, "止损空间") || strings.Contains(text, "姝㈡崯绌洪棿"):
+		return "盈亏比/止损空间不达标"
+	case strings.Contains(text, "买入区间") || strings.Contains(text, "涔板叆鍖洪棿"):
+		return "缺少有效买入区间"
+	case strings.Contains(text, "止盈止损") || strings.Contains(text, "止盈") || strings.Contains(text, "止损") ||
+		strings.Contains(text, "姝㈢泩") || strings.Contains(text, "姝㈡崯"):
+		return "缺少有效止盈止损"
+	case strings.Contains(text, "价格锚点") || strings.Contains(text, "偏离") || strings.Contains(text, "20%") ||
+		strings.Contains(text, "浠锋牸閿氱偣") || strings.Contains(text, "鍋忕"):
+		return "价格锚点偏离"
+	case strings.Contains(text, "证据") || strings.Contains(text, "核验") || strings.Contains(text, "璇佹嵁") || strings.Contains(text, "鏍搁獙"):
+		return "证据核验不足"
+	case strings.Contains(text, "数据缺失") || strings.Contains(text, "分钟线") || strings.Contains(lower, "minute") ||
+		strings.Contains(text, "鏁版嵁缂哄け") || strings.Contains(text, "鍒嗛挓绾?"):
+		return "数据缺失或分钟线缺失"
+	default:
+		return normalizeMarketSummaryBlockedReason(text)
 	}
 }
