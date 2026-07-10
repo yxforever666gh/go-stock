@@ -83,6 +83,7 @@ const emailSendLogPage = ref(1)
 const emailSendLogTotalPages = ref(1)
 const emailSendLogTotal = ref(0)
 const settingsLoaded = ref(false)
+const persistedConfig = ref({})
 const autoSaveState = ref('idle')
 const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
@@ -131,6 +132,65 @@ function normalizeAiConfigs(configs) {
     sort: index + 1,
     apiProtocol: normalizeAiProtocol(item?.apiProtocol),
   }))
+}
+
+function applyConfigToForm(config) {
+  const normalizedAiConfigs = Array.isArray(config?.aiConfigs)
+      ? normalizeAiConfigs(config.aiConfigs)
+      : formValue.value.openAI.aiConfigs
+  persistedConfig.value = {
+    ...(config || {}),
+    aiConfigs: normalizedAiConfigs,
+  }
+  formValue.value.ID = config?.ID || formValue.value.ID
+  formValue.value.tushareToken = config?.tushareToken || ''
+  formValue.value.yieldEmail = {
+    enable: config?.yieldEmailEnable === true,
+    to: config?.yieldEmailTo || '',
+    from: config?.yieldEmailFrom || '',
+    smtpHost: config?.yieldEmailSmtpHost || '',
+    smtpPort: config?.yieldEmailSmtpPort || 465,
+    smtpUsername: config?.yieldEmailSmtpUsername || '',
+    smtpPassword: config?.yieldEmailSmtpPassword || '',
+  }
+  formValue.value.updateBasicInfoOnStart = config?.updateBasicInfoOnStart === true
+  formValue.value.refreshInterval = config?.refreshInterval
+  formValue.value.openAI = {
+    enable: config?.openAiEnable === true,
+    aiConfigs: normalizedAiConfigs,
+    prompt: config?.prompt || '',
+    questionTemplate: config?.questionTemplate || '{{stockName}}分析和总结',
+    crawlTimeOut: config?.crawlTimeOut,
+    kDays: config?.kDays,
+    httpProxy: '',
+    httpProxyEnabled: false,
+  }
+  formValue.value.browserPath = config?.browserPath || ''
+  formValue.value.darkTheme = config?.darkTheme === true
+  formValue.value.minuteProviderMode = config?.minuteProviderMode || 'public'
+  formValue.value.minuteLongHistoryHintEnabled = config?.minuteLongHistoryHintEnabled !== false
+  formValue.value.akshareEnabled = config?.akshareEnabled !== false
+  formValue.value.sinaMinuteEnabled = config?.sinaMinuteEnabled !== false
+  formValue.value.tencentMinuteEnabled = config?.tencentMinuteEnabled !== false
+  formValue.value.akshareMinuteSourceMode = config?.akshareMinuteSourceMode || 'auto'
+  formValue.value.privateMinute = {
+    enabled: config?.privateMinuteEnabled === true,
+    baseUrl: config?.privateMinuteBaseUrl || '',
+    apiKey: config?.privateMinuteApiKey || '',
+    timeoutSec: config?.privateMinuteTimeoutSec || 60,
+    minIntervalMs: Number.isFinite(config?.privateMinuteMinIntervalMs) ? config.privateMinuteMinIntervalMs : 1200,
+    proxyMode: config?.privateMinuteProxyMode || 'disable',
+    level: config?.privateMinuteLevel || '1min',
+  }
+  formValue.value.enableFund = config?.enableFund === true
+  formValue.value.httpProxy = config?.httpProxy || ''
+  formValue.value.httpProxyEnabled = config?.httpProxyEnabled === true
+  formValue.value.forceNoProxyForFetch = config?.forceNoProxyForFetch !== false
+  formValue.value.enableAgent = config?.enableAgent === true
+  formValue.value.qgqpBId = config?.qgqpBId || ''
+  formValue.value.marketSummaryEmailEnabled = config?.marketSummaryEmailEnabled === true
+  formValue.value.marketSummaryCronEnabled = config?.marketSummaryCronEnabled !== false
+  formValue.value.marketSummaryCronTimes = config?.marketSummaryCronTimes || '09:40,11:30,14:30'
 }
 
 function aiConfigRowKey(aiConfig) {
@@ -230,56 +290,7 @@ function handleTextFieldBlur() {
 const promptTemplates = ref([])
 onMounted(() => {
   GetConfig().then(res => {
-    formValue.value.ID = res.ID
-    formValue.value.tushareToken = res.tushareToken
-    formValue.value.yieldEmail = {
-      enable: res.yieldEmailEnable,
-      to: res.yieldEmailTo || '',
-      from: res.yieldEmailFrom || '',
-      smtpHost: res.yieldEmailSmtpHost || '',
-      smtpPort: res.yieldEmailSmtpPort || 465,
-      smtpUsername: res.yieldEmailSmtpUsername || '',
-      smtpPassword: res.yieldEmailSmtpPassword || '',
-    }
-    formValue.value.updateBasicInfoOnStart = res.updateBasicInfoOnStart
-    formValue.value.refreshInterval = res.refreshInterval
-    // 加载AI配置
-    formValue.value.openAI = {
-      enable: res.openAiEnable,
-      aiConfigs: normalizeAiConfigs(res.aiConfigs || []),
-      prompt: res.prompt,
-      questionTemplate: res.questionTemplate ? res.questionTemplate : '{{stockName}}分析和总结',
-      crawlTimeOut: res.crawlTimeOut,
-      kDays: res.kDays,
-      httpProxy:"",
-      httpProxyEnabled:false,
-    }
-    formValue.value.browserPath = res.browserPath
-    formValue.value.darkTheme = res.darkTheme
-    formValue.value.minuteProviderMode = res.minuteProviderMode || 'public'
-    formValue.value.minuteLongHistoryHintEnabled = res.minuteLongHistoryHintEnabled !== false
-    formValue.value.akshareEnabled = res.akshareEnabled !== false
-    formValue.value.sinaMinuteEnabled = res.sinaMinuteEnabled !== false
-    formValue.value.tencentMinuteEnabled = res.tencentMinuteEnabled !== false
-    formValue.value.akshareMinuteSourceMode = res.akshareMinuteSourceMode || 'auto'
-    formValue.value.privateMinute = {
-      enabled: res.privateMinuteEnabled === true,
-      baseUrl: res.privateMinuteBaseUrl || '',
-      apiKey: res.privateMinuteApiKey || '',
-      timeoutSec: res.privateMinuteTimeoutSec || 60,
-      minIntervalMs: Number.isFinite(res.privateMinuteMinIntervalMs) ? res.privateMinuteMinIntervalMs : 1200,
-      proxyMode: res.privateMinuteProxyMode || 'disable',
-      level: res.privateMinuteLevel || '1min',
-    }
-    formValue.value.enableFund = res.enableFund
-    formValue.value.httpProxy=res.httpProxy;
-    formValue.value.httpProxyEnabled=res.httpProxyEnabled;
-    formValue.value.forceNoProxyForFetch = res.forceNoProxyForFetch !== false;
-    formValue.value.enableAgent = res.enableAgent;
-    formValue.value.qgqpBId = res.qgqpBId;
-    formValue.value.marketSummaryEmailEnabled = res.marketSummaryEmailEnabled === true;
-    formValue.value.marketSummaryCronEnabled = res.marketSummaryCronEnabled !== false;
-    formValue.value.marketSummaryCronTimes = res.marketSummaryCronTimes || '09:40,11:30,14:30';
+    applyConfigToForm(res)
     settingsLoaded.value = true
   })
 
@@ -295,9 +306,8 @@ onBeforeUnmount(() => {
 function buildConfigPayload() {
   renumberAiConfigSorts()
   return new data.SettingConfig({
+	...persistedConfig.value,
     ID: formValue.value.ID,
-    dingPushEnable: false,
-    dingRobot: "",
     yieldEmailEnable: formValue.value.yieldEmail.enable,
     yieldEmailTo: formValue.value.yieldEmail.to,
     yieldEmailFrom: formValue.value.yieldEmail.from,
@@ -305,9 +315,6 @@ function buildConfigPayload() {
     yieldEmailSmtpPort: formValue.value.yieldEmail.smtpPort,
     yieldEmailSmtpUsername: formValue.value.yieldEmail.smtpUsername,
     yieldEmailSmtpPassword: formValue.value.yieldEmail.smtpPassword,
-    yieldEmailCronEnabled: false,
-    yieldEmailCronTimes: '',
-    localPushEnable: false,
     updateBasicInfoOnStart: formValue.value.updateBasicInfoOnStart,
     refreshInterval: formValue.value.refreshInterval,
     openAiEnable: formValue.value.openAI.enable,
@@ -318,9 +325,7 @@ function buildConfigPayload() {
     questionTemplate: formValue.value.openAI.questionTemplate,
     crawlTimeOut: formValue.value.openAI.crawlTimeOut,
     kDays: formValue.value.openAI.kDays,
-    enableDanmu: false,
     browserPath: formValue.value.browserPath,
-    enableNews: false,
     darkTheme: formValue.value.darkTheme,
     minuteProviderMode: formValue.value.minuteProviderMode,
     minuteLongHistoryHintEnabled: formValue.value.minuteLongHistoryHintEnabled,
@@ -334,11 +339,8 @@ function buildConfigPayload() {
     akshareEnabled: formValue.value.akshareEnabled,
     sinaMinuteEnabled: formValue.value.sinaMinuteEnabled,
     tencentMinuteEnabled: formValue.value.tencentMinuteEnabled,
-    eastmoneyMinuteEnabled: true,
     akshareMinuteSourceMode: formValue.value.akshareMinuteSourceMode,
     enableFund: formValue.value.enableFund,
-    enablePushNews: false,
-    enableOnlyPushRedNews: false,
     httpProxy:formValue.value.httpProxy,
     httpProxyEnabled:formValue.value.httpProxyEnabled,
     forceNoProxyForFetch: formValue.value.forceNoProxyForFetch,
@@ -505,7 +507,7 @@ async function runPersist(options = {}) {
   if (showSuccess) {
     message.success(res)
   }
-  EventsEmit("updateSettings", config);
+  EventsEmit("updateSettings");
   if (recordAutoSaveError) {
     markAutoSaveSaved()
   }
@@ -676,53 +678,7 @@ function importConfig() {
     let reader = new FileReader();
     reader.onload = (e) => {
       let config = JSON.parse(e.target.result);
-      formValue.value.ID = config.ID
-      formValue.value.tushareToken = config.tushareToken
-      formValue.value.yieldEmail = {
-        enable: config.yieldEmailEnable,
-        to: config.yieldEmailTo || '',
-        from: config.yieldEmailFrom || '',
-        smtpHost: config.yieldEmailSmtpHost || '',
-        smtpPort: config.yieldEmailSmtpPort || 465,
-        smtpUsername: config.yieldEmailSmtpUsername || '',
-        smtpPassword: config.yieldEmailSmtpPassword || '',
-      }
-      formValue.value.updateBasicInfoOnStart = config.updateBasicInfoOnStart
-      formValue.value.refreshInterval = config.refreshInterval
-      // 导入AI配置
-      formValue.value.openAI = {
-        enable: config.openAiEnable,
-        aiConfigs: config.aiConfigs || [],
-        prompt: config.prompt,
-        questionTemplate: config.questionTemplate,
-        crawlTimeOut: config.crawlTimeOut,
-        kDays: config.kDays
-      }
-      formValue.value.browserPath = config.browserPath
-      formValue.value.darkTheme = config.darkTheme
-      formValue.value.minuteProviderMode = config.minuteProviderMode || 'public'
-      formValue.value.minuteLongHistoryHintEnabled = config.minuteLongHistoryHintEnabled !== false
-      formValue.value.akshareEnabled = config.akshareEnabled !== false
-      formValue.value.sinaMinuteEnabled = config.sinaMinuteEnabled !== false
-      formValue.value.tencentMinuteEnabled = config.tencentMinuteEnabled !== false
-      formValue.value.akshareMinuteSourceMode = config.akshareMinuteSourceMode || 'auto'
-      formValue.value.privateMinute = {
-        enabled: config.privateMinuteEnabled === true,
-        baseUrl: config.privateMinuteBaseUrl || '',
-        apiKey: config.privateMinuteApiKey || '',
-        timeoutSec: config.privateMinuteTimeoutSec || 60,
-        minIntervalMs: Number.isFinite(config.privateMinuteMinIntervalMs) ? config.privateMinuteMinIntervalMs : 1200,
-        proxyMode: config.privateMinuteProxyMode || 'disable',
-        level: config.privateMinuteLevel || '1min',
-      }
-      formValue.value.enableFund = config.enableFund
-      formValue.value.marketSummaryEmailEnabled = config.marketSummaryEmailEnabled === true
-      formValue.value.marketSummaryCronEnabled = config.marketSummaryCronEnabled !== false
-      formValue.value.marketSummaryCronTimes = config.marketSummaryCronTimes || '09:40,11:30,14:30'
-      formValue.value.httpProxy=config.httpProxy
-      formValue.value.httpProxyEnabled=config.httpProxyEnabled
-      formValue.value.enableAgent = config.enableAgent
-      formValue.value.qgqpBId = config.qgqpBId
+      applyConfigToForm(config)
       queueAutoSave()
     };
     reader.readAsText(file);
@@ -919,6 +875,9 @@ function deletePrompt(ID) {
                   <n-button type="info" @click="exportConfig">导出配置</n-button>
                   <n-button type="error" @click="importConfig">导入配置</n-button>
                 </n-space>
+                <n-text type="error" style="text-align: center">
+                  导出的 JSON 包含完整明文 API Key、Token 和 SMTP 授权码，请仅保存在可信设备。
+                </n-text>
                 <n-flex justify="center">
                   <n-text depth="3" v-if="autoSaveState === 'saving'">正在自动保存...</n-text>
                   <n-text depth="3" type="success" v-else-if="autoSaveState === 'saved'">已自动保存 {{ autoSaveLastSavedAt }}</n-text>

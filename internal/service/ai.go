@@ -112,6 +112,18 @@ func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText
 	return data.EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName, startedAt, verifiedCandidates)
 }
 
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
+	return data.EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName, startedAt, verifiedCandidates, productionLimit)
+}
+
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot, outputLimit, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
+	return data.EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verifiedCandidates, outputLimit, productionLimit)
+}
+
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot, options data.MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
+	return data.EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName, startedAt, verifiedCandidates, options)
+}
+
 func (s AIService) EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
 	return data.EnsureMarketSummaryYieldOverridesSaved(summaryText, startedAt)
 }

@@ -460,7 +460,11 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 			logState.ExcludedCandidateCt = len(excludedTodayStocks)
 			logState.addNote("same-day excluded stocks=%d", len(excludedTodayStocks))
 		}
-		verifiedCandidates = selectMarketSummaryFinalCandidates(verifiedCandidates, excludedTodayIndex, window, logState, marketSummaryFinalCandidateLimit)
+		finalCandidateLimit := resolveMarketSummaryFinalCandidateLimit(displayQuestion)
+		if finalCandidateLimit < marketSummaryFinalCandidateLimit {
+			logState.addNote("recommendation count policy limits final verified candidates=%d", finalCandidateLimit)
+		}
+		verifiedCandidates = selectMarketSummaryFinalCandidates(verifiedCandidates, excludedTodayIndex, window, logState, finalCandidateLimit)
 		logState.VerifiedCandidateCt = len(verifiedCandidates)
 		emitSummaryToolStatus(ch, "phase3.evidence.verify", "success", nil, 0)
 
@@ -975,10 +979,19 @@ func (o *OpenAi) GenerateMarketSummarySupplementTable(req MarketSummarySupplemen
 		req.RemainingVerified = req.RemainingVerified[:24]
 	}
 	if req.TargetProduction <= 0 {
-		req.TargetProduction = 2
+		req.TargetProduction = marketSummaryMaxProductionCandidates
+	}
+	if req.TargetProduction > marketSummaryMaxProductionCandidates {
+		req.TargetProduction = marketSummaryMaxProductionCandidates
+	}
+	if req.CurrentProduction < 0 {
+		req.CurrentProduction = 0
+	}
+	if req.CurrentProduction >= req.TargetProduction {
+		return "", "", "", nil
 	}
 	payload := mustJSON(req)
-	messages := buildMarketSummarySupplementMessages(payload)
+	messages := buildMarketSummarySupplementMessages(payload, req.TargetProduction, req.CurrentProduction)
 	return o.CompleteChat(messages, false)
 }
 
@@ -1013,11 +1026,15 @@ func filterMarketSummaryVerifiedCandidates(candidates []MarketSummaryVerifiedCan
 	return result
 }
 
-func buildMarketSummarySupplementMessages(payload string) []map[string]any {
+func buildMarketSummarySupplementMessages(payload string, targetProduction, currentProduction int) []map[string]any {
+	remainingProductionSlots := targetProduction - currentProduction
+	if remainingProductionSlots < 0 {
+		remainingProductionSlots = 0
+	}
 	messages := []map[string]any{
 		{
 			"role": "system",
-			"content": strings.TrimSpace("你是A股市场总结推荐补位层。你的职责只是在第一轮保存后生产候选不足时，从剩余 verified candidates 中输出补位交易计划表格。\n" +
+			"content": strings.TrimSpace("你是A股市场总结推荐补位层。你的职责只是在第一轮保存后生产候选不足时，从剩余 verified candidates 或可修正失败计划中输出补位交易计划表格。\n" +
 				"不要重写市场总结全文，不要新增候选，不要绕过硬规则。"),
 		},
 		{
@@ -1028,9 +1045,9 @@ func buildMarketSummarySupplementMessages(payload string) []map[string]any {
 				"| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |\n\n" +
 				"# 补位说明\n\n" +
 				"要求：\n" +
-				"1. 只允许使用输入里的 remainingVerified 候选，禁止新增股票；\n" +
-				"2. excludedToday 中的股票禁止输出；\n" +
-				"3. 只输出补位交易计划，最多 6 只，优先补足 targetProduction，但不得为了凑数降低质量；\n" +
+				"1. 只允许使用输入里的 remainingVerified 候选或 repairableFailures 对应股票，禁止使用二者之外的股票；repairableFailures 只能按后文 V1.4.2 约束修正一次；\n" +
+				"2. excludedToday 中的股票禁止输出；但同一代码若同时出现在 repairableFailures 中，可作为唯一例外，仅按修正规则输出一次；\n" +
+				fmt.Sprintf("3. 总生产目标为%d只，当前已有%d只，本轮最多新增%d只可交易生产候选；严格核验不足时允许少于该数量甚至0只，不得为了凑数降低质量；\n", targetProduction, currentProduction, remainingProductionSlots) +
 				"4. 价格锚点优先使用 auctionPrice，其次 minutePrice，再次 currentPrice；\n" +
 				"5. 买入区间、止盈区间、止损位必须与价格锚点同一数量级，偏离超过20%必须放弃；\n" +
 				"6. 买入依据必须写成“价格触发：...；量能触发：...”；\n" +
@@ -1044,8 +1061,8 @@ func buildMarketSummarySupplementMessages(payload string) []map[string]any {
 V1.4.2 补位和计划修正约束：
 1. remainingVerified 中优先使用 feasiblePlans.passHardGate=true 的候选；只有这些路径允许作为 conditional/生产补位。
 2. 无 passHardGate=true 路径的候选只能 analysis_only。
-3. repairableFailures 只允许修正一次，修正范围限于收窄买入区间、上移止盈或微调止损，且修正后必须满足 rewardRisk>=0.80、downsidePct<=5.00%。
-4. rewardRisk<0.50 或 downsidePct>6.00% 的失败计划不得修正为生产候选。
+3. repairableFailures 只允许修正一次，修正范围限于收窄买入区间、上移止盈或微调止损，且修正后必须满足 rewardRisk>=0.80；V1.4.2 不再设置 downsidePct 上限。
+4. rewardRisk<0.50 的失败计划不得修正为生产候选；downsidePct 仍必须输出，但只用于诊断和排序参考。
 5. 操作备注末尾必须追加 hardGateSelfCheck=pass/fail; worstEntry=数值; rewardRisk=数值; downsidePct=数值。
 `)})
 	return messages
@@ -1799,7 +1816,7 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 	instruction := strings.TrimSpace(`请基于上面的“事件发现层”和“证据核验层”结果，完成最终推荐生成层。
 要求：
 1. 只能基于已经进入证据核验层的候选股票生成结论，严禁新增候选股票；
-2. “推荐股票池”输出 8 到 12 只股票，并按优先级排序形成顺延补位队列；其中最多 4 只可作为可交易生产候选，剩余候选若强度不足必须写清仅分析/观察原因；
+2. “推荐股票池”的输出数量与可交易生产候选上限必须严格遵守后文唯一的“【推荐数量策略】”，并按优先级排序形成顺延补位队列；未进入生产候选的股票必须写清仅分析原因；
 3. 同日已出现在“当日已推荐股票排除池(JSON)”里的股票，禁止再次写入“推荐股票池”，也不要在正文里重复展示；
 4. 本次推荐只允许使用当前时间窗口内的新催化、新证据、新量价确认，不允许用前一时段已推荐股票反复充数；
 5. 若排除同日已推荐股票后，没有新的高质量候选标的，必须在“推荐股票池”明确写“暂无新增高质量候选标的”，不能复用旧票凑数；
@@ -1842,7 +1859,7 @@ V1.4.2 交易计划可行性硬约束：
 1. 证据核验 JSON 中的 feasiblePlans 是后端预计算路径。只有 feasiblePlans[].passHardGate=true 的路径，才允许生成 conditional/生产候选交易计划。
 2. 没有 passHardGate=true 路径的候选，只能写为 analysis_only，并在操作备注说明不可行原因；不得自行扩大止损、虚高止盈或构造低于硬规则的交易计划。
 3. 输出操作备注末尾必须追加自检字段：hardGateSelfCheck=pass/fail; worstEntry=数值; rewardRisk=数值; downsidePct=数值。
-4. 自检字段只用于诊断，最终是否入库仍以后端复算为准；不得降低 rewardRisk>=0.80 和 downsidePct<=5.00% 两条硬门槛。
+4. 自检字段只用于诊断，最终是否入库仍以后端复算为准；V1.4.2 不再设置 downsidePct 上限，但不得降低 rewardRisk>=0.80 这条硬门槛。
 `)})
 	logState.addNote("verified candidates payload size=%d", len(verified))
 	return messages

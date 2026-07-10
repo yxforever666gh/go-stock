@@ -1,6 +1,7 @@
 package db
 
 import (
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -85,13 +86,17 @@ func resolveDBLogLevel() gormlogger.LogLevel {
 }
 
 func newDBLogger() gormlogger.Interface {
+	return newDBLoggerWithWriter(os.Stdout)
+}
+
+func newDBLoggerWithWriter(writer io.Writer) gormlogger.Interface {
 	return gormlogger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		log.New(writer, "\r\n", log.LstdFlags),
 		gormlogger.Config{
 			SlowThreshold:             time.Second * 3,
 			Colorful:                  false,
 			IgnoreRecordNotFoundError: true,
-			ParameterizedQueries:      false,
+			ParameterizedQueries:      true,
 			LogLevel:                  resolveDBLogLevel(),
 		},
 	)
@@ -165,6 +170,43 @@ func InitMinute(sqlitePath string) {
 		log.Fatalf("minute db schema init error is %s", err.Error())
 	}
 	MinuteDao = openDb
+}
+
+// Close releases every primary, replica, and minute-database connection pool.
+// It is primarily used by tests and orderly shutdown paths.
+func Close() error {
+	var firstErr error
+	closed := make(map[any]struct{})
+	closePool := func(connPool gorm.ConnPool) error {
+		if prepared, ok := connPool.(*gorm.PreparedStmtDB); ok {
+			prepared.Close()
+			if sqlDB, err := prepared.GetDBConn(); err == nil {
+				connPool = sqlDB
+			}
+		}
+		if _, exists := closed[connPool]; exists {
+			return nil
+		}
+		closed[connPool] = struct{}{}
+		if closer, ok := connPool.(interface{ Close() error }); ok {
+			if err := closer.Close(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
+		return nil
+	}
+	if Dao != nil {
+		for _, plugin := range Dao.Config.Plugins {
+			if resolver, ok := plugin.(*dbresolver.DBResolver); ok {
+				_ = resolver.Call(closePool)
+			}
+		}
+		_ = closePool(Dao.Statement.ConnPool)
+	}
+	if MinuteDao != nil {
+		_ = closePool(MinuteDao.Statement.ConnPool)
+	}
+	return firstErr
 }
 
 func initMinuteDBSchema(openDb *gorm.DB) error {

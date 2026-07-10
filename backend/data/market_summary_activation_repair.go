@@ -190,6 +190,9 @@ func shouldAttemptRecoverHistoricalMarketSummaryRule(rec models.AiRecommendStock
 	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
 		return false
 	}
+	if isMarketSummaryV142StoredReportRecoverCandidate(rec) {
+		return true
+	}
 	if isRecoverableMarketSummaryMarketDataGap(rec) {
 		return true
 	}
@@ -203,6 +206,32 @@ func shouldAttemptRecoverHistoricalMarketSummaryRule(rec models.AiRecommendStock
 		return true
 	}
 	if ruleLooksCorruptedForMarketSummary(rec.ActivationRuleJSON) {
+		return true
+	}
+	return false
+}
+
+func isMarketSummaryV142StoredReportRecoverCandidate(rec models.AiRecommendStocks) bool {
+	if strings.TrimSpace(rec.SummaryVersion) != marketSummaryVersion142 {
+		return false
+	}
+	if !isAnalysisOnlyRecommend(&rec) && strings.TrimSpace(rec.RecommendBuyPrice) != "" && strings.TrimSpace(rec.ActivationRuleJSON) != "" {
+		return false
+	}
+	reasonText := strings.Join([]string{
+		rec.InvalidSignal,
+		rec.InvalidCondition,
+		rec.ActivationInvalidReason,
+		rec.Remarks,
+	}, "\n")
+	if strings.Contains(reasonText, "止损空间") && strings.Contains(reasonText, "5.00%") {
+		return true
+	}
+	if strings.Contains(reasonText, "hardGateSelfCheck=pass") &&
+		(strings.TrimSpace(rec.RecommendBuyPrice) == "" ||
+			strings.TrimSpace(rec.RecommendStopProfitPrice) == "" ||
+			strings.TrimSpace(rec.RecommendStopLossPrice) == "" ||
+			strings.TrimSpace(rec.ActivationRuleJSON) == "") {
 		return true
 	}
 	return false
@@ -346,10 +375,20 @@ func tryRecoverHistoricalMarketSummaryRule(rec *models.AiRecommendStocks) bool {
 		return false
 	}
 	recoverMarketSummaryExitPlan(rec)
+	if isV136Recommend(*rec) {
+		activationPrice := rec.RecommendBuyPriceMax
+		if activationPrice <= 0 {
+			activationPrice = resolveRecommendReferencePrice(*rec)
+		}
+		if ok, _ := passesV136RewardRiskGate(*rec, activationPrice); !ok {
+			return false
+		}
+	}
 
 	rec.RecommendStatus = "valid"
 	rec.ExecutionState = recommendExecutionConditional
 	rec.ActivationStatus = "pending"
+	rec.InvalidCondition = ""
 	rec.ActivationInvalidReason = ""
 	rec.ActivationRuleJSON = ""
 	rec.ActivationRuleVersion = ""
@@ -394,6 +433,13 @@ func recoverMarketSummaryTradePlanFromStoredReport(rec *models.AiRecommendStocks
 		rec.BuySignal = draft.BuySignal
 		rec.BuySignalDetail = draft.BuySignalDetail
 	}
+	if strings.TrimSpace(draft.SellSignal) != "" {
+		rec.SellSignal = draft.SellSignal
+		rec.SellSignalDetail = draft.SellSignalDetail
+	}
+	if strings.TrimSpace(draft.InvalidSignal) != "" {
+		rec.InvalidSignal = draft.InvalidSignal
+	}
 	if (strings.TrimSpace(rec.InvalidCondition) == "" || strings.Contains(rec.InvalidCondition, marketSummaryAnalysisOnlySkipReason) || strings.Contains(rec.InvalidCondition, "缺少真实价格/量能数据")) && strings.TrimSpace(draft.InvalidCondition) != "" {
 		rec.InvalidCondition = draft.InvalidCondition
 	}
@@ -417,11 +463,41 @@ func loadMarketSummaryRecommendDraftFromStoredReport(rec models.AiRecommendStock
 	var reports []models.AIResponseResult
 	if err := db.Dao.Model(&models.AIResponseResult{}).
 		Where("created_at >= ? AND created_at < ?", start, end).
+		Where("(content LIKE ? OR content LIKE ? OR question LIKE ?)", "%"+rec.StockCode+"%", "%"+rec.StockName+"%", "%市场%").
+		Order("created_at desc").
+		Find(&reports).Error; err == nil {
+		if draft := findMarketSummaryRecommendDraftInStoredReports(reports, rec, code); draft != nil {
+			return draft
+		}
+	}
+	reports = nil
+	if err := db.Dao.Model(&models.AIResponseResult{}).
+		Where("created_at >= ? AND created_at < ?", start, end).
 		Where("(stock_code = ? OR stock_name = ? OR question LIKE ?)", "市场资讯", "市场资讯", "%市场%").
 		Order("created_at asc").
 		Find(&reports).Error; err != nil {
 		return nil
 	}
+	for idx := range reports {
+		report := reports[idx]
+		if strings.TrimSpace(report.Content) == "" {
+			continue
+		}
+		if !strings.Contains(report.Content, rec.StockCode) && !strings.Contains(report.Content, rec.StockName) {
+			continue
+		}
+		drafts := parseMarketSummaryRecommendStockDraftsWithVersion(report.Content, report.ProviderName, report.ModelName, *rec.DataTime, rec.SummaryVersion)
+		for _, draft := range drafts {
+			if draft == nil || normalizeRecommendStockCode(draft.StockCode) != code {
+				continue
+			}
+			return draft
+		}
+	}
+	return nil
+}
+
+func findMarketSummaryRecommendDraftInStoredReports(reports []models.AIResponseResult, rec models.AiRecommendStocks, code string) *marketSummaryRecommendDraft {
 	for idx := range reports {
 		report := reports[idx]
 		if strings.TrimSpace(report.Content) == "" {
@@ -691,7 +767,7 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 	stats := marketSummaryActivationRepairStats{}
 	var rows []models.AiRecommendStocks
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
-		Where("summary_version IN ?", []string{marketSummaryPhase3Version, marketSummaryPhase4Version}).
+		Where("summary_version IN ?", marketSummaryKnownVersions()).
 		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error
@@ -795,6 +871,9 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 				updateMap["focus_price"] = rec.FocusPrice
 				updateMap["buy_signal"] = rec.BuySignal
 				updateMap["buy_signal_detail"] = rec.BuySignalDetail
+				updateMap["sell_signal"] = rec.SellSignal
+				updateMap["sell_signal_detail"] = rec.SellSignalDetail
+				updateMap["invalid_signal"] = rec.InvalidSignal
 				updateMap["invalid_condition"] = rec.InvalidCondition
 				updateMap["activation_status"] = rec.ActivationStatus
 				updateMap["activation_rule_json"] = rec.ActivationRuleJSON

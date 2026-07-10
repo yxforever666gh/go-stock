@@ -2,7 +2,9 @@ package data
 
 import "strings"
 
-const DefaultMarketSummaryQuestion = "总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出关键价位与交易计划"
+const DefaultMarketSummaryQuestion = "总结和分析股票市场新闻中的投资机会，并推荐8-12只A股候选，其中最多4只作为可交易生产候选，并给出关键价位与交易计划"
+
+const legacyDefaultMarketSummaryQuestion = "总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出关键价位与交易计划"
 
 const marketSummaryOutputInstruction = `
 【市场资讯AI总结输出规范】
@@ -32,7 +34,7 @@ const marketSummaryOutputInstruction = `
 
 约束：
 - 推荐股票必须是 A 股。
-- 推荐股票池最多输出 2 只股票，只保留证据最完整、评分最高、最接近可执行交易计划的两只；不足 2 只时宁缺毋滥。
+- “推荐股票池”的输出数量与生产候选上限必须严格遵守后文唯一的“【推荐数量策略】”，不得自行改写为其他固定数量，也不得超出策略上限。
 - 每只股票都必须同时给出：核心催化、关键证据、价格锚点、买入区间、止盈区间、止损位、买入依据、失效条件、风险点、预期周期、4维置信度、操作备注。
 - 只允许输出“推荐股票”，不要输出“观察标的 / 回避标的 / 低吸候选 / 右侧确认”这类标签。
 - 必须先结合“当前时间”和A股交易时段判断输出方式：
@@ -129,6 +131,8 @@ func NormalizeMarketSummaryQuestion(question string) string {
 	}
 
 	switch text {
+	case legacyDefaultMarketSummaryQuestion:
+		return DefaultMarketSummaryQuestion
 	case "总结和分析股票市场新闻中的投资机会":
 		return DefaultMarketSummaryQuestion
 	case "请根据当前时间，总结和分析股票市场新闻中的投资机会":
@@ -148,6 +152,7 @@ func NormalizeMarketSummaryQuestion(question string) string {
 	}
 
 	if strings.HasPrefix(text, "请根据当前时间，总结和分析股票市场新闻中的投资机会") &&
+		!hasExplicitMarketSummaryRecommendationCount(text) &&
 		!strings.Contains(text, "买卖区间") &&
 		!strings.Contains(text, "关键价位") &&
 		!strings.Contains(text, "交易计划") {
@@ -162,10 +167,8 @@ func BuildMarketSummaryExecutionQuestion(question string) string {
 	if content == "" {
 		content = DefaultMarketSummaryQuestion
 	}
-	if strings.Contains(content, marketSummaryInstructionMarker) {
-		return content
-	}
-	return strings.TrimSpace(content + "\n\n" + strings.TrimSpace(marketSummaryOutputInstruction))
+	policy := ResolveMarketSummaryRecommendationCountPolicy(content)
+	return strings.TrimSpace(content + "\n\n" + strings.TrimSpace(marketSummaryOutputInstruction) + "\n\n" + policy.Instruction())
 }
 
 func RenderMarketSummaryTemplate(text string) string {
@@ -181,9 +184,9 @@ func RenderMarketSummaryTemplate(text string) string {
 		"stockName", "市场资讯",
 		"stockCode", "市场资讯",
 	)
-	content = strings.TrimSpace(replacer.Replace(content))
-	if strings.Contains(content, marketSummaryInstructionMarker) {
-		return content
+	content = stripMarketSummaryInstruction(strings.TrimSpace(replacer.Replace(content)))
+	if content == "" {
+		return strings.TrimSpace(marketSummaryOutputInstruction)
 	}
 	return strings.TrimSpace(content + "\n\n" + strings.TrimSpace(marketSummaryOutputInstruction))
 }

@@ -28,6 +28,11 @@ func NewRuntime(cfg appconfig.AppConfig) AppRuntime {
 func InitApplication(cfg appconfig.AppConfig) AppRuntime {
 	EnsureRuntimeDirs(cfg)
 	db.Init(cfg.DB.Path)
+	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
+		logger.SugaredLogger.Errorf("settings migration failed: %v", err)
+	} else if err := data.EnsureSettingsRecord(); err != nil {
+		logger.SugaredLogger.Errorf("settings initialization failed: %v", err)
+	}
 	data.InitAnalyzeSentiment()
 	go AutoMigrate()
 	return NewRuntime(cfg)
@@ -45,6 +50,9 @@ func InitCLIStorage(dataDir, dbPath string) (string, error) {
 	}
 	db.Init(dbPath)
 	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
+		return "", err
+	}
+	if err := data.EnsureSettingsRecord(); err != nil {
 		return "", err
 	}
 	return dbPath, nil

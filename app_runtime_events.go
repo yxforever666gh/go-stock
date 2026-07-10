@@ -17,7 +17,6 @@ func (a *App) registerCommonRuntimeEvents(ctx context.Context) {
 	})
 
 	runtime.EventsOn(ctx, "updateSettings", func(optionalData ...interface{}) {
-		logger.SugaredLogger.Infof("updateSettings: %v", optionalData)
 		a.reloadWindowTheme(ctx)
 	})
 }
@@ -27,7 +26,6 @@ func (a *App) reloadWindowTheme(ctx context.Context) {
 	if config == nil {
 		return
 	}
-	logger.SugaredLogger.Infof("updateSettings config:%+v", config)
 	if config.DarkTheme {
 		runtime.WindowSetBackgroundColour(ctx, 27, 38, 54, 1)
 		runtime.WindowSetDarkTheme(ctx)

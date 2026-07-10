@@ -2929,12 +2929,12 @@ func applyInactiveYieldDefaults(item *models.AiRecommendStocksYieldItem) {
 			item.DataStatus = "未结构化"
 		}
 	case "invalid":
-		item.SellTime = "无法回算"
+		item.SellTime = "未激活失效"
 		if strings.TrimSpace(item.PositionStatus) == "" || item.PositionStatus == "待激活" || item.PositionStatus == "持有" {
-			item.PositionStatus = "无法回算"
+			item.PositionStatus = "未激活失效"
 		}
 		if strings.TrimSpace(item.DataStatus) == "" || item.DataStatus == "正常" {
-			item.DataStatus = "无法判定"
+			item.DataStatus = "已失效"
 		}
 	default:
 		item.SellTime = "待激活"
@@ -4777,7 +4777,7 @@ func mapRecommendRecordToFastYieldItem(
 	minPrice, _, ok := parseRecommendEntryRange(rec)
 	if !ok || minPrice <= 0 || buyTime.IsZero() {
 		item.ActivationStatus = "invalid"
-		item.PositionStatus = "无法回算"
+		item.PositionStatus = "未激活失效"
 		item.DataStatus = "无法判定"
 		item.DataStatusReason = "fast 模式无法解析主买入区"
 		applyRecommendBacktestEligibilityOverride(&item, &rec)

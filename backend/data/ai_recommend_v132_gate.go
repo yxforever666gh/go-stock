@@ -110,7 +110,7 @@ func passesV136RewardRiskGate(rec models.AiRecommendStocks, activationPrice floa
 	if ratio < v136HardRewardRiskRatio {
 		return false, fmt.Sprintf("V1.3.6盈亏比硬底线未通过：盈亏比 %.2f 低于 %.2f", round2(ratio), v136HardRewardRiskRatio)
 	}
-	if downsidePct > v132MaxDownsideRiskPct {
+	if isMarketSummaryDownsideCapEnabled(rec.SummaryVersion) && downsidePct > v132MaxDownsideRiskPct {
 		return false, fmt.Sprintf("V1.3.6源头质量门槛未通过：止损空间 %.2f%% 超过 %.2f%%", round2(downsidePct), v132MaxDownsideRiskPct)
 	}
 	if ratio < v132MinRewardRiskRatio {

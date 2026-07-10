@@ -23,7 +23,7 @@ func TestSanitizeMarketSummaryDiscoveryResultLimitsAndResolves(t *testing.T) {
 			{StockName: "中际旭创", StockCode: "300308.SZ", Direction: "AI算力"},
 			{StockName: "腾讯控股", StockCode: "00700.HK", Direction: "港股"},
 			{StockName: "新易盛", StockCode: "300502.SZ", Direction: "AI算力"},
-		}, buildMarketSummaryRouteCandidatesForTest(20)...),
+		}, buildMarketSummaryRouteCandidatesForTest(defaultMarketSummaryRouteBudget().CandidateLimit+4)...),
 	}
 	sanitizeMarketSummaryDiscoveryResult(result)
 	if len(result.CandidateStocks) != defaultMarketSummaryRouteBudget().CandidateLimit {
@@ -107,13 +107,90 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 	if len(messages) == 0 {
 		t.Fatal("expected non-empty messages")
 	}
-	last := messages[len(messages)-1]["content"].(string)
-	if !containsAll(last, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "输出 8 到 12 只", "顺延补位队列", "最多 4 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
-		t.Fatalf("unexpected final instruction: %s", last)
+	allMessages := marketSummaryMessagesText(messages)
+	if !containsAll(allMessages, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "目标输出 8 到 12 只股票", "顺延补位队列", "最多 4 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
+		t.Fatalf("unexpected final messages: %s", allMessages)
+	}
+	if strings.Count(allMessages, "本次“推荐股票池”目标输出") != 1 {
+		t.Fatalf("expected one authoritative recommendation count policy, got: %s", allMessages)
+	}
+	if strings.Count(allMessages, "输出 8 到 12 只股票") != 1 {
+		t.Fatalf("expected default 8-12 output rule to appear once without a duplicate fixed rule, got: %s", allMessages)
+	}
+	if strings.Contains(allMessages, "最多输出 2 只") {
+		t.Fatalf("expected final messages to drop legacy fixed two-stock limit: %s", allMessages)
 	}
 	if !messagesContainText(messages, "最差成交价盈亏比 0.71 低于 0.80") {
 		t.Fatalf("expected dropped candidate reason in messages: %+v", messages)
 	}
+}
+
+func TestBuildPhase3FinalMessagesHonorsExplicitRecommendationCount(t *testing.T) {
+	question := "请根据当前时间，总结和分析股票市场新闻中的投资机会，并推荐3只A股"
+	messages := buildPhase3FinalMessages(
+		"system prompt",
+		question,
+		marketSummaryDiscoveryInput{Question: question},
+		&marketSummaryDiscoveryResult{},
+		nil,
+		nil,
+		nil,
+		newMarketSummaryRouteLog(),
+	)
+	allMessages := marketSummaryMessagesText(messages)
+
+	if !strings.Contains(allMessages, "目标输出 3 只股票，其中最多 3 只可作为可交易生产候选") {
+		t.Fatalf("expected explicit three-stock policy in final messages: %s", allMessages)
+	}
+	if strings.Contains(allMessages, "输出 8 到 12 只股票") || strings.Contains(allMessages, "最多 4 只可作为可交易生产候选") {
+		t.Fatalf("expected no conflicting default count policy for explicit three-stock request: %s", allMessages)
+	}
+	if strings.Count(allMessages, "本次“推荐股票池”目标输出") != 1 {
+		t.Fatalf("expected one authoritative custom recommendation count policy, got: %s", allMessages)
+	}
+}
+
+func TestBuildMarketSummarySupplementMessagesUsesDynamicProductionTarget(t *testing.T) {
+	tests := []struct {
+		name              string
+		targetProduction  int
+		currentProduction int
+		want              string
+	}{
+		{name: "default target", targetProduction: 4, currentProduction: 2, want: "总生产目标为4只，当前已有2只，本轮最多新增2只可交易生产候选"},
+		{name: "custom target", targetProduction: 3, currentProduction: 1, want: "总生产目标为3只，当前已有1只，本轮最多新增2只可交易生产候选"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := buildMarketSummarySupplementMessages(`{"remainingVerified":[]}`, tt.targetProduction, tt.currentProduction)
+			allMessages := marketSummaryMessagesText(messages)
+			if !strings.Contains(allMessages, tt.want) {
+				t.Fatalf("expected dynamic supplement target %q, got: %s", tt.want, allMessages)
+			}
+			if strings.Contains(allMessages, "最多 6 只") {
+				t.Fatalf("expected supplement prompt to drop legacy fixed six-stock limit: %s", allMessages)
+			}
+			if !strings.Contains(allMessages, "严格核验不足时允许少于该数量甚至0只") {
+				t.Fatalf("expected supplement prompt to prohibit padding: %s", allMessages)
+			}
+			if !strings.Contains(allMessages, "remainingVerified 候选或 repairableFailures 对应股票") {
+				t.Fatalf("expected supplement prompt to allow both remaining and repairable candidates: %s", allMessages)
+			}
+			if strings.Contains(allMessages, "只允许使用输入里的 remainingVerified 候选，禁止新增股票") {
+				t.Fatalf("supplement prompt must not exclude repairableFailures: %s", allMessages)
+			}
+		})
+	}
+}
+
+func marketSummaryMessagesText(messages []map[string]any) string {
+	var builder strings.Builder
+	for _, message := range messages {
+		builder.WriteString(fmt.Sprint(message["content"]))
+		builder.WriteByte('\n')
+	}
+	return builder.String()
 }
 
 func messagesContainText(messages []map[string]any, needle string) bool {

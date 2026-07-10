@@ -140,14 +140,6 @@ func UpdateConfig(s *SettingConfig) string {
 	if s == nil || s.Settings == nil {
 		return "保存失败: 配置为空"
 	}
-	s.LocalPushEnable = false
-	s.DingPushEnable = false
-	s.DingRobot = ""
-	s.EnableDanmu = false
-	s.EnableNews = false
-	s.EnablePushNews = false
-	s.EnableOnlyPushRedNews = false
-	s.EastmoneyMinuteEnabled = true
 	normalizedRecipients, err := NormalizeYieldEmailRecipients(s.YieldEmailTo)
 	if err != nil {
 		return "保存失败: " + err.Error()
@@ -157,8 +149,6 @@ func UpdateConfig(s *SettingConfig) string {
 	s.YieldEmailSMTPHost = strings.TrimSpace(s.YieldEmailSMTPHost)
 	s.YieldEmailSMTPUsername = strings.TrimSpace(s.YieldEmailSMTPUsername)
 	s.YieldEmailSMTPPassword = strings.TrimSpace(s.YieldEmailSMTPPassword)
-	s.YieldEmailCronEnabled = false
-	s.YieldEmailCronTimes = ""
 	s.MinuteProviderMode = normalizeMinuteProviderMode(s.MinuteProviderMode)
 	s.PrivateMinuteBaseURL = strings.TrimSpace(s.PrivateMinuteBaseURL)
 	s.PrivateMinuteAPIKey = strings.TrimSpace(s.PrivateMinuteAPIKey)
@@ -203,20 +193,6 @@ func UpdateConfig(s *SettingConfig) string {
 		s.PrivateMinuteMinInterval = appconfig.DefaultDiemengMinIntervalMS
 	}
 
-	current := &Settings{}
-	err = db.Dao.Model(&Settings{}).First(current).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		logger.SugaredLogger.Error("查询配置失败:", err)
-		return "查询配置失败: " + err.Error()
-	}
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		// 首次保存时先创建一条记录，再直接写入本次前端提交的数据。
-		if e := db.Dao.Model(&Settings{}).Create(current).Error; e != nil {
-			logger.SugaredLogger.Error("创建配置失败:", e)
-			return "创建配置失败: " + e.Error()
-		}
-	}
-
 	updateMap := map[string]any{
 		"local_push_enable":                s.LocalPushEnable,
 		"ding_push_enable":                 s.DingPushEnable,
@@ -244,6 +220,7 @@ func UpdateConfig(s *SettingConfig) string {
 		"browser_path":                     s.BrowserPath,
 		"enable_news":                      s.EnableNews,
 		"dark_theme":                       s.DarkTheme,
+		"browser_pool_size":                s.BrowserPoolSize,
 		"enable_fund":                      s.EnableFund,
 		"enable_push_news":                 s.EnablePushNews,
 		"enable_only_push_red_news":        s.EnableOnlyPushRedNews,
@@ -270,16 +247,24 @@ func UpdateConfig(s *SettingConfig) string {
 		"akshare_minute_source_mode":       s.AkshareMinuteSourceMode,
 	}
 
-	if err = db.Dao.Model(&Settings{}).Where("id = ?", current.ID).Updates(updateMap).Error; err != nil {
-		logger.SugaredLogger.Error("更新配置失败:", err)
-		return "更新配置失败: " + err.Error()
-	}
-
-	// 更新 AI 配置列表
-	err = updateAiConfigs(s.AiConfigs)
+	err = db.Dao.Transaction(func(tx *gorm.DB) error {
+		current, ensureErr := ensureSettingsRecord(tx)
+		if ensureErr != nil {
+			return ensureErr
+		}
+		if updateErr := tx.Model(&Settings{}).Where("id = ?", current.ID).Updates(updateMap).Error; updateErr != nil {
+			return updateErr
+		}
+		// nil means the caller did not submit AI settings. An explicit empty
+		// array means delete all AI configurations.
+		if s.AiConfigs != nil {
+			return updateAiConfigs(tx, s.AiConfigs)
+		}
+		return nil
+	})
 	if err != nil {
-		logger.SugaredLogger.Errorf("更新AI模型服务配置失败: %v", err)
-		return "更新AI模型服务配置失败: " + err.Error()
+		logger.SugaredLogger.Errorf("更新配置失败: %v", err)
+		return "更新配置失败: " + err.Error()
 	}
 
 	return "保存成功！"
@@ -347,20 +332,21 @@ func NormalizeYieldEmailCronTimes(input string) ([]string, error) {
 	return times, nil
 }
 
-func updateAiConfigs(aiConfigs []*AIConfig) error {
+func updateAiConfigs(tx *gorm.DB, aiConfigs []*AIConfig) error {
 	if len(aiConfigs) == 0 {
-		err := db.Dao.Exec("DELETE FROM ai_config").Error
-		if err != nil {
-			return err
+		return tx.Exec("DELETE FROM ai_config").Error
+	}
+	for index, item := range aiConfigs {
+		if item == nil {
+			return fmt.Errorf("AI 配置第 %d 项为空", index+1)
 		}
-		return db.Dao.Exec("DELETE FROM sqlite_sequence WHERE name='ai_config'").Error
 	}
 	var ids []uint
 	lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
 		ids = append(ids, item.ID)
 	})
 	var existAiConfigs []*AIConfig
-	err := db.Dao.Model(&AIConfig{}).Select("id").Where("id in (?) ", ids).Find(&existAiConfigs).Error
+	err := tx.Model(&AIConfig{}).Select("id").Where("id in (?) ", ids).Find(&existAiConfigs).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
@@ -383,7 +369,7 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 			addAiConfigs = append(addAiConfigs, item)
 		} else {
 			notDeleteIds = append(notDeleteIds, item.ID)
-			e = db.Dao.Model(&AIConfig{}).Where("id=?", item.ID).Updates(map[string]interface{}{
+			e = tx.Model(&AIConfig{}).Where("id=?", item.ID).Updates(map[string]interface{}{
 				"sort":               item.Sort,
 				"name":               item.Name,
 				"base_url":           item.BaseUrl,
@@ -406,20 +392,21 @@ func updateAiConfigs(aiConfigs []*AIConfig) error {
 	}
 	//删除旧的配置
 	if len(notDeleteIds) > 0 {
-		err = db.Dao.Exec("DELETE FROM ai_config WHERE id NOT IN ?", notDeleteIds).Error
+		err = tx.Exec("DELETE FROM ai_config WHERE id NOT IN ?", notDeleteIds).Error
 		if err != nil {
 			return err
 		}
 	} else {
-		err = db.Dao.Exec("DELETE FROM ai_config").Error
+		err = tx.Exec("DELETE FROM ai_config").Error
 		if err != nil {
 			return err
 		}
 	}
-	logger.SugaredLogger.Infof("更新aiConfigs +%d", len(addAiConfigs))
 	//批量新增的配置
-	err = db.Dao.CreateInBatches(addAiConfigs, len(addAiConfigs)).Error
-	return err
+	if len(addAiConfigs) == 0 {
+		return nil
+	}
+	return tx.CreateInBatches(addAiConfigs, len(addAiConfigs)).Error
 }
 
 func GetSettingConfig() *SettingConfig {
@@ -433,41 +420,29 @@ func GetSettingConfig() *SettingConfig {
 		applyRuntimeOverrideFromSettings(settings)
 		return settingConfig
 	}
-	_ = db.Dao.Model(&Settings{}).First(settings).Error
-	if settings.OpenAiEnable {
-		err := db.Dao.Model(&AIConfig{}).
-			Order("CASE WHEN sort <= 0 THEN id ELSE sort END ASC").
-			Order("id ASC").
-			Find(&aiConfigs).Error
-		if err != nil {
-			logger.SugaredLogger.Error("查询AI配置失败:", err)
-		} else if len(aiConfigs) > 0 {
-			lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
-				if item.Sort <= 0 {
-					item.Sort = index + 1
-				}
-				item.ApiProtocol = NormalizeAIAPIProtocol(item.ApiProtocol)
-				if item.TimeOut <= 0 {
-					item.TimeOut = 60 * 5
-				}
-			})
-		}
-		if settings.CrawlTimeOut <= 0 {
-			settings.CrawlTimeOut = 60
-		}
-		if settings.KDays < 30 {
-			settings.KDays = 60
-		}
+	persistedSettings, err := ensureSettingsRecord(db.Dao)
+	if err != nil {
+		logger.SugaredLogger.Error("查询配置失败:", err)
+		applySettingDefaults(settings)
+	} else {
+		settings = persistedSettings
 	}
-	applySettingDefaults(settings)
-	if normalizedCronTimes, err := NormalizeYieldEmailCronTimes(settings.YieldEmailCronTimes); err == nil {
-		settings.YieldEmailCronTimes = strings.Join(normalizedCronTimes, ",")
-	}
-	if normalizedSummaryCronTimes, err := NormalizeMarketSummaryCronTimes(settings.MarketSummaryCronTimes); err == nil {
-		settings.MarketSummaryCronTimes = strings.Join(normalizedSummaryCronTimes, ",")
-	}
-	if normalizedRecipients, err := NormalizeYieldEmailRecipients(settings.YieldEmailTo); err == nil {
-		settings.YieldEmailTo = normalizedRecipients
+	err = db.Dao.Model(&AIConfig{}).
+		Order("CASE WHEN sort <= 0 THEN id ELSE sort END ASC").
+		Order("id ASC").
+		Find(&aiConfigs).Error
+	if err != nil {
+		logger.SugaredLogger.Error("查询AI配置失败:", err)
+	} else if len(aiConfigs) > 0 {
+		lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
+			if item.Sort <= 0 {
+				item.Sort = index + 1
+			}
+			item.ApiProtocol = NormalizeAIAPIProtocol(item.ApiProtocol)
+			if item.TimeOut <= 0 {
+				item.TimeOut = 60 * 5
+			}
+		})
 	}
 	settingConfig.Settings = settings
 	settingConfig.AiConfigs = aiConfigs
@@ -492,6 +467,18 @@ func applySettingDefaults(settings *Settings) {
 		return
 	}
 	applyPrivateMinuteSettingsFromEnv(settings)
+	if settings.YieldEmailSMTPPort <= 0 {
+		settings.YieldEmailSMTPPort = 465
+	}
+	if settings.RefreshInterval <= 0 {
+		settings.RefreshInterval = 1
+	}
+	if settings.CrawlTimeOut <= 0 {
+		settings.CrawlTimeOut = 60
+	}
+	if settings.KDays < 30 {
+		settings.KDays = 60
+	}
 	settings.LocalPushEnable = false
 	settings.DingPushEnable = false
 	settings.DingRobot = ""
@@ -548,11 +535,42 @@ func applySettingDefaults(settings *Settings) {
 	}
 }
 
+// EnsureSettingsRecord creates the singleton settings row with all first-run
+// defaults exactly once. Existing database values are never refilled from the
+// environment on later reads.
+func EnsureSettingsRecord() error {
+	if db.Dao == nil {
+		return errors.New("database is not initialized")
+	}
+	_, err := ensureSettingsRecord(db.Dao)
+	return err
+}
+
+func ensureSettingsRecord(tx *gorm.DB) (*Settings, error) {
+	settings := &Settings{}
+	err := tx.Model(&Settings{}).First(settings).Error
+	if err == nil {
+		return settings, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	applySettingDefaults(settings)
+	if err = tx.Create(settings).Error; err != nil {
+		// A concurrent startup path may already have created the singleton.
+		if lookupErr := tx.Model(&Settings{}).First(settings).Error; lookupErr == nil {
+			return settings, nil
+		}
+		return nil, err
+	}
+	return settings, nil
+}
+
 func NormalizeMarketSummaryCronTimes(input string) ([]string, error) {
 	replacer := strings.NewReplacer("，", ",", "；", ",", ";", ",", "\n", ",", "\t", ",")
 	raw := replacer.Replace(strings.TrimSpace(input))
 	if raw == "" {
-		raw = defaultMarketSummaryCronTimes
+		return nil, nil
 	}
 
 	seen := make(map[string]struct{})

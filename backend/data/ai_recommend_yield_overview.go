@@ -784,7 +784,7 @@ func resolveYieldReplayCurrentTime(item models.AiRecommendStocksYieldItem, state
 
 func parseYieldReplayTime(raw string) (time.Time, bool) {
 	text := strings.TrimSpace(raw)
-	if text == "" || text == "持有" || text == "待激活" || text == "已跳过" || text == "未纳入回测" || text == "无法回算" {
+	if text == "" || text == "持有" || text == "待激活" || text == "已跳过" || text == "未纳入回测" || text == "无法回算" || text == "未激活失效" {
 		return time.Time{}, false
 	}
 	t, err := parseDateTimeWithFallback(normalizeDateTime(text))

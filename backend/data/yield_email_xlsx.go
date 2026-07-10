@@ -557,6 +557,18 @@ func yieldSkippedDisplayReason(item models.AiRecommendStocksYieldItem) string {
 	return "未激活，已按规则跳过"
 }
 
+func yieldInvalidDisplayReason(item models.AiRecommendStocksYieldItem) string {
+	reason := strings.TrimSpace(firstNonEmptyText(
+		item.DataStatusReason,
+		item.ActivationInvalidReason,
+		item.BacktestEligibilityReason,
+	))
+	if reason != "" {
+		return reason
+	}
+	return "未激活前已触发失效条件，未纳入收益回算"
+}
+
 func yieldOpeningReviewActionText(review *models.AiRecommendOpeningReviewSummary) string {
 	if review == nil {
 		return "--"
@@ -608,7 +620,7 @@ func yieldActivationStatusLabel(item models.AiRecommendStocksYieldItem) string {
 	case "expired":
 		return "过期未触发"
 	case "invalid":
-		return "无法回算"
+		return "未激活失效"
 	case "ineligible":
 		return "未纳入回测"
 	default:
@@ -685,7 +697,7 @@ func yieldSellTimeDisplay(item models.AiRecommendStocksYieldItem) string {
 	case "ineligible":
 		return "未纳入回测"
 	case "invalid":
-		return "无法回算"
+		return "未激活失效\n" + yieldInvalidDisplayReason(item)
 	case "pending":
 		return "待激活"
 	}

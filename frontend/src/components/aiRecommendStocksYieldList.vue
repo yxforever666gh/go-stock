@@ -228,7 +228,7 @@ const defaultColumns = [
         pending: '待激活',
         skipped: '已跳过',
         expired: '过期未触发',
-        invalid: '无法回算',
+        invalid: '未激活失效',
         ineligible: '未纳入回测'
       }
       return h(NText, {type: typeMap[status] || 'default'}, {default: () => labelMap[status] || '--'})
@@ -309,7 +309,7 @@ const defaultColumns = [
       if (activationStatus === 'invalid') {
         const reason = invalidDisplayReason(row)
         return h("div", {style: "line-height: 1.35;"}, [
-          h(NText, {type: textType}, {default: () => "无法回算"}),
+          h(NText, {type: textType}, {default: () => "未激活失效"}),
           h("div", {
             style: "font-size: 12px; color: #666; margin-top: 2px; white-space: normal; word-break: break-word;"
           }, reason)
@@ -1375,7 +1375,7 @@ function invalidDisplayReason(row) {
   if (reason) {
     return reason
   }
-  return "激活条件未成立或已先触发失效条件"
+  return "未激活前已触发失效条件，未纳入收益回算"
 }
 
 function openingReviewActionText(review) {

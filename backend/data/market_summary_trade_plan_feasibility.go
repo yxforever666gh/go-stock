@@ -164,15 +164,11 @@ func finalizeMarketSummaryFeasiblePlan(path string, entryMin, entryMax, worstEnt
 	downside := plan.WorstEntry - plan.StopLoss
 	plan.RewardRisk = round2((plan.TakeProfit - plan.WorstEntry) / downside)
 	plan.DownsidePct = round2(downside / plan.WorstEntry * 100)
-	plan.PassHardGate = plan.RewardRisk >= marketSummaryFeasibleRewardRisk && plan.DownsidePct <= marketSummaryFeasibleDownsidePct
+	plan.PassHardGate = plan.RewardRisk >= marketSummaryFeasibleRewardRisk
 	if !plan.PassHardGate {
 		switch {
-		case plan.RewardRisk < marketSummaryFeasibleRewardRisk && plan.DownsidePct > marketSummaryFeasibleDownsidePct:
-			plan.FailureReason = fmt.Sprintf("盈亏比 %.2f 低于 0.80，止损空间 %.2f%% 超过 5.00%%", plan.RewardRisk, plan.DownsidePct)
 		case plan.RewardRisk < marketSummaryFeasibleRewardRisk:
 			plan.FailureReason = fmt.Sprintf("盈亏比 %.2f 低于 0.80", plan.RewardRisk)
-		case plan.DownsidePct > marketSummaryFeasibleDownsidePct:
-			plan.FailureReason = fmt.Sprintf("止损空间 %.2f%% 超过 5.00%%", plan.DownsidePct)
 		}
 	}
 	return plan

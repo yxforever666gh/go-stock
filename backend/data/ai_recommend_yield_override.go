@@ -76,7 +76,7 @@ func normalizeYieldOverrideActivationStatus(raw string) string {
 		return "pending"
 	case "activated", "已激活":
 		return "activated"
-	case "invalid", "无法回算":
+	case "invalid", "无法回算", "未激活失效":
 		return "invalid"
 	case "ineligible", "未纳入回测":
 		return "ineligible"

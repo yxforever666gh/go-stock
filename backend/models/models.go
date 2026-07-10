@@ -1118,6 +1118,7 @@ type MarketSummaryBlockedReasonItem struct {
 
 type MarketSummaryRecommendSaveResult struct {
 	SavedCount                  int                                     `json:"savedCount"`
+	UpgradedCount               int                                     `json:"upgradedCount,omitempty"`
 	ProductionCount             int                                     `json:"productionCount"`
 	AnalysisOnlyCount           int                                     `json:"analysisOnlyCount"`
 	BlockedCount                int                                     `json:"blockedCount"`
@@ -1125,6 +1126,8 @@ type MarketSummaryRecommendSaveResult struct {
 	ProductionDowngradeReasons  []MarketSummaryBlockedReasonItem        `json:"productionDowngradeReasons,omitempty"`
 	RepairableTradePlanFailures []MarketSummaryTradePlanRepairCandidate `json:"repairableTradePlanFailures,omitempty"`
 	UsedStockCodes              []string                                `json:"usedStockCodes"`
+	SavedStockCodes             []string                                `json:"savedStockCodes,omitempty"`
+	UpgradedStockCodes          []string                                `json:"upgradedStockCodes,omitempty"`
 	RemainingCandidateStocks    []string                                `json:"remainingCandidateStocks"`
 	AIOutputCount               int                                     `json:"aiOutputCount"`
 	AIOutputCountSecond         int                                     `json:"aiOutputCountSecond,omitempty"`
@@ -1134,12 +1137,19 @@ type MarketSummaryRecommendSaveResult struct {
 }
 
 type MarketSummaryTradePlanRepairCandidate struct {
-	StockCode   string  `json:"stockCode"`
-	StockName   string  `json:"stockName,omitempty"`
-	Reason      string  `json:"reason,omitempty"`
-	RewardRisk  float64 `json:"rewardRisk,omitempty"`
-	DownsidePct float64 `json:"downsidePct,omitempty"`
-	RepairHint  string  `json:"repairHint,omitempty"`
+	RecommendID                uint    `json:"recommendId,omitempty"`
+	StockCode                  string  `json:"stockCode"`
+	StockName                  string  `json:"stockName,omitempty"`
+	Reason                     string  `json:"reason,omitempty"`
+	RewardRisk                 float64 `json:"rewardRisk,omitempty"`
+	DownsidePct                float64 `json:"downsidePct,omitempty"`
+	OriginalBuyPrice           string  `json:"originalBuyPrice,omitempty"`
+	OriginalStopProfitPrice    string  `json:"originalStopProfitPrice,omitempty"`
+	OriginalStopLossPrice      string  `json:"originalStopLossPrice,omitempty"`
+	OriginalBuySignal          string  `json:"originalBuySignal,omitempty"`
+	OriginalInvalidCondition   string  `json:"originalInvalidCondition,omitempty"`
+	OriginalActivationRuleJSON string  `json:"originalActivationRuleJson,omitempty"`
+	RepairHint                 string  `json:"repairHint,omitempty"`
 }
 
 type MarketSummaryRunDiagnostic struct {

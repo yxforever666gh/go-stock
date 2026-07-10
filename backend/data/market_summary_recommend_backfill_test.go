@@ -81,6 +81,75 @@ func TestApplyMarketSummaryProductionSelectionKeepsFourTradableCandidates(t *tes
 	}
 }
 
+func TestApplyMarketSummaryProductionSelectionWithLimitClampsAndHonorsLimit(t *testing.T) {
+	tests := []struct {
+		name            string
+		productionLimit int
+		wantTradable    int
+		wantReason      string
+	}{
+		{name: "custom three", productionLimit: 3, wantTradable: 3, wantReason: "最多3只生产候选上限"},
+		{name: "zero", productionLimit: 0, wantTradable: 0, wantReason: "最多0只生产候选上限"},
+		{name: "negative clamps to zero", productionLimit: -1, wantTradable: 0, wantReason: "最多0只生产候选上限"},
+		{name: "above global maximum clamps to four", productionLimit: 9, wantTradable: 4, wantReason: "最多4只生产候选上限"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			items := make([]*marketSummaryRecommendDraft, 0, 6)
+			for i := 0; i < 6; i++ {
+				items = append(items, buildMarketSummaryProductionDraftForTest(i))
+			}
+
+			applyMarketSummaryProductionSelectionWithLimit(items, tt.productionLimit)
+
+			tradable := 0
+			for idx, item := range items {
+				if normalizeRecommendExecutionState(item.ExecutionState) != recommendExecutionAnalysisOnly {
+					tradable++
+					continue
+				}
+				if !strings.Contains(item.InvalidCondition, tt.wantReason) {
+					t.Fatalf("item %d analysis_only reason = %q, want %q", idx, item.InvalidCondition, tt.wantReason)
+				}
+			}
+			if tradable != tt.wantTradable {
+				t.Fatalf("tradable count = %d, want %d", tradable, tt.wantTradable)
+			}
+		})
+	}
+}
+
+func TestApplyMarketSummaryProductionSelectionDoesNotCountExistingAnalysisOnlyItems(t *testing.T) {
+	items := make([]*marketSummaryRecommendDraft, 0, 8)
+	for i := 0; i < 4; i++ {
+		item := buildMarketSummaryProductionDraftForTest(i)
+		item.ExecutionState = recommendExecutionAnalysisOnly
+		item.RecommendStatus = "missing_market_data"
+		item.InvalidCondition = "原始仅分析原因"
+		items = append(items, item)
+	}
+	for i := 4; i < 8; i++ {
+		items = append(items, buildMarketSummaryProductionDraftForTest(i))
+	}
+
+	applyMarketSummaryProductionSelectionWithLimit(items, 4)
+
+	productionCount := 0
+	for idx, item := range items {
+		if normalizeRecommendExecutionState(item.ExecutionState) == recommendExecutionAnalysisOnly {
+			if idx < 4 && item.InvalidCondition != "原始仅分析原因" {
+				t.Fatalf("existing analysis-only item %d was unexpectedly rewritten: %q", idx, item.InvalidCondition)
+			}
+			continue
+		}
+		productionCount++
+	}
+	if productionCount != 4 {
+		t.Fatalf("production count = %d, want 4; analysis-only rows must not consume production slots", productionCount)
+	}
+}
+
 func buildMarketSummaryProductionDraftForTest(idx int) *marketSummaryRecommendDraft {
 	price := 10.0 + float64(idx)
 	return &marketSummaryRecommendDraft{
@@ -696,5 +765,49 @@ func TestEnsureMarketSummaryYieldOverridesSaved(t *testing.T) {
 	}
 	if !strings.Contains(rows[1].DataStatusReason, "改判恢复收益率跟踪") {
 		t.Fatalf("unexpected review reason: %s", rows[1].DataStatusReason)
+	}
+}
+
+func TestDowngradeMarketSummaryDraftPreservesFirstRepairSource(t *testing.T) {
+	draft := &marketSummaryRecommendDraft{StockCode: "000001.SZ", RecommendBuyPrice: "10-11", RecommendBuyPriceMin: 10, RecommendBuyPriceMax: 11}
+	downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft, "first")
+	if draft.RepairSource == nil || draft.RepairSource.RecommendBuyPrice != "10-11" {
+		t.Fatalf("first repair source missing: %+v", draft.RepairSource)
+	}
+	downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft, "second")
+	if draft.RepairSource == nil || draft.RepairSource.RecommendBuyPrice != "10-11" {
+		t.Fatalf("first repair source was overwritten: %+v", draft.RepairSource)
+	}
+}
+
+func TestValidateMarketSummaryRepairBounds(t *testing.T) {
+	repair := &models.MarketSummaryTradePlanRepairCandidate{
+		OriginalBuyPrice:        "10-11",
+		OriginalStopProfitPrice: "12",
+		OriginalStopLossPrice:   "9.5",
+	}
+	valid := &models.AiRecommendStocks{
+		RecommendBuyPriceMin:        10.2,
+		RecommendBuyPriceMax:        10.8,
+		RecommendStopProfitPriceMin: 12.2,
+		RecommendStopLossPrice:      "9.6",
+	}
+	if err := validateMarketSummaryRepairBounds(repair, valid); err != nil {
+		t.Fatalf("expected narrowed repair to pass: %v", err)
+	}
+	invalid := *valid
+	invalid.RecommendBuyPriceMax = 11.5
+	if err := validateMarketSummaryRepairBounds(repair, &invalid); err == nil {
+		t.Fatal("expanded buy range must be rejected")
+	}
+	invalid = *valid
+	invalid.RecommendStopProfitPriceMin = 11.8
+	if err := validateMarketSummaryRepairBounds(repair, &invalid); err == nil {
+		t.Fatal("lowered take profit must be rejected")
+	}
+	invalid = *valid
+	invalid.RecommendStopLossPrice = "10.0"
+	if err := validateMarketSummaryRepairBounds(repair, &invalid); err == nil {
+		t.Fatal("large stop loss adjustment must be rejected")
 	}
 }

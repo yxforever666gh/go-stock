@@ -84,10 +84,11 @@ const summaryCronEnabled = ref(true)
 const summaryCronTimes = ref('09:40,11:30,14:30')
 const visitedTabs = ref([])
 
-const defaultMarketSummaryQuestion = '总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出关键价位与交易计划'
-const summaryOutputHint = '固定输出：市场主线 / 候选方向 / 风险提示 / 推荐结论 / 交易计划说明 / 推荐股票池 / 跳过复审（结构化表格）'
+const defaultMarketSummaryQuestion = '总结和分析股票市场新闻中的投资机会，并推荐8-12只A股候选，其中最多4只作为可交易生产候选，并给出关键价位与交易计划'
+const summaryOutputHint = '固定输出：市场主线 / 候选方向 / 风险提示 / 推荐结论 / 交易计划说明 / 推荐股票池 / 跳过复审（结构化表格）；默认推荐8-12只A股候选，最多4只可交易生产候选；严格核验不足时可少于8只甚至0只，不得降门槛或编造凑数'
 const legacyMarketSummaryQuestion = '总结和分析股票市场新闻中的投资机会'
 const legacyMarketSummaryQuestionWithTime = '请根据当前时间，总结和分析股票市场新闻中的投资机会'
+const legacyMarketSummaryQuestion2A = '总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出关键价位与交易计划'
 const legacyMarketSummaryQuestion3A = '总结和分析股票市场新闻中的投资机会，并推荐3只A股股票'
 const legacyMarketSummaryQuestion3A2 = '总结和分析股票市场新闻中的投资机会，并推荐3个A股股票'
 const legacyMarketSummaryQuestion3A3 = '总结和分析股票市场新闻中的投资机会，并推荐3只A股'
@@ -142,6 +143,12 @@ function containsMarketSummaryPlaceholders(q) {
   return ['{{stockName}}', '{{stockCode}}', '{stockName}', '{stockCode}', 'stockName', 'stockCode'].some((item) => text.includes(item))
 }
 
+function hasExplicitMarketSummaryRecommendationCount(q) {
+  const text = (q || '').trim()
+  if (!text) return false
+  return /(?:推荐|筛选|选出|挑选|输出|给出)\s*\d+\s*(?:(?:-|~|～|至|到|–|—)\s*\d+\s*)?(?:只(?:\s*(?:A\s*股|股票|标的|候选股))?|个\s*(?:A\s*股|股票|标的|候选股|股))/.test(text)
+}
+
 function normalizeMarketSummaryQuestion(q) {
   const raw = (q || '').trim()
   if (!raw) return defaultMarketSummaryQuestion
@@ -150,13 +157,14 @@ function normalizeMarketSummaryQuestion(q) {
   if (!text) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestionWithTime) return defaultMarketSummaryQuestion
+  if (text === legacyMarketSummaryQuestion2A) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion3A) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion3A2) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion3A3) return defaultMarketSummaryQuestion
   if (text === legacyMarketSummaryQuestion3A4) return defaultMarketSummaryQuestion
   if (text === '市场资讯分析和总结') return defaultMarketSummaryQuestion
   if (text === '市场资讯分析') return defaultMarketSummaryQuestion
-  if (text.startsWith(legacyMarketSummaryQuestionWithTime) && !text.includes('买卖区间') && !text.includes('关键价位') && !text.includes('交易计划')) {
+  if (text.startsWith(legacyMarketSummaryQuestionWithTime) && !hasExplicitMarketSummaryRecommendationCount(text) && !text.includes('买卖区间') && !text.includes('关键价位') && !text.includes('交易计划')) {
     return defaultMarketSummaryQuestion
   }
   return text
@@ -771,7 +779,7 @@ onBeforeUnmount(() => {
           @update:value="onQuestionInput"
           type="textarea"
           :show-count="true"
-          placeholder="请输入您的问题:例如 总结和分析股票市场新闻中的投资机会，并推荐2个A股，并给出买入区间、止盈区间、止损位与失效条件；结果将固定输出为市场主线/候选方向/风险提示/推荐结论/交易计划说明/推荐股票池"
+          placeholder="请输入您的问题:例如 总结和分析股票市场新闻中的投资机会，并推荐8-12只A股候选，其中最多4只作为可交易生产候选，并给出买入区间、止盈区间、止损位与失效条件；严格核验不足时可少于8只甚至0只，不得降门槛或编造凑数"
           :autosize="{ minRows: 2, maxRows: 5 }"
         />
         <n-button size="tiny" type="warning" :loading="summaryRunning" :disabled="summaryRunning" @click="reAiSummary">再次总结</n-button>

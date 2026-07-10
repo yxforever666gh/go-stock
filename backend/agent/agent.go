@@ -23,7 +23,6 @@ import (
 // @Desc
 // -----------------------------------------------------------------------------------
 func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig) *react.Agent {
-	logger.SugaredLogger.Infof("GetStockAiAgent aiConfig: %v", aiConfig)
 	temperature := float32(aiConfig.Temperature)
 	var toolableChatModel model.ToolCallingChatModel
 	var err error

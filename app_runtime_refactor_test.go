@@ -3,6 +3,7 @@ package main
 import (
 	"go-stock/backend/data"
 	"go-stock/backend/models"
+	"strings"
 	"testing"
 	"time"
 )
@@ -72,6 +73,26 @@ func TestIsLikelyRequestLevelFailure(t *testing.T) {
 	}
 	if isLikelyRequestLevelFailure([]string{"工具调用失败"}) {
 		t.Fatal("generic tool failure should not be treated as request-level failure")
+	}
+}
+
+func TestBuildMarketSummarySupplementNoteUsesDynamicTarget(t *testing.T) {
+	note := buildMarketSummarySupplementNote(true, 4, []string{"300001.SZ"}, nil)
+	if !strings.Contains(note, "第一轮生产候选不足 4 只") {
+		t.Fatalf("expected dynamic production target in supplement note: %s", note)
+	}
+	if !strings.Contains(note, "补位候选：300001") {
+		t.Fatalf("expected supplement note to include normalized candidate codes: %s", note)
+	}
+	if strings.Contains(note, "不足 2 只") {
+		t.Fatalf("supplement note must not retain the legacy fixed target: %s", note)
+	}
+}
+
+func TestCollectRuntimeSupplementCandidateCodesIncludesRepairableFailures(t *testing.T) {
+	codes := collectRuntimeSupplementCandidateCodes(nil, []models.MarketSummaryTradePlanRepairCandidate{{StockCode: "300002.SZ"}})
+	if len(codes) != 1 || codes[0] != "300002" {
+		t.Fatalf("unexpected supplement candidate codes: %v", codes)
 	}
 }
 
@@ -146,5 +167,61 @@ func TestResolveAIProviderNameFromConfigs_FallbackToModelName(t *testing.T) {
 	}
 	if got := resolveAIProviderNameFromConfigs(nil, 0, "deepseek-chat"); got != "DeepSeek" {
 		t.Fatalf("unexpected provider by model fallback: got=%q want=%q", got, "DeepSeek")
+	}
+}
+
+func TestMergeMarketSummarySaveResultAccountsForUpgrade(t *testing.T) {
+	target := &models.MarketSummaryRecommendSaveResult{
+		SavedCount:        4,
+		ProductionCount:   2,
+		AnalysisOnlyCount: 2,
+		SavedStockCodes:   []string{"000001.SZ"},
+		RepairableTradePlanFailures: []models.MarketSummaryTradePlanRepairCandidate{
+			{StockCode: "000002.SZ"},
+		},
+	}
+	extra := &models.MarketSummaryRecommendSaveResult{
+		SavedCount:         1,
+		UpgradedCount:      1,
+		ProductionCount:    2,
+		AnalysisOnlyCount:  0,
+		SavedStockCodes:    []string{"000003.SZ"},
+		UpgradedStockCodes: []string{"000002.SZ"},
+	}
+	mergeMarketSummarySaveResult(target, extra)
+	if target.SavedCount != 5 || target.UpgradedCount != 1 || target.ProductionCount != 4 || target.AnalysisOnlyCount != 1 {
+		t.Fatalf("unexpected merged counters: %+v", target)
+	}
+	if len(target.RepairableTradePlanFailures) != 0 {
+		t.Fatalf("upgraded repair candidate should be removed: %+v", target.RepairableTradePlanFailures)
+	}
+	if len(target.SavedStockCodes) != 2 || len(target.UpgradedStockCodes) != 1 {
+		t.Fatalf("unexpected merged codes: saved=%v upgraded=%v", target.SavedStockCodes, target.UpgradedStockCodes)
+	}
+}
+
+func TestSelectRuntimeRepairableVerifiedCandidatesRequiresSnapshot(t *testing.T) {
+	verified, repairable := selectRuntimeRepairableVerifiedCandidates(
+		[]data.MarketSummaryVerifiedCandidateSnapshot{{StockCode: "000001.SZ"}},
+		[]models.MarketSummaryTradePlanRepairCandidate{{StockCode: "000001.SZ", RecommendID: 1}, {StockCode: "000002.SZ", RecommendID: 2}},
+	)
+	if len(verified) != 1 || len(repairable) != 1 || repairable[0].StockCode != "000001" {
+		t.Fatalf("unexpected verified repair selection: verified=%v repairable=%v", verified, repairable)
+	}
+}
+
+func TestBuildMarketSummaryCandidateFunnelExplainsHardLimits(t *testing.T) {
+	policy := data.ResolveMarketSummaryRecommendationCountPolicy("推荐20只股票")
+	text := buildMarketSummaryCandidateFunnel(
+		&data.MarketSummaryRouteLogSnapshot{IndicatorCandidateCt: 120, IndicatorAIInputCt: 50, DiscoveryCandidateCt: 36, VerifiedCandidateCt: 8},
+		policy,
+		&models.MarketSummaryRecommendSaveResult{AIOutputCount: 20, SavedCount: 8, ProductionCount: 4, AnalysisOnlyCount: 4, BlockedCount: 12},
+		8,
+		8,
+	)
+	for _, want := range []string{"指标候选：120", "模型允许超量输出", "生产候选 4 只", "不代表已经激活", "系统单次上限为 12 只", "数量上限截断 8 行"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("funnel missing %q: %s", want, text)
+		}
 	}
 }

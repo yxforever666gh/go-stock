@@ -13,6 +13,7 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"gorm.io/gorm"
 )
 
 var (
@@ -90,14 +91,57 @@ func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelNam
 }
 
 func EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
+	return EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verifiedCandidates, marketSummaryRecommendationOutputLimit, marketSummaryMaxProductionCandidates)
+}
+
+func EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
+	return EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verifiedCandidates, marketSummaryRecommendationOutputLimit, productionLimit)
+}
+
+func EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot, outputLimit, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
+	return EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName, startedAt, verifiedCandidates, MarketSummaryRecommendSaveOptions{
+		NewRecordLimit:  outputLimit,
+		ProductionLimit: productionLimit,
+	})
+}
+
+type MarketSummaryRecommendSaveOptions struct {
+	NewRecordLimit        int
+	ProductionLimit       int
+	RepairableFailures    []models.MarketSummaryTradePlanRepairCandidate
+	RequireVerifiedRepair bool
+}
+
+type marketSummarySaveSelection struct {
+	Draft    *marketSummaryRecommendDraft
+	Existing *models.AiRecommendStocks
+	Repair   *models.MarketSummaryTradePlanRepairCandidate
+}
+
+type marketSummarySaveSelectionStats struct {
+	BlockedCount int
+	Reasons      []string
+}
+
+type marketSummaryPreparedSaveItem struct {
+	Selection marketSummarySaveSelection
+	Item      *models.AiRecommendStocks
+}
+
+func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot, options MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
 	result := &models.MarketSummaryRecommendSaveResult{
 		BlockedReasons:              []models.MarketSummaryBlockedReasonItem{},
 		ProductionDowngradeReasons:  []models.MarketSummaryBlockedReasonItem{},
 		RepairableTradePlanFailures: []models.MarketSummaryTradePlanRepairCandidate{},
 		UsedStockCodes:              []string{},
+		SavedStockCodes:             []string{},
+		UpgradedStockCodes:          []string{},
 		RemainingCandidateStocks:    []string{},
 	}
+	options.NewRecordLimit = normalizeMarketSummaryOutputLimit(options.NewRecordLimit)
+	options.ProductionLimit = normalizeMarketSummaryProductionLimit(options.ProductionLimit)
 	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, startedAt)
+	applyMarketSummaryFeasiblePlanFallback(drafts, verifiedCandidates)
 	result.AIOutputCount = len(drafts)
 	if len(drafts) == 0 {
 		result.BlockedCount = 1
@@ -115,69 +159,575 @@ func EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName
 		return result, err
 	}
 
-	missing := collectMarketSummaryRecommendStocksForSave(drafts, existing)
-	if len(missing) == 0 {
-		result.BlockedCount = len(drafts)
-		result.BlockedReasons = []models.MarketSummaryBlockedReasonItem{{Reason: "同日已推荐排除", Count: len(drafts)}}
-		result.UsedStockCodes = collectMarketSummaryDraftCodes(drafts)
+	selections, selectionStats := selectMarketSummaryRecommendDraftsForSave(drafts, existing, verifiedCandidates, options)
+	result.BlockedCount += selectionStats.BlockedCount
+	blockedReasons := append([]string(nil), selectionStats.Reasons...)
+	if len(selections) == 0 {
+		result.BlockedReasons = aggregateMarketSummaryBlockedReasons(blockedReasons)
 		result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
 		return result, nil
 	}
+	selectedDrafts := make([]*marketSummaryRecommendDraft, 0, len(selections))
+	for _, selection := range selections {
+		selectedDrafts = append(selectedDrafts, selection.Draft)
+	}
+	applyMarketSummaryProductionSelectionWithLimit(selectedDrafts, options.ProductionLimit)
 
-	items := make([]*models.AiRecommendStocks, 0, len(missing))
-	failures := make([]string, 0, len(missing))
-	downgradeReasons := make([]string, 0, len(missing))
-	repairableFailures := make([]models.MarketSummaryTradePlanRepairCandidate, 0, len(missing))
-	for _, draft := range missing {
-		downgradeReason := marketSummaryDraftProductionDowngradeReason(draft)
-		item, err := draft.toRecommendStock()
+	items := make([]marketSummaryPreparedSaveItem, 0, len(selections))
+	operationFailures := make([]string, 0, len(selections))
+	downgradeReasons := make([]string, 0, len(selections))
+	repairableFailures := make([]models.MarketSummaryTradePlanRepairCandidate, 0, len(selections))
+	for _, selection := range selections {
+		item, err := selection.Draft.toRecommendStock()
 		if err != nil {
-			failures = append(failures, err.Error())
+			operationFailures = append(operationFailures, err.Error())
+			blockedReasons = append(blockedReasons, err.Error())
 			result.BlockedCount++
 			continue
 		}
-		if downgradeReason != "" {
-			downgradeReasons = append(downgradeReasons, downgradeReason)
-			if repair, ok := buildMarketSummaryTradePlanRepairCandidate(draft, downgradeReason); ok {
-				repairableFailures = append(repairableFailures, repair)
-			}
-		}
-		items = append(items, item)
+		items = append(items, marketSummaryPreparedSaveItem{Selection: selection, Item: item})
 	}
 	if len(items) == 0 {
-		result.BlockedReasons = aggregateMarketSummaryBlockedReasons(failures)
-		result.UsedStockCodes = collectMarketSummaryDraftCodes(missing)
+		result.BlockedReasons = aggregateMarketSummaryBlockedReasons(blockedReasons)
 		result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
-		if len(failures) == 0 {
+		if len(operationFailures) == 0 {
 			return result, nil
 		}
-		return result, errors.New(strings.Join(failures, "；"))
+		return result, errors.New(strings.Join(operationFailures, "；"))
 	}
 
 	service := NewAiRecommendStocksService()
-	for idx, item := range items {
+	for idx, prepared := range items {
+		item := prepared.Item
+		if prepared.Selection.Existing != nil {
+			if isAnalysisOnlyRecommend(item) {
+				reason := firstNonEmptyText(item.InvalidCondition, item.ActivationInvalidReason, "修正后仍未通过生产硬校验")
+				blockedReasons = append(blockedReasons, reason)
+				downgradeReasons = append(downgradeReasons, reason)
+				result.BlockedCount++
+				continue
+			}
+			if err := upgradeMarketSummaryAnalysisOnlyRecommend(prepared.Selection.Existing.ID, prepared.Selection.Repair, item, startedAt); err != nil {
+				failure := fmt.Sprintf("第%d条修正记录未能升级: %v", idx+1, err)
+				operationFailures = append(operationFailures, failure)
+				blockedReasons = append(blockedReasons, failure)
+				result.BlockedCount++
+				continue
+			}
+			code := normalizeRecommendStockCode(item.StockCode)
+			result.UpgradedCount++
+			result.ProductionCount++
+			result.UpgradedStockCodes = append(result.UpgradedStockCodes, code)
+			result.UsedStockCodes = append(result.UsedStockCodes, code)
+			continue
+		}
 		if err := service.CreateAiRecommendStocks(item); err != nil {
-			failures = append(failures, fmt.Sprintf("第%d条推荐记录不完整: %v", idx+1, err))
+			failure := fmt.Sprintf("第%d条推荐记录不完整: %v", idx+1, err)
+			operationFailures = append(operationFailures, failure)
+			blockedReasons = append(blockedReasons, failure)
 			result.BlockedCount++
 			continue
 		}
 		result.SavedCount++
-		result.UsedStockCodes = append(result.UsedStockCodes, normalizeRecommendStockCode(item.StockCode))
+		code := normalizeRecommendStockCode(item.StockCode)
+		result.SavedStockCodes = append(result.SavedStockCodes, code)
+		result.UsedStockCodes = append(result.UsedStockCodes, code)
 		if isAnalysisOnlyRecommend(item) {
 			result.AnalysisOnlyCount++
+			downgradeReason := firstNonEmptyText(item.InvalidCondition, item.ActivationInvalidReason)
+			if downgradeReason != "" {
+				downgradeReasons = append(downgradeReasons, downgradeReason)
+				if repair, ok := buildMarketSummaryTradePlanRepairCandidate(prepared.Selection.Draft, downgradeReason); ok {
+					repair.RecommendID = item.ID
+					repairableFailures = append(repairableFailures, repair)
+				}
+			}
 		} else {
 			result.ProductionCount++
 		}
 	}
 	result.UsedStockCodes = dedupeNonEmptyStrings(result.UsedStockCodes, 0)
+	result.SavedStockCodes = dedupeNonEmptyStrings(result.SavedStockCodes, 0)
+	result.UpgradedStockCodes = dedupeNonEmptyStrings(result.UpgradedStockCodes, 0)
 	result.RemainingCandidateStocks = remainingMarketSummaryCandidateCodes(verifiedCandidates, result.UsedStockCodes)
-	result.BlockedReasons = aggregateMarketSummaryBlockedReasons(failures)
+	result.BlockedReasons = aggregateMarketSummaryBlockedReasons(blockedReasons)
 	result.ProductionDowngradeReasons = aggregateMarketSummaryProductionDowngradeReasons(downgradeReasons)
 	result.RepairableTradePlanFailures = repairableFailures
-	if len(failures) > 0 {
-		return result, errors.New(strings.Join(failures, "；"))
+	if len(operationFailures) > 0 {
+		return result, errors.New(strings.Join(operationFailures, "；"))
 	}
 	return result, nil
+}
+
+func selectMarketSummaryRecommendDraftsForSave(drafts []*marketSummaryRecommendDraft, existing []models.AiRecommendStocks, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot, options MarketSummaryRecommendSaveOptions) ([]marketSummarySaveSelection, marketSummarySaveSelectionStats) {
+	stats := marketSummarySaveSelectionStats{Reasons: []string{}}
+	existingByCode := make(map[string]*models.AiRecommendStocks, len(existing))
+	for idx := range existing {
+		code := normalizeRecommendStockCode(existing[idx].StockCode)
+		if code == "" {
+			continue
+		}
+		existingByCode[code] = &existing[idx]
+	}
+	repairByCode := make(map[string]*models.MarketSummaryTradePlanRepairCandidate, len(options.RepairableFailures))
+	for idx := range options.RepairableFailures {
+		code := normalizeRecommendStockCode(options.RepairableFailures[idx].StockCode)
+		if code == "" || options.RepairableFailures[idx].RecommendID == 0 {
+			continue
+		}
+		repairByCode[code] = &options.RepairableFailures[idx]
+	}
+	verifiedCodes := make(map[string]struct{}, len(verifiedCandidates))
+	for _, candidate := range verifiedCandidates {
+		if code := normalizeRecommendStockCode(candidate.StockCode); code != "" {
+			verifiedCodes[code] = struct{}{}
+		}
+	}
+
+	selections := make([]marketSummarySaveSelection, 0, len(drafts))
+	seen := make(map[string]struct{}, len(drafts))
+	newRecordCount := 0
+	for _, draft := range drafts {
+		if draft == nil {
+			continue
+		}
+		if shouldSkipMarketSummaryBackfill(draft) {
+			stats.BlockedCount++
+			stats.Reasons = append(stats.Reasons, "明确回避项排除")
+			continue
+		}
+		code := normalizeRecommendStockCode(draft.StockCode)
+		if code == "" {
+			stats.BlockedCount++
+			stats.Reasons = append(stats.Reasons, "股票代码为空")
+			continue
+		}
+		if _, ok := seen[code]; ok {
+			stats.BlockedCount++
+			stats.Reasons = append(stats.Reasons, "本批重复股票排除")
+			continue
+		}
+		seen[code] = struct{}{}
+		if existingItem, ok := existingByCode[code]; ok {
+			repair := repairByCode[code]
+			if reason := validateMarketSummaryRepairSelection(existingItem, repair, verifiedCodes, options.RequireVerifiedRepair); reason != "" {
+				stats.BlockedCount++
+				stats.Reasons = append(stats.Reasons, reason)
+				continue
+			}
+			selections = append(selections, marketSummarySaveSelection{Draft: draft, Existing: existingItem, Repair: repair})
+			continue
+		}
+		if newRecordCount >= options.NewRecordLimit {
+			stats.BlockedCount++
+			stats.Reasons = append(stats.Reasons, fmt.Sprintf("超出推荐数量上限（最多%d只）", options.NewRecordLimit))
+			continue
+		}
+		newRecordCount++
+		selections = append(selections, marketSummarySaveSelection{Draft: draft})
+	}
+	return selections, stats
+}
+
+func validateMarketSummaryRepairSelection(existing *models.AiRecommendStocks, repair *models.MarketSummaryTradePlanRepairCandidate, verifiedCodes map[string]struct{}, requireVerified bool) string {
+	if existing == nil || repair == nil {
+		return "同日已推荐排除"
+	}
+	code := normalizeRecommendStockCode(existing.StockCode)
+	if existing.ID == 0 || repair.RecommendID != existing.ID || normalizeRecommendStockCode(repair.StockCode) != code {
+		return "修正授权与同日记录不匹配"
+	}
+	if !isMarketSummaryStoredRecommend(existing) {
+		return "非市场总结来源记录禁止修正"
+	}
+	if !isAnalysisOnlyRecommend(existing) {
+		return "仅允许修正同日仅分析记录"
+	}
+	if requireVerified {
+		if _, ok := verifiedCodes[code]; !ok {
+			return "缺少对应 verified 快照，禁止修正"
+		}
+	}
+	return ""
+}
+
+func isMarketSummaryStoredRecommend(item *models.AiRecommendStocks) bool {
+	if item == nil {
+		return false
+	}
+	if isMarketSummaryActivationSource(item.ActivationRuleSource) {
+		return true
+	}
+	version := strings.TrimSpace(item.SummaryVersion)
+	for _, known := range marketSummaryKnownVersions() {
+		if version == known {
+			return true
+		}
+	}
+	return false
+}
+
+func upgradeMarketSummaryAnalysisOnlyRecommend(recommendID uint, repair *models.MarketSummaryTradePlanRepairCandidate, item *models.AiRecommendStocks, startedAt time.Time) error {
+	if recommendID == 0 || repair == nil || item == nil {
+		return errors.New("修正授权不完整")
+	}
+	if repair.RecommendID != recommendID {
+		return errors.New("修正授权记录ID不匹配")
+	}
+	code := normalizeRecommendStockCode(item.StockCode)
+	if code == "" || normalizeRecommendStockCode(repair.StockCode) != code {
+		return errors.New("修正授权股票代码不匹配")
+	}
+	startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
+	err := db.Dao.Transaction(func(tx *gorm.DB) error {
+		var current models.AiRecommendStocks
+		if err := tx.Where("id = ?", recommendID).First(&current).Error; err != nil {
+			return err
+		}
+		if current.DataTime == nil || current.DataTime.Before(startOfDay) || !current.DataTime.Before(endOfDay) {
+			return errors.New("修正目标不属于本次交易日")
+		}
+		if normalizeRecommendStockCode(current.StockCode) != code {
+			return errors.New("修正目标股票代码不匹配")
+		}
+		if !isMarketSummaryStoredRecommend(&current) {
+			return errors.New("修正目标不是市场总结来源记录")
+		}
+		if !isAnalysisOnlyRecommend(&current) {
+			return errors.New("修正目标已不是仅分析记录")
+		}
+
+		candidate, err := buildMarketSummaryRepairUpgradeCandidate(current, item, repair)
+		if err != nil {
+			return err
+		}
+		updates := map[string]any{
+			"recommend_buy_price":             candidate.RecommendBuyPrice,
+			"recommend_buy_price_min":         candidate.RecommendBuyPriceMin,
+			"recommend_buy_price_max":         candidate.RecommendBuyPriceMax,
+			"recommend_stop_profit_price":     candidate.RecommendStopProfitPrice,
+			"recommend_stop_profit_price_min": candidate.RecommendStopProfitPriceMin,
+			"recommend_stop_profit_price_max": candidate.RecommendStopProfitPriceMax,
+			"recommend_stop_loss_price":       candidate.RecommendStopLossPrice,
+			"recommend_category":              candidate.RecommendCategory,
+			"execution_state":                 candidate.ExecutionState,
+			"buy_signal":                      candidate.BuySignal,
+			"buy_signal_detail":               candidate.BuySignalDetail,
+			"sell_signal":                     candidate.SellSignal,
+			"sell_signal_detail":              candidate.SellSignalDetail,
+			"invalid_signal":                  candidate.InvalidSignal,
+			"invalid_condition":               candidate.InvalidCondition,
+			"activation_rule_json":            candidate.ActivationRuleJSON,
+			"activation_rule_version":         candidate.ActivationRuleVersion,
+			"activation_rule_source":          candidate.ActivationRuleSource,
+			"activation_status":               candidate.ActivationStatus,
+			"activation_invalid_reason":       candidate.ActivationInvalidReason,
+			"recommend_status":                candidate.RecommendStatus,
+		}
+		update := tx.Model(&models.AiRecommendStocks{}).
+			Where("id = ? AND data_time >= ? AND data_time < ?", recommendID, startOfDay, endOfDay).
+			Updates(updates)
+		if update.Error != nil {
+			return update.Error
+		}
+		if update.RowsAffected != 1 {
+			return fmt.Errorf("修正升级影响记录数异常: %d", update.RowsAffected)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	_ = markAiRecommendYieldDirtyCodesForMutationFn([]string{code}, "市场总结修正升级后等待严格模式下载/回算", aiRecommendYieldModeStrict)
+	requestAiRecommendYieldScopedRecalcForMutationFn(false, "market_summary_recommend_upgraded", []string{code})
+	return nil
+}
+
+func buildMarketSummaryRepairUpgradeCandidate(current models.AiRecommendStocks, item *models.AiRecommendStocks, repair *models.MarketSummaryTradePlanRepairCandidate) (*models.AiRecommendStocks, error) {
+	if item == nil || repair == nil {
+		return nil, errors.New("修正内容为空")
+	}
+	candidate := current
+	candidate.RecommendBuyPrice = strings.TrimSpace(item.RecommendBuyPrice)
+	candidate.RecommendBuyPriceMin = item.RecommendBuyPriceMin
+	candidate.RecommendBuyPriceMax = item.RecommendBuyPriceMax
+	candidate.RecommendStopProfitPrice = strings.TrimSpace(item.RecommendStopProfitPrice)
+	candidate.RecommendStopProfitPriceMin = item.RecommendStopProfitPriceMin
+	candidate.RecommendStopProfitPriceMax = item.RecommendStopProfitPriceMax
+	candidate.RecommendStopLossPrice = strings.TrimSpace(item.RecommendStopLossPrice)
+	candidate.BuySignal = strings.TrimSpace(item.BuySignal)
+	candidate.BuySignalDetail = strings.TrimSpace(item.BuySignalDetail)
+	candidate.SellSignal = strings.TrimSpace(item.SellSignal)
+	candidate.SellSignalDetail = strings.TrimSpace(item.SellSignalDetail)
+	candidate.InvalidSignal = firstNonEmptyText(item.InvalidSignal, item.InvalidCondition)
+	candidate.InvalidCondition = strings.TrimSpace(item.InvalidCondition)
+	candidate.ExecutionState = recommendExecutionConditional
+	candidate.RecommendCategory = recommendExecutionConditional
+	candidate.RecommendStatus = "valid"
+	candidate.ActivationStatus = ""
+	candidate.ActivationInvalidReason = ""
+	candidate.ActivationRuleJSON = ""
+	candidate.ActivationRuleVersion = ""
+	candidate.ActivationRuleSource = "market_summary"
+	if err := normalizeAiRecommendStockForSave(&candidate); err != nil {
+		return nil, err
+	}
+	if isAnalysisOnlyRecommend(&candidate) {
+		return nil, errors.New("修正后仍为仅分析状态")
+	}
+	if isPendingMarketDataRecommend(&candidate) || normalizeRecommendStatus(candidate.RecommendStatus) == recommendStatusPendingMarketData || strings.EqualFold(strings.TrimSpace(candidate.ActivationStatus), recommendActivationPendingData) {
+		return nil, errors.New("修正后仍等待行情数据，禁止升级生产候选")
+	}
+	if normalizeRecommendExecutionState(candidate.ExecutionState) != recommendExecutionConditional {
+		return nil, errors.New("修正后执行状态不是条件触发")
+	}
+	if !isMarketSummaryActivationSource(candidate.ActivationRuleSource) || strings.TrimSpace(candidate.ActivationRuleJSON) == "" {
+		return nil, errors.New("修正后缺少后端生成的市场总结激活规则")
+	}
+	if err := validateMarketSummaryRepairBounds(repair, &candidate); err != nil {
+		return nil, err
+	}
+	draft := marketSummaryRecommendDraftFromStoredRecommend(candidate)
+	if reason := marketSummaryDraftProductionRejectionReason(draft); reason != "" {
+		return nil, errors.New(reason)
+	}
+	return &candidate, nil
+}
+
+func validateMarketSummaryRepairBounds(repair *models.MarketSummaryTradePlanRepairCandidate, candidate *models.AiRecommendStocks) error {
+	if repair == nil || candidate == nil {
+		return errors.New("修正边界校验参数为空")
+	}
+	_, originalBuyMin, originalBuyMax := normalizePriceRangeText(repair.OriginalBuyPrice, 0, 0)
+	if originalBuyMin <= 0 || originalBuyMax <= 0 {
+		return errors.New("缺少原始买入区间，禁止修正升级")
+	}
+	if candidate.RecommendBuyPriceMin+0.01 < originalBuyMin || candidate.RecommendBuyPriceMax-0.01 > originalBuyMax {
+		return errors.New("修正买入区间只能在原区间内收窄")
+	}
+	_, originalProfitMin, _ := normalizePriceRangeText(repair.OriginalStopProfitPrice, 0, 0)
+	if originalProfitMin <= 0 || candidate.RecommendStopProfitPriceMin+0.01 < originalProfitMin {
+		return errors.New("修正止盈不得低于原止盈")
+	}
+	_, originalStopLoss := normalizeSinglePriceText(repair.OriginalStopLossPrice)
+	_, repairedStopLoss := normalizeSinglePriceText(candidate.RecommendStopLossPrice)
+	if originalStopLoss <= 0 || repairedStopLoss <= 0 {
+		return errors.New("缺少有效止损，禁止修正升级")
+	}
+	if math.Abs(repairedStopLoss-originalStopLoss)/originalStopLoss > 0.03 {
+		return errors.New("修正止损偏离原止损超过3%，不属于有限微调")
+	}
+	return nil
+}
+
+func marketSummaryRecommendDraftFromStoredRecommend(item models.AiRecommendStocks) *marketSummaryRecommendDraft {
+	return &marketSummaryRecommendDraft{
+		StockCode:                   item.StockCode,
+		StockName:                   item.StockName,
+		BkName:                      item.BkName,
+		StockPrice:                  item.StockPrice,
+		StockCurrentPrice:           item.StockCurrentPrice,
+		ObservePrice:                item.ObservePrice,
+		RecommendBuyPrice:           item.RecommendBuyPrice,
+		RecommendBuyPriceMin:        item.RecommendBuyPriceMin,
+		RecommendBuyPriceMax:        item.RecommendBuyPriceMax,
+		RecommendStopProfitPrice:    item.RecommendStopProfitPrice,
+		RecommendStopProfitPriceMin: item.RecommendStopProfitPriceMin,
+		RecommendStopProfitPriceMax: item.RecommendStopProfitPriceMax,
+		RecommendStopLossPrice:      item.RecommendStopLossPrice,
+		RecommendCategory:           item.RecommendCategory,
+		ExecutionState:              item.ExecutionState,
+		BuySignal:                   item.BuySignal,
+		BuySignalDetail:             item.BuySignalDetail,
+		InvalidSignal:               item.InvalidSignal,
+		InvalidCondition:            item.InvalidCondition,
+		EventStrength:               item.EventStrength,
+		CapitalConfirmation:         item.CapitalConfirmation,
+		FundamentalFit:              item.FundamentalFit,
+		TechnicalFit:                item.TechnicalFit,
+		ActivationRuleJSON:          item.ActivationRuleJSON,
+		ActivationRuleVersion:       item.ActivationRuleVersion,
+		ActivationRuleSource:        item.ActivationRuleSource,
+		ActivationInvalidReason:     item.ActivationInvalidReason,
+		RecommendStatus:             item.RecommendStatus,
+		SummaryVersion:              item.SummaryVersion,
+		Remarks:                     item.Remarks,
+	}
+}
+
+func applyMarketSummaryFeasiblePlanFallback(drafts []*marketSummaryRecommendDraft, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot) {
+	if len(drafts) == 0 || len(verifiedCandidates) == 0 {
+		return
+	}
+	verifiedByCode := make(map[string]MarketSummaryVerifiedCandidateSnapshot, len(verifiedCandidates))
+	for _, candidate := range verifiedCandidates {
+		code := normalizeRecommendStockCode(candidate.StockCode)
+		if code == "" {
+			continue
+		}
+		verifiedByCode[code] = candidate
+	}
+	for _, draft := range drafts {
+		if draft == nil || strings.TrimSpace(draft.SummaryVersion) != marketSummaryVersion142 {
+			continue
+		}
+		code := normalizeRecommendStockCode(draft.StockCode)
+		if code == "" {
+			continue
+		}
+		candidate, ok := verifiedByCode[code]
+		if !ok || !marketSummaryDraftNeedsFeasiblePlanFallback(draft) {
+			continue
+		}
+		plan, ok := selectBestMarketSummaryFeasiblePlan(candidate)
+		if !ok {
+			continue
+		}
+		applyFeasiblePlanToMarketSummaryDraft(draft, candidate, plan)
+	}
+}
+
+func marketSummaryDraftNeedsFeasiblePlanFallback(draft *marketSummaryRecommendDraft) bool {
+	if draft == nil {
+		return false
+	}
+	if normalizeRecommendExecutionState(draft.ExecutionState) == recommendExecutionAnalysisOnly {
+		return true
+	}
+	if draft.RecommendBuyPriceMin <= 0 || draft.RecommendBuyPriceMax <= 0 {
+		return true
+	}
+	if strings.TrimSpace(draft.RecommendStopProfitPrice) == "" || strings.TrimSpace(draft.RecommendStopLossPrice) == "" {
+		return true
+	}
+	if strings.TrimSpace(draft.ActivationRuleJSON) == "" {
+		return true
+	}
+	return false
+}
+
+func selectBestMarketSummaryFeasiblePlan(candidate MarketSummaryVerifiedCandidateSnapshot) (marketSummaryFeasiblePlan, bool) {
+	var best marketSummaryFeasiblePlan
+	found := false
+	for _, plan := range candidate.FeasiblePlans {
+		if !plan.PassHardGate {
+			continue
+		}
+		if !found ||
+			plan.RewardRisk > best.RewardRisk ||
+			(plan.RewardRisk == best.RewardRisk && plan.DownsidePct < best.DownsidePct) ||
+			(plan.RewardRisk == best.RewardRisk && plan.DownsidePct == best.DownsidePct && strings.EqualFold(plan.Path, "pullback") && !strings.EqualFold(best.Path, "pullback")) {
+			best = plan
+			found = true
+		}
+	}
+	return best, found
+}
+
+func applyFeasiblePlanToMarketSummaryDraft(draft *marketSummaryRecommendDraft, candidate MarketSummaryVerifiedCandidateSnapshot, plan marketSummaryFeasiblePlan) {
+	if draft == nil {
+		return
+	}
+	draft.RepairSource = nil
+	entryText := strings.TrimSpace(plan.EntryRange)
+	buyText, buyMin, buyMax := parseMarketSummaryBuyRange(entryText)
+	if buyMin <= 0 || buyMax <= 0 {
+		buyMin = plan.WorstEntry
+		buyMax = plan.WorstEntry
+		buyText = formatMarketSummaryPlanPrice(plan.WorstEntry)
+	}
+	stopProfitText := formatMarketSummaryPlanPrice(plan.TakeProfit)
+	stopLossText := formatMarketSummaryPlanPrice(plan.StopLoss)
+	anchor := firstNonEmptyText(candidate.AuctionPrice, candidate.MinutePrice, candidate.CurrentPrice, draft.StockCurrentPrice, draft.ObservePrice, draft.StockPrice)
+	if anchor != "" {
+		draft.StockPrice = anchor
+		draft.StockCurrentPrice = anchor
+		draft.StockClosePrice = anchor
+		draft.ObservePrice = anchor
+	}
+	draft.RecommendBuyPrice = firstNonEmptyText(buyText, entryText)
+	draft.RecommendBuyPriceMin = buyMin
+	draft.RecommendBuyPriceMax = buyMax
+	draft.RecommendStopProfitPrice = stopProfitText
+	draft.RecommendStopProfitPriceMin = plan.TakeProfit
+	draft.RecommendStopProfitPriceMax = plan.TakeProfit
+	draft.RecommendStopLossPrice = stopLossText
+	draft.FocusPrice = draft.RecommendBuyPrice
+	draft.ExecutionState = recommendExecutionConditional
+	draft.RecommendCategory = ""
+	draft.RecommendStatus = "valid"
+	draft.ActivationRuleSource = "market_summary"
+	draft.ActivationRuleVersion = activationRuleVersionV3
+	draft.BuySignal = fmt.Sprintf("价格触发：%s路径进入%s；量能触发：5分钟成交额不低于近5个5分钟平均成交额的1.10倍", strings.TrimSpace(plan.Path), draft.RecommendBuyPrice)
+	draft.BuySignalDetail = fmt.Sprintf("hardGateFallback=feasiblePlans; worstEntry=%.2f; rewardRisk=%.2f; downsidePct=%.2f", plan.WorstEntry, plan.RewardRisk, plan.DownsidePct)
+	draft.InvalidSignal = fmt.Sprintf("时间失效：未来5个交易日内未触发；价格失效：跌破止损位%s", stopLossText)
+	draft.InvalidCondition = ""
+	draft.ActivationInvalidReason = ""
+	draft.Remarks = appendRecommendRemarkNotice(draft.Remarks, fmt.Sprintf("feasiblePlans兜底补齐交易字段：path=%s; entry=%s; takeProfit=%.2f; stopLoss=%.2f; rewardRisk=%.2f; downsidePct=%.2f", plan.Path, draft.RecommendBuyPrice, plan.TakeProfit, plan.StopLoss, plan.RewardRisk, plan.DownsidePct))
+	if ruleJSON, version, err := buildActivationRuleFromMarketSummaryFeasiblePlan(draft, plan); err == nil {
+		draft.ActivationRuleJSON = ruleJSON
+		if version != "" {
+			draft.ActivationRuleVersion = version
+		}
+	} else {
+		draft.ActivationRuleJSON = ""
+		draft.ActivationInvalidReason = err.Error()
+	}
+	if reason := marketSummaryDraftProductionRejectionReason(draft); reason != "" {
+		downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft, reason)
+	}
+}
+
+func buildActivationRuleFromMarketSummaryFeasiblePlan(draft *marketSummaryRecommendDraft, plan marketSummaryFeasiblePlan) (string, string, error) {
+	if draft == nil {
+		return "", "", errors.New("market summary draft is nil")
+	}
+	signalType := "price_range_with_volume"
+	if strings.EqualFold(plan.Path, "breakout") {
+		signalType = "price_breakout_with_volume"
+	}
+	path := activationRule{
+		Name:             strings.TrimSpace(plan.Path),
+		SignalType:       signalType,
+		EvaluationWindow: "5m",
+		Baseline:         "avg_amount_5x5m",
+		Operator:         ">=",
+		ThresholdValue:   round2(draft.RecommendBuyPriceMin),
+		ThresholdMax:     round2(draft.RecommendBuyPriceMax),
+		VolumeRatio:      1.10,
+		ConfirmBars:      1,
+		VolumeWindow:     5,
+		VolumeMetric:     "amount",
+		ExpireTradeDays:  recommendPendingActivationMaxTradeDays,
+	}
+	if path.Name == "" {
+		path.Name = "pullback"
+	}
+	preview := draft.toPreviewRecommend()
+	if preview != nil {
+		path.OpeningPolicy = buildDefaultActivationOpeningPolicy(preview, draft.RecommendBuyPriceMin, draft.RecommendBuyPriceMax)
+	}
+	rule := activationRule{
+		Version: activationRuleVersionV3,
+		Mode:    activationRuleModeAnyOf,
+		Paths:   []activationRule{path},
+	}
+	raw, err := json.Marshal(rule)
+	if err != nil {
+		return "", "", err
+	}
+	normalized, version, err := normalizeMarketSummaryActivationRuleForProduction(string(raw))
+	if err != nil {
+		return "", "", err
+	}
+	return normalized, version, nil
+}
+
+func formatMarketSummaryPlanPrice(value float64) string {
+	if value <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(round2(value), 'f', 2, 64)
 }
 
 func EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
@@ -299,13 +849,17 @@ func buildMarketSummaryTradePlanRepairCandidate(item *marketSummaryRecommendDraf
 	if item == nil {
 		return models.MarketSummaryTradePlanRepairCandidate{}, false
 	}
-	rec := item.toPreviewRecommend()
+	source := item
+	if item.RepairSource != nil {
+		source = item.RepairSource
+	}
+	rec := source.toPreviewRecommend()
 	if rec == nil {
 		return models.MarketSummaryTradePlanRepairCandidate{}, false
 	}
 	stopProfit, profitOK := parseStopProfitPrice(*rec)
 	stopLoss, lossOK := parseStopLossPrice(*rec)
-	worstEntry := resolveMarketSummaryWorstEntryPriceForGate(item)
+	worstEntry := resolveMarketSummaryWorstEntryPriceForGate(source)
 	if !profitOK || !lossOK || stopProfit <= 0 || stopLoss <= 0 || worstEntry <= 0 || stopLoss >= worstEntry {
 		return models.MarketSummaryTradePlanRepairCandidate{}, false
 	}
@@ -315,18 +869,23 @@ func buildMarketSummaryTradePlanRepairCandidate(item *marketSummaryRecommendDraf
 	}
 	rewardRisk := round2((stopProfit - worstEntry) / downside)
 	downsidePct := round2(downside / worstEntry * 100)
-	repairable := (rewardRisk >= 0.50 && rewardRisk < marketSummaryFeasibleRewardRisk) ||
-		(downsidePct > marketSummaryFeasibleDownsidePct && downsidePct <= 6.00)
-	if !repairable || rewardRisk < 0.50 || downsidePct > 6.00 {
+	repairable := rewardRisk >= 0.50 && rewardRisk < marketSummaryFeasibleRewardRisk
+	if !repairable || rewardRisk < 0.50 {
 		return models.MarketSummaryTradePlanRepairCandidate{}, false
 	}
 	return models.MarketSummaryTradePlanRepairCandidate{
-		StockCode:   normalizeRecommendStockCode(item.StockCode),
-		StockName:   strings.TrimSpace(item.StockName),
-		Reason:      strings.TrimSpace(reason),
-		RewardRisk:  rewardRisk,
-		DownsidePct: downsidePct,
-		RepairHint:  "仅允许收窄买入区间、上移止盈或微调止损；修正后仍必须满足 rewardRisk>=0.80 且 downsidePct<=5.00%。",
+		StockCode:                  normalizeRecommendStockCode(source.StockCode),
+		StockName:                  strings.TrimSpace(source.StockName),
+		Reason:                     strings.TrimSpace(reason),
+		RewardRisk:                 rewardRisk,
+		DownsidePct:                downsidePct,
+		OriginalBuyPrice:           strings.TrimSpace(source.RecommendBuyPrice),
+		OriginalStopProfitPrice:    strings.TrimSpace(source.RecommendStopProfitPrice),
+		OriginalStopLossPrice:      strings.TrimSpace(source.RecommendStopLossPrice),
+		OriginalBuySignal:          strings.TrimSpace(source.BuySignal),
+		OriginalInvalidCondition:   strings.TrimSpace(source.InvalidCondition),
+		OriginalActivationRuleJSON: strings.TrimSpace(source.ActivationRuleJSON),
+		RepairHint:                 "仅允许收窄买入区间、上移止盈或微调止损；修正后仍必须满足 rewardRisk>=0.80；downsidePct 仅用于诊断。",
 	}, true
 }
 
@@ -340,7 +899,12 @@ func marketSummaryDayBounds(at time.Time) (time.Time, time.Time) {
 }
 
 func PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time.Time) (string, marketSummaryReportPrepareStats, error) {
+	return PrepareMarketSummaryReportForPersistenceWithLimit(summaryText, startedAt, marketSummaryRecommendationOutputLimit)
+}
+
+func PrepareMarketSummaryReportForPersistenceWithLimit(summaryText string, startedAt time.Time, outputLimit int) (string, marketSummaryReportPrepareStats, error) {
 	stats := marketSummaryReportPrepareStats{}
+	outputLimit = normalizeMarketSummaryOutputLimit(outputLimit)
 	lines := strings.Split(summaryText, "\n")
 	if len(lines) == 0 {
 		return strings.TrimSpace(summaryText), stats, nil
@@ -374,6 +938,10 @@ func PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time
 		stats.RowsSeen += rowStats.RowsSeen
 		stats.DuplicateRowsOmit += rowStats.DuplicateRowsOmit
 		stats.AnalysisOnlyRows += rowStats.AnalysisOnlyRows
+		if len(sanitizedRows) > outputLimit {
+			stats.OutputRowsOmit += len(sanitizedRows) - outputLimit
+			sanitizedRows = sanitizedRows[:outputLimit]
+		}
 		stats.RecommendationRows = len(sanitizedRows)
 		out = append(out, buildPreparedMarketSummaryTableLines(sanitizedRows)...)
 		replaced = true
@@ -589,6 +1157,14 @@ func renderPreparedMarketSummaryCell(text string) string {
 }
 
 func collectMarketSummaryRecommendStocksForSave(parsed []*marketSummaryRecommendDraft, existing []models.AiRecommendStocks) []*marketSummaryRecommendDraft {
+	return collectMarketSummaryRecommendStocksForSaveWithLimits(parsed, existing, marketSummaryRecommendationOutputLimit, marketSummaryMaxProductionCandidates)
+}
+
+func collectMarketSummaryRecommendStocksForSaveWithProductionLimit(parsed []*marketSummaryRecommendDraft, existing []models.AiRecommendStocks, productionLimit int) []*marketSummaryRecommendDraft {
+	return collectMarketSummaryRecommendStocksForSaveWithLimits(parsed, existing, marketSummaryRecommendationOutputLimit, productionLimit)
+}
+
+func collectMarketSummaryRecommendStocksForSaveWithLimits(parsed []*marketSummaryRecommendDraft, existing []models.AiRecommendStocks, outputLimit, productionLimit int) []*marketSummaryRecommendDraft {
 	existingCodes := make(map[string]struct{}, len(existing))
 	for _, item := range existing {
 		code := strings.ToUpper(strings.TrimSpace(item.StockCode))
@@ -617,7 +1193,11 @@ func collectMarketSummaryRecommendStocksForSave(parsed []*marketSummaryRecommend
 		seen[code] = struct{}{}
 		missing = append(missing, item)
 	}
-	applyMarketSummaryProductionSelection(missing)
+	outputLimit = normalizeMarketSummaryOutputLimit(outputLimit)
+	if len(missing) > outputLimit {
+		missing = missing[:outputLimit]
+	}
+	applyMarketSummaryProductionSelectionWithLimit(missing, productionLimit)
 	return missing
 }
 
@@ -630,19 +1210,27 @@ func shouldSkipMarketSummaryBackfill(item *marketSummaryRecommendDraft) bool {
 }
 
 func applyMarketSummaryProductionSelection(items []*marketSummaryRecommendDraft) {
+	applyMarketSummaryProductionSelectionWithLimit(items, marketSummaryMaxProductionCandidates)
+}
+
+func applyMarketSummaryProductionSelectionWithLimit(items []*marketSummaryRecommendDraft, productionLimit int) {
 	if len(items) == 0 {
 		return
 	}
+	productionLimit = normalizeMarketSummaryProductionLimit(productionLimit)
 	productionIndexes := make([]int, 0, len(items))
 	for idx := range items {
+		if items[idx] != nil && isAnalysisOnlyRecommend(items[idx].toPreviewRecommend()) {
+			continue
+		}
 		reason := marketSummaryDraftProductionRejectionReason(items[idx])
 		if reason != "" {
-			downgradeMarketSummaryDraftToAnalysisOnly(items[idx], reason)
+			downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(items[idx], reason)
 			continue
 		}
 		productionIndexes = append(productionIndexes, idx)
 	}
-	if len(productionIndexes) <= marketSummaryMaxProductionCandidates {
+	if len(productionIndexes) <= productionLimit {
 		return
 	}
 	sort.SliceStable(productionIndexes, func(i, j int) bool {
@@ -662,9 +1250,29 @@ func applyMarketSummaryProductionSelection(items []*marketSummaryRecommendDraft)
 		}
 		return strings.TrimSpace(left.StockCode) < strings.TrimSpace(right.StockCode)
 	})
-	for idx := marketSummaryMaxProductionCandidates; idx < len(productionIndexes); idx++ {
-		downgradeMarketSummaryDraftToAnalysisOnly(items[productionIndexes[idx]], fmt.Sprintf("超出当次市场总结最多%d只生产候选上限，已降级为仅分析", marketSummaryMaxProductionCandidates))
+	for idx := productionLimit; idx < len(productionIndexes); idx++ {
+		downgradeMarketSummaryDraftToAnalysisOnly(items[productionIndexes[idx]], fmt.Sprintf("超出当次市场总结最多%d只生产候选上限，已降级为仅分析", productionLimit))
 	}
+}
+
+func normalizeMarketSummaryProductionLimit(productionLimit int) int {
+	if productionLimit < 0 {
+		return 0
+	}
+	if productionLimit > marketSummaryMaxProductionCandidates {
+		return marketSummaryMaxProductionCandidates
+	}
+	return productionLimit
+}
+
+func normalizeMarketSummaryOutputLimit(outputLimit int) int {
+	if outputLimit < 0 {
+		return 0
+	}
+	if outputLimit > marketSummaryRecommendationOutputLimit {
+		return marketSummaryRecommendationOutputLimit
+	}
+	return outputLimit
 }
 
 func marketSummaryDraftPriorityScore(item *marketSummaryRecommendDraft) int {
@@ -734,7 +1342,7 @@ func marketSummaryDraftV136TradePlanRejectionReason(item *marketSummaryRecommend
 		return fmt.Sprintf("V1.3.6源头质量门槛未通过：最差成交价盈亏比 %.2f 低于 0.80", round2(ratio))
 	}
 	downsidePct := downside / worstEntry * 100
-	if downsidePct > v132MaxDownsideRiskPct {
+	if isMarketSummaryDownsideCapEnabled(item.SummaryVersion) && downsidePct > v132MaxDownsideRiskPct {
 		return fmt.Sprintf("V1.3.6源头质量门槛未通过：止损空间 %.2f%% 超过 %.2f%%", round2(downsidePct), v132MaxDownsideRiskPct)
 	}
 	if anchor, ok := parseBuyPrice(firstNonEmptyText(item.StockCurrentPrice, item.ObservePrice, item.StockPrice)); ok && anchor > 0 {
@@ -748,6 +1356,16 @@ func marketSummaryDraftV136TradePlanRejectionReason(item *marketSummaryRecommend
 		}
 	}
 	return ""
+}
+
+func isMarketSummaryDownsideCapEnabled(summaryVersion string) bool {
+	normalized := normalizeStrategyCohort(summaryVersion, strings.TrimSpace(summaryVersion))
+	switch strings.TrimSpace(normalized) {
+	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141:
+		return true
+	default:
+		return false
+	}
 }
 
 func resolveMarketSummaryWorstEntryPriceForGate(item *marketSummaryRecommendDraft) float64 {
@@ -808,6 +1426,27 @@ func downgradeMarketSummaryDraftToAnalysisOnly(draft *marketSummaryRecommendDraf
 	draft.ActivationRuleVersion = ""
 	draft.ActivationInvalidReason = reason
 	draft.Remarks = appendRecommendRemarkNotice(draft.Remarks, reason)
+}
+
+func downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft *marketSummaryRecommendDraft, reason string) {
+	if draft == nil {
+		return
+	}
+	repairSource := draft.RepairSource
+	if repairSource == nil {
+		repairSource = cloneMarketSummaryRecommendDraft(draft)
+	}
+	downgradeMarketSummaryDraftToAnalysisOnly(draft, reason)
+	draft.RepairSource = repairSource
+}
+
+func cloneMarketSummaryRecommendDraft(draft *marketSummaryRecommendDraft) *marketSummaryRecommendDraft {
+	if draft == nil {
+		return nil
+	}
+	cloned := *draft
+	cloned.RepairSource = nil
+	return &cloned
 }
 
 func normalizeMarketSummaryActivationRuleForProduction(raw string) (string, string, error) {
@@ -904,6 +1543,7 @@ type marketSummaryRecommendDraft struct {
 	SummaryVersion              string
 	RiskRemarks                 string
 	Remarks                     string
+	RepairSource                *marketSummaryRecommendDraft
 }
 
 type marketSummaryYieldOverrideDraft struct {
@@ -926,6 +1566,7 @@ type marketSummaryYieldOverrideRow struct {
 type marketSummaryReportPrepareStats struct {
 	RowsSeen           int
 	DuplicateRowsOmit  int
+	OutputRowsOmit     int
 	AnalysisOnlyRows   int
 	RecommendationRows int
 }
@@ -1116,9 +1757,6 @@ func parseMarketSummaryRecommendStockDraftsWithVersion(summaryText, providerName
 		drafts = append(drafts, draft)
 	}
 
-	sort.SliceStable(drafts, func(i, j int) bool {
-		return drafts[i].StockCode < drafts[j].StockCode
-	})
 	return drafts
 }
 
@@ -1629,7 +2267,7 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelNa
 		draft.applyPreviewRecommend(preview)
 	}
 	if reason := marketSummaryDraftProductionRejectionReason(draft); reason != "" {
-		downgradeMarketSummaryDraftToAnalysisOnly(draft, reason)
+		downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft, reason)
 	}
 	preview = draft.toPreviewRecommend()
 	if preview != nil && !isAnalysisOnlyRecommend(preview) &&
@@ -1729,7 +2367,7 @@ func normalizeMarketSummaryYieldOverrideVerdict(raw string) string {
 		return "pending"
 	case strings.Contains(text, "已激活"):
 		return "activated"
-	case strings.Contains(text, "无法回算"), strings.Contains(text, "无法判定"):
+	case strings.Contains(text, "无法回算"), strings.Contains(text, "未激活失效"), strings.Contains(text, "无法判定"):
 		return "invalid"
 	default:
 		return normalizeYieldOverrideActivationStatus(text)

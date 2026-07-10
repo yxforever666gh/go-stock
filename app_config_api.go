@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -15,8 +14,6 @@ import (
 )
 
 func (a *App) UpdateConfig(settingConfig *data.SettingConfig) string {
-	s1, _ := json.Marshal(settingConfig)
-	logger.SugaredLogger.Infof("UpdateConfig:%s", s1)
 	if settingConfig.RefreshInterval > 0 {
 		if entryID, exists := a.getCronEntry("MonitorStockPrices"); exists {
 			a.cron.Remove(entryID)
