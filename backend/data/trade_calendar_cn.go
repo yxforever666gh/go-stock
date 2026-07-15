@@ -18,6 +18,12 @@ type cnTradeCalCache struct {
 
 var globalCNTradeCalCache = &cnTradeCalCache{}
 
+const (
+	cnTradeCalCacheTTL       = 6 * time.Hour
+	cnTradeCalFailureTTL     = 5 * time.Minute
+	cnTradeCalMaxFetchSecond = int64(3)
+)
+
 func (c *cnTradeCalCache) lookup(day time.Time) (bool, bool) {
 	loc := cnLocation()
 	day = time.Date(day.In(loc).Year(), day.In(loc).Month(), day.In(loc).Day(), 0, 0, 0, 0, loc)
@@ -49,14 +55,24 @@ func (c *cnTradeCalCache) ensureRange(startDay, endDay time.Time) map[string]boo
 	if c.openDays != nil &&
 		!c.startDay.IsZero() && !c.endDay.IsZero() &&
 		!startDay.Before(c.startDay) && !endDay.After(c.endDay) &&
-		time.Since(c.loadedAt) < 6*time.Hour {
+		time.Since(c.loadedAt) < cnTradeCalCacheTTL {
 		return c.openDays
+	}
+	// A calendar outage must not turn a local database query into hundreds of
+	// sequential network retries. Keep the failure briefly and let callers use
+	// their documented weekday fallback until the cooldown expires.
+	if c.openDays == nil && c.lastError != "" && !c.loadedAt.IsZero() &&
+		time.Since(c.loadedAt) < cnTradeCalFailureTTL {
+		return nil
 	}
 
 	setting := GetSettingConfig()
 	timeout := int64(60)
 	if setting != nil && setting.CrawlTimeOut > 0 {
 		timeout = setting.CrawlTimeOut
+	}
+	if timeout > cnTradeCalMaxFetchSecond {
+		timeout = cnTradeCalMaxFetchSecond
 	}
 	tushare := NewTushareApi(setting)
 	openMap, err := tushare.GetTradeCalOpenMap("SSE", startDay, endDay, timeout)

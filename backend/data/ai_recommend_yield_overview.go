@@ -336,8 +336,22 @@ func resolveYieldDailyOverviewWindow(entries []yieldDailyOverviewEntry) (time.Ti
 }
 
 func loadYieldDailyOverviewTradingDays(startDay, endDay time.Time) ([]time.Time, *yieldDailyOverviewPriceSeries, error) {
-	klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
-	bars, err := loadDailyBarsWithCache(defaultBenchmarkModelCode, defaultBenchmarkCode, startDay, endDay, klineDays)
+	return loadYieldDailyOverviewTradingDaysWithRemote(startDay, endDay, true)
+}
+
+func loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay time.Time) ([]time.Time, *yieldDailyOverviewPriceSeries, error) {
+	return loadYieldDailyOverviewTradingDaysWithRemote(startDay, endDay, false)
+}
+
+func loadYieldDailyOverviewTradingDaysWithRemote(startDay, endDay time.Time, allowRemote bool) ([]time.Time, *yieldDailyOverviewPriceSeries, error) {
+	var bars []dailyBar
+	var err error
+	if allowRemote {
+		klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
+		bars, err = loadDailyBarsWithCache(defaultBenchmarkModelCode, defaultBenchmarkCode, startDay, endDay, klineDays)
+	} else {
+		bars, err = listDailyBarsFromCache(defaultBenchmarkModelCode, startDay, endDay)
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -390,6 +404,21 @@ func loadYieldDailyOverviewPriceSeries(
 	entries []yieldDailyOverviewEntry,
 	tradingDays []time.Time,
 ) (map[string]*yieldDailyOverviewPriceSeries, []string, error) {
+	return loadYieldDailyOverviewPriceSeriesWithRemote(entries, tradingDays, true)
+}
+
+func loadYieldDailyOverviewPriceSeriesFromCache(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+) (map[string]*yieldDailyOverviewPriceSeries, []string, error) {
+	return loadYieldDailyOverviewPriceSeriesWithRemote(entries, tradingDays, false)
+}
+
+func loadYieldDailyOverviewPriceSeriesWithRemote(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	allowRemote bool,
+) (map[string]*yieldDailyOverviewPriceSeries, []string, error) {
 	codeSet := make(map[string]struct{}, len(entries))
 	codes := make([]string, 0, len(entries))
 	for _, entry := range entries {
@@ -431,7 +460,7 @@ func loadYieldDailyOverviewPriceSeries(
 				return
 			}
 
-			series, err := loadYieldDailyOverviewPriceSeriesByCode(stockCode, startDay, endDay, tradingDays)
+			series, err := loadYieldDailyOverviewPriceSeriesByCode(stockCode, startDay, endDay, tradingDays, allowRemote)
 			if err != nil {
 				select {
 				case errCh <- err:
@@ -465,14 +494,21 @@ func loadYieldDailyOverviewPriceSeriesByCode(
 	startDay time.Time,
 	endDay time.Time,
 	tradingDays []time.Time,
+	allowRemote bool,
 ) (*yieldDailyOverviewPriceSeries, error) {
 	quoteCode := toQuoteCode(stockCode)
 	if quoteCode == "" {
 		return nil, nil
 	}
 
-	klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
-	bars, err := loadDailyBarsWithCache(stockCode, quoteCode, startDay, endDay, klineDays)
+	var bars []dailyBar
+	var err error
+	if allowRemote {
+		klineDays := estimateYieldDailyOverviewKlineDays(startDay, endDay)
+		bars, err = loadDailyBarsWithCache(stockCode, quoteCode, startDay, endDay, klineDays)
+	} else {
+		bars, err = listDailyBarsFromCache(stockCode, startDay, endDay)
+	}
 	if err != nil {
 		return nil, err
 	}

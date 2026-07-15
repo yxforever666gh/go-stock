@@ -293,8 +293,15 @@ func TestCalculateStrategyMaxDrawdownByEntries_WithPriceSeries(t *testing.T) {
 
 func TestCalculateBenchmarkSummaryByItems_MissingStockPriceSeriesKeepsStrategyXirr(t *testing.T) {
 	oldDB := db.Dao
+	oldMinuteDB := db.MinuteDao
 	db.Init(filepath.Join(t.TempDir(), "benchmark-missing-stock-series.db"))
-	t.Cleanup(func() { db.Dao = oldDB })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+		db.Dao = oldDB
+		db.MinuteDao = oldMinuteDB
+	})
 	if err := db.Dao.AutoMigrate(&models.AiRecommendDailyBar{}); err != nil {
 		t.Fatalf("auto migrate daily bars failed: %v", err)
 	}
@@ -339,5 +346,46 @@ func TestCalculateBenchmarkSummaryByItems_MissingStockPriceSeriesKeepsStrategyXi
 	}
 	if result.ExcessXirrText == "--" {
 		t.Fatalf("expected excess xirr text to still be available")
+	}
+}
+
+func TestCalculateBenchmarkSummaryByItemsCore_CacheMissReturnsPromptly(t *testing.T) {
+	oldDB := db.Dao
+	oldMinuteDB := db.MinuteDao
+	db.Init(filepath.Join(t.TempDir(), "benchmark-cache-miss.db"))
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+		db.Dao = oldDB
+		db.MinuteDao = oldMinuteDB
+	})
+	if err := db.Dao.AutoMigrate(&models.AiRecommendDailyBar{}); err != nil {
+		t.Fatalf("auto migrate daily bars failed: %v", err)
+	}
+
+	items := []models.AiRecommendStocksYieldItem{
+		{
+			RecommendID:         1,
+			StockCode:           "000001.SZ",
+			BacktestEligibility: recommendBacktestEligible,
+			ActivationStatus:    "activated",
+			BuyTime:             "2026-07-10 09:35:00",
+			ActivationTime:      "2026-07-10 09:35:00",
+			BuyAmount:           10,
+			CurrentPrice:        10.5,
+			CurrentPriceTime:    "2026-07-14 15:00:00",
+			YieldRate:           4.5,
+			YieldRateText:       "+4.50%",
+		},
+	}
+
+	started := time.Now()
+	result := calculateBenchmarkSummaryByItemsCore(items)
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("cache miss must not wait for remote daily bars, elapsed=%s", elapsed)
+	}
+	if result.RateText != "--" {
+		t.Fatalf("missing cached benchmark should keep fallback rate, got %q", result.RateText)
 	}
 }

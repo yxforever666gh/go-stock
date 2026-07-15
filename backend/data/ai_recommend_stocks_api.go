@@ -614,7 +614,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		lastManualProviderSummary = strings.TrimSpace(meta.LastManualProviderSummary)
 		lastManualAuditReady = meta.LastManualFinishedAt != nil
 		manualCooldownUntil, manualCooldownRemainSec = resolveManualCooldownInfo(meta.ManualCooldownUntil)
-		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(&meta, -1)
+		stats, issues := loadMinuteCoverageStatsCachedOrSchedule(&meta, -1)
 		minuteDone, minuteTotal, minutePending, minuteUncoverable = stats.Done, stats.Total, stats.Pending, stats.Uncoverable
 		coverageIssues = issues
 		if t, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
@@ -642,7 +642,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		}
 	}
 	if minuteTotal <= 0 {
-		stats, issues := computeMinuteDownloadCoverageStatsWithIssues(nil, -1)
+		stats, issues := loadMinuteCoverageStatsCachedOrSchedule(nil, -1)
 		minuteDone, minuteTotal, minutePending, minuteUncoverable = stats.Done, stats.Total, stats.Pending, stats.Uncoverable
 		coverageIssues = issues
 	}
@@ -797,8 +797,9 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		return nil, err
 	}
 	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, coverageIssues)
-	latestPriceMap, latestPriceTimeMap := loadCurrentPriceSnapshotForRecommendRecords(records)
-	applyLatestCurrentPriceSnapshot(items, latestPriceMap, latestPriceTimeMap)
+	// Strict mode is a read-only view of persisted snapshots. Do not make the
+	// database query depend on a live quote provider; background recalculation
+	// is responsible for refreshing CurrentPrice and CurrentPriceTime.
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
 	diagnostics := calculateYieldDiagnosticSummary(records, items)
 
@@ -1075,9 +1076,70 @@ var (
 	minuteCoverageStatsCacheMu   sync.Mutex
 	minuteCoverageStatsCache     minuteCoverageStatsCacheEntry
 	minuteCoverageStatsComputeMu sync.Mutex
+	minuteCoverageStatsWarmMu    sync.Mutex
+	minuteCoverageStatsWarming   bool
 )
 
-const minuteCoverageStatsCacheTTL = 30 * time.Second
+const minuteCoverageStatsCacheTTL = 5 * time.Minute
+
+func loadMinuteCoverageStatsCachedOrSchedule(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
+	key := minuteCoverageStatsCacheKey(meta, issueLimit)
+	now := time.Now()
+	minuteCoverageStatsCacheMu.Lock()
+	if minuteCoverageStatsCache.Key == key && minuteCoverageStatsCache.IssueLimit == issueLimit {
+		stats := minuteCoverageStatsCache.Stats
+		issues := append([]minuteCoverageIssue(nil), minuteCoverageStatsCache.Issues...)
+		fresh := now.Before(minuteCoverageStatsCache.ExpireAt)
+		minuteCoverageStatsCacheMu.Unlock()
+		if !fresh {
+			scheduleMinuteCoverageStatsWarm(meta, issueLimit)
+		}
+		return stats, issues
+	}
+	minuteCoverageStatsCacheMu.Unlock()
+
+	scheduleMinuteCoverageStatsWarm(meta, issueLimit)
+	if meta == nil {
+		return minuteCoverageStats{}, nil
+	}
+	total := meta.DownloadTotal
+	done := meta.DownloadDone
+	if total < 0 {
+		total = 0
+	}
+	if done < 0 {
+		done = 0
+	}
+	if done > total {
+		done = total
+	}
+	return minuteCoverageStats{Done: done, Total: total, Pending: total - done}, nil
+}
+
+func scheduleMinuteCoverageStatsWarm(meta *models.AiRecommendYieldMeta, issueLimit int) {
+	minuteCoverageStatsWarmMu.Lock()
+	if minuteCoverageStatsWarming {
+		minuteCoverageStatsWarmMu.Unlock()
+		return
+	}
+	minuteCoverageStatsWarming = true
+	minuteCoverageStatsWarmMu.Unlock()
+
+	var metaCopy *models.AiRecommendYieldMeta
+	if meta != nil {
+		cloned := *meta
+		metaCopy = &cloned
+	}
+	go func() {
+		defer func() {
+			_ = recover()
+			minuteCoverageStatsWarmMu.Lock()
+			minuteCoverageStatsWarming = false
+			minuteCoverageStatsWarmMu.Unlock()
+		}()
+		computeMinuteDownloadCoverageStatsWithIssues(metaCopy, issueLimit)
+	}()
+}
 
 func clearMinuteCoverageStatsCache() {
 	minuteCoverageStatsCacheMu.Lock()
@@ -3029,7 +3091,7 @@ func calculateBenchmarkSummaryByItemsCore(items []models.AiRecommendStocksYieldI
 	if !ok {
 		return result
 	}
-	tradingDays, benchmarkPriceSeries, err := loadYieldDailyOverviewTradingDays(startDay, endDay)
+	tradingDays, benchmarkPriceSeries, err := loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay)
 	if err != nil || len(tradingDays) == 0 || benchmarkPriceSeries == nil {
 		return result
 	}
@@ -3193,7 +3255,7 @@ func calculateStrategyMaxDrawdownByEntries(entries []yieldDailyOverviewEntry) (f
 	if len(tradingDays) == 0 {
 		return 0, false
 	}
-	priceSeriesMap, _, err := loadYieldDailyOverviewPriceSeries(entries, tradingDays)
+	priceSeriesMap, _, err := loadYieldDailyOverviewPriceSeriesFromCache(entries, tradingDays)
 	if err != nil || len(priceSeriesMap) == 0 {
 		return 0, false
 	}
@@ -3816,7 +3878,7 @@ func calculateMaxDrawdownByDailyRates(entries []yieldDailyOverviewEntry, trading
 	if len(entries) == 0 || len(tradingDays) == 0 {
 		return 0
 	}
-	priceSeriesMap, _, err := loadYieldDailyOverviewPriceSeries(entries, tradingDays)
+	priceSeriesMap, _, err := loadYieldDailyOverviewPriceSeriesFromCache(entries, tradingDays)
 	if err != nil || len(priceSeriesMap) == 0 {
 		return 0
 	}
@@ -3968,7 +4030,7 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldTaskStatus() (*models.AiRe
 	if meta.LastFullRecalcAt != nil {
 		dataAsOf = meta.LastFullRecalcAt.In(cnLocation()).Format("2006-01-02 15:04:05")
 	}
-	stats, _ := computeMinuteDownloadCoverageStatsWithIssues(meta, -1)
+	stats, _ := loadMinuteCoverageStatsCachedOrSchedule(meta, -1)
 	manualCooldownUntil, manualCooldownRemainSec := resolveManualCooldownInfo(meta.ManualCooldownUntil)
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
 

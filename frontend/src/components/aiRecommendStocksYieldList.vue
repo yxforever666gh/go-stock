@@ -257,6 +257,9 @@ const defaultColumns = [
       if (normalizeActivationStatus(row.activationStatus) === 'activated') {
         return h(NText, {type: textType}, {default: () => formatMoney(row.buyAmount)})
       }
+      if (normalizeActivationStatus(row.activationStatus) === 'invalid') {
+        return h(NText, {style: 'color: #000;'}, {default: () => formatRecommendBuyDisplay(row.recommendBuyPrice)})
+      }
       return h(NText, {type: textType}, {default: () => formatRecommendBuyDisplay(row.recommendBuyPrice)})
     }
   },
@@ -309,7 +312,7 @@ const defaultColumns = [
       if (activationStatus === 'invalid') {
         const reason = invalidDisplayReason(row)
         return h("div", {style: "line-height: 1.35;"}, [
-          h(NText, {type: textType}, {default: () => "未激活失效"}),
+          h(NText, {style: "color: #000;"}, {default: () => "未激活失效"}),
           h("div", {
             style: "font-size: 12px; color: #666; margin-top: 2px; white-space: normal; word-break: break-word;"
           }, reason)

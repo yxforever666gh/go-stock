@@ -12,6 +12,11 @@ import (
 func initTradeCalendarTestDB(t *testing.T) {
 	t.Helper()
 	db.Init(filepath.Join(t.TempDir(), "trade-calendar-test.db"))
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close test database: %v", err)
+		}
+	})
 }
 
 func TestIsCNOpenTradeDayStrictWeekend(t *testing.T) {
@@ -52,5 +57,23 @@ func TestIsCNOpenTradeDayStrictCalendarUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "trade calendar unavailable") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCNTradeCalCacheRecentFailureSkipsNetworkRetry(t *testing.T) {
+	loc := cnLocation()
+	day := time.Date(2026, 3, 4, 0, 0, 0, 0, loc)
+	cache := &cnTradeCalCache{
+		loadedAt:  time.Now(),
+		lastError: "network unavailable",
+	}
+
+	started := time.Now()
+	openDays := cache.ensureRange(day, day)
+	if openDays != nil {
+		t.Fatalf("recent failure should keep weekday fallback active")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("recent failure should not retry the network, elapsed=%s", elapsed)
 	}
 }
