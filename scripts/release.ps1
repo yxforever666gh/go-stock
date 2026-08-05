@@ -577,9 +577,6 @@ function Deploy-Candidate {
         Sort-Object LastWriteTime -Descending |
         ForEach-Object { $_.Directory.FullName } | Select-Object -Unique)
     $keepDirectories = @{}
-    foreach ($directory in @($releaseDirectories | Select-Object -First 3)) {
-        $keepDirectories[[System.IO.Path]::GetFullPath($directory).ToLowerInvariant()] = $true
-    }
     foreach ($protectedDirectory in @($Context.ReleaseDir, $(if ($previous) { Split-Path -Parent $previous.binary } else { $null }))) {
         if ($protectedDirectory) {
             $resolvedProtected = [System.IO.Path]::GetFullPath($protectedDirectory)
@@ -587,6 +584,10 @@ function Deploy-Candidate {
                 $keepDirectories[$resolvedProtected.ToLowerInvariant()] = $true
             }
         }
+    }
+    foreach ($directory in $releaseDirectories) {
+        if ($keepDirectories.Count -ge 3) { break }
+        $keepDirectories[[System.IO.Path]::GetFullPath($directory).ToLowerInvariant()] = $true
     }
     foreach ($directory in $releaseDirectories) {
         $resolved = [System.IO.Path]::GetFullPath($directory)
