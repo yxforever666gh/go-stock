@@ -541,7 +541,7 @@ function Deploy-Candidate {
             if ($liveBackupComplete) {
                 Restore-DatabaseFile (Join-Path $backupDir "stock.db") $MainDB
                 Restore-DatabaseFile (Join-Path $backupDir "minute.db") $MinuteDB
-                Invoke-DatabaseCommand $Context.Binary $MainDB $MinuteDB @("db", "verify")
+                Invoke-DatabaseCommand $Context.Binary $MainDB $MinuteDB @("db", "verify", "--quick-only")
             } elseif ($liveMutationStarted) {
                 throw "Live database mutation started without a complete rollback backup: $backupDir"
             }
@@ -607,7 +607,7 @@ function Invoke-Rollback {
     if (-not $RollbackReceipt) { throw "-RollbackReceipt is required" }
     $receipt = Get-Content -LiteralPath $RollbackReceipt -Raw | ConvertFrom-Json
     Restore-Backup $receipt.backupDir $receipt.current.binary
-    Invoke-DatabaseCommand $receipt.current.binary $MainDB $MinuteDB @("db", "verify")
+    Invoke-DatabaseCommand $receipt.current.binary $MainDB $MinuteDB @("db", "verify", "--quick-only")
     if (-not $receipt.previous) { throw "Deployment receipt has no previous release pointer" }
     Write-ReleasePointer $receipt.previous
     $process = Start-Candidate $receipt.previous.binary

@@ -72,6 +72,23 @@ func TestBackupRefusesExistingDestination(t *testing.T) {
 	}
 }
 
+func TestVerifySQLiteIntegrityDoesNotRequireCurrentSchema(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "legacy.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeTestDatabase(t, database)
+	if err := database.Exec("CREATE TABLE legacy_row (id INTEGER PRIMARY KEY, value TEXT)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifySQLiteIntegrity(database); err != nil {
+		t.Fatalf("schema-independent integrity check: %v", err)
+	}
+	if err := VerifySQLiteIntegrity(nil); err == nil {
+		t.Fatal("nil database must fail integrity verification")
+	}
+}
+
 func closeTestDatabase(t *testing.T, database *gorm.DB) {
 	t.Helper()
 	sqlDB, err := database.DB()

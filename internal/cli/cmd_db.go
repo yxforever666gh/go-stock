@@ -28,6 +28,22 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 	if subcommand != "status" && subcommand != "backup" && subcommand != "migrate" && subcommand != "verify" {
 		return fmt.Errorf("unknown db subcommand %q", subcommand)
 	}
+	if subcommand == "verify" {
+		fs := flag.NewFlagSet("db verify", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		quickOnly := fs.Bool("quick-only", false, "verify SQLite integrity without requiring the current schema")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("db verify does not accept positional arguments: %s", strings.Join(fs.Args(), " "))
+		}
+		if *quickOnly {
+			return runDBQuickCheck(opts, stdout)
+		}
+	} else if len(args) > 1 && subcommand != "backup" {
+		return fmt.Errorf("db %s does not accept positional arguments: %s", subcommand, strings.Join(args[1:], " "))
+	}
 	db.Init(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath))
 	defer db.Close()
 
@@ -84,6 +100,21 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 		})
 	}
 	return nil
+}
+
+func runDBQuickCheck(opts GlobalOptions, stdout io.Writer) error {
+	if _, err := db.InitReadOnly(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath)); err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := migrations.VerifySQLiteIntegrity(db.Dao); err != nil {
+		return fmt.Errorf("main database: %w", err)
+	}
+	if err := migrations.VerifySQLiteIntegrity(db.MinuteDao); err != nil {
+		return fmt.Errorf("minute database: %w", err)
+	}
+	_, err := fmt.Fprintln(stdout, "main quick_check=ok\nminute quick_check=ok")
+	return err
 }
 
 func resolveCLIPrimaryDBPath(dataDir, dbPath string) string {

@@ -111,9 +111,22 @@ func verifyBackupFile(path string) error {
 			_ = sqlDB.Close()
 		}
 	}()
+	if err := VerifySQLiteIntegrity(database); err != nil {
+		return fmt.Errorf("backup %w", err)
+	}
+	return nil
+}
+
+// VerifySQLiteIntegrity checks physical SQLite integrity without requiring the
+// database to match the current application schema. Rollback uses this after
+// restoring a pre-migration backup, before the previous binary is restarted.
+func VerifySQLiteIntegrity(database *gorm.DB) error {
+	if database == nil {
+		return fmt.Errorf("database is not initialized")
+	}
 	result := quickCheck(database)
-	if !strings.EqualFold(result, "ok") {
-		return fmt.Errorf("backup quick_check returned %q", result)
+	if !strings.EqualFold(strings.TrimSpace(result), "ok") {
+		return fmt.Errorf("quick_check returned %q", result)
 	}
 	return nil
 }
