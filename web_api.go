@@ -3,10 +3,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -148,8 +145,19 @@ func handleLatestMarketSummary(w http.ResponseWriter, r *http.Request) {
 
 func handleMarkdownExport(app *App, w http.ResponseWriter, r *http.Request) {
 	var req markdownExportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, false); err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	req.StockCode = strings.TrimSpace(req.StockCode)
+	req.StockName = strings.TrimSpace(req.StockName)
+	if req.StockCode == "" || req.StockName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stockCode and stockName are required"})
+		return
+	}
+	mode, err := normalizeExportMode(req.Mode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -160,47 +168,74 @@ func handleMarkdownExport(app *App, w http.ResponseWriter, r *http.Request) {
 	}
 	analysisTime := res.CreatedAt.Format("2006-01-02_15_04_05")
 	filename := sanitizeFilename(fmt.Sprintf("%s[%s]AI-analysis_%s.md", req.StockName, req.StockCode, analysisTime), ".md")
-	writeExport(w, req.Mode, filename, "text/markdown; charset=utf-8", []byte(res.Content))
+	writeExport(w, mode, filename, "text/markdown; charset=utf-8", []byte(res.Content))
 }
 
 func handleConfigExport(app *App, w http.ResponseWriter, r *http.Request) {
 	var req exportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, true); err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	mode, err := normalizeExportMode(req.Mode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	config := app.services.Config.ExportConfig()
-	writeExport(w, req.Mode, "config.json", "application/json", []byte(config))
+	writeExport(w, mode, "config.json", "application/json", []byte(config))
 }
 
 func handleImageExport(w http.ResponseWriter, r *http.Request) {
 	var req imageExportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, false); err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Base64Data = strings.TrimSpace(req.Base64Data)
+	if req.Name == "" || req.Base64Data == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name and base64Data are required"})
+		return
+	}
+	mode, err := normalizeExportMode(req.Mode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	payload, err := base64.StdEncoding.DecodeString(req.Base64Data)
-	if err != nil {
+	if err != nil || len(payload) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid file content"})
 		return
 	}
 	filename := sanitizeFilename(req.Name+"AI-analysis.png", ".png")
-	writeExport(w, req.Mode, filename, "image/png", payload)
+	writeExport(w, mode, filename, "image/png", payload)
 }
 
 func handleWordExport(w http.ResponseWriter, r *http.Request) {
 	var req wordExportRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
+	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, false); err != nil {
+		writeRequestError(w, err)
+		return
+	}
+	req.Filename = strings.TrimSpace(req.Filename)
+	req.Base64Data = strings.TrimSpace(req.Base64Data)
+	if req.Filename == "" || req.Base64Data == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "filename and base64Data are required"})
+		return
+	}
+	mode, err := normalizeExportMode(req.Mode)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	payload, err := base64.StdEncoding.DecodeString(req.Base64Data)
-	if err != nil {
+	if err != nil || len(payload) == 0 {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid file content"})
 		return
 	}
 	filename := sanitizeFilename(req.Filename, ".docx")
-	writeExport(w, req.Mode, filename, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", payload)
+	writeExport(w, mode, filename, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", payload)
 }
 
 func loopbackOnly(next http.Handler) http.Handler {
@@ -294,8 +329,9 @@ func validateLoopbackListenAddr(addr string) error {
 	if err != nil {
 		return fmt.Errorf("invalid web listen address %q: %w", addr, err)
 	}
-	if strings.TrimSpace(port) == "" || !isLoopbackHost(host) {
-		return fmt.Errorf("web listen address must use localhost, 127.0.0.1, or ::1: %q", addr)
+	host = strings.TrimSpace(host)
+	if strings.TrimSpace(port) == "" || (host != "127.0.0.1" && host != "::1") {
+		return fmt.Errorf("web listen address must use literal 127.0.0.1 or ::1: %q", addr)
 	}
 	return nil
 }

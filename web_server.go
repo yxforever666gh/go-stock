@@ -24,9 +24,15 @@ import (
 	log "go-stock/backend/logger"
 	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
+	"go-stock/internal/releaseinfo"
 )
 
 var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
+
+const (
+	maxRPCRequestBodyBytes    int64 = 4 << 20
+	maxExportRequestBodyBytes int64 = 32 << 20
+)
 
 type rpcRequest struct {
 	ID     any               `json:"id"`
@@ -82,9 +88,10 @@ type wsClient struct {
 }
 
 type WebEventHub struct {
-	mu       sync.RWMutex
-	clients  map[*wsClient]struct{}
-	upgrader websocket.Upgrader
+	mu             sync.RWMutex
+	clients        map[*wsClient]struct{}
+	upgrader       websocket.Upgrader
+	readinessCheck func() bool
 }
 
 func NewWebEventHub() *WebEventHub {
@@ -95,6 +102,7 @@ func NewWebEventHub() *WebEventHub {
 			WriteBufferSize: 1024,
 			CheckOrigin:     hasAllowedOrigin,
 		},
+		readinessCheck: func() bool { return releaseinfo.Readiness().Ready },
 	}
 }
 
@@ -111,14 +119,16 @@ func (h *WebEventHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 	h.mu.Unlock()
 
 	// Web mode may emit startup events before frontend websocket is connected.
-	// Send a one-shot done signal to avoid the UI blocking on loading state.
-	client.mu.Lock()
-	_ = client.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	_ = client.conn.WriteJSON(map[string]any{
-		"event":   "loadingMsg",
-		"payload": "done",
-	})
-	client.mu.Unlock()
+	// Only replay completion after the process has actually become ready.
+	if h.isReady() {
+		client.mu.Lock()
+		_ = client.conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		_ = client.conn.WriteJSON(map[string]any{
+			"event":   "loadingMsg",
+			"payload": "done",
+		})
+		client.mu.Unlock()
+	}
 
 	defer func() {
 		h.mu.Lock()
@@ -134,6 +144,10 @@ func (h *WebEventHub) HandleWS(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+func (h *WebEventHub) isReady() bool {
+	return h != nil && h.readinessCheck != nil && h.readinessCheck()
 }
 
 func (h *WebEventHub) Emit(event string, payload any) {
@@ -209,25 +223,9 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 		}()
 	})
 
-	mux.HandleFunc("/api/rpc", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, rpcResponse{OK: false, Error: "method not allowed"})
-			return
-		}
-
-		var req rpcRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, rpcResponse{ID: req.ID, OK: false, Error: "invalid request"})
-			return
-		}
-
-		result, err := invokeAppMethod(app, req.Method, req.Args)
-		if err != nil {
-			writeJSON(w, http.StatusOK, rpcResponse{ID: req.ID, OK: false, Error: err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusOK, rpcResponse{ID: req.ID, OK: true, Result: result})
-	})
+	mux.HandleFunc("/api/rpc", methodHandler(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
+		handleRPC(app, w, r)
+	}))
 
 	mux.HandleFunc("/api/ws", func(w http.ResponseWriter, r *http.Request) {
 		hub.HandleWS(w, r)
@@ -311,20 +309,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-		var req markdownExportRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
-			return
-		}
-
-		res := app.services.AI.GetAIResponseResult(app.ctx, req.StockCode)
-		if res == nil || len(res.Content) <= 100 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "分析结果异常,无法保存。"})
-			return
-		}
-		analysisTime := res.CreatedAt.Format("2006-01-02_15_04_05")
-		filename := sanitizeFilename(fmt.Sprintf("%s[%s]AI分析结果_%s.md", req.StockName, req.StockCode, analysisTime), ".md")
-		writeExport(w, req.Mode, filename, "text/markdown; charset=utf-8", []byte(res.Content))
+		handleMarkdownExport(app, w, r)
 	})
 
 	mux.HandleFunc("/api/export/config", func(w http.ResponseWriter, r *http.Request) {
@@ -332,13 +317,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-		var req exportRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
-			return
-		}
-		config := app.services.Config.ExportConfig()
-		writeExport(w, req.Mode, "config.json", "application/json", []byte(config))
+		handleConfigExport(app, w, r)
 	})
 
 	mux.HandleFunc("/api/export/image", func(w http.ResponseWriter, r *http.Request) {
@@ -346,18 +325,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-		var req imageExportRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
-			return
-		}
-		payload, err := base64.StdEncoding.DecodeString(req.Base64Data)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "文件内容异常,无法保存。"})
-			return
-		}
-		filename := sanitizeFilename(req.Name+"AI分析.png", ".png")
-		writeExport(w, req.Mode, filename, "image/png", payload)
+		handleImageExport(w, r)
 	})
 
 	mux.HandleFunc("/api/export/word", func(w http.ResponseWriter, r *http.Request) {
@@ -365,18 +333,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-		var req wordExportRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request"})
-			return
-		}
-		payload, err := base64.StdEncoding.DecodeString(req.Base64Data)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "文件内容异常,无法保存。"})
-			return
-		}
-		filename := sanitizeFilename(req.Filename, ".docx")
-		writeExport(w, req.Mode, filename, "application/vnd.openxmlformats-officedocument.wordprocessingml.document", payload)
+		handleWordExport(w, r)
 	})
 
 	staticFS, err := fs.Sub(assets, "frontend/dist")
@@ -403,6 +360,26 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 
 func isLocalRequest(r *http.Request) bool {
 	return isLoopbackRequest(r) && hasAllowedOrigin(r)
+}
+
+func handleRPC(app *App, w http.ResponseWriter, r *http.Request) {
+	var req rpcRequest
+	if err := decodeJSONRequest(w, r, &req, maxRPCRequestBodyBytes, false); err != nil {
+		writeRPCRequestError(w, req.ID, err)
+		return
+	}
+	req.Method = strings.TrimSpace(req.Method)
+	if req.Method == "" {
+		writeJSON(w, http.StatusBadRequest, rpcResponse{ID: req.ID, OK: false, Error: "method is required"})
+		return
+	}
+
+	result, err := invokeAppMethod(app, req.Method, req.Args)
+	if err != nil {
+		writeJSON(w, http.StatusOK, rpcResponse{ID: req.ID, OK: false, Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, rpcResponse{ID: req.ID, OK: true, Result: result})
 }
 
 func invokeAppMethod(app *App, methodName string, args []json.RawMessage) (any, error) {
@@ -541,7 +518,6 @@ var rpcMethodAllowlist = map[string]struct{}{
 	"RemoveGroup":                                  {},
 	"RemoveStockGroup":                             {},
 	"ResetAgentSession":                            {},
-	"RunMarketSummaryHumanizeCompatFixNow":         {},
 	"SaveAIResponseResult":                         {},
 	"SaveAsMarkdown":                               {},
 	"SaveImage":                                    {},
@@ -593,6 +569,60 @@ func normalizeResult(v reflect.Value) any {
 		}
 	}
 	return v.Interface()
+}
+
+func decodeJSONRequest(w http.ResponseWriter, r *http.Request, target any, limit int64, allowEmpty bool) error {
+	if r == nil || r.Body == nil {
+		if allowEmpty {
+			return nil
+		}
+		return errors.New("request body is required")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		if allowEmpty && errors.Is(err, io.EOF) {
+			return nil
+		}
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("request body must contain one JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func writeRPCRequestError(w http.ResponseWriter, id any, err error) {
+	status, message := requestErrorResponse(err)
+	writeJSON(w, status, rpcResponse{ID: id, OK: false, Error: message})
+}
+
+func writeRequestError(w http.ResponseWriter, err error) {
+	status, message := requestErrorResponse(err)
+	writeJSON(w, status, map[string]any{"error": message})
+}
+
+func requestErrorResponse(err error) (int, string) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return http.StatusRequestEntityTooLarge, "request body is too large"
+	}
+	return http.StatusBadRequest, "invalid request"
+}
+
+func normalizeExportMode(raw string) (string, error) {
+	mode := strings.ToLower(strings.TrimSpace(raw))
+	if mode == "" {
+		return "download", nil
+	}
+	if mode != "download" && mode != "server" {
+		return "", fmt.Errorf("invalid export mode %q", raw)
+	}
+	return mode, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

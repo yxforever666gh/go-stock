@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/gorilla/websocket"
 	"go-stock/backend/governance"
 	"go-stock/internal/releaseinfo"
 )
@@ -230,12 +232,12 @@ func TestAllowedOriginUsesHTTPSDefaultPort(t *testing.T) {
 }
 
 func TestValidateLoopbackListenAddr(t *testing.T) {
-	for _, addr := range []string{"127.0.0.1:34115", "localhost:34115", "[::1]:34115"} {
+	for _, addr := range []string{"127.0.0.1:34115", "[::1]:34115"} {
 		if err := validateLoopbackListenAddr(addr); err != nil {
 			t.Fatalf("%s: %v", addr, err)
 		}
 	}
-	for _, addr := range []string{"0.0.0.0:34115", ":34115", "192.168.1.10:34115"} {
+	for _, addr := range []string{"localhost:34115", "127.0.0.2:34115", "0.0.0.0:34115", ":34115", "192.168.1.10:34115"} {
 		if err := validateLoopbackListenAddr(addr); err == nil {
 			t.Fatalf("expected %s to be rejected", addr)
 		}
@@ -246,10 +248,106 @@ func TestRPCCompatibilityUsesExplicitAllowlist(t *testing.T) {
 	if !isRPCMethodAllowed("GetConfig") {
 		t.Fatal("expected a compatibility method to be allowed")
 	}
-	for _, method := range []string{"", "AddCronTask", "startup", "SomeFutureExportedMethod"} {
+	for _, method := range []string{"", "AddCronTask", "RunMarketSummaryHumanizeCompatFixNow", "startup", "SomeFutureExportedMethod"} {
 		if isRPCMethodAllowed(method) {
 			t.Fatalf("unexpected allowed RPC method: %q", method)
 		}
+	}
+}
+
+func TestDecodeJSONRequestEnforcesLimitAndSingleValue(t *testing.T) {
+	oversized := `{"method":"` + strings.Repeat("x", 64) + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/rpc", strings.NewReader(oversized))
+	err := decodeJSONRequest(httptest.NewRecorder(), req, &rpcRequest{}, 32, false)
+	var tooLarge *http.MaxBytesError
+	if !errors.As(err, &tooLarge) {
+		t.Fatalf("oversized request error = %v", err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/rpc", strings.NewReader(`{"method":"GetConfig"} {}`))
+	if err := decodeJSONRequest(httptest.NewRecorder(), req, &rpcRequest{}, 1024, false); err == nil {
+		t.Fatal("expected multiple JSON values to be rejected")
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/rpc", strings.NewReader(`{"method":"GetConfig","unknown":true}`))
+	if err := decodeJSONRequest(httptest.NewRecorder(), req, &rpcRequest{}, 1024, false); err == nil {
+		t.Fatal("expected unknown JSON fields to be rejected")
+	}
+}
+
+func TestExportHandlersValidateInputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		handler http.HandlerFunc
+		body    string
+		want    int
+	}{
+		{name: "image requires name", handler: handleImageExport, body: `{"base64Data":"eA=="}`, want: http.StatusBadRequest},
+		{name: "image validates base64", handler: handleImageExport, body: `{"name":"chart","base64Data":"%%%"}`, want: http.StatusBadRequest},
+		{name: "image validates mode", handler: handleImageExport, body: `{"mode":"other","name":"chart","base64Data":"eA=="}`, want: http.StatusBadRequest},
+		{name: "word requires filename", handler: handleWordExport, body: `{"base64Data":"eA=="}`, want: http.StatusBadRequest},
+		{name: "valid image defaults to download", handler: handleImageExport, body: `{"name":"chart","base64Data":"eA=="}`, want: http.StatusOK},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/export", strings.NewReader(tc.body))
+			rec := httptest.NewRecorder()
+			tc.handler(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d, body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/exports/markdown", strings.NewReader(`{"stockCode":"","stockName":""}`))
+	rec := httptest.NewRecorder()
+	handleMarkdownExport(nil, rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("markdown validation status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/exports/config", strings.NewReader(`{"mode":"other"}`))
+	rec = httptest.NewRecorder()
+	handleConfigExport(nil, rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("config mode status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestWebEventHubReplaysDoneOnlyWhenReady(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		ready bool
+	}{
+		{name: "not ready", ready: false},
+		{name: "ready", ready: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hub := NewWebEventHub()
+			hub.readinessCheck = func() bool { return tc.ready }
+			server := httptest.NewServer(http.HandlerFunc(hub.HandleWS))
+			defer server.Close()
+			conn, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+			if err != nil {
+				t.Fatalf("dial websocket: %v", err)
+			}
+			defer conn.Close()
+			_ = conn.SetReadDeadline(time.Now().Add(250 * time.Millisecond))
+			var envelope map[string]any
+			err = conn.ReadJSON(&envelope)
+			if !tc.ready {
+				if err == nil {
+					t.Fatalf("unexpected startup envelope while not ready: %#v", envelope)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("read startup envelope: %v", err)
+			}
+			if envelope["event"] != "loadingMsg" || envelope["payload"] != "done" {
+				t.Fatalf("unexpected startup envelope: %#v", envelope)
+			}
+		})
 	}
 }
 
