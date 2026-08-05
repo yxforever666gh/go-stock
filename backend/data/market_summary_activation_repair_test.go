@@ -307,7 +307,7 @@ func TestNormalizeAiRecommendStockForSave_MissingMinuteKeepsRecoverableMarketSum
 func TestRepairHistoricalMarketSummaryActivationIssues_InvalidatesMismatchAndUpgradesRules(t *testing.T) {
 	withStubbedMinuteProviders(t)
 	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-activation-repair.db"))
-	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
 

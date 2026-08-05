@@ -307,14 +307,14 @@ func validateAiRecommendStockForSave(recommend *models.AiRecommendStocks, buyMin
 }
 
 func (s *AiRecommendStocksService) CreateAiRecommendStocks(recommend *models.AiRecommendStocks) error {
-	// Preserve the generic API's empty-version input compatibility; normalization
-	// assigns its historical default. Any explicitly requested old cohort is
-	// rejected so callers cannot deliberately append to a frozen release.
-	if recommend != nil && strings.TrimSpace(recommend.SummaryVersion) != "" && isFrozenLegacyStrategyRecord(recommend) {
-		return fmt.Errorf("strategy cohort %s is frozen; new records are not permitted", strings.TrimSpace(recommend.SummaryVersion))
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
 	}
 	if err := normalizeAiRecommendStockForSave(recommend); err != nil {
 		return err
+	}
+	if isFrozenLegacyStrategyRecord(recommend) {
+		return fmt.Errorf("strategy cohort %s is frozen; new records are not permitted", strings.TrimSpace(recommend.SummaryVersion))
 	}
 	resultErr := db.Dao.Transaction(func(tx *gorm.DB) error {
 		if err := validateRecommendDailyUniqueness(tx, []*models.AiRecommendStocks{recommend}); err != nil {
@@ -337,16 +337,19 @@ func (s *AiRecommendStocksService) CreateAiRecommendStocks(recommend *models.AiR
 }
 
 func (s *AiRecommendStocksService) BatchCreateAiRecommendStocks(recommends []*models.AiRecommendStocks) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	normalized := make([]*models.AiRecommendStocks, 0, len(recommends))
 	for idx, item := range recommends {
 		if item == nil {
 			continue
 		}
-		if strings.TrimSpace(item.SummaryVersion) != "" && isFrozenLegacyStrategyRecord(item) {
-			return fmt.Errorf("strategy cohort %s is frozen; new records are not permitted", strings.TrimSpace(item.SummaryVersion))
-		}
 		if err := normalizeAiRecommendStockForSave(item); err != nil {
 			return fmt.Errorf("第%d条推荐记录不完整: %w", idx+1, err)
+		}
+		if isFrozenLegacyStrategyRecord(item) {
+			return fmt.Errorf("strategy cohort %s is frozen; new records are not permitted", strings.TrimSpace(item.SummaryVersion))
 		}
 		normalized = append(normalized, item)
 	}

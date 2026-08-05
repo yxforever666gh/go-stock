@@ -2,6 +2,8 @@ module go-stock
 
 go 1.25.0
 
+replace github.com/glebarez/go-sqlite => ./third_party/glebarez-go-sqlite
+
 require (
 	github.com/PuerkitoBio/goquery v1.11.0
 	github.com/chromedp/chromedp v0.14.2
@@ -13,12 +15,12 @@ require (
 	github.com/duke-git/lancet/v2 v2.3.8
 	github.com/energye/systray v1.0.2
 	github.com/gen2brain/beeep v0.11.1
+	github.com/glebarez/go-sqlite v1.22.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-ego/gse v0.80.3
 	github.com/go-resty/resty/v2 v2.17.0
 	github.com/go-toast/toast v0.0.0-20190211030409-01e6764cf0a4
 	github.com/gorilla/websocket v1.5.3
-	github.com/inconshreveable/go-update v0.0.0-20160112193335-8152e7eb6ccf
 	github.com/robertkrimen/otto v0.5.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.52.0
@@ -32,9 +34,11 @@ require (
 	golang.org/x/sys v0.38.0
 	golang.org/x/text v0.31.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
+	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/gorm v1.31.1
 	gorm.io/plugin/dbresolver v1.6.2
 	gorm.io/plugin/soft_delete v1.2.1
+	modernc.org/sqlite v1.40.1
 )
 
 require (
@@ -58,7 +62,6 @@ require (
 	github.com/eino-contrib/jsonschema v1.0.3 // indirect
 	github.com/esiqveland/notify v0.13.3 // indirect
 	github.com/evanphx/json-patch v0.5.2 // indirect
-	github.com/glebarez/go-sqlite v1.22.0 // indirect
 	github.com/go-json-experiment/json v0.0.0-20251027170946-4849db3c2f7e // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/gobwas/httphead v0.1.0 // indirect
@@ -130,11 +133,9 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/sourcemap.v1 v1.0.5 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/libc v1.67.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.40.1 // indirect
 )
 
 // replace github.com/wailsapp/wails/v2 v2.9.2 => C:\Users\spark\go\pkg\mod

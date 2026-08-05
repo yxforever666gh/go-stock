@@ -18,6 +18,9 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksByID(id uint) (*models.Ai
 
 // UpdateAiRecommendStocks 更新AI推荐股票记录
 func (s *AiRecommendStocksService) UpdateAiRecommendStocks(id uint, recommend *models.AiRecommendStocks) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if err := validateRecommendationUpdate(id, recommend); err != nil {
 		return err
 	}
@@ -79,6 +82,9 @@ func validateRecommendationUpdate(id uint, update *models.AiRecommendStocks) err
 
 // DeleteAiRecommendStocks 根据ID删除AI推荐股票记录
 func (s *AiRecommendStocksService) DeleteAiRecommendStocks(id uint) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if err := rejectFrozenLegacyRecommendationMutation([]uint{id}); err != nil {
 		return err
 	}
@@ -97,6 +103,9 @@ func (s *AiRecommendStocksService) DeleteAiRecommendStocks(id uint) error {
 
 // BatchDeleteAiRecommendStocks 批量删除AI推荐股票记录
 func (s *AiRecommendStocksService) BatchDeleteAiRecommendStocks(ids []uint) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if err := rejectFrozenLegacyRecommendationMutation(ids); err != nil {
 		return err
 	}

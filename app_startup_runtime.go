@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"go-stock/backend/data"
 	"go-stock/backend/logger"
-	appconfig "go-stock/internal/config"
+	"go-stock/internal/releaseinfo"
 	"time"
 )
 
@@ -31,6 +31,7 @@ func (a *App) domReady(ctx context.Context) {
 	a.registerMaintenanceRuntime(config)
 	a.registerConfiguredCronRuntimes(config)
 	a.registerFollowAnalysisCrons()
+	releaseinfo.MarkSchedulerReady(true)
 
 	logger.SugaredLogger.Infof("domReady-cronEntrys:%+v", a.cronEntrys)
 }
@@ -43,21 +44,19 @@ func (a *App) emitDomReadyDone() {
 }
 
 func (a *App) registerRealtimeRuntime(config *data.SettingConfig) {
-	go func() {
-		interval := config.RefreshInterval
-		if interval <= 0 {
-			interval = 1
-		}
-		if _, err := a.cron.AddFunc(fmt.Sprintf("@every %ds", interval+60), func() {
-			data.NewsAnalyze("", true)
-		}); err != nil {
-			logger.SugaredLogger.Errorf("注册 NewsAnalyze 定时任务失败: %v", err)
-		}
+	interval := config.RefreshInterval
+	if interval <= 0 {
+		interval = 1
+	}
+	if _, err := a.cron.AddFunc(fmt.Sprintf("@every %ds", interval+60), func() {
+		data.NewsAnalyze("", true)
+	}); err != nil {
+		logger.SugaredLogger.Errorf("注册 NewsAnalyze 定时任务失败: %v", err)
+	}
 
-		a.registerCronTask("MonitorStockPrices", fmt.Sprintf("@every %ds", interval), func() {
-			MonitorStockPrices(a)
-		})
-	}()
+	a.registerCronTask("MonitorStockPrices", fmt.Sprintf("@every %ds", interval), func() {
+		MonitorStockPrices(a)
+	})
 }
 
 func (a *App) registerNewsPollingCrons(interval int64, enablePush bool) {
@@ -87,14 +86,12 @@ func (a *App) registerNewsPollingCrons(interval int64, enablePush bool) {
 }
 
 func (a *App) registerFundRuntime(config *data.SettingConfig) {
-	go func() {
-		if !config.EnableFund {
-			return
-		}
-		a.registerCronTask("MonitorFundPrices", "@every 60s", func() {
-			MonitorFundPrices(a)
-		})
-	}()
+	if !config.EnableFund {
+		return
+	}
+	a.registerCronTask("MonitorFundPrices", "@every 60s", func() {
+		MonitorFundPrices(a)
+	})
 }
 
 func (a *App) registerTelegraphRuntime(config *data.SettingConfig) {
@@ -103,24 +100,6 @@ func (a *App) registerTelegraphRuntime(config *data.SettingConfig) {
 
 func (a *App) startImmediateRuntimeTasks(config *data.SettingConfig) {
 	go data.EnsureDiemengSelfCheckAsync("app_dom_ready")
-	go func() {
-		stats, err := data.RepairHistoricalLegacySkippedRecommendations(time.Now())
-		if err != nil {
-			logger.SugaredLogger.Errorf("历史跳过记录修复失败: %v", err)
-			return
-		}
-		if stats.RecalcQueuedCodes > 0 || stats.RecordStatesReset > 0 || stats.AggregateReset > 0 {
-			logger.SugaredLogger.Infof(
-				"历史跳过记录修复完成: scanned=%d stillSkipped=%d overrideKept=%d recordReset=%d aggregateReset=%d queuedCodes=%d",
-				stats.Scanned,
-				stats.StillSkipped,
-				stats.OverrideKept,
-				stats.RecordStatesReset,
-				stats.AggregateReset,
-				stats.RecalcQueuedCodes,
-			)
-		}
-	}()
 	go MonitorStockPrices(a)
 	if config.EnableFund {
 		go MonitorFundPrices(a)
@@ -129,29 +108,16 @@ func (a *App) startImmediateRuntimeTasks(config *data.SettingConfig) {
 }
 
 func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
-	go func() {
-		if appconfig.Load().Update.SelfUpdateEnabled && config.CheckUpdate {
-			a.CheckUpdate(0)
-		}
-		if config.UpdateBasicInfoOnStart {
-			go a.CheckStockBaseInfo(a.ctx)
-		}
+	if config.UpdateBasicInfoOnStart {
+		go a.CheckStockBaseInfo(a.ctx)
+	}
 
-		if _, err := a.cron.AddFunc("0 0 2 * * *", func() {
-			logger.SugaredLogger.Errorf("Checking for updates...")
-			a.CheckStockBaseInfo(a.ctx)
-		}); err != nil {
-			logger.SugaredLogger.Errorf("注册 CheckStockBaseInfo 定时任务失败: %v", err)
-		}
-		if appconfig.Load().Update.SelfUpdateEnabled && config.CheckUpdate {
-			if _, err := a.cron.AddFunc("30 05 8,12,20 * * *", func() {
-				logger.SugaredLogger.Errorf("Checking for updates...")
-				a.CheckUpdate(0)
-			}); err != nil {
-				logger.SugaredLogger.Errorf("注册 CheckUpdate 定时任务失败: %v", err)
-			}
-		}
-	}()
+	if _, err := a.cron.AddFunc("0 0 2 * * *", func() {
+		logger.SugaredLogger.Errorf("Checking for updates...")
+		a.CheckStockBaseInfo(a.ctx)
+	}); err != nil {
+		logger.SugaredLogger.Errorf("注册 CheckStockBaseInfo 定时任务失败: %v", err)
+	}
 }
 
 func (a *App) registerConfiguredCronRuntimes(config *data.SettingConfig) {

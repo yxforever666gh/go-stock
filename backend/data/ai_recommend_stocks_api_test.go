@@ -1167,6 +1167,7 @@ func TestCollapseRecommendRecordsSameDayByCode_KeepsLatestPerDay(t *testing.T) {
 func buildValidAiRecommendForCreate(dataTime time.Time, stockCode, stockName string) *models.AiRecommendStocks {
 	return &models.AiRecommendStocks{
 		DataTime:                 &dataTime,
+		SummaryVersion:           marketSummaryCurrentVersion,
 		ModelName:                "gpt-5.4",
 		StockCode:                stockCode,
 		StockName:                stockName,
@@ -1175,6 +1176,11 @@ func buildValidAiRecommendForCreate(dataTime time.Time, stockCode, stockName str
 		RecommendBuyPrice:        "10.00-10.50",
 		RecommendStopProfitPrice: "11.20-11.80",
 		RecommendStopLossPrice:   "9.60",
+		ExecutionState:           recommendExecutionConditional,
+		RecommendCategory:        recommendExecutionConditional,
+		BuySignal:                "价格触发：未来3个交易日内股价进入10.00-10.50主买入区；量能触发：5分钟成交额不低于近5个5分钟均额的1.2倍；逻辑触发：核心催化未证伪且板块未转弱",
+		SellSignal:               "价格触发：股价达到11.20-11.80止盈区间时分批退出",
+		InvalidSignal:            "时间失效：未来3个交易日内未触发主买入区；价格失效：任一5分钟收盘价跌破9.60",
 		RiskRemarks:              "若板块退潮或跌破止损位，需要严格执行退出",
 	}
 }

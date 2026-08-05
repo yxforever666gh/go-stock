@@ -67,8 +67,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Python.Bin != "" {
 		t.Fatalf("unexpected python bin: %s", cfg.Python.Bin)
 	}
-	if !cfg.Update.SelfUpdateEnabled {
-		t.Fatalf("expected self update enabled by default")
+	if cfg.Update.SelfUpdateEnabled {
+		t.Fatalf("expected self update disabled by default")
 	}
 	if cfg.Minute.Provider != DefaultMinuteProvider || cfg.Minute.CoverTradeDays != DefaultMinuteCoverTradeDays || cfg.Minute.FallbackTencent != DefaultMinuteFallbackTencent || cfg.Minute.TencentMinIntervalMS != DefaultTencentMinIntervalMS {
 		t.Fatalf("unexpected minute config: %+v", cfg.Minute)
@@ -211,7 +211,7 @@ func TestLoadInvalidValuesFallbackToDefaults(t *testing.T) {
 	if cfg.Yield.DownloadWorkers != DefaultYieldDownloadWorkers || cfg.Yield.CalcWorkers != DefaultYieldCalcWorkers || cfg.Yield.RecentWindowTradeDays != DefaultYieldRecentTradeDays || cfg.Yield.HedgeTencentDelayMS != DefaultYieldHedgeTencentMS || cfg.Yield.HedgeDiemengDelayMS != DefaultYieldHedgeDiemengMS || cfg.Yield.AkshareFallback != DefaultYieldAkshareFallback {
 		t.Fatalf("unexpected yield fallback config: %+v", cfg.Yield)
 	}
-	if !cfg.Update.SelfUpdateEnabled {
+	if cfg.Update.SelfUpdateEnabled {
 		t.Fatalf("unexpected self update fallback: %+v", cfg.Update)
 	}
 }

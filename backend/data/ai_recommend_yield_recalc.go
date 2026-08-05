@@ -84,6 +84,9 @@ func requestAiRecommendYieldRecalcWithScope(force bool, reason string, scopeCode
 }
 
 func startManualAiRecommendMinuteDownload() (map[string]any, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return nil, err
+	}
 	EnsureDiemengSelfCheckAsync("manual_minute_download")
 	if schemaErr := ensureYieldMetaSchema(); schemaErr != nil {
 		return nil, schemaErr
@@ -170,34 +173,20 @@ func keysFromScopeMap(scope map[string]struct{}) []string {
 	return codes
 }
 
-var (
-	yieldDirtySchemaMu sync.Mutex
-	yieldDirtySchemaDB *gorm.DB
-)
-
 func ensureYieldDirtySchema() error {
 	if db.Dao == nil {
-		return nil
+		return errors.New("strategy database is unavailable")
 	}
-	yieldDirtySchemaMu.Lock()
-	defer yieldDirtySchemaMu.Unlock()
-	if yieldDirtySchemaDB == db.Dao {
-		return nil
+	if !db.Dao.Migrator().HasTable(&models.AiRecommendYieldDirtyCode{}) {
+		return errors.New("ai recommendation yield dirty schema is unavailable; run numbered migrations")
 	}
-	if err := db.Dao.Exec("DROP INDEX IF EXISTS idx_ai_recommend_yield_dirty_code_stock_code").Error; err != nil {
-		return err
-	}
-	if err := db.Dao.AutoMigrate(&models.AiRecommendYieldDirtyCode{}); err != nil {
-		return err
-	}
-	if err := cleanupLegacyRuleFixCodeLevelDirtyRows(); err != nil {
-		return err
-	}
-	yieldDirtySchemaDB = db.Dao
 	return nil
 }
 
 func markAiRecommendYieldDirtyCodes(scopeCodes []string, reason string, mode string) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if schemaErr := ensureYieldDirtySchema(); schemaErr != nil {
 		return schemaErr
 	}
@@ -218,6 +207,9 @@ func markAiRecommendYieldDirtyCodes(scopeCodes []string, reason string, mode str
 }
 
 func markAiRecommendYieldDirtyRecords(recommendIDs []uint, reason string, mode string) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if schemaErr := ensureYieldDirtySchema(); schemaErr != nil {
 		return schemaErr
 	}
@@ -265,6 +257,9 @@ func markAiRecommendYieldDirtyRecords(recommendIDs []uint, reason string, mode s
 func upsertAiRecommendYieldDirtyRows(rows []models.AiRecommendYieldDirtyCode) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
 	}
 	return db.Dao.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -472,6 +467,9 @@ func clearAiRecommendYieldDirtyCodes(scopeCodes []string) error {
 	if len(normalized) == 0 {
 		return nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	codes := make([]string, 0, len(normalized))
 	for code := range normalized {
 		codes = append(codes, code)
@@ -507,6 +505,9 @@ func clearAiRecommendYieldDirtyCodesByRecordStates(states []models.AiRecommendYi
 }
 
 func getOrCreateYieldMeta() (*models.AiRecommendYieldMeta, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return nil, err
+	}
 	meta := &models.AiRecommendYieldMeta{}
 	err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(meta).Error
 	if err == nil {
@@ -708,6 +709,9 @@ func syncYieldStateIdentityFields() error {
 }
 
 func syncYieldRecordStateIdentityFields() error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if db.Dao == nil ||
 		!db.Dao.Migrator().HasTable(&models.AiRecommendStocks{}) ||
 		!db.Dao.Migrator().HasTable(&models.AiRecommendYieldRecordState{}) {
@@ -743,6 +747,9 @@ WHERE EXISTS (
 }
 
 func resetStaleYieldRecalcIfNeeded(meta *models.AiRecommendYieldMeta) bool {
+	if !strategyProductionIsLive(db.Dao) {
+		return false
+	}
 	if meta == nil || !meta.RecalcInProgress || meta.ID == 0 {
 		return false
 	}
@@ -772,7 +779,7 @@ func resetStaleYieldRecalcIfNeeded(meta *models.AiRecommendYieldMeta) bool {
 }
 
 func ResetInterruptedAiRecommendYieldTasksOnStartup() {
-	if db.Dao == nil {
+	if db.Dao == nil || !strategyProductionIsLive(db.Dao) {
 		return
 	}
 	now := time.Now()
@@ -794,21 +801,20 @@ func ResetInterruptedAiRecommendYieldTasksOnStartup() {
 }
 
 func ensureYieldMetaSchema() error {
-	if err := db.Dao.AutoMigrate(
+	if db.Dao == nil {
+		return errors.New("strategy database is unavailable")
+	}
+	for _, table := range []any{
 		&models.AiRecommendYieldMeta{},
 		&models.AiRecommendYieldState{},
 		&models.AiRecommendYieldRecordState{},
 		&models.AiRecommendYieldDirtyCode{},
 		&models.AiRecommendMinuteBar{},
 		&models.AiRecommendDailyBar{},
-	); err != nil {
-		return err
-	}
-	if err := syncYieldStateIdentityFields(); err != nil {
-		return err
-	}
-	if err := syncYieldRecordStateIdentityFields(); err != nil {
-		return err
+	} {
+		if !db.Dao.Migrator().HasTable(table) {
+			return fmt.Errorf("yield schema %T is unavailable; run numbered migrations", table)
+		}
 	}
 	return nil
 }

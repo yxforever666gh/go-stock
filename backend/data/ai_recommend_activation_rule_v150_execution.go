@@ -1166,6 +1166,9 @@ func appendMarketSummaryV150OrderEvents(rec models.AiRecommendStocks, run models
 	if len(source) == 0 {
 		return nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if db.Dao == nil {
 		return errors.New("strategy database is unavailable")
 	}

@@ -1,42 +1,45 @@
 package bootstrap
 
 import (
-	"go-stock/backend/data"
-	"go-stock/backend/db"
-	"go-stock/backend/logger"
-	"go-stock/backend/models"
-	"go-stock/backend/persistence"
-	appconfig "go-stock/internal/config"
-	"go-stock/internal/service"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
+
+	"go-stock/backend/db"
+	appconfig "go-stock/internal/config"
+	"go-stock/internal/migrations"
+	"go-stock/internal/releaseinfo"
+	"go-stock/internal/service"
 )
 
 type AppRuntime struct {
-	Config   appconfig.AppConfig
-	Services service.AppServices
+	Config    appconfig.AppConfig
+	Storage   Storage
+	Clock     service.Clock
+	Providers service.ProviderSet
+	Services  service.AppServices
 }
 
-func NewRuntime(cfg appconfig.AppConfig) AppRuntime {
-	return AppRuntime{
-		Config:   cfg,
-		Services: service.NewAppServices(),
-	}
-}
-
-func InitApplication(cfg appconfig.AppConfig) AppRuntime {
+func InitApplication(cfg appconfig.AppConfig) (AppRuntime, error) {
 	EnsureRuntimeDirs(cfg)
 	db.Init(cfg.DB.Path)
-	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
-		logger.SugaredLogger.Errorf("settings migration failed: %v", err)
-	} else if err := data.EnsureSettingsRecord(); err != nil {
-		logger.SugaredLogger.Errorf("settings initialization failed: %v", err)
+	if err := migrations.MigrateAll(db.Dao, db.MinuteDao); err != nil {
+		releaseinfo.MarkNotReady(err)
+		return AppRuntime{}, err
 	}
-	data.InitAnalyzeSentiment()
-	go AutoMigrate()
-	return NewRuntime(cfg)
+	runtime, err := AssembleRuntime(cfg, productionRuntimeDependencies())
+	if err != nil {
+		releaseinfo.MarkNotReady(err)
+		return AppRuntime{}, err
+	}
+	releaseinfo.MarkStorageReady()
+	if err := runtime.Services.Runtime.Initialize(context.Background()); err != nil {
+		releaseinfo.MarkNotReady(err)
+		return AppRuntime{}, err
+	}
+	releaseinfo.MarkServicesReady()
+	return runtime, nil
 }
 
 func InitCLIStorage(dataDir, dbPath string) (string, error) {
@@ -50,13 +53,10 @@ func InitCLIStorage(dataDir, dbPath string) (string, error) {
 		return "", err
 	}
 	db.Init(dbPath)
-	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
+	if err := migrations.MigrateAll(db.Dao, db.MinuteDao); err != nil {
 		return "", err
 	}
-	if err := persistence.MigrateStrategyPersistence(db.Dao); err != nil {
-		return "", err
-	}
-	if err := data.EnsureSettingsRecord(); err != nil {
+	if err := (legacyApplicationInitializer{}).EnsureSettings(context.Background()); err != nil {
 		return "", err
 	}
 	return dbPath, nil
@@ -82,57 +82,6 @@ func EnsureRuntimeDirs(cfg appconfig.AppConfig) {
 		if minuteDBDir != "." && minuteDBDir != "" {
 			checkDir(minuteDBDir)
 		}
-	}
-}
-
-func AutoMigrate() {
-	appModels := []any{
-		&data.StockInfo{},
-		&data.StockBasic{},
-		&data.FollowedStock{},
-		&data.IndexBasic{},
-		&data.Settings{},
-		&models.AIResponseResult{},
-		&models.AgentChatSession{},
-		&models.AgentChatMessage{},
-		&models.StockInfoHK{},
-		&models.StockInfoUS{},
-		&data.FollowedFund{},
-		&data.FundBasic{},
-		&models.PromptTemplate{},
-		&data.Group{},
-		&data.GroupStock{},
-		&models.Tags{},
-		&models.Telegraph{},
-		&models.TelegraphTags{},
-		&models.LongTigerRankData{},
-		&data.AIConfig{},
-		&models.BKDict{},
-		&models.WordAnalyze{},
-		&models.SentimentResultAnalyze{},
-		&models.AiRecommendStocks{},
-		&models.AiRecommendOpeningReview{},
-		&models.AiRecommendYieldState{},
-		&models.AiRecommendYieldOverride{},
-		&models.AiRecommendYieldRecordState{},
-		&models.AiRecommendYieldMeta{},
-		&models.AiRecommendMinuteBar{},
-		&models.AiRecommendDailyBar{},
-		&models.CronTaskRun{},
-		&models.EmailSendLog{},
-		&models.MarketSummaryRunDiagnostic{},
-	}
-	if err := db.Dao.AutoMigrate(appModels...); err != nil {
-		logger.SugaredLogger.Errorf("auto migrate failed: %v", err)
-		return
-	}
-	if err := persistence.MigrateStrategyPersistence(db.Dao); err != nil {
-		logger.SugaredLogger.Errorf("strategy persistence migration failed: %v", err)
-		return
-	}
-	data.ResetInterruptedAiRecommendYieldTasksOnStartup()
-	if _, err := data.RepairSameDayOnlyLegacySkippedRecommendations(time.Now()); err != nil {
-		logger.SugaredLogger.Warnf("repair sameDayOnly legacy skipped recommendations failed: %v", err)
 	}
 }
 

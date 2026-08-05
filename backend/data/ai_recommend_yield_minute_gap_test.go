@@ -313,6 +313,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) 
 	}
 	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
 	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryCurrentVersion,
 		DataTime:                    &recordTime,
 		StockCode:                   "301293.SZ",
 		StockName:                   "三博脑科",
@@ -434,6 +435,7 @@ func TestCloseManualMinuteCoverageGaps_MarksUncoverableAfterRetryExhausted(t *te
 	}
 	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
 	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryCurrentVersion,
 		DataTime:                    &recordTime,
 		StockCode:                   "301293.SZ",
 		StockName:                   "三博脑科",
@@ -532,6 +534,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesExistingUncoverableGap(t *testing.
 	}
 	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
 	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryCurrentVersion,
 		DataTime:                    &recordTime,
 		StockCode:                   "301293.SZ",
 		StockName:                   "三博脑科",
@@ -647,6 +650,7 @@ func TestCloseManualMinuteCoverageGaps_MarksContinuityGapUncoverableAfterRetryEx
 	}
 	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
 	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryCurrentVersion,
 		DataTime:                    &recordTime,
 		StockCode:                   "301293.SZ",
 		StockName:                   "三博脑科",

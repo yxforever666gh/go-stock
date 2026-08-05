@@ -672,6 +672,9 @@ func markMarketSummaryRecommendPendingMarketData(recommend *models.AiRecommendSt
 }
 
 func recoverPendingMarketSummaryRecommendationsForScope(scope map[string]struct{}) ([]string, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return nil, err
+	}
 	if len(scope) == 0 {
 		return nil, nil
 	}
@@ -780,6 +783,9 @@ func absDuration(v time.Duration) time.Duration {
 
 func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummaryActivationRepairStats, error) {
 	stats := marketSummaryActivationRepairStats{}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return stats, err
+	}
 	var rows []models.AiRecommendStocks
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("summary_version = ?", marketSummaryVersion150).

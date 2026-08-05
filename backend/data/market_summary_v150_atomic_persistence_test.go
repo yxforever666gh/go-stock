@@ -16,6 +16,7 @@ import (
 
 func TestPersistMarketSummaryV150DecisionSerializesFinalQuotaAndLeavesNoOrphanRules(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-atomic.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("migrate recommendations: %v", err)

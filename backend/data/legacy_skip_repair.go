@@ -23,6 +23,9 @@ type legacySkipRepairStats struct {
 
 func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepairStats, error) {
 	stats := legacySkipRepairStats{}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return stats, err
+	}
 	cutoff := legacyDirectActivationCutoffStart()
 
 	var rows []models.AiRecommendStocks
@@ -103,6 +106,9 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 
 func RepairSameDayOnlyLegacySkippedRecommendations(now time.Time) (legacySkipRepairStats, error) {
 	stats := legacySkipRepairStats{}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return stats, err
+	}
 	var states []models.AiRecommendYieldRecordState
 	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).
 		Joins("JOIN ai_recommend_stocks AS rec ON rec.id = ai_recommend_yield_record_state.recommend_id AND rec.deleted_at IS NULL").
@@ -160,6 +166,9 @@ func resetHistoricalSkippedYieldRecordState(recommendID uint, now time.Time) err
 	if recommendID == 0 {
 		return nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
 		Where("recommend_id = ? AND activation_status = ?", recommendID, "skipped").
 		Where("recommend_id IN (?)", db.Dao.Model(&models.AiRecommendStocks{}).Select("id").Where("summary_version = ?", marketSummaryVersion150)).
@@ -184,6 +193,9 @@ func resetHistoricalSkippedYieldRecordState(recommendID uint, now time.Time) err
 func resetSameDayOnlySkippedYieldRecordStates(recommendIDs []uint, now time.Time) error {
 	if len(recommendIDs) == 0 {
 		return nil
+	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
 	}
 	return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
 		Where("recommend_id IN ? AND activation_status = ? AND data_status_reason = ?", recommendIDs, "skipped", sameDayOnlyLegacySkipReason).

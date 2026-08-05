@@ -8,8 +8,10 @@ import (
 
 	"go-stock/backend/data"
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 )
 
 const marketSummaryV150ExecutionCronKey = "MarketSummaryV150ExecutionMonitor"
@@ -160,6 +162,9 @@ func (a *App) registerMarketSummaryV150ExecutionRuntime() {
 }
 
 func (a *App) executeMarketSummaryV150ExecutionMonitor(now time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+	if err := governance.RequireStrategyLive(a.ctx, db.Dao, v150.StrategyVersion); err != nil {
+		return data.MarketSummaryV150ExecutionMonitorResult{ObservedAt: now}, err
+	}
 	taskRun := &models.CronTaskRun{
 		TaskName:    "strategy_v150_execution_monitor",
 		TriggeredAt: now,

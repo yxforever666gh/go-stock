@@ -16,6 +16,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 		&models.AiRecommendYieldState{},
 		&models.AiRecommendYieldRecordState{},
 		&models.AiRecommendYieldOverride{},
+		&models.AiRecommendYieldDirtyCode{},
 	); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

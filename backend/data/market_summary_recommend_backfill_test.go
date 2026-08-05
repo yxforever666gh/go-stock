@@ -16,7 +16,7 @@ func setupMarketSummaryRecommendBackfillRealtimeEnv(t *testing.T, dbName string)
 	t.Helper()
 	withStubbedMinuteProviders(t)
 	initDatabaseForTest(t, filepath.Join(t.TempDir(), dbName))
-	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
+	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
 }

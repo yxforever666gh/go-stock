@@ -13,6 +13,9 @@ import (
 )
 
 func closeManualMinuteCoverageGaps(runtime *aiRecommendYieldRecalcRuntime, codeSet map[string]struct{}) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if runtime == nil || runtime.meta == nil || len(codeSet) == 0 {
 		return nil
 	}
@@ -87,6 +90,9 @@ func markPendingMinuteCoverageIssuesUncoverable(meta *models.AiRecommendYieldMet
 }
 
 func markMinuteCoverageIssuesUncoverable(meta *models.AiRecommendYieldMeta, issues []minuteCoverageIssue, prefix string) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if meta == nil || len(issues) == 0 {
 		return nil
 	}
@@ -141,6 +147,12 @@ func buildUncoverableMinuteIssueReason(issue minuteCoverageIssue, prefix string)
 func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.AiRecommendStocks, reason string, now time.Time) error {
 	if issue.RecordID == 0 {
 		return nil
+	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
+	if isFrozenLegacyStrategyRecord(&rec) {
+		return fmt.Errorf("strategy cohort %s is frozen; yield state is read-only", strings.TrimSpace(rec.SummaryVersion))
 	}
 	existing := models.AiRecommendYieldRecordState{}
 	err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).Where("recommend_id = ?", issue.RecordID).First(&existing).Error
@@ -202,6 +214,9 @@ func upsertMinuteUncoverableRecordState(issue minuteCoverageIssue, rec models.Ai
 func updateManualMinuteCoverageRetryStatus(metaID uint, round int, deadline time.Time, stats minuteCoverageStats, issues []minuteCoverageIssue) error {
 	if metaID == 0 {
 		return nil
+	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
 	}
 	parts := manualCoverageIssueParts(issues, "待覆盖", 3)
 	message := fmt.Sprintf("正在重试分钟线缺口（第%d轮，待覆盖:%d，不可覆盖:%d）", round, stats.Pending, stats.Uncoverable)

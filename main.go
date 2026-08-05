@@ -4,12 +4,14 @@ import (
 	"context"
 	"embed"
 	"flag"
+	"fmt"
 	"go-stock/backend/data"
 	"go-stock/backend/db"
 	log "go-stock/backend/logger"
 	"go-stock/internal/bootstrap"
 	"go-stock/internal/cli"
 	appconfig "go-stock/internal/config"
+	"go-stock/internal/releaseinfo"
 	"os"
 	"runtime/debug"
 )
@@ -46,9 +48,15 @@ var OFFICIAL_STATEMENT string
 var BuildKey string
 
 func main() {
-	// Keep the documented cache-only replay command available from the project
-	// root (`go run . strategy-backtest ...`) without starting the GUI runtime.
-	if len(os.Args) > 1 && (os.Args[1] == "strategy-backtest" || os.Args[1] == "strategy-rule-replay") {
+	if err := releaseinfo.InitializeBuildInfo(""); err != nil {
+		fmt.Fprintf(os.Stderr, "initialize build info: %v\n", err)
+		os.Exit(1)
+	}
+	manifest := releaseinfo.Manifest()
+	build := releaseinfo.Build()
+	Version = manifest.AppVersion
+	VersionCommit = build.Commit
+	if len(os.Args) > 1 && cli.HasCommand(os.Args[1:]) {
 		os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	cfg := appconfig.Load()
@@ -68,7 +76,10 @@ func main() {
 		}
 	}()
 
-	appRuntime := bootstrap.InitApplication(cfg)
+	appRuntime, err := bootstrap.InitApplication(cfg)
+	if err != nil {
+		log.SugaredLogger.Fatalf("application initialization failed: %v", err)
+	}
 	data.SetRuntimeEventEmitter(emitEvent)
 
 	log.SugaredLogger.Info("starting...")

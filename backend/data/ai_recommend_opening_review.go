@@ -36,10 +36,19 @@ type openingReviewMarketSnapshot struct {
 }
 
 func ensureOpeningReviewSchema() error {
-	return db.Dao.AutoMigrate(&models.AiRecommendOpeningReview{})
+	if db.Dao == nil {
+		return fmt.Errorf("strategy database is unavailable")
+	}
+	if !db.Dao.Migrator().HasTable(&models.AiRecommendOpeningReview{}) {
+		return fmt.Errorf("opening review schema is unavailable; run numbered migrations")
+	}
+	return nil
 }
 
 func RunMorningOpeningReview(now time.Time) (string, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return "", err
+	}
 	if err := ensureOpeningReviewSchema(); err != nil {
 		return "", err
 	}
@@ -69,6 +78,30 @@ func RunMorningOpeningReview(now time.Time) (string, error) {
 func saveOpeningReviews(rows []models.AiRecommendOpeningReview) error {
 	if len(rows) == 0 {
 		return nil
+	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
+	recommendIDs := make([]uint, 0, len(rows))
+	seen := make(map[uint]struct{}, len(rows))
+	for _, row := range rows {
+		if row.RecommendID == 0 {
+			return fmt.Errorf("opening review recommendation id is required")
+		}
+		if _, exists := seen[row.RecommendID]; exists {
+			continue
+		}
+		seen[row.RecommendID] = struct{}{}
+		recommendIDs = append(recommendIDs, row.RecommendID)
+	}
+	var currentCount int64
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("id IN ? AND summary_version = ?", recommendIDs, marketSummaryCurrentVersion).
+		Count(&currentCount).Error; err != nil {
+		return err
+	}
+	if currentCount != int64(len(recommendIDs)) {
+		return fmt.Errorf("opening reviews may only be written for strategy cohort %s", marketSummaryCurrentVersion)
 	}
 	return db.Dao.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
@@ -173,6 +206,7 @@ func buildPendingOpeningReviews(tradeDay time.Time, now time.Time) ([]models.AiR
 	records := make([]models.AiRecommendStocks, 0, 64)
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("COALESCE(data_time, created_at) < ?", dayStart).
+		Where("summary_version = ?", marketSummaryCurrentVersion).
 		Order("COALESCE(data_time, created_at) DESC, id DESC").
 		Find(&records).Error
 	if err != nil {
@@ -259,7 +293,9 @@ func buildHoldingOpeningReviews(tradeDay time.Time, now time.Time) ([]models.AiR
 	}
 
 	records := make([]models.AiRecommendStocks, 0, len(ids))
-	if err := db.Dao.Model(&models.AiRecommendStocks{}).Where("id IN ?", ids).Find(&records).Error; err != nil {
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("id IN ? AND summary_version = ?", ids, marketSummaryCurrentVersion).
+		Find(&records).Error; err != nil {
 		return nil, err
 	}
 	recordMap := make(map[uint]models.AiRecommendStocks, len(records))

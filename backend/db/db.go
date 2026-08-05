@@ -20,25 +20,6 @@ import (
 var Dao *gorm.DB
 var MinuteDao *gorm.DB
 
-const minuteBarSchemaSQL = `
-CREATE TABLE IF NOT EXISTS minute_bar (
-  stock_code TEXT NOT NULL,
-  trade_time INTEGER NOT NULL,
-  open REAL NOT NULL,
-  high REAL NOT NULL,
-  low REAL NOT NULL,
-  close REAL NOT NULL,
-  volume REAL,
-  amount REAL,
-  source TEXT,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (stock_code, trade_time)
-) WITHOUT ROWID;
-
-CREATE INDEX IF NOT EXISTS idx_minute_bar_trade_time
-ON minute_bar(trade_time);
-`
-
 func resolveDBBusyTimeoutMs() int {
 	return appconfig.Load().DB.BusyTimeoutMS
 }
@@ -236,8 +217,8 @@ func InitMinute(sqlitePath string) {
 	dbCon.SetMaxIdleConns(2)
 	dbCon.SetMaxOpenConns(4)
 	dbCon.SetConnMaxLifetime(time.Hour)
-	if err := initMinuteDBSchema(openDb); err != nil {
-		log.Fatalf("minute db schema init error is %s", err.Error())
+	if err := configureMinuteDB(openDb); err != nil {
+		log.Fatalf("minute db configuration error is %s", err.Error())
 	}
 	MinuteDao = openDb
 }
@@ -279,7 +260,7 @@ func Close() error {
 	return firstErr
 }
 
-func initMinuteDBSchema(openDb *gorm.DB) error {
+func configureMinuteDB(openDb *gorm.DB) error {
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
@@ -290,10 +271,7 @@ func initMinuteDBSchema(openDb *gorm.DB) error {
 			return err
 		}
 	}
-	if err := openDb.Exec(minuteBarSchemaSQL).Error; err != nil {
-		return err
-	}
-	return openDb.Exec("PRAGMA optimize").Error
+	return nil
 }
 
 func resolveMinutePathForMainPath(mainPath string) string {

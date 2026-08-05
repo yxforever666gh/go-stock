@@ -1,6 +1,7 @@
 package data
 
 import (
+	"errors"
 	"os"
 	"sort"
 	"strings"
@@ -212,9 +213,7 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 		return len(rows), nil
 	}
 	if !legacyMinuteBarTableAvailable() {
-		if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
-			return 0, err
-		}
+		return 0, errors.New("legacy minute cache schema is unavailable; run numbered migrations")
 	}
 	if err := upsertMinuteBarsToLegacyCache(rows); err != nil {
 		return 0, err

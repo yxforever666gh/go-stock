@@ -42,8 +42,10 @@ func TestMarketSummaryV150ExecutionObservationFailureSkipsSymbolAndIsRetryable(t
 	rec := seedMarketSummaryV150ExecutionFixture(t, decision, marketSummaryV150TestBreakoutPlan(validFrom))
 
 	previousNow := marketSummaryV150ExecutionSecurityNow
+	previousCorporateActionNow := marketSummaryV150CorporateActionNow
 	previousFetch := fetchMarketSummaryV150ExecutionSecurityFactFn
 	marketSummaryV150ExecutionSecurityNow = func() time.Time { return now }
+	marketSummaryV150CorporateActionNow = func() time.Time { return now }
 	fetchCalls := 0
 	fetchMarketSummaryV150ExecutionSecurityFactFn = func(symbol string, observedAt time.Time) (marketSummaryV150ExecutionSecurityFact, error) {
 		fetchCalls++
@@ -57,6 +59,7 @@ func TestMarketSummaryV150ExecutionObservationFailureSkipsSymbolAndIsRetryable(t
 	}
 	t.Cleanup(func() {
 		marketSummaryV150ExecutionSecurityNow = previousNow
+		marketSummaryV150CorporateActionNow = previousCorporateActionNow
 		fetchMarketSummaryV150ExecutionSecurityFactFn = previousFetch
 	})
 

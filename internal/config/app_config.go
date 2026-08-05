@@ -149,7 +149,7 @@ func Load() AppConfig {
 			Bin: strings.TrimSpace(os.Getenv("GO_STOCK_PYTHON_BIN")),
 		},
 		Update: UpdateConfig{
-			SelfUpdateEnabled: boolOrDefault("GO_STOCK_SELF_UPDATE_ENABLED", true),
+			SelfUpdateEnabled: boolOrDefault("GO_STOCK_SELF_UPDATE_ENABLED", false),
 		},
 		Minute: MinuteConfig{
 			Provider:             enumOrDefault("GO_STOCK_MINUTE_PROVIDER", DefaultMinuteProvider, "public", "diemeng", "akshare", "auto", "sina", "tencent"),

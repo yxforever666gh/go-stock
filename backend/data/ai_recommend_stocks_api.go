@@ -423,6 +423,9 @@ func shouldTriggerYieldQueryRecalc(meta *models.AiRecommendYieldMeta, expectedTr
 }
 
 func triggerYieldQueryRecalcIfStale(meta *models.AiRecommendYieldMeta, expectedTradeDate, now time.Time) bool {
+	if !strategyProductionIsLive(db.Dao) {
+		return false
+	}
 	if !shouldTriggerYieldQueryRecalc(meta, expectedTradeDate, now) {
 		return false
 	}
@@ -506,6 +509,9 @@ func triggerYieldPendingIntradayRecalcIfStale(
 	records []models.AiRecommendStocks,
 	recordStateMap map[uint]models.AiRecommendYieldRecordState,
 ) bool {
+	if !strategyProductionIsLive(db.Dao) {
+		return false
+	}
 	if meta == nil || meta.ID == 0 || meta.RecalcInProgress {
 		return false
 	}

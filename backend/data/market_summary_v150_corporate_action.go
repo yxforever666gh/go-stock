@@ -96,6 +96,9 @@ func refreshMarketSummaryV150CorporateActionObservation(originRunID, symbol stri
 	if !allowRefresh {
 		return "", nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return "", err
+	}
 	originRunID = strings.TrimSpace(originRunID)
 	symbol = normalizeRecommendStockCode(symbol)
 	coverageDay = normalizeDailyTradeDate(coverageDay)
@@ -209,6 +212,9 @@ func loadCachedMarketSummaryV150CorporateActionObservation(symbol string, covera
 }
 
 func appendMarketSummaryV150CorporateActionObservation(originRunID string, fact marketSummaryV150CorporateActionFact, startedAt, availableAt time.Time) (string, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return "", err
+	}
 	if db.Dao == nil || !db.Dao.Migrator().HasTable(&models.StrategyRunSnapshot{}) || !db.Dao.Migrator().HasTable(&models.CorporateActionEvent{}) {
 		return "", errors.New("immutable corporate action tables are unavailable")
 	}

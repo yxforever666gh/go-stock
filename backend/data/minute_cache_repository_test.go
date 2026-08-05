@@ -204,12 +204,8 @@ func TestMinuteCacheRangeMergesMinuteDBAndLegacyRange(t *testing.T) {
 }
 
 func TestMinuteCacheDualWrite(t *testing.T) {
+	initMinuteCacheTestDB(t, "minute-cache-dual-write.db")
 	t.Setenv("GO_STOCK_MINUTE_DUAL_WRITE", "1")
-	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "minute-cache-dual-write.db"))
-	if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
-		t.Fatalf("auto migrate legacy minute table failed: %v", err)
-	}
 	tradeTime := testMinuteTime(10, 2)
 	if _, err := upsertMinuteBarsToCache("300004.SZ", []minuteBar{{TradeTime: tradeTime, Open: 7, High: 8, Low: 6, Close: 7.5}}, "dual"); err != nil {
 		t.Fatalf("upsert minute bars failed: %v", err)
@@ -224,12 +220,8 @@ func TestMinuteCacheDualWrite(t *testing.T) {
 }
 
 func TestMinuteCacheDeleteCleansMinuteAndLegacy(t *testing.T) {
+	initMinuteCacheTestDB(t, "minute-cache-delete.db")
 	t.Setenv("GO_STOCK_MINUTE_DUAL_WRITE", "1")
-	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "minute-cache-delete.db"))
-	if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
-		t.Fatalf("auto migrate legacy minute table failed: %v", err)
-	}
 	tradeTime := testMinuteTime(10, 3)
 	if _, err := upsertMinuteBarsToCache("300005.SZ", []minuteBar{{TradeTime: tradeTime, Open: 1, High: 1, Low: 1, Close: 1}}, "dual"); err != nil {
 		t.Fatalf("upsert minute bars failed: %v", err)

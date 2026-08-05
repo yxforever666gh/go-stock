@@ -292,6 +292,7 @@ func TestMarketSummaryV150PullbackRequiresStatefulSupportRecovery(t *testing.T) 
 
 func TestMarketSummaryV150CapacitySharesDailyAndActivePendingLimits(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-capacity.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
@@ -428,6 +429,7 @@ func TestUpgradeMarketSummaryAnalysisOnlyRecommendRejectsLegacyVersion(t *testin
 
 func TestUpgradeMarketSummaryAnalysisOnlyRecommendReadsPersistedV150Version(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-irreversible.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
@@ -792,6 +794,7 @@ func TestMarketSummaryV150RejectsStaleAdjustedDailySeries(t *testing.T) {
 
 func TestMarketSummaryV150PortfolioUsesMostRecentStopAndExpiresOldPending(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-portfolio.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(models.StrategyPersistenceModels()...); err != nil {
 		t.Fatalf("auto migrate: %v", err)
@@ -882,6 +885,7 @@ func TestMarketSummaryV150PortfolioUsesMostRecentStopAndExpiresOldPending(t *tes
 
 func TestMarketSummaryV150DailyCapIsSharedAcrossSameDayRuns(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-daily-cap.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(models.StrategyPersistenceModels()...); err != nil {
 		t.Fatalf("auto migrate: %v", err)
@@ -963,6 +967,7 @@ func TestMarketSummaryV150DailyCapIsSharedAcrossSameDayRuns(t *testing.T) {
 
 func TestPersistMarketSummaryV150RecommendationsRechecksSharedDailyQuota(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-persist-quota.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
@@ -1043,6 +1048,7 @@ func TestPersistMarketSummaryV150RecommendationsRechecksSharedDailyQuota(t *test
 
 func TestMarketSummaryV150RuntimeDecisionPersistsCompleteImmutableBundle(t *testing.T) {
 	db.Init(filepath.Join(t.TempDir(), "market-summary-v150-runtime.db"))
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() { _ = db.Close() })
 	previousMarkDirty := markAiRecommendYieldDirtyCodesForMutationFn
 	previousRequestRecalc := requestAiRecommendYieldScopedRecalcForMutationFn

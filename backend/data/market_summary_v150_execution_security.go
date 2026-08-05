@@ -79,6 +79,9 @@ func refreshMarketSummaryV150ExecutionSecurityObservation(originRunID, symbol st
 	if !allowRefresh {
 		return "", nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return "", err
+	}
 	originRunID = strings.TrimSpace(originRunID)
 	symbol = normalizeRecommendStockCode(symbol)
 	if originRunID == "" || symbol == "" {
@@ -104,6 +107,9 @@ func appendMarketSummaryV150ExecutionSecurityObservation(
 	fact marketSummaryV150ExecutionSecurityFact,
 	startedAt, availableAt time.Time,
 ) (string, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return "", err
+	}
 	if db.Dao == nil || !db.Dao.Migrator().HasTable(&models.StrategyRunSnapshot{}) || !db.Dao.Migrator().HasTable(&models.SecurityMasterHistory{}) {
 		return "", errors.New("immutable strategy security tables are unavailable")
 	}

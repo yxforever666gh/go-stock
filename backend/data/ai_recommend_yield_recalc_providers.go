@@ -1085,6 +1085,9 @@ func upsertYieldStates(states []models.AiRecommendYieldState) error {
 }
 
 func upsertYieldRecordStates(states []models.AiRecommendYieldRecordState) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	filtered, err := filterV150YieldRecordStates(states)
 	if err != nil {
 		return err
@@ -1182,6 +1185,9 @@ func syncRecommendActivationStatusFromRecordStates(states []models.AiRecommendYi
 	if len(states) == 0 {
 		return nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 
 	type recommendActivationSync struct {
 		RecommendID             uint
@@ -1251,6 +1257,9 @@ func cleanRemovedYieldRecordStates(recordIDs []uint) error {
 }
 
 func updateYieldRecalcProgress(metaID uint, done, total int) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	percent := calculateRecalcPercent(done, total)
 	return runWithSQLiteBusyRetry(func() error {
 		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
@@ -1263,6 +1272,9 @@ func updateYieldRecalcProgress(metaID uint, done, total int) error {
 }
 
 func updateYieldDownloadProgress(metaID uint, done, total int) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	percent := calculateRecalcPercent(done, total)
 	return runWithSQLiteBusyRetry(func() error {
 		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{

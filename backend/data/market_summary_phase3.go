@@ -107,16 +107,14 @@ func isCurrentStrategyCohortRecord(rec *models.AiRecommendStocks) bool {
 	return strings.TrimSpace(rec.SummaryVersion) == marketSummaryCurrentVersion
 }
 
-// isFrozenLegacyStrategyRecord is intentionally narrow: the 1.5.0 release
-// contract freezes the 1.4.2 cohort without retroactively changing CRUD
-// semantics for unversioned, phase or other historical cohorts.
+// isFrozenLegacyStrategyRecord makes every non-current cohort read-only. Old
+// rows remain queryable, but production CRUD, repair and recalculation paths
+// must not mutate them during or after the governance refactor.
 func isFrozenLegacyStrategyRecord(rec *models.AiRecommendStocks) bool {
 	if rec == nil {
 		return false
 	}
-	version := strings.ToLower(strings.TrimSpace(rec.SummaryVersion))
-	version = strings.TrimPrefix(version, "v")
-	return version == marketSummaryVersion142
+	return strings.TrimSpace(rec.SummaryVersion) != marketSummaryCurrentVersion
 }
 
 type marketSummaryRouteBudget struct {

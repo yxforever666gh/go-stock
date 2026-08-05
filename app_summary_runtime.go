@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go-stock/backend/data"
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"strconv"
@@ -67,6 +68,17 @@ func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int
 }
 
 func (a *App) runSummaryStockNewsTask(question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) summaryRunResult {
+	if err := governance.RequireStrategyLive(a.ctx, db.Dao, data.MarketSummaryCurrentVersion()); err != nil {
+		logger.SugaredLogger.Warnf("market summary production blocked: %v", err)
+		emitEvent(a.ctx, "summaryStockNewsToolStatus", map[string]any{
+			"event":  "summaryStockNewsToolStatus",
+			"tool":   "market_summary",
+			"status": governance.StrategyModePaused,
+			"reason": err.Error(),
+			"time":   time.Now().Format(time.DateTime),
+		})
+		return summaryRunResult{errs: []string{err.Error()}}
+	}
 	if !a.tryAcquireSummaryTask() {
 		emitEvent(a.ctx, "summaryStockNewsToolStatus", map[string]any{
 			"event":  "summaryStockNewsToolStatus",

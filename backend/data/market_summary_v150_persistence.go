@@ -57,6 +57,9 @@ type marketSummaryV150SecurityPayload struct {
 // PersistMarketSummaryV150Snapshot freezes every ranked candidate, rejection,
 // selected rule and initial strategy event in one immutable transaction.
 func PersistMarketSummaryV150Snapshot(ctx context.Context, database *gorm.DB, run *MarketSummaryV150RunSnapshot) error {
+	if err := requireStrategyProductionLive(ctx, database); err != nil {
+		return err
+	}
 	if run == nil {
 		return errors.New("v1.5 snapshot run is nil")
 	}
@@ -285,6 +288,9 @@ func PersistMarketSummaryV150Snapshot(ctx context.Context, database *gorm.DB, ru
 // PersistMarketSummaryV150Recommendations writes only backend-selected plans.
 // It does not parse the model's four scores, price targets, or execution state.
 func PersistMarketSummaryV150Recommendations(database *gorm.DB, run *MarketSummaryV150RunSnapshot, providerName, modelName string) (*models.MarketSummaryRecommendSaveResult, error) {
+	if err := requireStrategyProductionLive(context.Background(), database); err != nil {
+		return nil, err
+	}
 	persistMarketSummaryV150RecommendationsMu.Lock()
 	defer persistMarketSummaryV150RecommendationsMu.Unlock()
 	result, err := persistMarketSummaryV150RecommendationsLocked(database, run, providerName, modelName)
@@ -306,6 +312,9 @@ func PersistMarketSummaryV150Decision(
 	run *MarketSummaryV150RunSnapshot,
 	providerName, modelName string,
 ) (*models.MarketSummaryRecommendSaveResult, error) {
+	if err := requireStrategyProductionLive(ctx, database); err != nil {
+		return nil, err
+	}
 	if run == nil {
 		return nil, errors.New("v1.5 recommendation run is nil")
 	}

@@ -48,6 +48,9 @@ var marketSummaryObservationPhrases = []string{
 }
 
 func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return 0, err
+	}
 	marketSummaryRecommendSaveMu.Lock()
 	defer marketSummaryRecommendSaveMu.Unlock()
 
@@ -147,6 +150,9 @@ type marketSummaryPreparedSaveItem struct {
 }
 
 func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot, options MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return nil, err
+	}
 	marketSummaryRecommendSaveMu.Lock()
 	defer marketSummaryRecommendSaveMu.Unlock()
 
@@ -745,6 +751,9 @@ func formatMarketSummaryPlanPrice(value float64) string {
 }
 
 func EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return 0, err
+	}
 	drafts, err := parseMarketSummaryYieldOverrideDrafts(summaryText, startedAt)
 	if err != nil {
 		return 0, err

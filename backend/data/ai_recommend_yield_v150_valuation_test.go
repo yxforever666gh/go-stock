@@ -515,6 +515,7 @@ func initV150YieldBenchmarkTestDB(t *testing.T) {
 	oldDB := db.Dao
 	oldMinuteDB := db.MinuteDao
 	db.Init(filepath.Join(t.TempDir(), "v150-yield-benchmark.db"))
+	initMinuteSchemaForTest(t)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close V1.5 yield benchmark test database: %v", err)

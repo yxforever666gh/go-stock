@@ -188,6 +188,9 @@ func marketSummaryV150CompletedBoundary(now, day time.Time, startHour, startMinu
 // lifecycle event identities and immutable appends are idempotent.
 func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150ExecutionMonitorResult, error) {
 	result := MarketSummaryV150ExecutionMonitorResult{ObservedAt: now.In(cnLocation())}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return result, err
+	}
 	window, ok := ResolveMarketSummaryV150ExecutionWindow(now)
 	if !ok {
 		return result, errors.New("v1.5 execution monitor window is unavailable")

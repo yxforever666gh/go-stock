@@ -1006,6 +1006,8 @@ func seedMarketSummaryV150ExecutionFixtureWithSecurity(t *testing.T, decision ti
 func initMarketSummaryV150ExecutionTestDB(t *testing.T) {
 	t.Helper()
 	db.Init(filepath.Join(t.TempDir(), "v150-execution.db"))
+	initMinuteSchemaForTest(t)
+	enableStrategyProductionForTest(t, db.Dao)
 	t.Cleanup(func() {
 		_ = db.Close()
 		db.Dao = nil

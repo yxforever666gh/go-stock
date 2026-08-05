@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"go-stock/backend/db"
@@ -14,7 +13,6 @@ import (
 
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/go-resty/resty/v2"
-	"github.com/inconshreveable/go-update"
 	"golang.org/x/exp/slices"
 )
 
@@ -49,23 +47,11 @@ func (a *App) CheckUpdate(flag int) {
 		return
 	}
 
-	downloadURL := defaultReleaseDownloadURL(releaseVersion.TagName)
 	commitMessage := strings.TrimSpace(releaseVersion.Commit.Message)
-	a.emitReleaseNews("发现新版本："+releaseVersion.TagName, commitMessage)
-
-	body, err := downloadReleaseBinary(downloadURL)
-	if err != nil || len(body) < 1024*500 {
-		a.emitReleaseNews("新版本："+releaseVersion.TagName, commitMessage+"\n新版本下载失败,请稍后重试或请前往 "+publicReleasesURL()+" 手动下载替换文件。")
-		return
-	}
-
-	if err = update.Apply(bytes.NewReader(body), update.Options{}); err != nil {
-		logger.SugaredLogger.Error("更新失败: ", err.Error())
-		go emitEvent(a.ctx, "updateVersion", releaseVersion)
-		return
-	}
-
-	a.emitReleaseNews("新版本："+releaseVersion.TagName, "版本更新完成,下次重启软件生效.")
+	a.emitReleaseNews(
+		"发现新版本："+releaseVersion.TagName,
+		commitMessage+"\n自动更新已禁用；请仅通过本机 Windows release pipeline 部署已校验的唯一产物。",
+	)
 }
 
 func (a *App) fetchLatestReleaseVersion() (*models.GitHubReleaseVersion, error) {
@@ -112,21 +98,6 @@ func (a *App) enrichReleaseVersion(releaseVersion *models.GitHubReleaseVersion) 
 		Get(releaseVersion.Tag.Object.Url); err == nil {
 		releaseVersion.Commit = *commit
 	}
-}
-
-func defaultReleaseDownloadURL(tagName string) string {
-	if IsMacOS() {
-		return releaseDownloadURL(tagName, "go-stock-darwin-universal")
-	}
-	return releaseDownloadURL(tagName, "go-stock-windows-amd64.exe")
-}
-
-func downloadReleaseBinary(downloadURL string) ([]byte, error) {
-	resp, err := resty.New().R().Get(downloadURL)
-	if err != nil {
-		return nil, err
-	}
-	return resp.Body(), nil
 }
 
 func (a *App) emitReleaseNews(timeLabel, content string) {

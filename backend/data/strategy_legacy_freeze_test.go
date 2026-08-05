@@ -178,8 +178,8 @@ func TestLegacyRecommendationRejectsOverrideAndCRUDMutation(t *testing.T) {
 	if err := service.UpdateAiRecommendStocks(legacy.ID, &models.AiRecommendStocks{StockName: "mutated"}); err == nil {
 		t.Fatal("legacy update must be rejected")
 	}
-	if err := service.UpdateAiRecommendStocks(unversionedLegacy.ID, &models.AiRecommendStocks{StockName: "unversioned-updated"}); err != nil {
-		t.Fatalf("unversioned CRUD is outside the explicit V1.4.2 freeze: %v", err)
+	if err := service.UpdateAiRecommendStocks(unversionedLegacy.ID, &models.AiRecommendStocks{StockName: "unversioned-updated"}); err == nil {
+		t.Fatal("unversioned legacy update must be rejected")
 	}
 	if err := service.UpdateAiRecommendStocks(currentAnalysisOnly.ID, &models.AiRecommendStocks{ExecutionState: recommendExecutionConditional}); err == nil {
 		t.Fatal("V1.5 analysis_only update to conditional must be rejected")
@@ -193,8 +193,8 @@ func TestLegacyRecommendationRejectsOverrideAndCRUDMutation(t *testing.T) {
 	if err := service.DeleteAiRecommendStocks(legacy.ID); err == nil {
 		t.Fatal("legacy delete must be rejected")
 	}
-	if err := service.DeleteAiRecommendStocks(unversionedLegacy.ID); err != nil {
-		t.Fatalf("unversioned delete is outside the explicit V1.4.2 freeze: %v", err)
+	if err := service.DeleteAiRecommendStocks(unversionedLegacy.ID); err == nil {
+		t.Fatal("unversioned legacy delete must be rejected")
 	}
 	if err := service.BatchDeleteAiRecommendStocks([]uint{current.ID, legacy.ID}); err == nil {
 		t.Fatal("mixed batch containing a legacy row must be rejected atomically")
@@ -202,30 +202,41 @@ func TestLegacyRecommendationRejectsOverrideAndCRUDMutation(t *testing.T) {
 	if err := service.CreateAiRecommendStocks(&models.AiRecommendStocks{SummaryVersion: marketSummaryVersion142}); err == nil {
 		t.Fatal("creating a new legacy-version record must be rejected")
 	}
-	var gotLegacy, gotCurrent models.AiRecommendStocks
+	unversionedCreate := buildValidAiRecommendForCreate(at.Add(time.Hour), "600004.SH", "unversioned-create")
+	unversionedCreate.SummaryVersion = ""
+	if err := service.CreateAiRecommendStocks(unversionedCreate); err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("creating an unversioned legacy record error = %v, want frozen rejection", err)
+	}
+	var gotLegacy, gotUnversioned, gotCurrent models.AiRecommendStocks
 	if err := db.Dao.First(&gotLegacy, legacy.ID).Error; err != nil {
 		t.Fatalf("legacy row disappeared: %v", err)
 	}
 	if err := db.Dao.First(&gotCurrent, current.ID).Error; err != nil {
 		t.Fatalf("current row disappeared after rejected mixed batch: %v", err)
 	}
+	if err := db.Dao.First(&gotUnversioned, unversionedLegacy.ID).Error; err != nil {
+		t.Fatalf("unversioned legacy row disappeared: %v", err)
+	}
 	if gotLegacy.StockName != "legacy" || gotLegacy.ExecutionState != recommendExecutionAnalysisOnly {
 		t.Fatalf("legacy row changed: %+v", gotLegacy)
 	}
+	if gotUnversioned.StockName != "unversioned-legacy" {
+		t.Fatalf("unversioned legacy row changed: %+v", gotUnversioned)
+	}
 }
 
-func TestFrozenLegacyPredicateMatchesOnlyV142(t *testing.T) {
+func TestFrozenLegacyPredicateMatchesEveryNonCurrentCohort(t *testing.T) {
 	tests := []struct {
 		version string
 		frozen  bool
 	}{
 		{version: marketSummaryVersion142, frozen: true},
 		{version: "v1.4.2", frozen: true},
-		{version: marketSummaryVersion141, frozen: false},
-		{version: marketSummaryVersion140, frozen: false},
-		{version: marketSummaryVersion136, frozen: false},
-		{version: marketSummaryPhase4Version, frozen: false},
-		{version: "", frozen: false},
+		{version: marketSummaryVersion141, frozen: true},
+		{version: marketSummaryVersion140, frozen: true},
+		{version: marketSummaryVersion136, frozen: true},
+		{version: marketSummaryPhase4Version, frozen: true},
+		{version: "", frozen: true},
 		{version: marketSummaryVersion150, frozen: false},
 	}
 	for _, test := range tests {
@@ -234,6 +245,57 @@ func TestFrozenLegacyPredicateMatchesOnlyV142(t *testing.T) {
 			t.Fatalf("version %q frozen=%t, want %t", test.version, got, test.frozen)
 		}
 	}
+}
+
+func TestLegacyCohortRejectsDerivedProductionRows(t *testing.T) {
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "legacy-derived-write-guards.db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendOpeningReview{},
+		&models.AiRecommendYieldRecordState{},
+		&models.MarketSummaryRunDiagnostic{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 8, 5, 9, 40, 0, 0, cnLocation())
+	legacy := models.AiRecommendStocks{
+		SummaryVersion: marketSummaryVersion142,
+		StockCode:      "600005.SH",
+		StockName:      "legacy-derived",
+		DataTime:       &at,
+	}
+	if err := db.Dao.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	err := saveOpeningReviews([]models.AiRecommendOpeningReview{{
+		RecommendID: legacy.ID,
+		StockCode:   legacy.StockCode,
+		TradeDate:   at.Format(time.DateOnly),
+		ReviewScope: openingReviewScopePending,
+		ReviewPhase: openingReviewPhase0940,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "only be written") {
+		t.Fatalf("legacy opening review error = %v", err)
+	}
+	err = upsertMinuteUncoverableRecordState(minuteCoverageIssue{
+		RecordID:  legacy.ID,
+		StockCode: legacy.StockCode,
+	}, legacy, "legacy must stay frozen", at)
+	if err == nil || !strings.Contains(err.Error(), "frozen") {
+		t.Fatalf("legacy yield state error = %v", err)
+	}
+	err = SaveMarketSummaryRunDiagnostic(&models.MarketSummaryRunDiagnostic{
+		RunID:          "legacy-diagnostic",
+		SummaryVersion: marketSummaryVersion142,
+	})
+	if err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("legacy diagnostic error = %v", err)
+	}
+
+	assertStrategyTableCount(t, &models.AiRecommendOpeningReview{}, 0)
+	assertStrategyTableCount(t, &models.AiRecommendYieldRecordState{}, 0)
+	assertStrategyTableCount(t, &models.MarketSummaryRunDiagnostic{}, 0)
 }
 
 func TestHistoricalOverrideCannotReviveAnalysisOnlyInMemory(t *testing.T) {

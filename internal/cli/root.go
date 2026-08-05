@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strings"
 )
 
 type GlobalOptions struct {
@@ -22,6 +23,27 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	if cmd == "" {
 		printRootUsage(stdout)
 		return 2
+	}
+	if cmd == "release" {
+		if err := runRelease(cmdArgs, opts, stdout); err != nil {
+			fmt.Fprintf(stderr, "execution failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if cmd == "db" {
+		if err := runDB(cmdArgs, opts, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "execution failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+	if cmd == "strategy" {
+		if err := runStrategy(cmdArgs, opts, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "execution failed: %v\n", err)
+			return 1
+		}
+		return 0
 	}
 
 	var resolvedDBPath string
@@ -70,6 +92,24 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func IsCommand(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "quote", "search", "ai", "network-audit", "repair-market-summary", "backfill-market-summary-recommend", "strategy-backtest", "strategy-rule-replay", "strategy", "db", "release", "help", "-h", "--help":
+		return true
+	default:
+		return false
+	}
+}
+
+func HasCommand(args []string) bool {
+	for _, arg := range args {
+		if IsCommand(arg) {
+			return true
+		}
+	}
+	return false
+}
+
 func parseRootArgs(args []string, stderr io.Writer) (GlobalOptions, string, []string, error) {
 	opts := GlobalOptions{
 		DataDir: "data",
@@ -112,4 +152,8 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "    示例: strategy-backtest --version 1.5.0 --from 2026-01-01 --to 2026-06-30")
 	fmt.Fprintln(w, "  strategy-rule-replay  严格只读、cache-only 的历史结构化规则执行审计")
 	fmt.Fprintln(w, "    示例: strategy-rule-replay --expect-count 226 --json")
+	fmt.Fprintln(w, "  strategy status|pause|resume  查看或变更持久化策略生产模式")
+	fmt.Fprintln(w, "    示例: strategy resume --version 1.5.0 --reason \"engineering gates passed\"")
+	fmt.Fprintln(w, "  db status|backup|migrate|verify  管理并校验主库和分钟库")
+	fmt.Fprintln(w, "  release inspect  查看发布清单、构建身份和策略配置 hash")
 }

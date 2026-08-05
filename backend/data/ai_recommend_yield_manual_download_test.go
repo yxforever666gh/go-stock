@@ -10,7 +10,7 @@ import (
 	"go-stock/backend/models"
 )
 
-func TestEnsureYieldMetaSchema_AddsManualAuditColumnsToLegacyTable(t *testing.T) {
+func TestEnsureYieldMetaSchemaRejectsLegacySchemaWithoutMutation(t *testing.T) {
 	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-meta-legacy.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate recommend table failed: %v", err)
@@ -45,8 +45,8 @@ func TestEnsureYieldMetaSchema_AddsManualAuditColumnsToLegacyTable(t *testing.T)
 		t.Fatalf("create legacy meta table failed: %v", err)
 	}
 
-	if err := ensureYieldMetaSchema(); err != nil {
-		t.Fatalf("ensureYieldMetaSchema failed: %v", err)
+	if err := ensureYieldMetaSchema(); err == nil || !strings.Contains(err.Error(), "run numbered migrations") {
+		t.Fatalf("ensureYieldMetaSchema error = %v, want numbered migration rejection", err)
 	}
 
 	type pragmaRow struct {
@@ -69,16 +69,24 @@ func TestEnsureYieldMetaSchema_AddsManualAuditColumnsToLegacyTable(t *testing.T)
 		"last_manual_sqlite_busy_count",
 		"last_manual_provider_summary",
 	} {
-		if _, ok := names[col]; !ok {
-			t.Fatalf("expected column %s to be added", col)
+		if _, ok := names[col]; ok {
+			t.Fatalf("runtime schema verification unexpectedly added column %s", col)
 		}
 	}
 }
 
 func TestPersistManualYieldAudit_WritesFinishedSummary(t *testing.T) {
 	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-manual-audit-persist.db"))
-	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
-		t.Fatalf("auto migrate recommend table failed: %v", err)
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldDirtyCode{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendDailyBar{},
+	); err != nil {
+		t.Fatalf("auto migrate yield tables failed: %v", err)
 	}
 	if err := ensureYieldMetaSchema(); err != nil {
 		t.Fatalf("ensureYieldMetaSchema failed: %v", err)
@@ -338,6 +346,7 @@ func TestIsFullAiRecommendYieldRecalc_ForceWithScopeIsNotFull(t *testing.T) {
 }
 
 func TestRecalcManagerPendingForceKeepsScopeAndReason(t *testing.T) {
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "recalc-manager-live.db"))
 	manager := &aiRecommendYieldRecalcManager{running: true}
 	scope := normalizeScopeCodes([]string{"002297.SZ"})
 

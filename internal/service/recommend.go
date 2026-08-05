@@ -1,9 +1,18 @@
 package service
 
 import (
+	"time"
+
 	"go-stock/backend/data"
 	"go-stock/backend/models"
 )
+
+type MarketSummaryActivationRepairResult struct {
+	Scanned      int `json:"scanned"`
+	Downgraded   int `json:"downgraded"`
+	RuleUpgraded int `json:"ruleUpgraded"`
+	SkippedNoRef int `json:"skippedNoRef"`
+}
 
 type RecommendService struct{}
 
@@ -77,4 +86,17 @@ func (s RecommendService) GetMarketSummaryProductionDowngradeReasonTop(query mod
 
 func (s RecommendService) DeleteAiRecommendStocks(id uint) error {
 	return data.NewAiRecommendStocksService().DeleteAiRecommendStocks(id)
+}
+
+func (s RecommendService) RepairHistoricalMarketSummaryActivationIssues(now time.Time) (MarketSummaryActivationRepairResult, error) {
+	result, err := data.RepairHistoricalMarketSummaryActivationIssues(now)
+	if err != nil {
+		return MarketSummaryActivationRepairResult{}, err
+	}
+	return MarketSummaryActivationRepairResult{
+		Scanned:      result.Scanned,
+		Downgraded:   result.Downgraded,
+		RuleUpgraded: result.RuleUpgraded,
+		SkippedNoRef: result.SkippedNoRef,
+	}, nil
 }

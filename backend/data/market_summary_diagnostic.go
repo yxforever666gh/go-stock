@@ -2,6 +2,7 @@ package data
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -22,11 +23,17 @@ func SaveMarketSummaryRunDiagnostic(item *models.MarketSummaryRunDiagnostic) err
 	if item == nil {
 		return nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if strings.TrimSpace(item.RunID) == "" {
 		item.RunID = "market-summary-" + time.Now().Format("20060102150405.000000000")
 	}
 	if strings.TrimSpace(item.SummaryVersion) == "" {
 		item.SummaryVersion = marketSummaryCurrentVersion
+	}
+	if strings.TrimSpace(item.SummaryVersion) != marketSummaryCurrentVersion {
+		return fmt.Errorf("strategy cohort %s is frozen; diagnostics are read-only", strings.TrimSpace(item.SummaryVersion))
 	}
 	if item.StartedAt.IsZero() {
 		item.StartedAt = time.Now()

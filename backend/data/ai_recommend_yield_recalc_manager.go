@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/strategy/v150"
@@ -16,6 +17,10 @@ import (
 )
 
 func (m *aiRecommendYieldRecalcManager) Request(force bool, reason string, scope map[string]struct{}) {
+	if err := governance.RequireStrategyLive(nil, db.Dao, v150.StrategyVersion); err != nil {
+		logger.SugaredLogger.Warnf("AI recommendation yield recalculation blocked: %v", err)
+		return
+	}
 	m.mu.Lock()
 	if m.running {
 		m.pending = true
@@ -44,6 +49,17 @@ func (m *aiRecommendYieldRecalcManager) run(force bool, reason string, scope map
 	nextReason := reason
 	nextScope := copyScopeMap(scope)
 	for {
+		if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+			logger.SugaredLogger.Warnf("AI recommendation yield recalculation stopped: %v", err)
+			m.mu.Lock()
+			m.pending = false
+			m.pendingForce = false
+			m.pendingReason = ""
+			m.pendingScope = nil
+			m.running = false
+			m.mu.Unlock()
+			return
+		}
 		err := rebuildAiRecommendYieldSnapshot(nextForce, nextReason, nextScope)
 		if err != nil {
 			logger.SugaredLogger.Errorf("rebuildAiRecommendYieldSnapshot error: %v", err)
@@ -356,6 +372,9 @@ func runWithSQLiteBusyRetry(fn func() error) error {
 }
 
 func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string]struct{}) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if schemaErr := ensureYieldMetaSchema(); schemaErr != nil {
 		return schemaErr
 	}
@@ -551,6 +570,9 @@ func beginAiRecommendYieldRecalc(force bool, reason string) (*aiRecommendYieldRe
 }
 
 func markAiRecommendYieldRecalcStarted(metaID uint) error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	return runWithSQLiteBusyRetry(func() error {
 		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
 			"recalc_in_progress": true,
@@ -570,6 +592,9 @@ func startAiRecommendYieldHeartbeat(metaID uint) chan struct{} {
 		for {
 			select {
 			case <-ticker.C:
+				if !strategyProductionIsLive(db.Dao) {
+					return
+				}
 				_ = runWithSQLiteBusyRetry(func() error {
 					return db.Dao.Model(&models.AiRecommendYieldMeta{}).
 						Where("id = ? AND recalc_in_progress = ?", metaID, true).
@@ -584,6 +609,9 @@ func startAiRecommendYieldHeartbeat(metaID uint) chan struct{} {
 }
 
 func finishAiRecommendYieldRecalc(metaID uint, startedAt time.Time, runErr error, downloadWarning string) {
+	if !strategyProductionIsLive(db.Dao) {
+		return
+	}
 	updateMap := map[string]any{
 		"recalc_in_progress": false,
 		"updated_at":         time.Now(),
@@ -611,6 +639,9 @@ func persistManualYieldAudit(metaID uint, audit *aiRecommendYieldManualAudit) er
 	if audit == nil || metaID == 0 {
 		return nil
 	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	snapshot := audit.snapshot()
 	return runWithSQLiteBusyRetry(func() error {
 		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
@@ -635,6 +666,9 @@ func nullableTime(t time.Time) *time.Time {
 }
 
 func buildAiRecommendYieldRecalcRuntime(meta *models.AiRecommendYieldMeta, now time.Time, force bool, reason string) (*aiRecommendYieldRecalcRuntime, error) {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return nil, err
+	}
 	_ = db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", meta.ID).Updates(map[string]any{
 		"akshare_ready":         false,
 		"akshare_checked_at":    time.Now(),
@@ -828,6 +862,9 @@ func isManualMinuteWarmupTimeout(err error) bool {
 func updateManualMinuteWarmupStatus(metaID uint, message string) error {
 	if metaID == 0 {
 		return nil
+	}
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
 	}
 	return runWithSQLiteBusyRetry(func() error {
 		return db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", metaID).Updates(map[string]any{
@@ -1724,7 +1761,7 @@ func cleanupAiRecommendYieldSnapshots(allCodes []string, allRecordIDs []uint) er
 }
 
 func markAiRecommendYieldRecalcError(metaID uint, err error) {
-	if err == nil {
+	if err == nil || !strategyProductionIsLive(db.Dao) {
 		return
 	}
 	_ = runWithSQLiteBusyRetry(func() error {
@@ -1773,6 +1810,9 @@ func (w *aiRecommendYieldSnapshotWriter) AppendRecordState(state models.AiRecomm
 }
 
 func (w *aiRecommendYieldSnapshotWriter) Flush() error {
+	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+		return err
+	}
 	if err := w.flushStates(); err != nil {
 		return err
 	}

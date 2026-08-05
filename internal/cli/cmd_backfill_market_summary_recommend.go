@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"go-stock/internal/service"
 )
 
 type marketSummaryRecommendBackfillRow struct {
@@ -57,6 +57,7 @@ func runBackfillMarketSummaryRecommend(args []string, g GlobalOptions, stdout, s
 
 	rows := make([]marketSummaryRecommendBackfillRow, 0, len(reports))
 	totalSaved := 0
+	aiService := service.NewAIService()
 	for _, report := range reports {
 		row := marketSummaryRecommendBackfillRow{
 			ID:           report.ID,
@@ -65,7 +66,7 @@ func runBackfillMarketSummaryRecommend(args []string, g GlobalOptions, stdout, s
 			ModelName:    strings.TrimSpace(report.ModelName),
 		}
 		if !dryRun {
-			saved, saveErr := data.EnsureMarketSummaryRecommendStocksSaved(report.Content, report.ProviderName, report.ModelName, report.CreatedAt)
+			saved, saveErr := aiService.EnsureMarketSummaryRecommendStocksSaved(report.Content, report.ProviderName, report.ModelName, report.CreatedAt)
 			row.Saved = saved
 			totalSaved += saved
 			if saveErr != nil {
