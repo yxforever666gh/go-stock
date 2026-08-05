@@ -74,7 +74,7 @@ func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) err
 }
 
 func productionRuntimeDependencies() RuntimeDependencies {
-	marketData := data.NewCompatibilityMarketDataReader()
+	marketData := data.NewCompatibilityMarketDataReader(db.Dao, db.MinuteDao)
 	return RuntimeDependencies{
 		Storage: Storage{Main: db.Dao, Minute: db.MinuteDao},
 		Services: service.Dependencies{
@@ -83,6 +83,11 @@ func productionRuntimeDependencies() RuntimeDependencies {
 			Providers: service.ProviderSet{
 				DailyBars:  marketData,
 				MinuteBars: marketData,
+				Quotes:     marketData,
+				Securities: marketData,
+				News:       data.NewCompatibilityNewsReader(),
+				Ledger:     data.NewCompatibilityPortfolioLedger(db.Dao),
+				Legacy:     data.NewCompatibilityLegacyRepository(db.Dao),
 			},
 		},
 	}

@@ -71,6 +71,18 @@ func SealStrategyOrderEvents(events []models.OrderEvent) error {
 	return nil
 }
 
+// VerifyStrategyOrderEvents revalidates immutable event seals without
+// replaying or mutating the ledger. Read-only portfolio adapters use this
+// before exposing events as an accounting source.
+func VerifyStrategyOrderEvents(events []models.OrderEvent) error {
+	for i := range events {
+		if err := verifySnapshotRecord(events[i]); err != nil {
+			return fmt.Errorf("verify order event %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 func sealSnapshotRecord(record any) error {
 	canonical, normalized, err := canonicalSnapshotRecord(record)
 	if err != nil {

@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-var ErrInvalidObservation = errors.New("invalid market-data observation")
+var (
+	ErrInvalidObservation     = errors.New("invalid market-data observation")
+	ErrObservationUnavailable = errors.New("market-data observation unavailable")
+)
 
 type Adjustment string
 
