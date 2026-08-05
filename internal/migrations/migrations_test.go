@@ -42,7 +42,7 @@ func TestMigrateAllIsIdempotentAndInstallsStrategyGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(mainStatus.Records) != 1 || len(minuteStatus.Records) != 1 {
+	if len(mainStatus.Records) != 2 || len(minuteStatus.Records) != 2 {
 		t.Fatalf("unexpected migration ledgers: main=%+v minute=%+v", mainStatus.Records, minuteStatus.Records)
 	}
 
@@ -94,6 +94,106 @@ func TestMigrateRejectsChecksumConflict(t *testing.T) {
 	}
 	if err := MigrateMain(database); err == nil || !strings.Contains(err.Error(), "checksum conflict") {
 		t.Fatalf("checksum conflict error = %v", err)
+	}
+}
+
+func TestPublishedBaselineUpgradesToDefinitionLock(t *testing.T) {
+	mainDB := openMigrationTestDB(t, filepath.Join(t.TempDir(), "stock.db"))
+	minuteDB := openMigrationTestDB(t, filepath.Join(t.TempDir(), "minute.db"))
+
+	if err := migrate(mainDB, "main", mainMigrations[:1], 1); err != nil {
+		t.Fatalf("apply published main baseline: %v", err)
+	}
+	if err := migrate(minuteDB, "minute", minuteMigrations[:1], 1); err != nil {
+		t.Fatalf("apply published minute baseline: %v", err)
+	}
+	if err := MigrateAll(mainDB, minuteDB); err != nil {
+		t.Fatalf("upgrade published baselines: %v", err)
+	}
+
+	mainStatus, err := VerifyMain(mainDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minuteStatus, err := VerifyMinute(minuteDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(mainStatus.Records) != 2 || len(minuteStatus.Records) != 2 {
+		t.Fatalf("definition-lock migrations were not applied: main=%+v minute=%+v", mainStatus.Records, minuteStatus.Records)
+	}
+	if mainStatus.Records[0].Checksum != "41df05f8dbf7b1c56fe959ee8893d97938ddfe35425e98110333e47e2ee40ba6" {
+		t.Fatalf("published main baseline checksum changed: %s", mainStatus.Records[0].Checksum)
+	}
+	if minuteStatus.Records[0].Checksum != "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec" {
+		t.Fatalf("published minute baseline checksum changed: %s", minuteStatus.Records[0].Checksum)
+	}
+}
+
+func TestDefinitionLockRejectsExistingGuardConflict(t *testing.T) {
+	database := openMigrationTestDB(t, filepath.Join(t.TempDir(), "stock.db"))
+	if err := migrate(database, "main", mainMigrations[:1], 1); err != nil {
+		t.Fatal(err)
+	}
+	guard := strategyGuardStatements()[0]
+	if err := database.Exec("DROP TRIGGER " + guard.name).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec("CREATE TRIGGER " + guard.name + " BEFORE INSERT ON ai_recommend_stocks BEGIN SELECT RAISE(ABORT, 'tampered'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateMain(database); err == nil || !strings.Contains(err.Error(), "definition conflict") {
+		t.Fatalf("guard definition conflict error = %v", err)
+	}
+}
+
+func TestDefinitionLockRejectsExistingMinuteIndexConflict(t *testing.T) {
+	database := openMigrationTestDB(t, filepath.Join(t.TempDir(), "minute.db"))
+	if err := migrate(database, "minute", minuteMigrations[:1], 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec("DROP INDEX idx_minute_bar_trade_time").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec("CREATE INDEX idx_minute_bar_trade_time ON minute_bar(stock_code)").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateMinute(database); err == nil || !strings.Contains(err.Error(), "definition conflict") {
+		t.Fatalf("minute index definition conflict error = %v", err)
+	}
+}
+
+func TestMigrationChecksumIncludesDefinition(t *testing.T) {
+	base := migration{
+		id:          7,
+		name:        "definition_test",
+		description: "checksum definition coverage",
+		definition:  func() string { return "schema-a" },
+	}
+	changed := base
+	changed.definition = func() string { return "schema-b" }
+	if base.checksum() == changed.checksum() {
+		t.Fatal("migration checksum did not change with its definition")
+	}
+}
+
+func TestBaselineMigrationChecksums(t *testing.T) {
+	tests := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{name: "main-v1-published", got: mainMigrations[0].checksum(), want: "41df05f8dbf7b1c56fe959ee8893d97938ddfe35425e98110333e47e2ee40ba6"},
+		{name: "main-v2-definition-lock", got: mainMigrations[1].checksum(), want: "b0ee5280aaa1292a1b72d9dedac9bd40bf0fded4733d1d37c5b856e4bccac50b"},
+		{name: "minute-v1-published", got: minuteMigrations[0].checksum(), want: "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec"},
+		{name: "minute-v2-definition-lock", got: minuteMigrations[1].checksum(), want: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.got != test.want {
+				t.Fatalf("baseline checksum = %s, want %s", test.got, test.want)
+			}
+		})
 	}
 }
 

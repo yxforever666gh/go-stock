@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,8 +20,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const minuteBarSchemaSQL = `
-CREATE TABLE IF NOT EXISTS minute_bar (
+const minuteBarTableSQL = `CREATE TABLE IF NOT EXISTS minute_bar (
   stock_code TEXT NOT NULL,
   trade_time INTEGER NOT NULL,
   open REAL NOT NULL,
@@ -32,11 +32,12 @@ CREATE TABLE IF NOT EXISTS minute_bar (
   source TEXT,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (stock_code, trade_time)
-) WITHOUT ROWID;
+) WITHOUT ROWID`
 
-CREATE INDEX IF NOT EXISTS idx_minute_bar_trade_time
-ON minute_bar(trade_time);
-`
+const minuteBarIndexSQL = `CREATE INDEX IF NOT EXISTS idx_minute_bar_trade_time
+ON minute_bar(trade_time)`
+
+const minuteBarSchemaSQL = minuteBarTableSQL + ";\n\n" + minuteBarIndexSQL + ";\n"
 
 type MigrationRecord struct {
 	ID         int       `gorm:"primaryKey;autoIncrement:false" json:"id"`
@@ -61,11 +62,16 @@ type migration struct {
 	id          int
 	name        string
 	description string
+	definition  func() string
 	apply       func(*gorm.DB) error
 }
 
 func (m migration) checksum() string {
-	sum := sha256.Sum256([]byte(fmt.Sprintf("%06d\n%s\n%s\n", m.id, m.name, m.description)))
+	definition := ""
+	if m.definition != nil {
+		definition = m.definition()
+	}
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%06d\n%s\n%s\n%s", m.id, m.name, m.description, definition)))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -75,16 +81,19 @@ var mainMigrations = []migration{
 		name:        "baseline_app_schema",
 		description: "App 1.5.1 baseline of the existing primary schema, paused runtime control, and immutable strategy write guards; no repair or backfill side effects.",
 		apply: func(tx *gorm.DB) error {
-			if err := tx.AutoMigrate(mainModels()...); err != nil {
+			return applyMainSchema(tx)
+		},
+	},
+	{
+		id:          2,
+		name:        "lock_app_schema_definition",
+		description: "App 1.5.1 locks the complete primary model and strategy guard definition without rewriting the published baseline migration.",
+		definition:  mainMigrationDefinition,
+		apply: func(tx *gorm.DB) error {
+			if err := applyMainSchema(tx); err != nil {
 				return err
 			}
-			if err := persistence.MigrateStrategyPersistence(tx); err != nil {
-				return err
-			}
-			if err := governance.InitializeStrategyRuntimeControl(context.Background(), tx, releaseinfo.Manifest().CurrentStrategyVersion); err != nil {
-				return err
-			}
-			return installStrategyWriteGuards(tx)
+			return verifyStrategyWriteGuards(tx)
 		},
 	},
 }
@@ -98,6 +107,72 @@ var minuteMigrations = []migration{
 			return tx.Exec(minuteBarSchemaSQL).Error
 		},
 	},
+	{
+		id:          2,
+		name:        "lock_minute_bar_schema_definition",
+		description: "App 1.5.1 locks the complete minute_bar DDL without rewriting the published baseline migration.",
+		definition: func() string {
+			return minuteBarSchemaSQL
+		},
+		apply: func(tx *gorm.DB) error {
+			if err := tx.Exec(minuteBarSchemaSQL).Error; err != nil {
+				return err
+			}
+			return verifyMinuteSchema(tx)
+		},
+	},
+}
+
+func applyMainSchema(tx *gorm.DB) error {
+	if err := tx.AutoMigrate(mainModels()...); err != nil {
+		return err
+	}
+	if err := persistence.MigrateStrategyPersistence(tx); err != nil {
+		return err
+	}
+	if err := governance.InitializeStrategyRuntimeControl(context.Background(), tx, releaseinfo.Manifest().CurrentStrategyVersion); err != nil {
+		return err
+	}
+	return installStrategyWriteGuards(tx)
+}
+
+func mainMigrationDefinition() string {
+	var definition strings.Builder
+	appendModelDefinitions(&definition, "main_models", mainModels())
+	appendModelDefinitions(&definition, "strategy_persistence_models", models.StrategyPersistenceModels())
+	appendModelDefinitions(&definition, "strategy_runtime_control", []any{&governance.StrategyRuntimeControl{}})
+	definition.WriteString("strategy_write_guards\n")
+	for _, guard := range strategyGuardStatements() {
+		fmt.Fprintf(&definition, "%d:%s\n", len(guard.statement), guard.statement)
+	}
+	return definition.String()
+}
+
+func appendModelDefinitions(definition *strings.Builder, group string, modelValues []any) {
+	fmt.Fprintf(definition, "%s:%d\n", group, len(modelValues))
+	for modelIndex, modelValue := range modelValues {
+		modelType := reflect.TypeOf(modelValue)
+		for modelType != nil && modelType.Kind() == reflect.Pointer {
+			modelType = modelType.Elem()
+		}
+		if modelType == nil || modelType.Kind() != reflect.Struct {
+			fmt.Fprintf(definition, "%d:<invalid:%T>\n", modelIndex, modelValue)
+			continue
+		}
+		fmt.Fprintf(definition, "%d:%s.%s:%d\n", modelIndex, modelType.PkgPath(), modelType.Name(), modelType.NumField())
+		for fieldIndex := 0; fieldIndex < modelType.NumField(); fieldIndex++ {
+			field := modelType.Field(fieldIndex)
+			fmt.Fprintf(
+				definition,
+				"%d:%s:%s:%q:%t\n",
+				fieldIndex,
+				field.Name,
+				field.Type.String(),
+				string(field.Tag),
+				field.Anonymous,
+			)
+		}
+	}
 }
 
 func mainModels() []any {
@@ -162,12 +237,18 @@ var immutableStrategyTables = []string{
 	"strategy_order_event",
 }
 
-func installStrategyWriteGuards(database *gorm.DB) error {
+type strategyGuardStatement struct {
+	name      string
+	statement string
+}
+
+func strategyGuardStatements() []strategyGuardStatement {
 	strategyVersion := strings.ReplaceAll(releaseinfo.Manifest().CurrentStrategyVersion, "'", "''")
 	livePredicate := fmt.Sprintf(
 		"NOT EXISTS (SELECT 1 FROM strategy_runtime_control WHERE id = 1 AND mode = 'live' AND current_strategy_version = '%s')",
 		strategyVersion,
 	)
+	statements := make([]strategyGuardStatement, 0, len(pausedStrategyTables)*3+len(immutableStrategyTables)*2+3)
 	for _, table := range pausedStrategyTables {
 		for _, operation := range []string{"INSERT", "UPDATE", "DELETE"} {
 			name := fmt.Sprintf("guard_strategy_paused_%s_%s", strings.ToLower(operation), table)
@@ -177,9 +258,7 @@ WHEN %s
 BEGIN
   SELECT RAISE(ABORT, 'strategy production is paused');
 END`, name, operation, table, livePredicate)
-			if err := database.Exec(statement).Error; err != nil {
-				return fmt.Errorf("install %s: %w", name, err)
-			}
+			statements = append(statements, strategyGuardStatement{name: name, statement: statement})
 		}
 	}
 
@@ -191,39 +270,87 @@ BEFORE %s ON %s
 BEGIN
   SELECT RAISE(ABORT, 'immutable strategy snapshot');
 END`, name, operation, table)
-			if err := database.Exec(statement).Error; err != nil {
-				return fmt.Errorf("install %s: %w", name, err)
-			}
+			statements = append(statements, strategyGuardStatement{name: name, statement: statement})
 		}
 	}
 
-	legacyStatements := []string{
-		fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS guard_legacy_recommend_insert
+	statements = append(statements,
+		strategyGuardStatement{name: "guard_legacy_recommend_insert", statement: fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS guard_legacy_recommend_insert
 BEFORE INSERT ON ai_recommend_stocks
 WHEN COALESCE(NEW.summary_version, '') <> '%s'
 BEGIN
   SELECT RAISE(ABORT, 'legacy strategy cohort is read-only');
-END`, strategyVersion),
-		fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS guard_legacy_recommend_update
+END`, strategyVersion)},
+		strategyGuardStatement{name: "guard_legacy_recommend_update", statement: fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS guard_legacy_recommend_update
 BEFORE UPDATE ON ai_recommend_stocks
 WHEN COALESCE(OLD.summary_version, '') <> '%s'
   OR COALESCE(NEW.summary_version, '') <> COALESCE(OLD.summary_version, '')
 BEGIN
   SELECT RAISE(ABORT, 'legacy strategy cohort is read-only');
-END`, strategyVersion),
-		fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS guard_legacy_recommend_delete
+END`, strategyVersion)},
+		strategyGuardStatement{name: "guard_legacy_recommend_delete", statement: fmt.Sprintf(`CREATE TRIGGER IF NOT EXISTS guard_legacy_recommend_delete
 BEFORE DELETE ON ai_recommend_stocks
 WHEN COALESCE(OLD.summary_version, '') <> '%s'
 BEGIN
   SELECT RAISE(ABORT, 'legacy strategy cohort is read-only');
-END`, strategyVersion),
-	}
-	for _, statement := range legacyStatements {
-		if err := database.Exec(statement).Error; err != nil {
-			return fmt.Errorf("install legacy strategy guard: %w", err)
+END`, strategyVersion)},
+	)
+	return statements
+}
+
+func installStrategyWriteGuards(database *gorm.DB) error {
+	for _, guard := range strategyGuardStatements() {
+		if err := database.Exec(guard.statement).Error; err != nil {
+			return fmt.Errorf("install %s: %w", guard.name, err)
 		}
 	}
 	return nil
+}
+
+func verifyStrategyWriteGuards(database *gorm.DB) error {
+	for _, guard := range strategyGuardStatements() {
+		if err := verifySQLiteSchemaObject(database, "trigger", guard.name, guard.statement); err != nil {
+			return fmt.Errorf("verify %s: %w", guard.name, err)
+		}
+	}
+	return nil
+}
+
+func verifyMinuteSchema(database *gorm.DB) error {
+	if err := verifySQLiteSchemaObject(database, "table", "minute_bar", minuteBarTableSQL); err != nil {
+		return fmt.Errorf("verify minute_bar: %w", err)
+	}
+	if err := verifySQLiteSchemaObject(database, "index", "idx_minute_bar_trade_time", minuteBarIndexSQL); err != nil {
+		return fmt.Errorf("verify idx_minute_bar_trade_time: %w", err)
+	}
+	return nil
+}
+
+func verifySQLiteSchemaObject(database *gorm.DB, objectType, name, expectedSQL string) error {
+	var actualSQL string
+	result := database.Raw(
+		"SELECT sql FROM sqlite_master WHERE type = ? AND name = ?",
+		objectType,
+		name,
+	).Scan(&actualSQL)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 || strings.TrimSpace(actualSQL) == "" {
+		return fmt.Errorf("%s %q is missing", objectType, name)
+	}
+	if normalizeSQLiteSQL(actualSQL) != normalizeSQLiteSQL(expectedSQL) {
+		return fmt.Errorf("%s %q definition conflict: database=%q code=%q", objectType, name, actualSQL, expectedSQL)
+	}
+	return nil
+}
+
+func normalizeSQLiteSQL(value string) string {
+	normalized := strings.Join(strings.Fields(strings.TrimSuffix(strings.TrimSpace(value), ";")), " ")
+	for _, prefix := range []string{"CREATE TRIGGER", "CREATE TABLE", "CREATE INDEX"} {
+		normalized = strings.Replace(normalized, prefix+" IF NOT EXISTS", prefix, 1)
+	}
+	return normalized
 }
 
 func MigrateMain(database *gorm.DB) error {
