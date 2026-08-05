@@ -1,0 +1,370 @@
+openapi: 3.1.0
+info:
+  title: Go-Stock Local Web API
+  version: 1.5.1
+  description: Local-only HTTP contract for the Windows Web product.
+servers:
+  - url: http://127.0.0.1:34115
+paths:
+  /healthz:
+    get:
+      deprecated: true
+      operationId: getLegacyHealth
+      tags: [system]
+      responses:
+        "200":
+          description: Legacy Web health endpoint. New clients should use livez and readyz.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /livez:
+    get:
+      operationId: getLiveness
+      tags: [system]
+      responses:
+        "200":
+          description: The process is alive.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LivenessStatus"
+  /readyz:
+    get:
+      operationId: getReadiness
+      tags: [system]
+      responses:
+        "200":
+          description: The process is ready to serve local traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionStatus"
+        "503":
+          description: Startup validation or service assembly is incomplete.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionStatus"
+  /api/v1/system/version:
+    get:
+      operationId: getSystemVersion
+      tags: [system]
+      responses:
+        "200":
+          description: Release, build, schema, strategy, and runtime identity.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SystemVersionStatus"
+  /api/v1/system/health:
+    get:
+      operationId: getSystemHealth
+      tags: [system]
+      responses:
+        "200":
+          description: Compatibility health response under the versioned API.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /api/v1/strategy/runtime:
+    get:
+      operationId: getStrategyRuntime
+      tags: [strategy]
+      responses:
+        "200":
+          description: Persisted strategy production mode. This endpoint is read-only.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyRuntimeStatus"
+        "503":
+          description: The persisted runtime state could not be read; callers must assume paused.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyRuntimeStatus"
+  /api/v1/market/summary/latest:
+    get:
+      operationId: getLatestMarketSummary
+      tags: [market]
+      parameters:
+        - in: query
+          name: sinceSeconds
+          schema:
+            type: integer
+            minimum: 1
+      responses:
+        "200":
+          description: Metadata for the latest persisted market summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketSummaryStatus"
+  /api/v1/exports/markdown:
+    post:
+      operationId: exportMarkdown
+      tags: [exports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MarkdownExportRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ExportResponse"
+  /api/v1/exports/config:
+    post:
+      operationId: exportConfig
+      tags: [exports]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExportRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ExportResponse"
+  /api/v1/exports/image:
+    post:
+      operationId: exportImage
+      tags: [exports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ImageExportRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ExportResponse"
+  /api/v1/exports/word:
+    post:
+      operationId: exportWord
+      tags: [exports]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WordExportRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/ExportResponse"
+  /api/v1/events/ws:
+    get:
+      operationId: connectEventsWebSocket
+      tags: [system]
+      responses:
+        "101":
+          description: WebSocket event stream using EventEnvelope JSON messages.
+components:
+  responses:
+    ExportResponse:
+      description: Download payload or path to a server-side export.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ExportPayload"
+  schemas:
+    LivenessStatus:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          const: true
+    HealthStatus:
+      type: object
+      required: [ok, mode, version]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        mode:
+          type: string
+          const: web
+        version:
+          type: string
+    ReleaseManifest:
+      type: object
+      required: [appVersion, currentStrategyVersion, strategyConfigHash, mainSchemaVersion, minuteSchemaVersion]
+      properties:
+        appVersion:
+          type: string
+        currentStrategyVersion:
+          type: string
+        strategyConfigHash:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+        mainSchemaVersion:
+          type: integer
+        minuteSchemaVersion:
+          type: integer
+    BuildInfo:
+      type: object
+      required: [commit, buildTime, artifactSHA256, dirty]
+      properties:
+        commit:
+          type: string
+        buildTime:
+          type: string
+        artifactSHA256:
+          type: string
+        dirty:
+          type: boolean
+    ReadinessStatus:
+      type: object
+      required: [ready, migrations, database, services, scheduler, strategyMode]
+      properties:
+        ready:
+          type: boolean
+        migrations:
+          type: boolean
+        database:
+          type: boolean
+        services:
+          type: boolean
+        scheduler:
+          type: boolean
+        strategyMode:
+          type: string
+          enum: [paused, live]
+        error:
+          type: string
+    SystemVersionStatus:
+      allOf:
+        - $ref: "#/components/schemas/ReleaseManifest"
+        - $ref: "#/components/schemas/BuildInfo"
+        - type: object
+          required: [configHash, startedAt, strategyMode, readiness]
+          properties:
+            configHash:
+              type: string
+            startedAt:
+              type: string
+              format: date-time
+            strategyMode:
+              type: string
+              enum: [paused, live]
+            readiness:
+              $ref: "#/components/schemas/ReadinessStatus"
+    StrategyRuntimeStatus:
+      type: object
+      required: [mode, targetStrategyVersion, ready]
+      properties:
+        mode:
+          type: string
+          enum: [paused, live]
+        changedAt:
+          type: string
+          format: date-time
+        reason:
+          type: string
+        targetStrategyVersion:
+          type: string
+        changedBy:
+          type: string
+        ready:
+          type: boolean
+    MarketSummaryStatus:
+      type: object
+      required: [ok, id, createdAt, stockCode, stockName, question, providerName, modelName, contentLen]
+      properties:
+        ok:
+          type: boolean
+        id:
+          type: integer
+          format: int64
+        createdAt:
+          type: string
+          format: date-time
+        stockCode:
+          type: string
+        stockName:
+          type: string
+        question:
+          type: string
+        providerName:
+          type: string
+        modelName:
+          type: string
+        contentLen:
+          type: integer
+    ExportRequest:
+      type: object
+      properties:
+        mode:
+          type: string
+          enum: [download, server]
+          default: download
+    MarkdownExportRequest:
+      allOf:
+        - $ref: "#/components/schemas/ExportRequest"
+        - type: object
+          required: [stockCode, stockName]
+          properties:
+            stockCode:
+              type: string
+            stockName:
+              type: string
+    ImageExportRequest:
+      allOf:
+        - $ref: "#/components/schemas/ExportRequest"
+        - type: object
+          required: [name, base64Data]
+          properties:
+            name:
+              type: string
+            base64Data:
+              type: string
+              format: byte
+    WordExportRequest:
+      allOf:
+        - $ref: "#/components/schemas/ExportRequest"
+        - type: object
+          required: [filename, base64Data]
+          properties:
+            filename:
+              type: string
+            base64Data:
+              type: string
+              format: byte
+    DownloadPayload:
+      type: object
+      required: [mode, filename, mime, contentBase64]
+      properties:
+        mode:
+          type: string
+          const: download
+        filename:
+          type: string
+        mime:
+          type: string
+        contentBase64:
+          type: string
+          format: byte
+    ServerFilePayload:
+      type: object
+      required: [mode, path, filename]
+      properties:
+        mode:
+          type: string
+          const: server
+        path:
+          type: string
+        filename:
+          type: string
+    ExportPayload:
+      oneOf:
+        - $ref: "#/components/schemas/DownloadPayload"
+        - $ref: "#/components/schemas/ServerFilePayload"
+    EventEnvelope:
+      type: object
+      required: [event, payload]
+      properties:
+        event:
+          type: string
+        payload: {}

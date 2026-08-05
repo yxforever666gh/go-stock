@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 GO_PACKAGES := $(shell go list ./... | grep -v '/frontend/node_modules/')
 
-.PHONY: ci test test-go test-go-race test-integration test-desktop lint lint-go lint-frontend build-web build-frontend build-web-binary dev dev-web run-web build-desktop
+.PHONY: ci test test-go test-go-race test-integration test-desktop lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web build-desktop
 
 test: test-go
 
@@ -21,17 +21,25 @@ test-desktop:
 lint: lint-go lint-frontend
 
 lint-go:
-	golangci-lint run ./...
+	go vet ./...
+	go mod tidy -diff
+	test -z "$$(gofmt -l $$(git diff --name-only --diff-filter=ACMR 1.5.0 HEAD -- '*.go'))"
 
 lint-frontend:
 	cd frontend && npm run lint
+
+openapi-generate:
+	go run ./cmd/openapi-contract -write
+
+openapi-check:
+	go run ./cmd/openapi-contract
 
 build-web: build-frontend
 
 build-frontend:
 	cd frontend && npm run build
 
-ci: test lint build-web
+ci: openapi-check test lint build-web
 
 dev: dev-web
 

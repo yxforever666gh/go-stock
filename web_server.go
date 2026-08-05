@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"net"
 	"net/http"
 	"os"
 	"path"
@@ -94,9 +93,7 @@ func NewWebEventHub() *WebEventHub {
 		upgrader: websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
-			CheckOrigin: func(r *http.Request) bool {
-				return true
-			},
+			CheckOrigin:     hasAllowedOrigin,
 		},
 	}
 }
@@ -167,16 +164,20 @@ func (h *WebEventHub) Emit(event string, payload any) {
 }
 
 func runWebMode(app *App, addr string, hub *WebEventHub) error {
+	if err := validateLoopbackListenAddr(addr); err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	var server *http.Server
+	registerWebV1Routes(mux, app, hub, defaultWebStatusProvider{})
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/healthz", methodHandler(http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"ok":      true,
 			"mode":    "web",
 			"version": Version,
 		})
-	})
+	}))
 
 	mux.HandleFunc("/api/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -386,7 +387,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 
 	server = &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           loopbackOnly(mux),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -401,24 +402,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 }
 
 func isLocalRequest(r *http.Request) bool {
-	host := r.Host
-	if forwardedHost := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); forwardedHost != "" {
-		host = forwardedHost
-	}
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	host = strings.Trim(strings.ToLower(host), "[]")
-	if host != "127.0.0.1" && host != "::1" && host != "localhost" {
-		return false
-	}
-
-	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteHost = r.RemoteAddr
-	}
-	remoteHost = strings.Trim(strings.ToLower(remoteHost), "[]")
-	return remoteHost == "127.0.0.1" || remoteHost == "::1" || remoteHost == "localhost"
+	return isLoopbackRequest(r) && hasAllowedOrigin(r)
 }
 
 func invokeAppMethod(app *App, methodName string, args []json.RawMessage) (any, error) {
@@ -482,16 +466,108 @@ func invokeAppMethod(app *App, methodName string, args []json.RawMessage) (any, 
 }
 
 func isRPCMethodAllowed(methodName string) bool {
-	if methodName == "" {
-		return false
-	}
-	if methodName == "startup" || methodName == "domReady" || methodName == "beforeClose" || methodName == "shutdown" || methodName == "AddCronTask" {
-		return false
-	}
-	if strings.ToUpper(methodName[:1]) != methodName[:1] {
-		return false
-	}
-	return true
+	_, ok := rpcMethodAllowlist[methodName]
+	return ok
+}
+
+var rpcMethodAllowlist = map[string]struct{}{
+	"AddGroup":                                     {},
+	"AddPrompt":                                    {},
+	"AddStockGroup":                                {},
+	"AnalyzeSentiment":                             {},
+	"AnalyzeSentimentWithFreqWeight":               {},
+	"BatchDeleteAIResponseResult":                  {},
+	"ChatWithAgent":                                {},
+	"CheckStockBaseInfo":                           {},
+	"CheckUpdate":                                  {},
+	"ClsCalendar":                                  {},
+	"CreateAgentSession":                           {},
+	"DelPrompt":                                    {},
+	"DeleteAIResponseResult":                       {},
+	"DeleteAgentSession":                           {},
+	"DeleteAiRecommendStocks":                      {},
+	"EMDictCode":                                   {},
+	"ExportConfig":                                 {},
+	"Follow":                                       {},
+	"FollowFund":                                   {},
+	"GetAIResponseResult":                          {},
+	"GetAIResponseResultList":                      {},
+	"GetAgentSessionList":                          {},
+	"GetAgentSessionMessages":                      {},
+	"GetAiConfigs":                                 {},
+	"GetAiRecommendStocksDateRange":                {},
+	"GetAiRecommendStocksList":                     {},
+	"GetAiRecommendStocksYieldList":                {},
+	"GetAiRecommendYieldDailyOverview":             {},
+	"GetAiRecommendYieldErrorLogs":                 {},
+	"GetAiRecommendYieldMinuteChart":               {},
+	"GetAiRecommendYieldTaskStatus":                {},
+	"GetConfig":                                    {},
+	"GetEmailSendLogList":                          {},
+	"GetFollowList":                                {},
+	"GetFollowedFund":                              {},
+	"GetGroupList":                                 {},
+	"GetGroupStockList":                            {},
+	"GetHotStrategy":                               {},
+	"GetIndustryMoneyRankSina":                     {},
+	"GetIndustryRank":                              {},
+	"GetMarketSummaryBlockedReasonTop":             {},
+	"GetMarketSummaryEmptyRunCount":                {},
+	"GetMarketSummaryProductionDowngradeReasonTop": {},
+	"GetMarketSummaryRunDiagnostics":               {},
+	"GetMoneyRankSina":                             {},
+	"GetPromptTemplates":                           {},
+	"GetStockCommonKLine":                          {},
+	"GetStockKLine":                                {},
+	"GetStockList":                                 {},
+	"GetStockMinutePriceLineData":                  {},
+	"GetStockMoneyTrendByDay":                      {},
+	"GetTelegraphList":                             {},
+	"GetVersionInfo":                               {},
+	"GetfundList":                                  {},
+	"GlobalStockIndexes":                           {},
+	"Greet":                                        {},
+	"HotEvent":                                     {},
+	"HotStock":                                     {},
+	"HotTopic":                                     {},
+	"IndustryResearchReport":                       {},
+	"InitializeGroupSort":                          {},
+	"InvestCalendarTimeLine":                       {},
+	"LongTigerRank":                                {},
+	"NewChatStream":                                {},
+	"NewsPush":                                     {},
+	"OpenURL":                                      {},
+	"ReFleshTelegraphList":                         {},
+	"RemoveGroup":                                  {},
+	"RemoveStockGroup":                             {},
+	"ResetAgentSession":                            {},
+	"RunMarketSummaryHumanizeCompatFixNow":         {},
+	"SaveAIResponseResult":                         {},
+	"SaveAsMarkdown":                               {},
+	"SaveImage":                                    {},
+	"SaveWordFile":                                 {},
+	"SearchStock":                                  {},
+	"SendDingDingMessage":                          {},
+	"SendDingDingMessageByType":                    {},
+	"SendLatestAIAnalysisReportNow":                {},
+	"SendMarketSummaryEmailNow":                    {},
+	"SendYieldEmailTestMessage":                    {},
+	"SendYieldEmailXLSXNow":                        {},
+	"SetAlarmChangePercent":                        {},
+	"SetCostPriceAndVolume":                        {},
+	"SetStockAICron":                               {},
+	"SetStockSort":                                 {},
+	"ShareAnalysis":                                {},
+	"StartAiRecommendMinuteDownload":               {},
+	"StockNotice":                                  {},
+	"StockResearchReport":                          {},
+	"SummarizeAgentSessionTitle":                   {},
+	"SummaryStockNews":                             {},
+	"TestAIConfig":                                 {},
+	"UnFollow":                                     {},
+	"UnFollowFund":                                 {},
+	"UpdateConfig":                                 {},
+	"UpdateGroupSort":                              {},
 }
 
 func decodeArg(raw json.RawMessage, targetType reflect.Type) (reflect.Value, error) {
