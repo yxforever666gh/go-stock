@@ -44,6 +44,11 @@ Thumbs.db
 /runtime/db/*.bak-*
 /runtime/db/
 /runtime/network-audit/
+/runtime/backups/
+/runtime/releases/
+/runtime/deployments/
+/runtime/current.json
+/runtime/go-stock-web.pid
 data.test
 /test-results/
 /.playwright-mcp/
