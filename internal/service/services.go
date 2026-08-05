@@ -1,6 +1,7 @@
 package service
 
 type AppServices struct {
+	Runtime   RuntimeService
 	Stock     StockService
 	Market    MarketService
 	AI        AIService
@@ -13,7 +14,20 @@ type AppServices struct {
 }
 
 func NewAppServices() AppServices {
+	services, _ := NewAppServicesWithDependencies(Dependencies{
+		Clock:       wallClock{},
+		Initializer: noOpApplicationInitializer{},
+	})
+	return services
+}
+
+func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, error) {
+	runtimeService, err := newRuntimeService(dependencies)
+	if err != nil {
+		return AppServices{}, err
+	}
 	return AppServices{
+		Runtime:   runtimeService,
 		Stock:     NewStockService(),
 		Market:    NewMarketService(),
 		AI:        NewAIService(),
@@ -23,5 +37,5 @@ func NewAppServices() AppServices {
 		History:   NewHistoryService(),
 		Recommend: NewRecommendService(),
 		Notify:    NewNotifyService(),
-	}
+	}, nil
 }
