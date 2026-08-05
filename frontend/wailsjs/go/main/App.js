@@ -286,10 +286,6 @@ export function ResetAgentSession(arg1) {
   return window['go']['main']['App']['ResetAgentSession'](arg1);
 }
 
-export function RunMarketSummaryHumanizeCompatFixNow() {
-  return window['go']['main']['App']['RunMarketSummaryHumanizeCompatFixNow']();
-}
-
 export function SaveAIResponseResult(arg1, arg2, arg3, arg4, arg5, arg6) {
   return window['go']['main']['App']['SaveAIResponseResult'](arg1, arg2, arg3, arg4, arg5, arg6);
 }

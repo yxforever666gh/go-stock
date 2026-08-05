@@ -146,8 +146,6 @@ export function RemoveStockGroup(arg1:string,arg2:string,arg3:number):Promise<st
 
 export function ResetAgentSession(arg1:string):Promise<void>;
 
-export function RunMarketSummaryHumanizeCompatFixNow():Promise<string>;
-
 export function SaveAIResponseResult(arg1:string,arg2:string,arg3:string,arg4:string,arg5:string,arg6:number):Promise<void>;
 
 export function SaveAsMarkdown(arg1:string,arg2:string):Promise<string>;

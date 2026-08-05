@@ -6,7 +6,6 @@ import {
   GetConfig,
   GetEmailSendLogList,
   GetPromptTemplates,
-  RunMarketSummaryHumanizeCompatFixNow,
   SendYieldEmailXLSXNow,
   SendYieldEmailTestMessage,
   TestAIConfig,
@@ -75,7 +74,6 @@ const formValue = ref({
 })
 const yieldEmailTestSending = ref(false)
 const yieldEmailXlsxSending = ref(false)
-const marketSummaryCompatFixing = ref(false)
 const aiConfigTestStates = ref({})
 const emailSendLogsLoading = ref(false)
 const emailSendLogs = ref([])
@@ -605,23 +603,6 @@ async function sendYieldEmailXLSXNowAction() {
   }
 }
 
-async function runMarketSummaryCompatFixAction() {
-  if (marketSummaryCompatFixing.value) {
-    return
-  }
-  marketSummaryCompatFixing.value = true
-  try {
-    const res = await RunMarketSummaryHumanizeCompatFixNow()
-    if (String(res || '').includes('失败')) {
-      message.error(res)
-      return
-    }
-    message.success(res)
-  } finally {
-    marketSummaryCompatFixing.value = false
-  }
-}
-
 async function refreshEmailSendLogs(pageNo = emailSendLogPage.value) {
   emailSendLogsLoading.value = true
   try {
@@ -790,7 +771,6 @@ function deletePrompt(ID) {
             :form-value="formValue"
             :yield-email-test-sending="yieldEmailTestSending"
             :yield-email-xlsx-sending="yieldEmailXlsxSending"
-            :market-summary-compat-fixing="marketSummaryCompatFixing"
             :email-send-logs-loading="emailSendLogsLoading"
             :email-send-logs="emailSendLogs"
             :email-send-log-page="emailSendLogPage"
@@ -800,7 +780,6 @@ function deletePrompt(ID) {
             @text-blur="handleTextFieldBlur"
             @send-test="sendYieldEmailTest"
             @send-xlsx="sendYieldEmailXLSXNowAction"
-            @run-compat-fix="runMarketSummaryCompatFixAction"
             @refresh-logs="refreshEmailSendLogs"
             @prev-page="prevEmailSendLogPage"
             @next-page="nextEmailSendLogPage"

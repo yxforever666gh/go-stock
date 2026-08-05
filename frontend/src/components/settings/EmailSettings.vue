@@ -15,10 +15,6 @@ defineProps({
     type: Boolean,
     required: true,
   },
-  marketSummaryCompatFixing: {
-    type: Boolean,
-    required: true,
-  },
   emailSendLogsLoading: {
     type: Boolean,
     required: true,
@@ -46,7 +42,6 @@ const emit = defineEmits([
   'text-blur',
   'send-test',
   'send-xlsx',
-  'run-compat-fix',
   'refresh-logs',
   'prev-page',
   'next-page',
@@ -160,11 +155,9 @@ const emailSendLogColumns = [
           <n-space>
             <n-button type="primary" :loading="yieldEmailTestSending" @click="emit('send-test')">发送“你好”测试邮件</n-button>
             <n-button type="success" :loading="yieldEmailXlsxSending" @click="emit('send-xlsx')">立刻发送收益率 XLSX</n-button>
-            <n-button tertiary :loading="marketSummaryCompatFixing" @click="emit('run-compat-fix')">修复历史 AI 总结备注</n-button>
             <n-button tertiary @click="emit('refresh-logs')" :loading="emailSendLogsLoading">刷新发送日志</n-button>
           </n-space>
           <n-text depth="3">收益率 XLSX 会单独发送与网页收益率列表一致的全量表格，不受页面 100 条分页限制，并保留主要状态颜色。若开启上面的开关，只有“市场资讯 AI 总结定时任务”完成后才会自动发邮件；手动总结不会自动发。</n-text>
-          <n-text depth="3">“修复历史 AI 总结备注”会一次性把旧报告和旧推荐备注里的 `activationRuleJson` 转成人话，不影响机器侧 strict 规则。</n-text>
         </n-space>
       </n-form-item-gi>
       <n-form-item-gi :span="24" v-if="formValue.yieldEmail.enable">

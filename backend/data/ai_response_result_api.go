@@ -1,15 +1,20 @@
 package data
 
 import (
+	"errors"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"strings"
 	"time"
 
 	"github.com/duke-git/lancet/v2/datetime"
 	"github.com/duke-git/lancet/v2/strutil"
+	"gorm.io/gorm"
 )
 
 type AIResponseResultService struct{}
+
+var ErrMarketSummaryAIHistoryReadOnly = errors.New("market summary AI history is read-only")
 
 func NewAIResponseResultService() *AIResponseResultService {
 	return &AIResponseResultService{}
@@ -98,17 +103,42 @@ func (s *AIResponseResultService) GetAIResponseResultList(query models.AIRespons
 
 // DeleteAIResponseResult 根据ID删除AI响应结果
 func (s *AIResponseResultService) DeleteAIResponseResult(id uint) error {
-
-	// 使用软删除
-	result := db.Dao.Where("id = ?", id).Delete(&models.AIResponseResult{})
-
-	return result.Error
+	return deleteAIResponseResults([]uint{id})
 }
 
 // BatchDeleteAIResponseResult 批量删除AI响应结果
 func (s *AIResponseResultService) BatchDeleteAIResponseResult(ids []uint) error {
-	// 使用软删除
-	result := db.Dao.Where("id IN ?", ids).Delete(&models.AIResponseResult{})
+	return deleteAIResponseResults(ids)
+}
 
-	return result.Error
+func deleteAIResponseResults(ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	if db.Dao == nil {
+		return errors.New("AI response database is unavailable")
+	}
+	return db.Dao.Transaction(func(tx *gorm.DB) error {
+		var rows []models.AIResponseResult
+		if err := tx.Unscoped().
+			Select("id", "stock_code", "stock_name").
+			Where("id IN ?", ids).
+			Find(&rows).Error; err != nil {
+			return err
+		}
+		for idx := range rows {
+			if isMarketSummaryAIResponse(rows[idx]) {
+				return ErrMarketSummaryAIHistoryReadOnly
+			}
+		}
+		return tx.Where("id IN ?", ids).Delete(&models.AIResponseResult{}).Error
+	})
+}
+
+// AIResponseResult predates strategy cohorts, so the stable market-summary
+// identity protects both legacy and current raw reports.
+func isMarketSummaryAIResponse(result models.AIResponseResult) bool {
+	const marketSummaryIdentity = "市场资讯"
+	return strings.TrimSpace(result.StockCode) == marketSummaryIdentity ||
+		strings.TrimSpace(result.StockName) == marketSummaryIdentity
 }

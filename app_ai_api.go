@@ -132,20 +132,6 @@ func (a *App) SendMarketSummaryEmailNow(summaryText, question, modelName, summar
 	})
 }
 
-func (a *App) RunMarketSummaryHumanizeCompatFixNow() string {
-	result, err := data.RunMarketSummaryHumanizeCompatFix()
-	if err != nil {
-		return "修复失败: " + err.Error()
-	}
-	return fmt.Sprintf(
-		"修复完成：AI分析报告更新 %d/%d 条，推荐备注更新 %d/%d 条",
-		result.ReportsUpdated,
-		result.ReportsScanned,
-		result.RemarksUpdated,
-		result.RemarksScanned,
-	)
-}
-
 func resolveAIProviderName(aiConfigID int, modelName string) string {
 	cfg := data.GetSettingConfig()
 	if cfg == nil {
