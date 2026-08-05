@@ -21,7 +21,7 @@ import { Dragon, FirefoxBrowser, Gripfire, Robot } from '@vicons/fa'
 import { ReportAnalytics, ReportMoney, ReportSearch } from '@vicons/tabler'
 import { BoxSearch20Regular } from '@vicons/fluent'
 import { NotificationFilled, StockOutlined } from '@vicons/antd'
-import { BrowserOpenURL, EventsEmit } from '../../wailsjs/runtime'
+import { BrowserOpenURL, EventsEmit } from '../services/browser-runtime.mjs'
 
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) })

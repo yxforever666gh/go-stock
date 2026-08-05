@@ -6,7 +6,7 @@ import {ArrowDownOutline, CaretDown, CaretUp, PulseOutline, Refresh, RefreshCirc
 import KLineChart from "./KLineChart.vue";
 import MoneyTrend from "./moneyTrend.vue";
 import {useMessage} from "naive-ui";
-import {BrowserOpenURL} from "../../wailsjs/runtime";
+import {BrowserOpenURL} from "../services/browser-runtime.mjs";
 
 const {stockCode}=defineProps(
     {

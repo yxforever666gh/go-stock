@@ -1,6 +1,6 @@
 <script setup>
 import { defineAsyncComponent, nextTick, onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { EventsOff, EventsOn } from "../../wailsjs/runtime";
+import { EventsOff, EventsOn } from "../services/browser-runtime.mjs";
 import { useRoute, useRouter } from 'vue-router'
 
 const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order'

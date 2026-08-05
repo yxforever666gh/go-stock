@@ -2,9 +2,9 @@
 import {h, onBeforeMount, onMounted, onUnmounted, ref} from 'vue'
 import {SearchStock, GetHotStrategy, OpenURL, Follow, GetFollowList} from "../services/app-api";
 import {useMessage, NText, NTag, NButton} from 'naive-ui'
-import {Environment} from "../../wailsjs/runtime"
+import {Environment} from "../services/browser-runtime.mjs"
 import {RefreshCircleSharp} from "@vicons/ionicons5";
-import {EventsEmit} from "../../wailsjs/runtime";
+import {EventsEmit} from "../services/browser-runtime.mjs";
 
 const message = useMessage()
 const search = ref('')

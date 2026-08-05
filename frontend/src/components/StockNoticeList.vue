@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {onBeforeMount, ref} from 'vue'
 import {GetStockList, StockNotice} from "../services/app-api";
-import {BrowserOpenURL} from "../../wailsjs/runtime";
+import {BrowserOpenURL} from "../services/browser-runtime.mjs";
 import {RefreshCircleSharp} from "@vicons/ionicons5";
 import _ from "lodash";
 import KLineChart from "./KLineChart.vue";

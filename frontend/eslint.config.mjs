@@ -6,7 +6,7 @@ export default [
     ignores: ['dist/**', 'node_modules/**', 'wailsjs/**'],
   },
   {
-    files: ['src/**/*.{js,ts,vue}'],
+    files: ['src/**/*.{js,mjs,ts,vue}'],
     languageOptions: {
       parser: vueParser,
       ecmaVersion: 'latest',

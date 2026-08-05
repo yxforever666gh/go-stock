@@ -16,7 +16,7 @@ import {
   GetVersionInfo,
   UpdateConfig,
 } from '../services/app-api'
-import { EventsOff, EventsOn } from '../../wailsjs/runtime'
+import { EventsOff, EventsOn } from '../services/browser-runtime.mjs'
 import { PulseOutline } from '@vicons/ionicons5'
 import { NAvatar, useMessage, useNotification } from 'naive-ui'
 import { useRoute } from 'vue-router'

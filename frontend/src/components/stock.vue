@@ -48,7 +48,7 @@ import {
   WindowFullscreen,
   WindowReload,
   WindowUnfullscreen
-} from '../../wailsjs/runtime'
+} from '../services/browser-runtime.mjs'
 import {Add} from '@vicons/ionicons5'
 import '@vavt/v3-extension/lib/asset/ExportPDF.css';
 import {useRoute, useRouter} from 'vue-router'

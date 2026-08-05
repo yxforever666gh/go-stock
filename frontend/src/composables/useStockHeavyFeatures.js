@@ -1,4 +1,4 @@
-import { Environment } from '../../wailsjs/runtime'
+import { Environment } from '../services/browser-runtime.mjs'
 import {
   GetStockKLine,
   GetStockMinutePriceLineData,

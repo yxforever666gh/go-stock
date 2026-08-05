@@ -5,11 +5,11 @@ import {
   WindowFullscreen,
   WindowUnfullscreen,
   WindowSetTitle,
-} from '../wailsjs/runtime'
+} from './services/browser-runtime.mjs'
 import { onBeforeMount, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { darkTheme, dateZhCN, zhCN } from 'naive-ui'
-import { GetConfig, GetGroupList, GetVersionInfo } from './services/app-api'
+import { GetConfig, GetGroupList, GetVersionInfo, apiClient } from './services/app-api'
 import {
   applyFeatureMenuVisibility,
   createMenuOptions,
@@ -34,7 +34,21 @@ const officialStatement = ref('')
 const menuOptions = ref([])
 const shuttingDown = ref(false)
 const shutdownMessage = ref('')
+const strategyRuntime = ref(null)
 let cleanupRuntimeEvents = () => {}
+let strategyRuntimeTimer = null
+
+async function refreshStrategyRuntime() {
+  try {
+    strategyRuntime.value = await apiClient.strategy.runtime()
+  } catch (error) {
+    strategyRuntime.value = {
+      mode: 'paused',
+      ready: false,
+      reason: error instanceof Error ? error.message : '运行状态不可用',
+    }
+  }
+}
 
 function toggleFullscreen(e) {
   activeKey.value = 'full'
@@ -68,6 +82,9 @@ function toggleFullscreen(e) {
 
 onBeforeUnmount(() => {
   cleanupRuntimeEvents()
+  if (strategyRuntimeTimer) {
+    window.clearInterval(strategyRuntimeTimer)
+  }
 })
 
 function syncFeatureFlags(res) {
@@ -139,6 +156,7 @@ onBeforeMount(() => {
   GetConfig().then((res) => {
     syncFeatureFlags(res)
   })
+  refreshStrategyRuntime()
 })
 
 onMounted(() => {
@@ -147,6 +165,7 @@ onMounted(() => {
   GetConfig().then((res) => {
     syncFeatureFlags(res)
   })
+  strategyRuntimeTimer = window.setInterval(refreshStrategyRuntime, 30000)
 })
 </script>
 <template>
@@ -197,6 +216,15 @@ onMounted(() => {
                               :options="menuOptions"
                               responsive
                       />
+                        <n-tag
+                            data-testid="strategy-runtime-status"
+                            size="small"
+                            :type="strategyRuntime?.mode === 'live' && strategyRuntime?.ready ? 'success' : 'warning'"
+                            :title="strategyRuntime?.reason || ''"
+                            class="strategy-runtime-status"
+                        >
+                          策略 {{ strategyRuntime?.mode === 'live' && strategyRuntime?.ready ? '运行中' : '已暂停' }}
+                        </n-tag>
                         <n-button
                             tertiary
                             type="error"
@@ -234,6 +262,11 @@ onMounted(() => {
 .app-exit-button {
   flex: 0 0 auto;
   margin-right: 12px;
+}
+
+.strategy-runtime-status {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .app-shutdown-message {

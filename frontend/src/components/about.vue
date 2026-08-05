@@ -1,7 +1,7 @@
 <script setup>
 import { h, onBeforeUnmount, onMounted, ref } from 'vue';
 import { CheckUpdate, GetVersionInfo, OpenURL } from '../services/app-api';
-import { Environment, EventsOff, EventsOn } from '../../wailsjs/runtime';
+import { Environment, EventsOff, EventsOn } from '../services/browser-runtime.mjs';
 import { NAvatar, NButton, useNotification } from 'naive-ui';
 
 const updateLog = ref('');

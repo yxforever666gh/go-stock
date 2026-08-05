@@ -14,7 +14,7 @@ import {
 } from "../services/app-api";
 import {NTag, useMessage} from "naive-ui";
 import {data, models} from "../../wailsjs/go/models";
-import {EventsEmit} from "../../wailsjs/runtime";
+import {EventsEmit} from "../services/browser-runtime.mjs";
 import MinuteProviderSettings from "./settings/MinuteProviderSettings.vue";
 import EmailSettings from "./settings/EmailSettings.vue";
 import AiConfigSettings from "./settings/AiConfigSettings.vue";

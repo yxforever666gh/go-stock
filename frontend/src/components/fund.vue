@@ -10,7 +10,7 @@ import {
   GetVersionInfo, OpenURL,
   UnFollowFund
 } from "../services/app-api";
-import {Environment} from "../../wailsjs/runtime";
+import {Environment} from "../services/browser-runtime.mjs";
 
 const icon = ref(null)
 const message = useMessage()

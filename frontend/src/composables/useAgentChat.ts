@@ -10,7 +10,7 @@ import {
   GetVersionInfo,
   SummarizeAgentSessionTitle,
 } from '../services/app-api'
-import { EventsOff, EventsOn } from '../../wailsjs/runtime'
+import { EventsOff, EventsOn } from '../services/browser-runtime.mjs'
 
 type ChatMessage = {
   id: string

@@ -1,4 +1,4 @@
-import { EventsEmit, EventsOff, EventsOn } from '../../wailsjs/runtime'
+import { EventsEmit, EventsOff, EventsOn } from '../services/browser-runtime.mjs'
 
 export function registerAppRuntimeEvents({ loading, loadingMsg, realtimeProfit }) {
   EventsOn('realtime_profit', (data) => {
