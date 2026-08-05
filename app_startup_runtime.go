@@ -12,6 +12,9 @@ import (
 func (a *App) domReady(ctx context.Context) {
 	defer PanicHandler()
 	defer a.emitDomReadyDone()
+	// Web mode invokes domReady directly without the desktop startup hook. The
+	// once-guard makes this a fallback only; desktop execution starts earlier.
+	a.registerMarketSummaryV150ExecutionRuntime()
 
 	if !a.tryMarkDomReadyDone() {
 		logger.SugaredLogger.Warn("跳过重复 domReady 初始化: runtime 已完成注册")

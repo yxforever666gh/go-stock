@@ -60,19 +60,13 @@ export function GetAiRecommendStocksList(arg1:models.AiRecommendStocksQuery):Pro
 
 export function GetAiRecommendStocksYieldList(arg1:models.AiRecommendStocksQuery):Promise<models.AiRecommendStocksYieldPageData>;
 
-export function GetAiRecommendYieldTaskStatus():Promise<models.AiRecommendStocksYieldPageData>;
-
 export function GetAiRecommendYieldDailyOverview(arg1:models.AiRecommendStocksQuery):Promise<models.AiRecommendYieldDailyOverviewData>;
 
 export function GetAiRecommendYieldErrorLogs(arg1:number):Promise<Array<Record<string, string>>>;
 
 export function GetAiRecommendYieldMinuteChart(arg1:number):Promise<models.AiRecommendYieldMinuteChartData>;
 
-export function GetMarketSummaryRunDiagnostics(arg1:any):Promise<any>;
-
-export function GetMarketSummaryEmptyRunCount(arg1:any):Promise<number>;
-
-export function GetMarketSummaryBlockedReasonTop(arg1:any):Promise<Array<any>>;
+export function GetAiRecommendYieldTaskStatus():Promise<models.AiRecommendStocksYieldPageData>;
 
 export function GetConfig():Promise<data.SettingConfig>;
 
@@ -91,6 +85,14 @@ export function GetHotStrategy():Promise<Record<string, any>>;
 export function GetIndustryMoneyRankSina(arg1:string,arg2:string):Promise<Array<Record<string, any>>>;
 
 export function GetIndustryRank(arg1:string,arg2:number):Promise<Array<any>>;
+
+export function GetMarketSummaryBlockedReasonTop(arg1:models.MarketSummaryRunDiagnosticQuery):Promise<Array<models.MarketSummaryBlockedReasonItem>>;
+
+export function GetMarketSummaryEmptyRunCount(arg1:models.MarketSummaryRunDiagnosticQuery):Promise<number>;
+
+export function GetMarketSummaryProductionDowngradeReasonTop(arg1:models.MarketSummaryRunDiagnosticQuery):Promise<Array<models.MarketSummaryBlockedReasonItem>>;
+
+export function GetMarketSummaryRunDiagnostics(arg1:models.MarketSummaryRunDiagnosticQuery):Promise<models.MarketSummaryRunDiagnosticSummary>;
 
 export function GetMoneyRankSina(arg1:string):Promise<Array<Record<string, any>>>;
 

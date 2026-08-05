@@ -15,7 +15,7 @@ func TestFetchSourcesWorkWithoutProxy(t *testing.T) {
 	t.Setenv("GO_STOCK_DIEMENG_PROXY_MODE", "inherit")
 	t.Setenv("GO_STOCK_AKSHARE_PROXY_MODE", "inherit")
 
-	db.Init(filepath.Join(t.TempDir(), "fetch-no-proxy.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "fetch-no-proxy.db"))
 	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

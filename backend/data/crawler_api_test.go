@@ -127,7 +127,7 @@ func TestGetHtmlWithActions(t *testing.T) {
 func TestHk(t *testing.T) {
 	requireIntegration(t)
 	//https://stock.finance.sina.com.cn/hkstock/quotes/00001.html
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	hks := &[]models.StockInfoHK{}
 	db.Dao.Model(&models.StockInfoHK{}).Limit(1).Find(hks)
 
@@ -174,7 +174,7 @@ func TestHk(t *testing.T) {
 
 func TestUpdateUSName(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	us := &[]models.StockInfoUS{}
 	db.Dao.Model(&models.StockInfoUS{}).Where("name = ?", "").Order("RANDOM()").Find(us)
 
@@ -220,7 +220,7 @@ func TestUpdateUSName(t *testing.T) {
 }
 func TestUS(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	bytes, err := os.ReadFile("../../build/us.json")
 	if err != nil {
 		return
@@ -308,7 +308,7 @@ func TestUSSINA(t *testing.T) {
 
 func TestSina(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	url := "https://finance.sina.com.cn/realstock/company/sz002906/nc.shtml"
 	crawlerAPI := CrawlerApi{}
 	crawlerBaseInfo := CrawlerBaseInfo{
@@ -343,7 +343,7 @@ func TestSina(t *testing.T) {
 func TestDC(t *testing.T) {
 	requireIntegration(t)
 	url := "https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=sh600745#/cwfx"
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	crawlerAPI := CrawlerApi{}
 	crawlerBaseInfo := CrawlerBaseInfo{
 		Name:        "TestCrawler",

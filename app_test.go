@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 )
@@ -31,7 +30,7 @@ func TestIsUSTradingTime(t *testing.T) {
 
 func TestCheckStockBaseInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("./data/stock.db")
+	initDatabaseForTest(t, "./data/stock.db")
 	NewApp().CheckStockBaseInfo(context.Background())
 }
 

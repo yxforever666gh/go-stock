@@ -48,29 +48,13 @@ func sanitizeAiRecommendStockForDisplay(item *models.AiRecommendStocks) {
 func RunMarketSummaryHumanizeCompatFix() (MarketSummaryHumanizeCompatFixResult, error) {
 	result := MarketSummaryHumanizeCompatFixResult{}
 	err := db.Dao.Transaction(func(tx *gorm.DB) error {
-		var reports []models.AIResponseResult
-		if err := tx.Model(&models.AIResponseResult{}).
-			Where("(stock_code = ? OR stock_name = ?)", "市场资讯", "市场资讯").
-			Where("(content LIKE ? OR content LIKE ?)", "%activationRuleJson%", "%\"signalType\"%").
-			Find(&reports).Error; err != nil {
-			return err
-		}
-		result.ReportsScanned = len(reports)
-		for idx := range reports {
-			cleaned := HumanizeMarketSummaryReport(reports[idx].Content)
-			if cleaned == reports[idx].Content {
-				continue
-			}
-			if err := tx.Model(&models.AIResponseResult{}).
-				Where("id = ?", reports[idx].ID).
-				Update("content", cleaned).Error; err != nil {
-				return err
-			}
-			result.ReportsUpdated++
-		}
+		// AIResponseResult has no strategy-version key. Historical reports are
+		// therefore immutable; display-time sanitization provides the same UI
+		// result without rewriting a 1.4.2 artifact.
 
 		var recommends []models.AiRecommendStocks
 		if err := tx.Model(&models.AiRecommendStocks{}).
+			Where("summary_version = ?", marketSummaryVersion150).
 			Where("(remarks LIKE ? OR remarks LIKE ?)", "%activationRuleJson%", "%\"signalType\"%").
 			Find(&recommends).Error; err != nil {
 			return err
@@ -82,7 +66,7 @@ func RunMarketSummaryHumanizeCompatFix() (MarketSummaryHumanizeCompatFixResult, 
 				continue
 			}
 			if err := tx.Model(&models.AiRecommendStocks{}).
-				Where("id = ?", recommends[idx].ID).
+				Where("id = ? AND summary_version = ?", recommends[idx].ID, marketSummaryVersion150).
 				Update("remarks", cleaned).Error; err != nil {
 				return err
 			}

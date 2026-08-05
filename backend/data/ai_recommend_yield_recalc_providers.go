@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -134,7 +133,10 @@ func syncMinuteBarsWithOptions(tsCode string, start, end time.Time, crawlTimeout
 	}
 
 	// Determine whether cached minute bars fully cover the requested trading sessions.
-	info.CoverageOK = minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(tsCode, bars, start, end, true)
+	// A cache-only replay must remain cache-only all the way through coverage
+	// classification.  In particular, do not turn a missing minute window into
+	// a Diemeng suspension lookup when the caller explicitly disabled fetching.
+	info.CoverageOK = minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(tsCode, bars, start, end, allowFetch)
 	return bars, info
 }
 
@@ -880,9 +882,25 @@ func fillYieldMetrics(state *models.AiRecommendYieldState) {
 	}
 }
 
-func fillYieldRecordMetrics(state *models.AiRecommendYieldRecordState) {
+type yieldRecordMetricContext struct {
+	Record models.AiRecommendStocks
+	AsOf   time.Time
+}
+
+func fillYieldRecordMetrics(state *models.AiRecommendYieldRecordState, contexts ...yieldRecordMetricContext) {
 	state.YieldRate = 0
 	state.YieldRateText = "--"
+	if len(contexts) > 0 && isV150CostVersion(contexts[0].Record.SummaryVersion) {
+		handled, err := fillV150YieldRecordMetricsFromLedger(state, contexts[0])
+		if err != nil {
+			state.DataStatus = v150YieldValuationUnavailableStatus
+			state.DataStatusReason = appendYieldHealthReason(state.DataStatusReason, "V1.5 immutable order ledger accounting unavailable: "+err.Error())
+			return
+		}
+		if handled {
+			return
+		}
+	}
 	if state.BuyAmount <= 0 {
 		return
 	}
@@ -1015,52 +1033,66 @@ func lookupCanonicalAShareTsCode(symbol string) string {
 }
 
 func upsertYieldStates(states []models.AiRecommendYieldState) error {
-	updateColumns := []string{
-		"updated_at",
-		"stock_name",
-		"model_names",
-		"bk_name",
-		"recommend_count",
-		"recommend_category",
-		"recommend_time",
-		"signal_time",
-		"activation_status",
-		"activation_time",
-		"activation_price",
-		"buy_time",
-		"buy_amount",
-		"stop_profit_amount",
-		"stop_loss_amount",
-		"sell_amount_text",
-		"position_status",
-		"sell_time",
-		"realized_sell_amount",
-		"current_price",
-		"current_price_time",
-		"yield_rate",
-		"yield_rate_text",
-		"data_status",
-		"data_status_reason",
-		"last_minute_ts",
-		"last_recalc_at",
-		"minute_cache_start",
-		"minute_cache_end",
-		"minute_cache_source",
-		"minute_cache_updated",
-		"frozen",
-		"total_scope_start",
-		"total_scope_end",
-	}
+	// This table is keyed only by stock code and contains the frozen legacy
+	// aggregate. A version-safe V1.5 writer cannot update it.
+	_ = states
+	return nil
+	/*
+		updateColumns := []string{
+			"updated_at",
+			"stock_name",
+			"model_names",
+			"bk_name",
+			"recommend_count",
+			"recommend_category",
+			"recommend_time",
+			"signal_time",
+			"activation_status",
+			"activation_time",
+			"activation_price",
+			"buy_time",
+			"buy_amount",
+			"stop_profit_amount",
+			"stop_loss_amount",
+			"sell_amount_text",
+			"position_status",
+			"sell_time",
+			"realized_sell_amount",
+			"current_price",
+			"current_price_time",
+			"yield_rate",
+			"yield_rate_text",
+			"data_status",
+			"data_status_reason",
+			"last_minute_ts",
+			"last_recalc_at",
+			"minute_cache_start",
+			"minute_cache_end",
+			"minute_cache_source",
+			"minute_cache_updated",
+			"frozen",
+			"total_scope_start",
+			"total_scope_end",
+		}
 
-	return runWithSQLiteBusyRetry(func() error {
-		return db.Dao.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "stock_code"}},
-			DoUpdates: clause.AssignmentColumns(updateColumns),
-		}).CreateInBatches(states, 100).Error
-	})
+		return runWithSQLiteBusyRetry(func() error {
+			return db.Dao.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "stock_code"}},
+				DoUpdates: clause.AssignmentColumns(updateColumns),
+			}).CreateInBatches(states, 100).Error
+		})
+	*/
 }
 
 func upsertYieldRecordStates(states []models.AiRecommendYieldRecordState) error {
+	filtered, err := filterV150YieldRecordStates(states)
+	if err != nil {
+		return err
+	}
+	states = filtered
+	if len(states) == 0 {
+		return nil
+	}
 	updateColumns := []string{
 		"updated_at",
 		"stock_code",
@@ -1113,6 +1145,39 @@ func upsertYieldRecordStates(states []models.AiRecommendYieldRecordState) error 
 	return clearAiRecommendYieldDirtyCodesByRecordStates(states)
 }
 
+func filterV150YieldRecordStates(states []models.AiRecommendYieldRecordState) ([]models.AiRecommendYieldRecordState, error) {
+	if len(states) == 0 {
+		return nil, nil
+	}
+	ids := make([]uint, 0, len(states))
+	for _, state := range states {
+		if state.RecommendID != 0 {
+			ids = append(ids, state.RecommendID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	allowedRows := make([]struct{ ID uint }, 0, len(ids))
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Select("id").
+		Where("id IN ? AND summary_version = ?", ids, marketSummaryVersion150).
+		Find(&allowedRows).Error; err != nil {
+		return nil, err
+	}
+	allowed := make(map[uint]struct{}, len(allowedRows))
+	for _, row := range allowedRows {
+		allowed[row.ID] = struct{}{}
+	}
+	filtered := make([]models.AiRecommendYieldRecordState, 0, len(states))
+	for _, state := range states {
+		if _, ok := allowed[state.RecommendID]; ok {
+			filtered = append(filtered, state)
+		}
+	}
+	return filtered, nil
+}
+
 func syncRecommendActivationStatusFromRecordStates(states []models.AiRecommendYieldRecordState) error {
 	if len(states) == 0 {
 		return nil
@@ -1163,7 +1228,7 @@ func syncRecommendActivationStatusFromRecordStates(states []models.AiRecommendYi
 		}
 		if err := runWithSQLiteBusyRetry(func() error {
 			return db.Dao.Model(&models.AiRecommendStocks{}).
-				Where("id = ?", update.RecommendID).
+				Where("id = ? AND summary_version = ?", update.RecommendID, marketSummaryVersion150).
 				Updates(updateMap).Error
 		}); err != nil {
 			return err
@@ -1173,17 +1238,16 @@ func syncRecommendActivationStatusFromRecordStates(states []models.AiRecommendYi
 }
 
 func cleanRemovedYieldStates(codes []string) error {
-	if len(codes) == 0 {
-		return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendYieldState{}).Error
-	}
-	return db.Dao.Where("stock_code NOT IN ?", codes).Delete(&models.AiRecommendYieldState{}).Error
+	// Versionless aggregate rows are frozen legacy data.
+	_ = codes
+	return nil
 }
 
 func cleanRemovedYieldRecordStates(recordIDs []uint) error {
-	if len(recordIDs) == 0 {
-		return db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendYieldRecordState{}).Error
-	}
-	return db.Dao.Where("recommend_id NOT IN ?", recordIDs).Delete(&models.AiRecommendYieldRecordState{}).Error
+	// Do not delete record-state history. The table has no strategy-version
+	// column, so absence from a V1.5 target set cannot authorize deletion.
+	_ = recordIDs
+	return nil
 }
 
 func updateYieldRecalcProgress(metaID uint, done, total int) error {

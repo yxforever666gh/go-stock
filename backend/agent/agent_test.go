@@ -25,12 +25,13 @@ import (
 
 func TestGetStockAiAgent(t *testing.T) {
 	// 这是一个需要外部模型服务/网络环境的集成测试，默认跳过，避免 CI/本地 go test 卡住。
-	if os.Getenv("RUN_INTEGRATION_TESTS") != "1" {
-		t.Skip("skip integration test; set RUN_INTEGRATION_TESTS=1 to enable")
+	if os.Getenv("GO_STOCK_RUN_INTEGRATION") != "1" {
+		t.Skip("skip integration test; set GO_STOCK_RUN_INTEGRATION=1 to enable")
 	}
 
 	ctx := context.Background()
 	db.Init("../../data/stock.db")
+	t.Cleanup(func() { _ = db.Close() })
 	config := data.GetSettingConfig()
 	aiAgent := GetStockAiAgent(&ctx, *config.AiConfigs[0])
 
@@ -82,11 +83,12 @@ func TestGetStockAiAgent(t *testing.T) {
 
 func TestAgent(t *testing.T) {
 	// 这是一个需要外部模型服务/网络环境的集成测试，默认跳过，避免 CI/本地 go test 卡住。
-	if os.Getenv("RUN_INTEGRATION_TESTS") != "1" {
-		t.Skip("skip integration test; set RUN_INTEGRATION_TESTS=1 to enable")
+	if os.Getenv("GO_STOCK_RUN_INTEGRATION") != "1" {
+		t.Skip("skip integration test; set GO_STOCK_RUN_INTEGRATION=1 to enable")
 	}
 
 	db.Init("../../data/stock.db")
+	t.Cleanup(func() { _ = db.Close() })
 
 	md := strings.Builder{}
 	ch := NewStockAiAgentApi().Chat("分析一下立讯精密", 0, nil)

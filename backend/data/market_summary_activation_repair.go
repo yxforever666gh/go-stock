@@ -169,6 +169,12 @@ func normalizeMarketSummaryExecutionDataForSaveWithFetch(recommend *models.AiRec
 	if recommend == nil || !isMarketSummaryActivationSource(recommend.ActivationRuleSource) {
 		return nil
 	}
+	// analysis_only is terminal across every strategy version. In particular,
+	// a later market-data repair must not route it through pending_data and turn
+	// execution back into conditional.
+	if isAnalysisOnlyRecommend(recommend) {
+		return nil
+	}
 	snapshot, ok := loadMarketSummaryReferenceSnapshotWithFetch(*recommend, allowFetch)
 	if !ok || snapshot.Price <= 0 || snapshot.Amount <= 0 {
 		if hasRecoverableMarketSummaryTradePlan(*recommend) {
@@ -188,6 +194,9 @@ func normalizeMarketSummaryExecutionDataForSaveWithFetch(recommend *models.AiRec
 
 func shouldAttemptRecoverHistoricalMarketSummaryRule(rec models.AiRecommendStocks) bool {
 	if !isMarketSummaryActivationSource(rec.ActivationRuleSource) {
+		return false
+	}
+	if isAnalysisOnlyRecommend(&rec) {
 		return false
 	}
 	if isMarketSummaryV142StoredReportRecoverCandidate(rec) {
@@ -638,6 +647,9 @@ func markMarketSummaryRecommendPendingMarketData(recommend *models.AiRecommendSt
 	if recommend == nil {
 		return
 	}
+	if isAnalysisOnlyRecommend(recommend) {
+		return
+	}
 	reason = normalizeRecommendText(reason)
 	if reason == "" {
 		reason = marketSummaryPendingMarketDataReason
@@ -670,6 +682,7 @@ func recoverPendingMarketSummaryRecommendationsForScope(scope map[string]struct{
 	rows := make([]models.AiRecommendStocks, 0, len(codes))
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("stock_code IN ?", codes).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error
@@ -732,7 +745,9 @@ func recoverPendingMarketSummaryRecommendationsForScope(scope map[string]struct{
 			row.ActivationInvalidReason == rec.ActivationInvalidReason {
 			continue
 		}
-		if err := db.Dao.Model(&models.AiRecommendStocks{}).Where("id = ?", row.ID).Updates(updateMap).Error; err != nil {
+		if err := db.Dao.Model(&models.AiRecommendStocks{}).
+			Where("id = ? AND summary_version = ?", row.ID, marketSummaryVersion150).
+			Updates(updateMap).Error; err != nil {
 			return nil, err
 		}
 		changed = append(changed, normalizeRecommendStockCode(row.StockCode))
@@ -767,7 +782,7 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 	stats := marketSummaryActivationRepairStats{}
 	var rows []models.AiRecommendStocks
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
-		Where("summary_version IN ?", marketSummaryKnownVersions()).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error
@@ -886,7 +901,9 @@ func RepairHistoricalMarketSummaryActivationIssues(now time.Time) (marketSummary
 			stats.SkippedNoRef++
 			continue
 		}
-		if err := db.Dao.Model(&models.AiRecommendStocks{}).Where("id = ?", row.ID).Updates(updateMap).Error; err != nil {
+		if err := db.Dao.Model(&models.AiRecommendStocks{}).
+			Where("id = ? AND summary_version = ?", row.ID, marketSummaryVersion150).
+			Updates(updateMap).Error; err != nil {
 			return stats, err
 		}
 		changedCodes = append(changedCodes, normalizeRecommendStockCode(row.StockCode))

@@ -15,7 +15,7 @@ func TestBuildYieldRecordStateFromRecommend_RecomputesFrozenSellWithOpenGap(t *t
 	if loc == nil {
 		loc = time.Local
 	}
-	db.Init(filepath.Join(t.TempDir(), "yield-frozen-recompute.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-frozen-recompute.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

@@ -1060,6 +1060,8 @@ export namespace models {
 	    activationInvalidReason: string;
 	    recommendStatus: string;
 	    summaryVersion: string;
+	    strategyRunId?: string;
+	    strategyRuleId?: string;
 	    riskRemarks: string;
 	    remarks: string;
 	    latestOpeningReview?: AiRecommendOpeningReviewSummary;
@@ -1119,6 +1121,8 @@ export namespace models {
 	        this.activationInvalidReason = source["activationInvalidReason"];
 	        this.recommendStatus = source["recommendStatus"];
 	        this.summaryVersion = source["summaryVersion"];
+	        this.strategyRunId = source["strategyRunId"];
+	        this.strategyRuleId = source["strategyRuleId"];
 	        this.riskRemarks = source["riskRemarks"];
 	        this.remarks = source["remarks"];
 	        this.latestOpeningReview = this.convertValues(source["latestOpeningReview"], AiRecommendOpeningReviewSummary);
@@ -1217,6 +1221,7 @@ export namespace models {
 	export class AiRecommendStocksYieldItem {
 	    recommendId: number;
 	    rowKey: string;
+	    summaryVersion?: string;
 	    calcMode?: string;
 	    strictReady: boolean;
 	    strictPendingReason?: string;
@@ -1272,6 +1277,7 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.recommendId = source["recommendId"];
 	        this.rowKey = source["rowKey"];
+	        this.summaryVersion = source["summaryVersion"];
 	        this.calcMode = source["calcMode"];
 	        this.strictReady = source["strictReady"];
 	        this.strictPendingReason = source["strictPendingReason"];
@@ -1338,6 +1344,38 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class StrategyValidationStatus {
+	    status: string;
+	    label: string;
+	    tradingDayCount: number;
+	    closedTradeCount: number;
+	    comparableTradeCount: number;
+	    recommendationDayCount: number;
+	    netMeanPct: number;
+	    netExcessMeanPct: number;
+	    profitFactor: number;
+	    dailyLowerBound90Pct: number;
+	    unmetConditions: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new StrategyValidationStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.label = source["label"];
+	        this.tradingDayCount = source["tradingDayCount"];
+	        this.closedTradeCount = source["closedTradeCount"];
+	        this.comparableTradeCount = source["comparableTradeCount"];
+	        this.recommendationDayCount = source["recommendationDayCount"];
+	        this.netMeanPct = source["netMeanPct"];
+	        this.netExcessMeanPct = source["netExcessMeanPct"];
+	        this.profitFactor = source["profitFactor"];
+	        this.dailyLowerBound90Pct = source["dailyLowerBound90Pct"];
+	        this.unmetConditions = source["unmetConditions"];
+	    }
+	}
 	export class AiRecommendStocksYieldPageData {
 	    list: AiRecommendStocksYieldItem[];
 	    total: number;
@@ -1366,6 +1404,8 @@ export namespace models {
 	    medianExcessYieldRate: number;
 	    medianExcessYieldRateText: string;
 	    strategyCohort?: string;
+	    v150Validation?: StrategyValidationStatus;
+	    v150HealthWarnings?: string[];
 	    sameDayActivationRate: number;
 	    sameDayActivationRateText?: string;
 	    staleActivationRate: number;
@@ -1377,6 +1417,10 @@ export namespace models {
 	    stopLossCount: number;
 	    takeProfitCount: number;
 	    openCount: number;
+	    v132GateBlockedCount: number;
+	    v132StrengthBlockedCount: number;
+	    v132RewardRiskBlockedCount: number;
+	    v132CooldownBlockedCount: number;
 	    dataAsOf: string;
 	    recalcInProgress: boolean;
 	    recalcProgress: number;
@@ -1384,6 +1428,7 @@ export namespace models {
 	    downloadProgress: number;
 	    downloadDone: number;
 	    downloadTotal: number;
+	    lastDownloadError?: string;
 	    minuteDownloadDone: number;
 	    minuteDownloadTotal: number;
 	    minuteDownloadPending: number;
@@ -1436,6 +1481,8 @@ export namespace models {
 	        this.medianExcessYieldRate = source["medianExcessYieldRate"];
 	        this.medianExcessYieldRateText = source["medianExcessYieldRateText"];
 	        this.strategyCohort = source["strategyCohort"];
+	        this.v150Validation = this.convertValues(source["v150Validation"], StrategyValidationStatus);
+	        this.v150HealthWarnings = source["v150HealthWarnings"];
 	        this.sameDayActivationRate = source["sameDayActivationRate"];
 	        this.sameDayActivationRateText = source["sameDayActivationRateText"];
 	        this.staleActivationRate = source["staleActivationRate"];
@@ -1447,6 +1494,10 @@ export namespace models {
 	        this.stopLossCount = source["stopLossCount"];
 	        this.takeProfitCount = source["takeProfitCount"];
 	        this.openCount = source["openCount"];
+	        this.v132GateBlockedCount = source["v132GateBlockedCount"];
+	        this.v132StrengthBlockedCount = source["v132StrengthBlockedCount"];
+	        this.v132RewardRiskBlockedCount = source["v132RewardRiskBlockedCount"];
+	        this.v132CooldownBlockedCount = source["v132CooldownBlockedCount"];
 	        this.dataAsOf = source["dataAsOf"];
 	        this.recalcInProgress = source["recalcInProgress"];
 	        this.recalcProgress = source["recalcProgress"];
@@ -1454,6 +1505,7 @@ export namespace models {
 	        this.downloadProgress = source["downloadProgress"];
 	        this.downloadDone = source["downloadDone"];
 	        this.downloadTotal = source["downloadTotal"];
+	        this.lastDownloadError = source["lastDownloadError"];
 	        this.minuteDownloadDone = source["minuteDownloadDone"];
 	        this.minuteDownloadTotal = source["minuteDownloadTotal"];
 	        this.minuteDownloadPending = source["minuteDownloadPending"];
@@ -1514,6 +1566,7 @@ export namespace models {
 	}
 	export class AiRecommendYieldDailyOverviewPoint {
 	    tradeDate: string;
+	    portfolioEquity: number;
 	    costBasisNet: number;
 	    dailyHoldingCostNet: number;
 	    holdingCount: number;
@@ -1540,6 +1593,7 @@ export namespace models {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.tradeDate = source["tradeDate"];
+	        this.portfolioEquity = source["portfolioEquity"];
 	        this.costBasisNet = source["costBasisNet"];
 	        this.dailyHoldingCostNet = source["dailyHoldingCostNet"];
 	        this.holdingCount = source["holdingCount"];
@@ -1568,10 +1622,13 @@ export namespace models {
 	    benchmarkCode: string;
 	    benchmarkName: string;
 	    strategyCohort?: string;
+	    validationStatus?: string;
+	    portfolioCapital?: number;
 	    totalRecordCount: number;
 	    includedRecordCount: number;
 	    skippedRecordCount: number;
 	    warnings: string[];
+	    v150HealthWarnings?: string[];
 	    points: AiRecommendYieldDailyOverviewPoint[];
 
 	    static createFrom(source: any = {}) {
@@ -1587,10 +1644,13 @@ export namespace models {
 	        this.benchmarkCode = source["benchmarkCode"];
 	        this.benchmarkName = source["benchmarkName"];
 	        this.strategyCohort = source["strategyCohort"];
+	        this.validationStatus = source["validationStatus"];
+	        this.portfolioCapital = source["portfolioCapital"];
 	        this.totalRecordCount = source["totalRecordCount"];
 	        this.includedRecordCount = source["includedRecordCount"];
 	        this.skippedRecordCount = source["skippedRecordCount"];
 	        this.warnings = source["warnings"];
+	        this.v150HealthWarnings = source["v150HealthWarnings"];
 	        this.points = this.convertValues(source["points"], AiRecommendYieldDailyOverviewPoint);
 	    }
 
@@ -1840,6 +1900,163 @@ export namespace models {
 	        this.endDate = source["endDate"];
 	    }
 	}
+	export class MarketSummaryBlockedReasonItem {
+	    reason: string;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new MarketSummaryBlockedReasonItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reason = source["reason"];
+	        this.count = source["count"];
+	    }
+	}
+	export class MarketSummaryRunDiagnostic {
+	    ID: number;
+	    // Go type: time
+	    CreatedAt: any;
+	    // Go type: time
+	    UpdatedAt: any;
+	    // Go type: gorm
+	    DeletedAt: any;
+	    runId: string;
+	    summaryVersion: string;
+	    runSlot: string;
+	    // Go type: time
+	    startedAt: any;
+	    // Go type: time
+	    finishedAt: any;
+	    indicatorCandidateCount: number;
+	    indicatorAiInputCount: number;
+	    discoveryCandidateCount: number;
+	    verifiedCandidateCount: number;
+	    aiOutputCountFirst: number;
+	    aiOutputCountSecond: number;
+	    savedCount: number;
+	    productionCount: number;
+	    analysisOnlyCount: number;
+	    blockedCount: number;
+	    blockedReasonTop: string;
+	    productionDowngradeReasonTop: string;
+	    emptyRun: boolean;
+	    notesJson: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MarketSummaryRunDiagnostic(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ID = source["ID"];
+	        this.CreatedAt = this.convertValues(source["CreatedAt"], null);
+	        this.UpdatedAt = this.convertValues(source["UpdatedAt"], null);
+	        this.DeletedAt = this.convertValues(source["DeletedAt"], null);
+	        this.runId = source["runId"];
+	        this.summaryVersion = source["summaryVersion"];
+	        this.runSlot = source["runSlot"];
+	        this.startedAt = this.convertValues(source["startedAt"], null);
+	        this.finishedAt = this.convertValues(source["finishedAt"], null);
+	        this.indicatorCandidateCount = source["indicatorCandidateCount"];
+	        this.indicatorAiInputCount = source["indicatorAiInputCount"];
+	        this.discoveryCandidateCount = source["discoveryCandidateCount"];
+	        this.verifiedCandidateCount = source["verifiedCandidateCount"];
+	        this.aiOutputCountFirst = source["aiOutputCountFirst"];
+	        this.aiOutputCountSecond = source["aiOutputCountSecond"];
+	        this.savedCount = source["savedCount"];
+	        this.productionCount = source["productionCount"];
+	        this.analysisOnlyCount = source["analysisOnlyCount"];
+	        this.blockedCount = source["blockedCount"];
+	        this.blockedReasonTop = source["blockedReasonTop"];
+	        this.productionDowngradeReasonTop = source["productionDowngradeReasonTop"];
+	        this.emptyRun = source["emptyRun"];
+	        this.notesJson = source["notesJson"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MarketSummaryRunDiagnosticQuery {
+	    limit: number;
+	    startDate: string;
+	    endDate: string;
+	    summaryVersion: string;
+	    strategyCohort: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MarketSummaryRunDiagnosticQuery(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.limit = source["limit"];
+	        this.startDate = source["startDate"];
+	        this.endDate = source["endDate"];
+	        this.summaryVersion = source["summaryVersion"];
+	        this.strategyCohort = source["strategyCohort"];
+	    }
+	}
+	export class MarketSummaryRunDiagnosticSummary {
+	    list: MarketSummaryRunDiagnostic[];
+	    latest?: MarketSummaryRunDiagnostic;
+	    blockedReasonTop: MarketSummaryBlockedReasonItem[];
+	    productionDowngradeReasonTop: MarketSummaryBlockedReasonItem[];
+	    emptyRunCount: number;
+	    consecutiveEmptyRunCount: number;
+	    strategyCohort?: string;
+	    summaryVersion?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MarketSummaryRunDiagnosticSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.list = this.convertValues(source["list"], MarketSummaryRunDiagnostic);
+	        this.latest = this.convertValues(source["latest"], MarketSummaryRunDiagnostic);
+	        this.blockedReasonTop = this.convertValues(source["blockedReasonTop"], MarketSummaryBlockedReasonItem);
+	        this.productionDowngradeReasonTop = this.convertValues(source["productionDowngradeReasonTop"], MarketSummaryBlockedReasonItem);
+	        this.emptyRunCount = source["emptyRunCount"];
+	        this.consecutiveEmptyRunCount = source["consecutiveEmptyRunCount"];
+	        this.strategyCohort = source["strategyCohort"];
+	        this.summaryVersion = source["summaryVersion"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class Prompt {
 	    ID: number;
 	    name: string;
@@ -1878,6 +2095,7 @@ export namespace models {
 	        this.Description = source["Description"];
 	    }
 	}
+
 	export class VersionInfo {
 	    ID: number;
 	    // Go type: time

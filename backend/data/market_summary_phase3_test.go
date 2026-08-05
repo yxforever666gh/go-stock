@@ -49,7 +49,10 @@ func TestDefaultMarketSummaryRouteBudgetExpandsV140Candidates(t *testing.T) {
 		t.Fatalf("marketSummaryFinalCandidateLimit = %d, want 12", marketSummaryFinalCandidateLimit)
 	}
 	if marketSummaryMaxProductionCandidates != 4 {
-		t.Fatalf("marketSummaryMaxProductionCandidates = %d, want 4", marketSummaryMaxProductionCandidates)
+		t.Fatalf("legacy marketSummaryMaxProductionCandidates = %d, want 4", marketSummaryMaxProductionCandidates)
+	}
+	if got := marketSummaryV150RiskOnDailyCap(); got != 2 {
+		t.Fatalf("V1.5 risk-on daily cap = %d, want 2", got)
 	}
 }
 
@@ -108,7 +111,7 @@ func TestBuildPhase3FinalMessagesIncludesVerifiedPayload(t *testing.T) {
 		t.Fatal("expected non-empty messages")
 	}
 	allMessages := marketSummaryMessagesText(messages)
-	if !containsAll(allMessages, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "目标输出 8 到 12 只股票", "顺延补位队列", "最多 4 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
+	if !containsAll(allMessages, []string{"事件发现层", "证据核验层", "固定 7 个一级标题", "推荐股票池", "跳过复审", "原记录ID", "买入区间", "买入依据", "technicalMetrics", "minutePrice", "minuteAmount", "auctionPrice", "价格锚点", "当日已推荐股票排除池", "候选过滤/跳过原因", "analysis_only", "目标输出 8 到 12 只股票", "顺延补位队列", "最多 2 只可作为可交易生产候选", "暂无新增高质量候选标的", "本次筛选窗口"}) {
 		t.Fatalf("unexpected final messages: %s", allMessages)
 	}
 	if strings.Count(allMessages, "本次“推荐股票池”目标输出") != 1 {
@@ -139,10 +142,10 @@ func TestBuildPhase3FinalMessagesHonorsExplicitRecommendationCount(t *testing.T)
 	)
 	allMessages := marketSummaryMessagesText(messages)
 
-	if !strings.Contains(allMessages, "目标输出 3 只股票，其中最多 3 只可作为可交易生产候选") {
+	if !strings.Contains(allMessages, "目标输出 3 只股票，其中最多 2 只可作为可交易生产候选") {
 		t.Fatalf("expected explicit three-stock policy in final messages: %s", allMessages)
 	}
-	if strings.Contains(allMessages, "输出 8 到 12 只股票") || strings.Contains(allMessages, "最多 4 只可作为可交易生产候选") {
+	if strings.Contains(allMessages, "输出 8 到 12 只股票") {
 		t.Fatalf("expected no conflicting default count policy for explicit three-stock request: %s", allMessages)
 	}
 	if strings.Count(allMessages, "本次“推荐股票池”目标输出") != 1 {
@@ -157,7 +160,7 @@ func TestBuildMarketSummarySupplementMessagesUsesDynamicProductionTarget(t *test
 		currentProduction int
 		want              string
 	}{
-		{name: "default target", targetProduction: 4, currentProduction: 2, want: "总生产目标为4只，当前已有2只，本轮最多新增2只可交易生产候选"},
+		{name: "default target", targetProduction: 2, currentProduction: 1, want: "总生产目标为2只，当前已有1只，本轮最多新增1只可交易生产候选"},
 		{name: "custom target", targetProduction: 3, currentProduction: 1, want: "总生产目标为3只，当前已有1只，本轮最多新增2只可交易生产候选"},
 	}
 

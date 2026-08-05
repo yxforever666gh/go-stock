@@ -2,14 +2,13 @@ package data
 
 import (
 	"context"
-	"go-stock/backend/db"
 	log "go-stock/backend/logger"
 	"testing"
 )
 
 func TestNewDeepSeekOpenAiConfig(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	InitAnalyzeSentiment()
 
 	var tools []Tool
@@ -56,7 +55,7 @@ func TestGetTopNewsList(t *testing.T) {
 
 func TestSearchGuShiTongStockInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	//SearchGuShiTongStockInfo("hk01810", 60)
 	msgs := SearchGuShiTongStockInfo("sh600745", 60)
 	for _, msg := range *msgs {
@@ -68,7 +67,7 @@ func TestSearchGuShiTongStockInfo(t *testing.T) {
 
 func TestGetZSInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	GetZSInfo("中证银行", "sz399986", 5)
 	GetZSInfo("上海贝岭", "sh600171", 5)
 }

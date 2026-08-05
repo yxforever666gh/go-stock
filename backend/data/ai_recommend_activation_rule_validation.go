@@ -79,6 +79,11 @@ func setActivationRuleTimestamps(rule *activationRule, rec models.AiRecommendSto
 	if recordTime.IsZero() {
 		recordTime = now
 	}
+	if recordTime.IsZero() {
+		recordTime = time.Now()
+	}
+
+	rule.GeneratedAt = recordTime
 
 	// 设置数据截止时间为推荐时间（确保不使用未来数据）
 	rule.DataCutoffTime = recordTime
@@ -89,6 +94,27 @@ func setActivationRuleTimestamps(rule *activationRule, rec models.AiRecommendSto
 	// 递归设置路径的时间戳
 	for i := range rule.Paths {
 		setActivationRuleTimestamps(&rule.Paths[i], rec, now)
+	}
+}
+
+func setActivationRuleCausalTimeline(rule *activationRule, generatedAt, dataCutoff, validFrom time.Time) {
+	if rule == nil {
+		return
+	}
+	if generatedAt.IsZero() {
+		generatedAt = validFrom
+	}
+	if validFrom.IsZero() {
+		validFrom = generatedAt
+	}
+	if dataCutoff.IsZero() || (!generatedAt.IsZero() && dataCutoff.After(generatedAt)) {
+		dataCutoff = generatedAt
+	}
+	rule.GeneratedAt = generatedAt
+	rule.DataCutoffTime = dataCutoff
+	rule.ValidFrom = validFrom
+	for idx := range rule.Paths {
+		setActivationRuleCausalTimeline(&rule.Paths[idx], generatedAt, dataCutoff, validFrom)
 	}
 }
 

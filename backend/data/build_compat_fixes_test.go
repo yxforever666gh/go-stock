@@ -26,7 +26,7 @@ func TestShouldAutoSendYieldXLSX_DisabledForAllReasons(t *testing.T) {
 }
 
 func TestLoadLatestAIAnalysisReportForCron_RequiresFreshReport(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "latest-ai-report-cron.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "latest-ai-report-cron.db"))
 	if err := db.Dao.AutoMigrate(&models.AIResponseResult{}); err != nil {
 		t.Fatalf("auto migrate ai response result failed: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestLoadLatestAIAnalysisReportForCron_RequiresFreshReport(t *testing.T) {
 }
 
 func TestLoadLatestAIAnalysisReport_ManualStillAllowsLatestStoredReport(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "latest-ai-report-manual.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "latest-ai-report-manual.db"))
 	if err := db.Dao.AutoMigrate(&models.AIResponseResult{}); err != nil {
 		t.Fatalf("auto migrate ai response result failed: %v", err)
 	}
@@ -94,7 +94,7 @@ func TestLoadLatestAIAnalysisReport_ManualStillAllowsLatestStoredReport(t *testi
 }
 
 func TestHasSuccessfulMarketSummaryEmailLog_DeduplicatesBySendTypeAndReportTime(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-email-dedupe.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-email-dedupe.db"))
 	if err := db.Dao.AutoMigrate(&models.EmailSendLog{}); err != nil {
 		t.Fatalf("auto migrate email send log failed: %v", err)
 	}

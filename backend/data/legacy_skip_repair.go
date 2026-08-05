@@ -27,6 +27,7 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 
 	var rows []models.AiRecommendStocks
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error; err != nil {
 		return stats, err
@@ -36,11 +37,6 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 	if err != nil {
 		return stats, err
 	}
-	aggregateStateMap, err := loadExistingYieldStateMap()
-	if err != nil {
-		return stats, err
-	}
-
 	recordIDs := make([]uint, 0, len(rows))
 	for _, row := range rows {
 		if row.ID == 0 {
@@ -54,7 +50,6 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 	}
 
 	codesToRecalc := map[string]struct{}{}
-	aggregateResetCodes := map[string]struct{}{}
 	for _, row := range rows {
 		recordTime := recommendRecordTime(row)
 		if recordTime.IsZero() || !recordTime.Before(cutoff) {
@@ -64,10 +59,8 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 
 		code := normalizeRecommendStockCode(row.StockCode)
 		recordState := recordStateMap[row.ID]
-		aggregateState := aggregateStateMap[code]
 		recordSkipped := recordState != nil && strings.EqualFold(strings.TrimSpace(recordState.ActivationStatus), "skipped")
-		aggregateSkipped := aggregateState != nil && strings.EqualFold(strings.TrimSpace(aggregateState.ActivationStatus), "skipped")
-		if !recordSkipped && !aggregateSkipped {
+		if !recordSkipped {
 			continue
 		}
 
@@ -87,15 +80,6 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 				return stats, err
 			}
 			stats.RecordStatesReset++
-		}
-		if aggregateSkipped {
-			if _, ok := aggregateResetCodes[code]; !ok {
-				if err := resetHistoricalSkippedYieldAggregateState(code, now); err != nil {
-					return stats, err
-				}
-				aggregateResetCodes[code] = struct{}{}
-				stats.AggregateReset++
-			}
 		}
 		if code != "" {
 			codesToRecalc[code] = struct{}{}
@@ -120,7 +104,9 @@ func RepairHistoricalLegacySkippedRecommendations(now time.Time) (legacySkipRepa
 func RepairSameDayOnlyLegacySkippedRecommendations(now time.Time) (legacySkipRepairStats, error) {
 	stats := legacySkipRepairStats{}
 	var states []models.AiRecommendYieldRecordState
-	if err := db.Dao.
+	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+		Joins("JOIN ai_recommend_stocks AS rec ON rec.id = ai_recommend_yield_record_state.recommend_id AND rec.deleted_at IS NULL").
+		Where("rec.summary_version = ?", marketSummaryVersion150).
 		Where("activation_status = ? AND data_status_reason = ?", "skipped", sameDayOnlyLegacySkipReason).
 		Find(&states).Error; err != nil {
 		return stats, err
@@ -142,7 +128,7 @@ func RepairSameDayOnlyLegacySkippedRecommendations(now time.Time) (legacySkipRep
 	}
 	if len(recommendIDs) > 0 {
 		if err := db.Dao.Model(&models.AiRecommendStocks{}).
-			Where("id IN ? AND activation_status = ?", recommendIDs, "skipped").
+			Where("id IN ? AND summary_version = ? AND activation_status = ?", recommendIDs, marketSummaryVersion150, "skipped").
 			Updates(map[string]any{
 				"activation_status":         "pending",
 				"activation_invalid_reason": "",
@@ -161,10 +147,6 @@ func RepairSameDayOnlyLegacySkippedRecommendations(now time.Time) (legacySkipRep
 		scopeCodes = append(scopeCodes, code)
 	}
 	if len(scopeCodes) > 0 {
-		if err := resetSameDayOnlySkippedYieldAggregateStates(scopeCodes, now); err != nil {
-			return stats, err
-		}
-		stats.AggregateReset = len(scopeCodes)
 		if err := markAiRecommendYieldDirtyCodes(scopeCodes, "sameDayOnly 历史硬跳过修复后等待重算", aiRecommendYieldModeStrict); err != nil {
 			return stats, err
 		}
@@ -180,6 +162,7 @@ func resetHistoricalSkippedYieldRecordState(recommendID uint, now time.Time) err
 	}
 	return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
 		Where("recommend_id = ? AND activation_status = ?", recommendID, "skipped").
+		Where("recommend_id IN (?)", db.Dao.Model(&models.AiRecommendStocks{}).Select("id").Where("summary_version = ?", marketSummaryVersion150)).
 		Updates(map[string]any{
 			"activation_status":    "pending",
 			"activation_time":      nil,
@@ -204,6 +187,7 @@ func resetSameDayOnlySkippedYieldRecordStates(recommendIDs []uint, now time.Time
 	}
 	return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
 		Where("recommend_id IN ? AND activation_status = ? AND data_status_reason = ?", recommendIDs, "skipped", sameDayOnlyLegacySkipReason).
+		Where("recommend_id IN (?)", db.Dao.Model(&models.AiRecommendStocks{}).Select("id").Where("summary_version = ?", marketSummaryVersion150)).
 		Updates(map[string]any{
 			"activation_status":    "pending",
 			"activation_time":      nil,
@@ -223,55 +207,15 @@ func resetSameDayOnlySkippedYieldRecordStates(recommendIDs []uint, now time.Time
 }
 
 func resetHistoricalSkippedYieldAggregateState(stockCode string, now time.Time) error {
-	stockCode = normalizeRecommendStockCode(stockCode)
-	if stockCode == "" {
-		return nil
-	}
-	return db.Dao.Model(&models.AiRecommendYieldState{}).
-		Where("stock_code = ? AND activation_status = ?", stockCode, "skipped").
-		Updates(map[string]any{
-			"activation_status":    "pending",
-			"activation_time":      nil,
-			"activation_price":     0,
-			"buy_time":             nil,
-			"buy_amount":           0,
-			"position_status":      "待激活",
-			"sell_time":            nil,
-			"realized_sell_amount": nil,
-			"yield_rate":           0,
-			"yield_rate_text":      "--",
-			"data_status":          "待激活",
-			"data_status_reason":   "历史跳过修复后待重算",
-			"last_recalc_at":       &now,
-			"frozen":               false,
-		}).Error
+	// Versionless aggregates are frozen at 1.4.2.
+	_ = stockCode
+	_ = now
+	return nil
 }
 
 func resetSameDayOnlySkippedYieldAggregateStates(stockCodes []string, now time.Time) error {
-	normalized := normalizeScopeCodes(stockCodes)
-	if len(normalized) == 0 {
-		return nil
-	}
-	codes := make([]string, 0, len(normalized))
-	for code := range normalized {
-		codes = append(codes, code)
-	}
-	return db.Dao.Model(&models.AiRecommendYieldState{}).
-		Where("stock_code IN ? AND activation_status = ? AND data_status_reason = ?", codes, "skipped", sameDayOnlyLegacySkipReason).
-		Updates(map[string]any{
-			"activation_status":    "pending",
-			"activation_time":      nil,
-			"activation_price":     0,
-			"buy_time":             nil,
-			"buy_amount":           0,
-			"position_status":      "待激活",
-			"sell_time":            nil,
-			"realized_sell_amount": nil,
-			"yield_rate":           0,
-			"yield_rate_text":      "--",
-			"data_status":          "待激活",
-			"data_status_reason":   "sameDayOnly 历史硬跳过修复后待重算",
-			"last_recalc_at":       &now,
-			"frozen":               false,
-		}).Error
+	// Versionless aggregates are frozen at 1.4.2.
+	_ = stockCodes
+	_ = now
+	return nil
 }

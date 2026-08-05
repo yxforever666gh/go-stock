@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-stock/backend/db"
@@ -23,7 +24,14 @@ var (
 )
 
 const marketSummaryProductionScoreFloor = 60
+
+// Keep the legacy 1.4.2 production limit immutable. Strategy 1.5.0 reads its
+// independent cap from v150.FixedStrategyV150Config instead.
 const marketSummaryMaxProductionCandidates = 4
+const marketSummaryMaxActivePendingCandidates = 5
+const marketSummaryAnalysisOnlyIrreversibleReason = "analysis_only records are irreversible and cannot be upgraded by repair or supplement output"
+
+var marketSummaryRecommendSaveMu sync.Mutex
 
 var marketSummaryObservationPhrases = []string{
 	"仅观察",
@@ -40,12 +48,17 @@ var marketSummaryObservationPhrases = []string{
 }
 
 func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
-	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, startedAt)
+	marketSummaryRecommendSaveMu.Lock()
+	defer marketSummaryRecommendSaveMu.Unlock()
+
+	decisionAt := resolveMarketSummaryDecisionCompletionTime(startedAt)
+	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, decisionAt)
+	applyMarketSummaryDecisionTimeline(drafts, startedAt, decisionAt)
 	if len(drafts) == 0 {
 		return 0, nil
 	}
 
-	startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
+	startOfDay, endOfDay := marketSummaryDayBounds(decisionAt)
 	existing := make([]models.AiRecommendStocks, 0, len(drafts))
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("data_time >= ? AND data_time < ?", startOfDay, endOfDay).
@@ -58,6 +71,11 @@ func EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelNam
 	if len(missing) == 0 {
 		return 0, nil
 	}
+	productionLimit, err := resolveMarketSummaryV150ProductionLimit(db.Dao, decisionAt, marketSummaryV150RiskOnDailyCap())
+	if err != nil {
+		return 0, err
+	}
+	applyMarketSummaryProductionSelectionWithLimit(missing, productionLimit)
 
 	items := make([]*models.AiRecommendStocks, 0, len(missing))
 	saved := 0
@@ -129,6 +147,9 @@ type marketSummaryPreparedSaveItem struct {
 }
 
 func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot, options MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
+	marketSummaryRecommendSaveMu.Lock()
+	defer marketSummaryRecommendSaveMu.Unlock()
+
 	result := &models.MarketSummaryRecommendSaveResult{
 		BlockedReasons:              []models.MarketSummaryBlockedReasonItem{},
 		ProductionDowngradeReasons:  []models.MarketSummaryBlockedReasonItem{},
@@ -140,8 +161,9 @@ func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, provi
 	}
 	options.NewRecordLimit = normalizeMarketSummaryOutputLimit(options.NewRecordLimit)
 	options.ProductionLimit = normalizeMarketSummaryProductionLimit(options.ProductionLimit)
-	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, startedAt)
-	applyMarketSummaryFeasiblePlanFallback(drafts, verifiedCandidates)
+	decisionAt := resolveMarketSummaryDecisionCompletionTime(startedAt)
+	drafts := parseMarketSummaryRecommendStockDrafts(summaryText, providerName, modelName, decisionAt)
+	applyMarketSummaryDecisionTimeline(drafts, startedAt, decisionAt)
 	result.AIOutputCount = len(drafts)
 	if len(drafts) == 0 {
 		result.BlockedCount = 1
@@ -150,7 +172,7 @@ func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, provi
 		return result, nil
 	}
 
-	startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
+	startOfDay, endOfDay := marketSummaryDayBounds(decisionAt)
 	existing := make([]models.AiRecommendStocks, 0, len(drafts))
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("data_time >= ? AND data_time < ?", startOfDay, endOfDay).
@@ -171,7 +193,11 @@ func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, provi
 	for _, selection := range selections {
 		selectedDrafts = append(selectedDrafts, selection.Draft)
 	}
-	applyMarketSummaryProductionSelectionWithLimit(selectedDrafts, options.ProductionLimit)
+	productionLimit, err := resolveMarketSummaryV150ProductionLimit(db.Dao, decisionAt, options.ProductionLimit)
+	if err != nil {
+		return result, err
+	}
+	applyMarketSummaryProductionSelectionWithLimit(selectedDrafts, productionLimit)
 
 	items := make([]marketSummaryPreparedSaveItem, 0, len(selections))
 	operationFailures := make([]string, 0, len(selections))
@@ -200,25 +226,12 @@ func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, provi
 	for idx, prepared := range items {
 		item := prepared.Item
 		if prepared.Selection.Existing != nil {
-			if isAnalysisOnlyRecommend(item) {
-				reason := firstNonEmptyText(item.InvalidCondition, item.ActivationInvalidReason, "修正后仍未通过生产硬校验")
-				blockedReasons = append(blockedReasons, reason)
-				downgradeReasons = append(downgradeReasons, reason)
-				result.BlockedCount++
-				continue
-			}
-			if err := upgradeMarketSummaryAnalysisOnlyRecommend(prepared.Selection.Existing.ID, prepared.Selection.Repair, item, startedAt); err != nil {
-				failure := fmt.Sprintf("第%d条修正记录未能升级: %v", idx+1, err)
-				operationFailures = append(operationFailures, failure)
-				blockedReasons = append(blockedReasons, failure)
-				result.BlockedCount++
-				continue
-			}
-			code := normalizeRecommendStockCode(item.StockCode)
-			result.UpgradedCount++
-			result.ProductionCount++
-			result.UpgradedStockCodes = append(result.UpgradedStockCodes, code)
-			result.UsedStockCodes = append(result.UsedStockCodes, code)
+			// A persisted analysis_only decision is terminal for every strategy
+			// version. A later model response may never turn it into production.
+			reason := marketSummaryAnalysisOnlyIrreversibleReason
+			blockedReasons = append(blockedReasons, reason)
+			downgradeReasons = append(downgradeReasons, reason)
+			result.BlockedCount++
 			continue
 		}
 		if err := service.CreateAiRecommendStocks(item); err != nil {
@@ -237,10 +250,6 @@ func EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, provi
 			downgradeReason := firstNonEmptyText(item.InvalidCondition, item.ActivationInvalidReason)
 			if downgradeReason != "" {
 				downgradeReasons = append(downgradeReasons, downgradeReason)
-				if repair, ok := buildMarketSummaryTradePlanRepairCandidate(prepared.Selection.Draft, downgradeReason); ok {
-					repair.RecommendID = item.ID
-					repairableFailures = append(repairableFailures, repair)
-				}
 			}
 		} else {
 			result.ProductionCount++
@@ -318,6 +327,11 @@ func selectMarketSummaryRecommendDraftsForSave(drafts []*marketSummaryRecommendD
 			selections = append(selections, marketSummarySaveSelection{Draft: draft, Existing: existingItem, Repair: repair})
 			continue
 		}
+		if options.RequireVerifiedRepair {
+			stats.BlockedCount++
+			stats.Reasons = append(stats.Reasons, "second-round output may repair an authorized record but may not create a new recommendation")
+			continue
+		}
 		if newRecordCount >= options.NewRecordLimit {
 			stats.BlockedCount++
 			stats.Reasons = append(stats.Reasons, fmt.Sprintf("超出推荐数量上限（最多%d只）", options.NewRecordLimit))
@@ -343,12 +357,18 @@ func validateMarketSummaryRepairSelection(existing *models.AiRecommendStocks, re
 	if !isAnalysisOnlyRecommend(existing) {
 		return "仅允许修正同日仅分析记录"
 	}
-	if requireVerified {
-		if _, ok := verifiedCodes[code]; !ok {
-			return "缺少对应 verified 快照，禁止修正"
+	// analysis_only is a terminal decision. Keep the remaining checks below
+	// unreachable by design so neither an authorization token nor a verified
+	// snapshot can reopen it.
+	return marketSummaryAnalysisOnlyIrreversibleReason
+	/*
+		if requireVerified {
+			if _, ok := verifiedCodes[code]; !ok {
+				return "缺少对应 verified 快照，禁止修正"
+			}
 		}
-	}
-	return ""
+		return ""
+	*/
 }
 
 func isMarketSummaryStoredRecommend(item *models.AiRecommendStocks) bool {
@@ -368,79 +388,89 @@ func isMarketSummaryStoredRecommend(item *models.AiRecommendStocks) bool {
 }
 
 func upgradeMarketSummaryAnalysisOnlyRecommend(recommendID uint, repair *models.MarketSummaryTradePlanRepairCandidate, item *models.AiRecommendStocks, startedAt time.Time) error {
-	if recommendID == 0 || repair == nil || item == nil {
-		return errors.New("修正授权不完整")
-	}
-	if repair.RecommendID != recommendID {
-		return errors.New("修正授权记录ID不匹配")
-	}
-	code := normalizeRecommendStockCode(item.StockCode)
-	if code == "" || normalizeRecommendStockCode(repair.StockCode) != code {
-		return errors.New("修正授权股票代码不匹配")
-	}
-	startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
-	err := db.Dao.Transaction(func(tx *gorm.DB) error {
-		var current models.AiRecommendStocks
-		if err := tx.Where("id = ?", recommendID).First(&current).Error; err != nil {
-			return err
+	// Deliberately fail before inspecting or writing the database. This is a
+	// cross-version invariant, including legacy records whose SummaryVersion is
+	// empty or spoofed by a later model response.
+	_ = recommendID
+	_ = repair
+	_ = item
+	_ = startedAt
+	return errors.New(marketSummaryAnalysisOnlyIrreversibleReason)
+	/*
+		if repair.RecommendID != recommendID {
+			return errors.New("修正授权记录ID不匹配")
 		}
-		if current.DataTime == nil || current.DataTime.Before(startOfDay) || !current.DataTime.Before(endOfDay) {
-			return errors.New("修正目标不属于本次交易日")
+		code := normalizeRecommendStockCode(item.StockCode)
+		if code == "" || normalizeRecommendStockCode(repair.StockCode) != code {
+			return errors.New("修正授权股票代码不匹配")
 		}
-		if normalizeRecommendStockCode(current.StockCode) != code {
-			return errors.New("修正目标股票代码不匹配")
-		}
-		if !isMarketSummaryStoredRecommend(&current) {
-			return errors.New("修正目标不是市场总结来源记录")
-		}
-		if !isAnalysisOnlyRecommend(&current) {
-			return errors.New("修正目标已不是仅分析记录")
-		}
+		startOfDay, endOfDay := marketSummaryDayBounds(startedAt)
+		err := db.Dao.Transaction(func(tx *gorm.DB) error {
+			var current models.AiRecommendStocks
+			if err := tx.Where("id = ?", recommendID).First(&current).Error; err != nil {
+				return err
+			}
+			if strings.TrimSpace(current.SummaryVersion) == marketSummaryVersion150 && isAnalysisOnlyRecommend(&current) {
+				return errors.New("v1.5 analysis_only records are irreversible")
+			}
+			if current.DataTime == nil || current.DataTime.Before(startOfDay) || !current.DataTime.Before(endOfDay) {
+				return errors.New("修正目标不属于本次交易日")
+			}
+			if normalizeRecommendStockCode(current.StockCode) != code {
+				return errors.New("修正目标股票代码不匹配")
+			}
+			if !isMarketSummaryStoredRecommend(&current) {
+				return errors.New("修正目标不是市场总结来源记录")
+			}
+			if !isAnalysisOnlyRecommend(&current) {
+				return errors.New("修正目标已不是仅分析记录")
+			}
 
-		candidate, err := buildMarketSummaryRepairUpgradeCandidate(current, item, repair)
+			candidate, err := buildMarketSummaryRepairUpgradeCandidate(current, item, repair)
+			if err != nil {
+				return err
+			}
+			updates := map[string]any{
+				"recommend_buy_price":             candidate.RecommendBuyPrice,
+				"recommend_buy_price_min":         candidate.RecommendBuyPriceMin,
+				"recommend_buy_price_max":         candidate.RecommendBuyPriceMax,
+				"recommend_stop_profit_price":     candidate.RecommendStopProfitPrice,
+				"recommend_stop_profit_price_min": candidate.RecommendStopProfitPriceMin,
+				"recommend_stop_profit_price_max": candidate.RecommendStopProfitPriceMax,
+				"recommend_stop_loss_price":       candidate.RecommendStopLossPrice,
+				"recommend_category":              candidate.RecommendCategory,
+				"execution_state":                 candidate.ExecutionState,
+				"buy_signal":                      candidate.BuySignal,
+				"buy_signal_detail":               candidate.BuySignalDetail,
+				"sell_signal":                     candidate.SellSignal,
+				"sell_signal_detail":              candidate.SellSignalDetail,
+				"invalid_signal":                  candidate.InvalidSignal,
+				"invalid_condition":               candidate.InvalidCondition,
+				"activation_rule_json":            candidate.ActivationRuleJSON,
+				"activation_rule_version":         candidate.ActivationRuleVersion,
+				"activation_rule_source":          candidate.ActivationRuleSource,
+				"activation_status":               candidate.ActivationStatus,
+				"activation_invalid_reason":       candidate.ActivationInvalidReason,
+				"recommend_status":                candidate.RecommendStatus,
+			}
+			update := tx.Model(&models.AiRecommendStocks{}).
+				Where("id = ? AND data_time >= ? AND data_time < ?", recommendID, startOfDay, endOfDay).
+				Updates(updates)
+			if update.Error != nil {
+				return update.Error
+			}
+			if update.RowsAffected != 1 {
+				return fmt.Errorf("修正升级影响记录数异常: %d", update.RowsAffected)
+			}
+			return nil
+		})
 		if err != nil {
 			return err
 		}
-		updates := map[string]any{
-			"recommend_buy_price":             candidate.RecommendBuyPrice,
-			"recommend_buy_price_min":         candidate.RecommendBuyPriceMin,
-			"recommend_buy_price_max":         candidate.RecommendBuyPriceMax,
-			"recommend_stop_profit_price":     candidate.RecommendStopProfitPrice,
-			"recommend_stop_profit_price_min": candidate.RecommendStopProfitPriceMin,
-			"recommend_stop_profit_price_max": candidate.RecommendStopProfitPriceMax,
-			"recommend_stop_loss_price":       candidate.RecommendStopLossPrice,
-			"recommend_category":              candidate.RecommendCategory,
-			"execution_state":                 candidate.ExecutionState,
-			"buy_signal":                      candidate.BuySignal,
-			"buy_signal_detail":               candidate.BuySignalDetail,
-			"sell_signal":                     candidate.SellSignal,
-			"sell_signal_detail":              candidate.SellSignalDetail,
-			"invalid_signal":                  candidate.InvalidSignal,
-			"invalid_condition":               candidate.InvalidCondition,
-			"activation_rule_json":            candidate.ActivationRuleJSON,
-			"activation_rule_version":         candidate.ActivationRuleVersion,
-			"activation_rule_source":          candidate.ActivationRuleSource,
-			"activation_status":               candidate.ActivationStatus,
-			"activation_invalid_reason":       candidate.ActivationInvalidReason,
-			"recommend_status":                candidate.RecommendStatus,
-		}
-		update := tx.Model(&models.AiRecommendStocks{}).
-			Where("id = ? AND data_time >= ? AND data_time < ?", recommendID, startOfDay, endOfDay).
-			Updates(updates)
-		if update.Error != nil {
-			return update.Error
-		}
-		if update.RowsAffected != 1 {
-			return fmt.Errorf("修正升级影响记录数异常: %d", update.RowsAffected)
-		}
+		_ = markAiRecommendYieldDirtyCodesForMutationFn([]string{code}, "市场总结修正升级后等待严格模式下载/回算", aiRecommendYieldModeStrict)
+		requestAiRecommendYieldScopedRecalcForMutationFn(false, "market_summary_recommend_upgraded", []string{code})
 		return nil
-	})
-	if err != nil {
-		return err
-	}
-	_ = markAiRecommendYieldDirtyCodesForMutationFn([]string{code}, "市场总结修正升级后等待严格模式下载/回算", aiRecommendYieldModeStrict)
-	requestAiRecommendYieldScopedRecalcForMutationFn(false, "market_summary_recommend_upgraded", []string{code})
-	return nil
+	*/
 }
 
 func buildMarketSummaryRepairUpgradeCandidate(current models.AiRecommendStocks, item *models.AiRecommendStocks, repair *models.MarketSummaryTradePlanRepairCandidate) (*models.AiRecommendStocks, error) {
@@ -556,35 +586,11 @@ func marketSummaryRecommendDraftFromStoredRecommend(item models.AiRecommendStock
 }
 
 func applyMarketSummaryFeasiblePlanFallback(drafts []*marketSummaryRecommendDraft, verifiedCandidates []MarketSummaryVerifiedCandidateSnapshot) {
-	if len(drafts) == 0 || len(verifiedCandidates) == 0 {
-		return
-	}
-	verifiedByCode := make(map[string]MarketSummaryVerifiedCandidateSnapshot, len(verifiedCandidates))
-	for _, candidate := range verifiedCandidates {
-		code := normalizeRecommendStockCode(candidate.StockCode)
-		if code == "" {
-			continue
-		}
-		verifiedByCode[code] = candidate
-	}
-	for _, draft := range drafts {
-		if draft == nil || strings.TrimSpace(draft.SummaryVersion) != marketSummaryVersion142 {
-			continue
-		}
-		code := normalizeRecommendStockCode(draft.StockCode)
-		if code == "" {
-			continue
-		}
-		candidate, ok := verifiedByCode[code]
-		if !ok || !marketSummaryDraftNeedsFeasiblePlanFallback(draft) {
-			continue
-		}
-		plan, ok := selectBestMarketSummaryFeasiblePlan(candidate)
-		if !ok {
-			continue
-		}
-		applyFeasiblePlanToMarketSummaryDraft(draft, candidate, plan)
-	}
+	// Intentionally disabled for every strategy version. Once the model/backend classifies a
+	// draft as analysis_only, verified feasiblePlans are diagnostic input only
+	// and must never manufacture a production trade plan.
+	_ = drafts
+	_ = verifiedCandidates
 }
 
 func marketSummaryDraftNeedsFeasiblePlanFallback(draft *marketSummaryRecommendDraft) bool {
@@ -625,57 +631,65 @@ func selectBestMarketSummaryFeasiblePlan(candidate MarketSummaryVerifiedCandidat
 }
 
 func applyFeasiblePlanToMarketSummaryDraft(draft *marketSummaryRecommendDraft, candidate MarketSummaryVerifiedCandidateSnapshot, plan marketSummaryFeasiblePlan) {
-	if draft == nil {
-		return
-	}
-	draft.RepairSource = nil
-	entryText := strings.TrimSpace(plan.EntryRange)
-	buyText, buyMin, buyMax := parseMarketSummaryBuyRange(entryText)
-	if buyMin <= 0 || buyMax <= 0 {
-		buyMin = plan.WorstEntry
-		buyMax = plan.WorstEntry
-		buyText = formatMarketSummaryPlanPrice(plan.WorstEntry)
-	}
-	stopProfitText := formatMarketSummaryPlanPrice(plan.TakeProfit)
-	stopLossText := formatMarketSummaryPlanPrice(plan.StopLoss)
-	anchor := firstNonEmptyText(candidate.AuctionPrice, candidate.MinutePrice, candidate.CurrentPrice, draft.StockCurrentPrice, draft.ObservePrice, draft.StockPrice)
-	if anchor != "" {
-		draft.StockPrice = anchor
-		draft.StockCurrentPrice = anchor
-		draft.StockClosePrice = anchor
-		draft.ObservePrice = anchor
-	}
-	draft.RecommendBuyPrice = firstNonEmptyText(buyText, entryText)
-	draft.RecommendBuyPriceMin = buyMin
-	draft.RecommendBuyPriceMax = buyMax
-	draft.RecommendStopProfitPrice = stopProfitText
-	draft.RecommendStopProfitPriceMin = plan.TakeProfit
-	draft.RecommendStopProfitPriceMax = plan.TakeProfit
-	draft.RecommendStopLossPrice = stopLossText
-	draft.FocusPrice = draft.RecommendBuyPrice
-	draft.ExecutionState = recommendExecutionConditional
-	draft.RecommendCategory = ""
-	draft.RecommendStatus = "valid"
-	draft.ActivationRuleSource = "market_summary"
-	draft.ActivationRuleVersion = activationRuleVersionV3
-	draft.BuySignal = fmt.Sprintf("价格触发：%s路径进入%s；量能触发：5分钟成交额不低于近5个5分钟平均成交额的1.10倍", strings.TrimSpace(plan.Path), draft.RecommendBuyPrice)
-	draft.BuySignalDetail = fmt.Sprintf("hardGateFallback=feasiblePlans; worstEntry=%.2f; rewardRisk=%.2f; downsidePct=%.2f", plan.WorstEntry, plan.RewardRisk, plan.DownsidePct)
-	draft.InvalidSignal = fmt.Sprintf("时间失效：未来5个交易日内未触发；价格失效：跌破止损位%s", stopLossText)
-	draft.InvalidCondition = ""
-	draft.ActivationInvalidReason = ""
-	draft.Remarks = appendRecommendRemarkNotice(draft.Remarks, fmt.Sprintf("feasiblePlans兜底补齐交易字段：path=%s; entry=%s; takeProfit=%.2f; stopLoss=%.2f; rewardRisk=%.2f; downsidePct=%.2f", plan.Path, draft.RecommendBuyPrice, plan.TakeProfit, plan.StopLoss, plan.RewardRisk, plan.DownsidePct))
-	if ruleJSON, version, err := buildActivationRuleFromMarketSummaryFeasiblePlan(draft, plan); err == nil {
-		draft.ActivationRuleJSON = ruleJSON
-		if version != "" {
-			draft.ActivationRuleVersion = version
+	// Retained as a compatibility stub for old callers/tests. Feasible plans are
+	// diagnostic only and may never mutate a draft into a production candidate.
+	_ = draft
+	_ = candidate
+	_ = plan
+	return
+	/*
+		if draft == nil {
+			return
 		}
-	} else {
-		draft.ActivationRuleJSON = ""
-		draft.ActivationInvalidReason = err.Error()
-	}
-	if reason := marketSummaryDraftProductionRejectionReason(draft); reason != "" {
-		downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft, reason)
-	}
+		draft.RepairSource = nil
+		entryText := strings.TrimSpace(plan.EntryRange)
+		buyText, buyMin, buyMax := parseMarketSummaryBuyRange(entryText)
+		if buyMin <= 0 || buyMax <= 0 {
+			buyMin = plan.WorstEntry
+			buyMax = plan.WorstEntry
+			buyText = formatMarketSummaryPlanPrice(plan.WorstEntry)
+		}
+		stopProfitText := formatMarketSummaryPlanPrice(plan.TakeProfit)
+		stopLossText := formatMarketSummaryPlanPrice(plan.StopLoss)
+		anchor := firstNonEmptyText(candidate.AuctionPrice, candidate.MinutePrice, candidate.CurrentPrice, draft.StockCurrentPrice, draft.ObservePrice, draft.StockPrice)
+		if anchor != "" {
+			draft.StockPrice = anchor
+			draft.StockCurrentPrice = anchor
+			draft.StockClosePrice = anchor
+			draft.ObservePrice = anchor
+		}
+		draft.RecommendBuyPrice = firstNonEmptyText(buyText, entryText)
+		draft.RecommendBuyPriceMin = buyMin
+		draft.RecommendBuyPriceMax = buyMax
+		draft.RecommendStopProfitPrice = stopProfitText
+		draft.RecommendStopProfitPriceMin = plan.TakeProfit
+		draft.RecommendStopProfitPriceMax = plan.TakeProfit
+		draft.RecommendStopLossPrice = stopLossText
+		draft.FocusPrice = draft.RecommendBuyPrice
+		draft.ExecutionState = recommendExecutionConditional
+		draft.RecommendCategory = ""
+		draft.RecommendStatus = "valid"
+		draft.ActivationRuleSource = "market_summary"
+		draft.ActivationRuleVersion = activationRuleVersionV3
+		draft.BuySignal = fmt.Sprintf("价格触发：%s路径进入%s；量能触发：5分钟成交额不低于近5个5分钟平均成交额的1.10倍", strings.TrimSpace(plan.Path), draft.RecommendBuyPrice)
+		draft.BuySignalDetail = fmt.Sprintf("hardGateFallback=feasiblePlans; worstEntry=%.2f; rewardRisk=%.2f; downsidePct=%.2f", plan.WorstEntry, plan.RewardRisk, plan.DownsidePct)
+		draft.InvalidSignal = fmt.Sprintf("时间失效：未来5个交易日内未触发；价格失效：跌破止损位%s", stopLossText)
+		draft.InvalidCondition = ""
+		draft.ActivationInvalidReason = ""
+		draft.Remarks = appendRecommendRemarkNotice(draft.Remarks, fmt.Sprintf("feasiblePlans兜底补齐交易字段：path=%s; entry=%s; takeProfit=%.2f; stopLoss=%.2f; rewardRisk=%.2f; downsidePct=%.2f", plan.Path, draft.RecommendBuyPrice, plan.TakeProfit, plan.StopLoss, plan.RewardRisk, plan.DownsidePct))
+		if ruleJSON, version, err := buildActivationRuleFromMarketSummaryFeasiblePlan(draft, plan); err == nil {
+			draft.ActivationRuleJSON = ruleJSON
+			if version != "" {
+				draft.ActivationRuleVersion = version
+			}
+		} else {
+			draft.ActivationRuleJSON = ""
+			draft.ActivationInvalidReason = err.Error()
+		}
+		if reason := marketSummaryDraftProductionRejectionReason(draft); reason != "" {
+			downgradeMarketSummaryDraftToAnalysisOnlyWithRepairSource(draft, reason)
+		}
+	*/
 }
 
 func buildActivationRuleFromMarketSummaryFeasiblePlan(draft *marketSummaryRecommendDraft, plan marketSummaryFeasiblePlan) (string, string, error) {
@@ -1275,6 +1289,175 @@ func normalizeMarketSummaryOutputLimit(outputLimit int) int {
 	return outputLimit
 }
 
+type marketSummaryV150Capacity struct {
+	DailyProduction int64
+	ActivePending   int64
+}
+
+func resolveMarketSummaryDecisionCompletionTime(startedAt time.Time) time.Time {
+	now := timeNow()
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if startedAt.IsZero() {
+		return now
+	}
+	loc := cnLocation()
+	startedLocal := startedAt.In(loc)
+	nowLocal := now.In(loc)
+	if nowLocal.Before(startedLocal) ||
+		startedLocal.Year() != nowLocal.Year() ||
+		startedLocal.YearDay() != nowLocal.YearDay() {
+		// Historical imports/tests have no observable completion timestamp. Keep
+		// their supplied decision time instead of rewriting them to today.
+		return startedAt
+	}
+	return now
+}
+
+func applyMarketSummaryDecisionTimeline(drafts []*marketSummaryRecommendDraft, dataCutoff, decisionAt time.Time) {
+	if decisionAt.IsZero() {
+		return
+	}
+	if dataCutoff.IsZero() || dataCutoff.After(decisionAt) {
+		dataCutoff = decisionAt
+	}
+	for _, draft := range drafts {
+		if draft == nil || strings.TrimSpace(draft.SummaryVersion) != marketSummaryVersion150 {
+			continue
+		}
+		completedAt := decisionAt
+		draft.DataTime = &completedAt
+		if strings.TrimSpace(draft.StockCurrentPriceTime) == "" {
+			draft.StockCurrentPriceTime = dataCutoff.Format(time.DateTime)
+		}
+		raw := strings.TrimSpace(draft.ActivationRuleJSON)
+		if raw == "" {
+			continue
+		}
+		rule, err := parseActivationRuleJSON(raw)
+		if err != nil || rule == nil {
+			continue
+		}
+		validFrom := nextMarketSummary15MinuteBarStart(completedAt)
+		setActivationRuleCausalTimeline(rule, completedAt, dataCutoff, validFrom)
+		normalized, err := json.Marshal(rule)
+		if err != nil {
+			continue
+		}
+		draft.ActivationRuleJSON = string(normalized)
+	}
+}
+
+func resolveMarketSummaryV150ProductionLimit(tx *gorm.DB, at time.Time, requested int) (int, error) {
+	requested = normalizeMarketSummaryProductionLimit(requested)
+	v150DailyCap := marketSummaryV150RiskOnDailyCap()
+	if requested > v150DailyCap {
+		requested = v150DailyCap
+	}
+	if requested == 0 {
+		return 0, nil
+	}
+	capacity, err := loadMarketSummaryV150Capacity(tx, at)
+	if err != nil {
+		return 0, err
+	}
+	dailyAvailable := v150DailyCap - int(capacity.DailyProduction)
+	activeAvailable := marketSummaryMaxActivePendingCandidates - int(capacity.ActivePending)
+	if dailyAvailable < 0 {
+		dailyAvailable = 0
+	}
+	if activeAvailable < 0 {
+		activeAvailable = 0
+	}
+	if requested > dailyAvailable {
+		requested = dailyAvailable
+	}
+	if requested > activeAvailable {
+		requested = activeAvailable
+	}
+	return requested, nil
+}
+
+func nextMarketSummary15MinuteBarStart(decisionAt time.Time) time.Time {
+	if decisionAt.IsZero() {
+		return time.Time{}
+	}
+	loc := cnLocation()
+	decision := decisionAt.In(loc)
+	day := time.Date(decision.Year(), decision.Month(), decision.Day(), 0, 0, 0, 0, loc)
+	marketOpen := func(target time.Time) time.Time {
+		return time.Date(target.Year(), target.Month(), target.Day(), 9, 30, 0, 0, loc)
+	}
+	if !isCNOpenTradeDaySafe(day) {
+		return marketOpen(shiftToNextCNOpenTradeDaySafe(day))
+	}
+
+	minuteOfDay := decision.Hour()*60 + decision.Minute()
+	switch {
+	case minuteOfDay < 9*60+30:
+		return marketOpen(day)
+	case minuteOfDay < 11*60+30:
+		nextMinute := (minuteOfDay/15 + 1) * 15
+		if nextMinute < 11*60+30 {
+			return time.Date(day.Year(), day.Month(), day.Day(), nextMinute/60, nextMinute%60, 0, 0, loc)
+		}
+		return time.Date(day.Year(), day.Month(), day.Day(), 13, 0, 0, 0, loc)
+	case minuteOfDay < 13*60:
+		return time.Date(day.Year(), day.Month(), day.Day(), 13, 0, 0, 0, loc)
+	case minuteOfDay < 15*60:
+		nextMinute := (minuteOfDay/15 + 1) * 15
+		if nextMinute < 15*60 {
+			return time.Date(day.Year(), day.Month(), day.Day(), nextMinute/60, nextMinute%60, 0, 0, loc)
+		}
+	}
+	nextDay := shiftToNextCNOpenTradeDaySafe(day.AddDate(0, 0, 1))
+	return marketOpen(nextDay)
+}
+
+func loadMarketSummaryV150Capacity(tx *gorm.DB, at time.Time) (marketSummaryV150Capacity, error) {
+	capacity := marketSummaryV150Capacity{}
+	if tx == nil {
+		tx = db.Dao
+	}
+	if tx == nil {
+		return capacity, errors.New("market summary database is not initialized")
+	}
+	startOfDay, endOfDay := marketSummaryDayBounds(at)
+	base := func() *gorm.DB {
+		return tx.Table("ai_recommend_stocks AS r").
+			Where("r.deleted_at IS NULL").
+			Where("r.summary_version = ?", marketSummaryVersion150).
+			Where("COALESCE(TRIM(r.execution_state), '') <> ?", recommendExecutionAnalysisOnly)
+	}
+	if err := base().
+		Where("COALESCE(r.data_time, r.created_at) >= ? AND COALESCE(r.data_time, r.created_at) < ?", startOfDay, endOfDay).
+		Count(&capacity.DailyProduction).Error; err != nil {
+		return capacity, err
+	}
+
+	if tx.Migrator().HasTable(&models.AiRecommendYieldRecordState{}) {
+		effectiveStatus := "COALESCE(NULLIF(TRIM(s.activation_status), ''), NULLIF(TRIM(r.activation_status), ''), 'pending')"
+		if err := base().
+			Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
+			Where("("+effectiveStatus+" = ? OR ("+effectiveStatus+" = ? AND s.sell_time IS NULL))", "pending", "activated").
+			Distinct("r.id").
+			Count(&capacity.ActivePending).Error; err != nil {
+			return capacity, err
+		}
+		return capacity, nil
+	}
+
+	effectiveStatus := "COALESCE(NULLIF(TRIM(r.activation_status), ''), 'pending')"
+	if err := base().
+		Where(effectiveStatus+" IN ?", []string{"pending", "activated"}).
+		Distinct("r.id").
+		Count(&capacity.ActivePending).Error; err != nil {
+		return capacity, err
+	}
+	return capacity, nil
+}
+
 func marketSummaryDraftPriorityScore(item *marketSummaryRecommendDraft) int {
 	if item == nil {
 		return 0
@@ -1305,7 +1488,7 @@ func marketSummaryDraftProductionRejectionReason(item *marketSummaryRecommendDra
 		return "四维评分未全部达到60分，已降级为仅分析"
 	}
 	switch strings.TrimSpace(item.SummaryVersion) {
-	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
+	case marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142, marketSummaryVersion150:
 		if reason := marketSummaryDraftV136TradePlanRejectionReason(item); reason != "" {
 			return reason
 		}
@@ -2280,6 +2463,7 @@ func buildRecommendStockDraftFromRow(row marketSummaryRow, providerName, modelNa
 	if draft.ProviderName == "" && draft.ModelName != "" {
 		draft.ProviderName = strings.TrimSpace(DetectAIProviderName(&AIConfig{ModelName: draft.ModelName}))
 	}
+	applyMarketSummaryDecisionTimeline([]*marketSummaryRecommendDraft{draft}, dataTime, dataTime)
 	return draft
 }
 

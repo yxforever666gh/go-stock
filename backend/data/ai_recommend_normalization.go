@@ -408,7 +408,7 @@ func shouldUseStrictBacktestEligibility(recommend *models.AiRecommendStocks) boo
 	switch version {
 	case "", "phase1-v1", defaultAiRecommendSummaryVersion, "phase3-v2":
 		return false
-	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142, marketSummaryVersion150:
 		return true
 	default:
 		return false
@@ -1379,7 +1379,7 @@ func shouldApplyTimeAwareRecommendRules(recommend *models.AiRecommendStocks) boo
 		return true
 	}
 	switch strings.TrimSpace(recommend.SummaryVersion) {
-	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142, marketSummaryVersion150:
 		return true
 	default:
 		return false

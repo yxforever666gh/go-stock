@@ -20,22 +20,39 @@ const breakoutMaxEntryChaseRatio = 1.015
 const breakoutStopProfitSafetyRatio = 0.995
 
 type activationRule struct {
-	Version          string                   `json:"version,omitempty"`
-	Mode             string                   `json:"mode,omitempty"`
-	Name             string                   `json:"name,omitempty"`
-	Paths            []activationRule         `json:"paths,omitempty"`
-	OpeningPolicy    *activationOpeningPolicy `json:"openingPolicy,omitempty"`
-	SignalType       string                   `json:"signalType"`
-	EvaluationWindow string                   `json:"evaluationWindow,omitempty"`
-	Baseline         string                   `json:"baseline,omitempty"`
-	Operator         string                   `json:"operator,omitempty"`
-	ThresholdValue   float64                  `json:"thresholdValue,omitempty"`
-	ThresholdMax     float64                  `json:"thresholdMax,omitempty"`
-	VolumeRatio      float64                  `json:"volumeRatio,omitempty"`
-	ConfirmBars      int                      `json:"confirmBars,omitempty"`
-	VolumeWindow     int                      `json:"volumeWindow,omitempty"`
-	VolumeMetric     string                   `json:"volumeMetric,omitempty"`
-	ExpireTradeDays  int                      `json:"expireTradeDays,omitempty"`
+	Version                    string                   `json:"version,omitempty"`
+	Mode                       string                   `json:"mode,omitempty"`
+	Name                       string                   `json:"name,omitempty"`
+	StrategyRunID              string                   `json:"strategyRunId,omitempty"`
+	StrategyRuleID             string                   `json:"strategyRuleId,omitempty"`
+	Paths                      []activationRule         `json:"paths,omitempty"`
+	OpeningPolicy              *activationOpeningPolicy `json:"openingPolicy,omitempty"`
+	SignalType                 string                   `json:"signalType"`
+	EvaluationWindow           string                   `json:"evaluationWindow,omitempty"`
+	Baseline                   string                   `json:"baseline,omitempty"`
+	Operator                   string                   `json:"operator,omitempty"`
+	ThresholdValue             float64                  `json:"thresholdValue,omitempty"`
+	ThresholdMax               float64                  `json:"thresholdMax,omitempty"`
+	Support                    float64                  `json:"support,omitempty"`
+	ReferenceEntry             float64                  `json:"referenceEntry,omitempty"`
+	Stop                       float64                  `json:"stop,omitempty"`
+	Target                     float64                  `json:"target,omitempty"`
+	ATR14                      float64                  `json:"atr14,omitempty"`
+	RiskPerShare               float64                  `json:"riskPerShare,omitempty"`
+	RewardRisk                 float64                  `json:"rewardRisk,omitempty"`
+	NegativeOvernightGapRisk60 float64                  `json:"negativeOvernightGapRisk60,omitempty"`
+	VolumeRatio                float64                  `json:"volumeRatio,omitempty"`
+	ConfirmBars                int                      `json:"confirmBars,omitempty"`
+	VolumeWindow               int                      `json:"volumeWindow,omitempty"`
+	VolumeMetric               string                   `json:"volumeMetric,omitempty"`
+	ExpireTradeDays            int                      `json:"expireTradeDays,omitempty"`
+	DecisionTradeDayIndex      int                      `json:"decisionTradeDayIndex,omitempty"`
+	ValidFromTradeDayIndex     int                      `json:"validFromTradeDayIndex,omitempty"`
+	ValidTradeDays             int                      `json:"validTradeDays,omitempty"`
+	MaxHoldTradeDays           int                      `json:"maxHoldTradeDays,omitempty"`
+	NoActivationAfterMin       int                      `json:"noActivationAfterMin,omitempty"`
+	TrailingActivationR        float64                  `json:"trailingActivationR,omitempty"`
+	TrailingATRMultiple        float64                  `json:"trailingATRMultiple,omitempty"`
 	// 时间戳字段，用于防止事后拟合
 	GeneratedAt    time.Time `json:"generatedAt,omitempty"`    // 规则生成时间
 	ValidFrom      time.Time `json:"validFrom,omitempty"`      // 规则生效时间
@@ -773,6 +790,12 @@ func resolveActivationRuleScan(rec models.AiRecommendStocks, bars []minuteBar) a
 }
 
 func resolveActivationRuleScanWithActivationGate(rec models.AiRecommendStocks, bars []minuteBar) activationScanResult {
+	// 1.5.0 has its own deterministic execution engine.  Its activation,
+	// sizing and portfolio checks are performed by strategy/v150 and must not
+	// be passed through the legacy V1.3.6 VWAP/reward-risk gate.
+	if strings.TrimSpace(rec.SummaryVersion) == marketSummaryVersion150 {
+		return resolveActivationRuleScan(rec, bars)
+	}
 	remaining := bars
 	reasons := make([]string, 0, 4)
 	for len(remaining) > 0 {
@@ -836,6 +859,9 @@ func resolveSingleActivationRuleScan(rec models.AiRecommendStocks, rule *activat
 		}
 		return scan
 	case "price_range_with_volume":
+		if strings.TrimSpace(rec.SummaryVersion) == marketSummaryVersion150 && strings.EqualFold(strings.TrimSpace(rule.Name), "pullback") {
+			return scanMarketSummaryV150PullbackRule(rule, grouped)
+		}
 		triggerMin := rule.ThresholdValue
 		triggerMax := rule.ThresholdMax
 		if triggerMin > 0 {
@@ -863,6 +889,39 @@ func resolveSingleActivationRuleScan(rec models.AiRecommendStocks, rule *activat
 	default:
 		return activationScanResult{Reason: "暂不支持的结构化激活规则类型"}
 	}
+}
+
+func scanMarketSummaryV150PullbackRule(rule *activationRule, bars []minuteBar) activationScanResult {
+	if rule == nil {
+		return activationScanResult{Reason: "v1.5 pullback rule is unavailable"}
+	}
+	if normalizeActivationEvaluationWindow(rule.EvaluationWindow) != "15m" {
+		return activationScanResult{Reason: "v1.5 pullback rule requires a 15m evaluation window"}
+	}
+	entryMin, entryMax := rule.ThresholdValue, rule.ThresholdMax
+	if entryMin <= 0 || entryMax <= 0 || entryMax < entryMin || rule.Support <= 0 {
+		return activationScanResult{Reason: "v1.5 pullback rule requires explicit entry bounds and support"}
+	}
+
+	zoneTouched := false
+	for _, bar := range bars {
+		if bar.TradeTime.IsZero() || (!rule.ValidFrom.IsZero() && bar.TradeTime.Before(rule.ValidFrom)) {
+			continue
+		}
+		if bar.High >= entryMin && entryMax >= bar.Low {
+			zoneTouched = true
+		}
+		if !zoneTouched || bar.Close < rule.Support {
+			continue
+		}
+		return activationScanResult{
+			Triggered: true,
+			Time:      bar.TradeTime,
+			Price:     round2(bar.Close),
+			Reason:    "completed_15m_recovery",
+		}
+	}
+	return activationScanResult{Reason: "v1.5 pullback has not completed zone-touch and support recovery"}
 }
 
 func activationRulePaths(rule *activationRule) []activationRule {

@@ -99,7 +99,7 @@ func TestShouldTriggerYieldQueryRecalc_RespectsTradeDateAndCooldown(t *testing.T
 }
 
 func TestTriggerYieldQueryRecalcIfStale_UpdatesCooldownAndInvokesRecalc(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-query-refresh.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-query-refresh.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendYieldMeta{}); err != nil {
 		t.Fatalf("auto migrate meta failed: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestCollectYieldPendingIntradayRecalcScope_FindsStalePendingOrMissingState(
 }
 
 func TestTriggerYieldPendingIntradayRecalcIfStale_UpdatesCooldownAndInvokesScopedRecalc(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-query-pending-refresh.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-query-pending-refresh.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendYieldMeta{}); err != nil {
 		t.Fatalf("auto migrate meta failed: %v", err)
 	}

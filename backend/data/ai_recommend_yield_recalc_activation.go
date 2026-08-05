@@ -9,21 +9,35 @@ import (
 )
 
 type yieldBuildContext struct {
-	Force               bool
-	Reason              string
-	Now                 time.Time
-	InTradingSession    bool
-	LatestTradeDate     time.Time
-	CrawlTimeout        int64
-	DisableMinuteFetch  bool
-	Tushare             *TushareApi
-	CurrentPriceMap     map[string]float64
-	CurrentPriceTimeMap map[string]string
+	Force              bool
+	Reason             string
+	Now                time.Time
+	InTradingSession   bool
+	LatestTradeDate    time.Time
+	CrawlTimeout       int64
+	DisableMinuteFetch bool
+	// V150EvaluationCutoff separates the last fully closed execution bar from
+	// the wall clock used to obtain a new security observation. It is set by the
+	// independent monitor during provider-grace windows and left zero by legacy
+	// yield recalculation callers.
+	V150EvaluationCutoff time.Time
+	// RequireV150ExecutionObservation distinguishes an online event-order
+	// replay (whose minute/provider fetches were completed up front) from a
+	// genuinely offline cache-only replay. Online checkpoints must still use a
+	// dedicated same-day execution security observation.
+	RequireV150ExecutionObservation bool
+	// FailOnV150ObservationRefreshError makes the online monitor skip only the
+	// symbols whose point-in-time observation failed, then return a retryable
+	// aggregate error after all other symbols have been replayed.
+	FailOnV150ObservationRefreshError bool
+	Tushare                           *TushareApi
+	CurrentPriceMap                   map[string]float64
+	CurrentPriceTimeMap               map[string]string
 }
 
 func isSoldPositionStatus(status string) bool {
 	status = strings.TrimSpace(status)
-	return status == "已止盈" || status == "已止损"
+	return status == "已止盈" || status == "已止损" || status == marketSummaryV150TimeExitStatus
 }
 
 func hasActivatedAggregateLifecycle(state *models.AiRecommendYieldState) bool {
@@ -301,7 +315,6 @@ func buildYieldStateFromAggregate(aggr *aiRecommendYieldAggregate, existing *mod
 	}
 	state.DataStatus = activationInfo.DataStatus
 	state.DataStatusReason = activationInfo.DataStatusReason
-
 	if activationTime == nil || activationTime.IsZero() || activationPrice <= 0 {
 		if hasActivatedAggregateLifecycle(existing) {
 			restoreActivatedAggregateLifecycle(&state, existing)
@@ -438,6 +451,19 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 		DataStatus:        "正常",
 		TotalScopeEnd:     ctx.Now.Format("2006-01-02"),
 	}
+	finishMetrics := func() {
+		applyV150YieldRecordStateValuationAvailability(rec, &state, ctx.Now)
+		// Lifecycle rows are sealed during this rebuild, after ctx.Now was
+		// captured. Use the projection's actual knowledge time so those just-
+		// committed immutable rows are visible while event_at remains bounded by
+		// that same cutoff. Historical point-in-time callers can pass an explicit
+		// cutoff directly to fillYieldRecordMetrics.
+		metricAsOf := timeNow().In(cnLocation())
+		if metricAsOf.Before(ctx.Now) {
+			metricAsOf = ctx.Now
+		}
+		fillYieldRecordMetrics(&state, yieldRecordMetricContext{Record: rec, AsOf: metricAsOf})
+	}
 	if !recordTime.IsZero() {
 		t := recordTime
 		state.RecommendTime = &t
@@ -504,19 +530,17 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 	}
 	sanitizeYieldSellSnapshot(sellFloorTime, &state.PositionStatus, &state.SellTime, &state.RealizedSellAmount, &state.Frozen)
 
-	if p, ok := ctx.CurrentPriceMap[code]; ok {
-		state.CurrentPrice = round2(p)
+	currentPrice, hasCurrentPrice := ctx.CurrentPriceMap[code]
+	currentPriceTime := strings.TrimSpace(ctx.CurrentPriceTimeMap[code])
+	if hasCurrentPrice && currentPrice > 0 && currentPriceTime != "" {
+		state.CurrentPrice = round2(currentPrice)
+		state.CurrentPriceTime = currentPriceTime
 	}
-	if pTime, ok := ctx.CurrentPriceTimeMap[code]; ok {
-		state.CurrentPriceTime = pTime
-	}
-	if state.CurrentPrice <= 0 {
-		if p, ok := parseBuyPrice(rec.StockCurrentPrice); ok {
+	if state.CurrentPrice <= 0 || strings.TrimSpace(state.CurrentPriceTime) == "" {
+		if p, ok := parseBuyPrice(rec.StockCurrentPrice); ok && p > 0 && strings.TrimSpace(rec.StockCurrentPriceTime) != "" {
 			state.CurrentPrice = round2(p)
+			state.CurrentPriceTime = strings.TrimSpace(rec.StockCurrentPriceTime)
 		}
-	}
-	if strings.TrimSpace(state.CurrentPriceTime) == "" {
-		state.CurrentPriceTime = strings.TrimSpace(rec.StockCurrentPriceTime)
 	}
 
 	if eligibility, reason := resolveRecommendBacktestEligibility(&rec); eligibility != recommendBacktestEligible {
@@ -542,7 +566,7 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 		state.Frozen = false
 		state.DataStatusReason = reason
 		state.TotalScopeStart = ""
-		fillYieldRecordMetrics(&state)
+		finishMetrics()
 		return state
 	}
 
@@ -550,7 +574,7 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 	frozenSold := state.Frozen && isSoldPositionStatus(state.PositionStatus)
 
 	if !manualBackfill && !shouldUpdateActiveRecord(existing, ctx.Force, ctx.InTradingSession, ctx.LatestTradeDate, ctx.Now) {
-		fillYieldRecordMetrics(&state)
+		finishMetrics()
 		return state
 	}
 
@@ -581,14 +605,14 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 	if !isAShareTsCode(code) {
 		state.DataStatus = "无法判定"
 		state.DataStatusReason = "非A股"
-		fillYieldRecordMetrics(&state)
+		finishMetrics()
 		return state
 	}
 
 	if state.StopProfitAmount == nil && state.StopLossAmount == nil {
 		state.DataStatus = "无法判定"
 		state.DataStatusReason = "缺少止盈止损"
-		fillYieldRecordMetrics(&state)
+		finishMetrics()
 		return state
 	}
 
@@ -606,30 +630,37 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 	}
 	state.DataStatus = activationInfo.DataStatus
 	state.DataStatusReason = activationInfo.DataStatusReason
+	if activationInfo.V150Entry != nil {
+		stop := round2(activationInfo.V150Entry.Plan.Stop)
+		target := round2(activationInfo.V150Entry.Plan.Target)
+		state.StopLossAmount = &stop
+		state.StopProfitAmount = &target
+		state.SellAmountText = buildSellAmountText(state.StopProfitAmount, state.StopLossAmount)
+	}
 
 	if activationTime == nil || activationTime.IsZero() || activationPrice <= 0 {
 		switch state.DataStatus {
 		case "已跳过":
 			state.ActivationStatus = "skipped"
 			state.PositionStatus = "已放弃"
-			fillYieldRecordMetrics(&state)
+			finishMetrics()
 			return state
 		case "已失效":
 			state.ActivationStatus = "invalid"
 			state.PositionStatus = "已失效"
-			fillYieldRecordMetrics(&state)
+			finishMetrics()
 			return state
 		case "已过期":
 			state.ActivationStatus = "expired"
 			state.PositionStatus = "过期未触发"
-			fillYieldRecordMetrics(&state)
+			finishMetrics()
 			return state
 		}
 		if state.DataStatus == "正常" {
 			state.DataStatus = "待激活"
 			state.DataStatusReason = "未触发主买入区"
 		}
-		fillYieldRecordMetrics(&state)
+		finishMetrics()
 		return state
 	}
 	if reason, blocked := validateActivationExitPlan(activationPrice, state.StopProfitAmount); blocked {
@@ -641,7 +672,7 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 		state.PositionStatus = "已放弃"
 		state.DataStatus = "已跳过"
 		state.DataStatusReason = appendRecommendInvalidConditionText(reason, rec.InvalidCondition)
-		fillYieldRecordMetrics(&state)
+		finishMetrics()
 		return state
 	}
 
@@ -654,30 +685,43 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 	state.PositionStatus = "持有"
 
 	sellFloorTime = resolveNextSellEligibleTime(*activationTime)
-	scanStart := sellFloorTime
-	if !manualBackfill && !frozenSold && existing != nil && existing.LastMinuteTs != nil && existing.LastMinuteTs.After(scanStart) {
-		scanStart = existing.LastMinuteTs.Add(time.Minute)
-	}
-	scanEnd := normalizeMinuteCoverageEnd(resolveMinuteEvalEnd(ctx.Now, ctx.InTradingSession, ctx.LatestTradeDate))
-	if manualBackfill {
-		if ctx.InTradingSession {
-			scanEnd = normalizeMinuteCoverageEnd(ctx.Now)
-		} else {
-			scanEnd = resolveLatestCloseEvalEnd(ctx.Now, ctx.LatestTradeDate)
+	var triggerStatus string
+	var triggerTime time.Time
+	var triggerPrice float64
+	var evalInfo triggerEvalInfo
+	if strings.TrimSpace(rec.SummaryVersion) == marketSummaryVersion150 && activationInfo.V150Entry != nil {
+		triggerStatus, triggerTime, triggerPrice, evalInfo = evaluateMarketSummaryV150Exit(
+			rec,
+			*activationInfo.V150Entry,
+			ctx,
+			manualBackfill && !ctx.DisableMinuteFetch,
+		)
+	} else {
+		scanStart := sellFloorTime
+		if !manualBackfill && !frozenSold && existing != nil && existing.LastMinuteTs != nil && existing.LastMinuteTs.After(scanStart) {
+			scanStart = existing.LastMinuteTs.Add(time.Minute)
 		}
-	}
+		scanEnd := normalizeMinuteCoverageEnd(resolveMinuteEvalEnd(ctx.Now, ctx.InTradingSession, ctx.LatestTradeDate))
+		if manualBackfill {
+			if ctx.InTradingSession {
+				scanEnd = normalizeMinuteCoverageEnd(ctx.Now)
+			} else {
+				scanEnd = resolveLatestCloseEvalEnd(ctx.Now, ctx.LatestTradeDate)
+			}
+		}
 
-	triggerStatus, triggerTime, triggerPrice, evalInfo := evaluatePositionWithMinuteAndDaily(
-		code,
-		scanStart,
-		scanEnd,
-		state.StopProfitAmount,
-		state.StopLossAmount,
-		ctx.Tushare,
-		ctx.CrawlTimeout,
-		manualBackfill && !ctx.DisableMinuteFetch,
-		ctx.DisableMinuteFetch,
-	)
+		triggerStatus, triggerTime, triggerPrice, evalInfo = evaluatePositionWithMinuteAndDaily(
+			code,
+			scanStart,
+			scanEnd,
+			state.StopProfitAmount,
+			state.StopLossAmount,
+			ctx.Tushare,
+			ctx.CrawlTimeout,
+			manualBackfill && !ctx.DisableMinuteFetch,
+			ctx.DisableMinuteFetch,
+		)
+	}
 
 	if evalInfo.LastMinuteTs != nil {
 		state.LastMinuteTs = evalInfo.LastMinuteTs
@@ -711,7 +755,7 @@ func buildYieldRecordStateFromRecommend(rec models.AiRecommendStocks, existing *
 		state.RealizedSellAmount = prevRealizedSellAmount
 	}
 
-	fillYieldRecordMetrics(&state)
+	finishMetrics()
 	return state
 }
 
@@ -839,6 +883,9 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 		info.DataStatusReason = "缺少结构化激活规则"
 		return nil, 0, info
 	}
+	if strings.TrimSpace(rec.SummaryVersion) == marketSummaryVersion150 {
+		return resolveMarketSummaryV150Activation(rec, ctx, allowHeadBackfill)
+	}
 	minPrice, maxPrice, ok := parseRecommendEntryRange(rec)
 	if !ok {
 		if legacyDirectActivation {
@@ -873,6 +920,19 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 	info.CacheUpdated = cacheInfo.CacheUpdated
 	info.CacheSource = cacheInfo.CacheSource
 	info.LastMinuteTs = cacheInfo.LastMinuteTs
+	if strings.TrimSpace(rec.SummaryVersion) == marketSummaryVersion150 {
+		evaluatedThrough := end
+		if !ctx.Now.IsZero() && (evaluatedThrough.IsZero() || ctx.Now.Before(evaluatedThrough)) {
+			evaluatedThrough = ctx.Now
+		}
+		var prepareReason string
+		bars, prepareReason = prepareMarketSummaryV150ActivationBars(rec, bars, evaluatedThrough)
+		if len(bars) == 0 {
+			info.DataStatus = "待激活"
+			info.DataStatusReason = firstNonEmptyText(prepareReason, "v1.5 is waiting for a complete 15-minute bar after validFrom")
+			return nil, 0, info
+		}
+	}
 	openingNote := ""
 	if !legacyDirectActivation {
 		if rule, err := parseActivationRuleJSON(rec.ActivationRuleJSON); err == nil {
@@ -975,6 +1035,85 @@ func resolveRecommendActivation(rec models.AiRecommendStocks, ctx yieldBuildCont
 	info.DataStatus = "待激活"
 	info.DataStatusReason = firstNonEmptyText(openingNote, "未触发主买入区")
 	return nil, 0, info
+}
+
+// prepareMarketSummaryV150ActivationBars is the compatibility boundary for
+// the legacy yield scanner. v1.5 decisions may only observe bars whose full
+// 15-minute interval starts at/after validFrom and has completed by the
+// evaluation cutoff. Returning one aggregate per completed interval prevents
+// pre-decision or partial-bar data from leaking into the activation scan.
+func prepareMarketSummaryV150ActivationBars(rec models.AiRecommendStocks, bars []minuteBar, evaluatedThrough time.Time) ([]minuteBar, string) {
+	if strings.TrimSpace(rec.SummaryVersion) != marketSummaryVersion150 {
+		return bars, ""
+	}
+	rule, err := parseActivationRuleJSON(rec.ActivationRuleJSON)
+	if err != nil || rule == nil {
+		return nil, firstNonEmptyText(errorText(err), "v1.5 activation rule is unavailable")
+	}
+	validFrom := rule.ValidFrom
+	for _, path := range activationRulePaths(rule) {
+		if path.ValidFrom.After(validFrom) {
+			validFrom = path.ValidFrom
+		}
+	}
+	if validFrom.IsZero() {
+		return nil, "v1.5 activation rule has no validFrom timestamp"
+	}
+	if evaluatedThrough.IsZero() || !evaluatedThrough.After(validFrom) {
+		return nil, "v1.5 is waiting for the first complete 15-minute bar after validFrom"
+	}
+
+	eligible := make([]minuteBar, 0, len(bars))
+	for _, bar := range bars {
+		if bar.TradeTime.IsZero() {
+			continue
+		}
+		bucketStart := marketSummary15MinuteBucketStart(bar.TradeTime)
+		bucketEnd := bucketStart.Add(15 * time.Minute)
+		if bucketStart.Before(validFrom) || bucketEnd.After(evaluatedThrough) {
+			continue
+		}
+		eligible = append(eligible, bar)
+	}
+	if len(eligible) == 0 {
+		return nil, "v1.5 is waiting for a complete 15-minute bar after validFrom"
+	}
+
+	aggregated := aggregateMinuteBarsByWindow(eligible, "15m")
+	completed := make([]minuteBar, 0, len(aggregated))
+	for idx := range aggregated {
+		bucketStart := marketSummary15MinuteBucketStart(aggregated[idx].TradeTime)
+		bucketEnd := bucketStart.Add(15 * time.Minute)
+		// A wall-clock-complete interval with a truncated cache is still not an
+		// observable completed bar. Require coverage through its final minute.
+		if aggregated[idx].TradeTime.Before(bucketEnd.Add(-time.Minute)) {
+			continue
+		}
+		// The signal becomes observable only at bar close. This also prevents
+		// downstream clamping from backdating a trigger into the interval.
+		aggregated[idx].TradeTime = bucketEnd
+		completed = append(completed, aggregated[idx])
+	}
+	if len(completed) == 0 {
+		return nil, "v1.5 minute data does not cover a complete 15-minute bar after validFrom"
+	}
+	return completed, ""
+}
+
+func marketSummary15MinuteBucketStart(at time.Time) time.Time {
+	if at.IsZero() {
+		return time.Time{}
+	}
+	local := at.In(cnLocation())
+	minute := (local.Minute() / 15) * 15
+	return time.Date(local.Year(), local.Month(), local.Day(), local.Hour(), minute, 0, 0, local.Location())
+}
+
+func errorText(err error) string {
+	if err == nil {
+		return ""
+	}
+	return strings.TrimSpace(err.Error())
 }
 
 func shouldApplyOpeningPolicyForActivation(recordTime time.Time, policy *activationOpeningPolicy) bool {
@@ -1425,6 +1564,7 @@ type triggerEvalInfo struct {
 	CacheSource      string
 	ActivationTime   *time.Time
 	ActivationPrice  float64
+	V150Entry        *marketSummaryV150EntryExecution
 }
 
 type activitySessionSnapshot struct {

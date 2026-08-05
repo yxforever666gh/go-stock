@@ -70,7 +70,7 @@ func TestShouldIncludeMarketSummaryTimeText(t *testing.T) {
 }
 
 func TestLoadSameDayMarketSummaryExcludedStocks(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-routing-test.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-routing-test.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

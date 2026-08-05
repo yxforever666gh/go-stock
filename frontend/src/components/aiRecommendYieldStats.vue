@@ -51,11 +51,14 @@ const v132CooldownBlockedCountRef = ref(0)
 const marketDiagnosticRef = ref(null)
 const marketDiagnosticReasonTopRef = ref([])
 const marketDiagnosticDowngradeReasonTopRef = ref([])
+const v150ValidationRef = ref(null)
+const v150HealthWarningsRef = ref([])
 
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.5.0', value: '1.5.0' },
   { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },
   { label: 'V1.4.0', value: '1.4.0' },
@@ -64,7 +67,9 @@ const strategyCohortOptions = [
   { label: 'V1.3.1', value: 'phase3-v4' }
 ]
 const strategyCohortLabelMap = {
-  current: 'V1.4.2',
+  current: 'V1.5.0',
+  '1.5.0': 'V1.5.0',
+  'v1.5.0': 'V1.5.0',
   '1.4.2': 'V1.4.2',
   'v1.4.2': 'V1.4.2',
   '1.4.1': 'V1.4.1',
@@ -240,7 +245,9 @@ async function loadSummary() {
     v132StrengthBlockedCountRef.value = Number(result?.v132StrengthBlockedCount || 0)
     v132RewardRiskBlockedCountRef.value = Number(result?.v132RewardRiskBlockedCount || 0)
     v132CooldownBlockedCountRef.value = Number(result?.v132CooldownBlockedCount || 0)
+    v150ValidationRef.value = result?.v150Validation || null
   } catch (error) {
+    v150ValidationRef.value = null
     console.error('loadSummary failed', error)
   } finally {
     loadingRef.value = false
@@ -258,6 +265,7 @@ async function loadDailyOverview() {
       warnings: ['读取全库收益走势失败，请稍后重试'],
       points: []
     }
+    v150HealthWarningsRef.value = Array.isArray(result?.v150HealthWarnings) ? result.v150HealthWarnings : []
   } catch (error) {
     console.error('loadDailyOverview failed', error)
     dailyOverviewDataRef.value = {
@@ -265,6 +273,7 @@ async function loadDailyOverview() {
       warnings: ['读取全库收益走势失败，请稍后重试'],
       points: []
     }
+    v150HealthWarningsRef.value = []
   } finally {
     overviewLoadingRef.value = false
   }
@@ -447,7 +456,39 @@ function dailyOverviewWarningText() {
           </n-button>
         </n-input-group>
         <div class="yield-stats-toolbar-hint">
-          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.4.2、V1.4.1、V1.4.0、V1.3.6、V1.3.2、V1.3.1 对比不同策略阶段。</n-text>
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.5.0、V1.4.2、V1.4.1、V1.4.0、V1.3.6、V1.3.2、V1.3.1 对比不同策略阶段。</n-text>
+          <n-alert
+            v-if="strategyCohortRef === '1.5.0'"
+            type="warning"
+            :show-icon="false"
+            style="margin-top: 8px;"
+          >
+            <div>V1.5.0 收益状态：{{ v150ValidationRef?.label || '前向验证中' }}。</div>
+            <div v-if="v150ValidationRef" style="margin-top: 4px;">
+              样本进度：{{ v150ValidationRef.tradingDayCount }}/60 个交易日，
+              {{ v150ValidationRef.closedTradeCount }}/100 笔平仓，
+              {{ v150ValidationRef.comparableTradeCount }}/100 笔 510300 可比平仓，
+              {{ v150ValidationRef.recommendationDayCount }}/40 个独立推荐日。
+            </div>
+            <div v-if="v150ValidationRef" style="margin-top: 4px;">
+              净均值 {{ Number(v150ValidationRef.netMeanPct || 0).toFixed(2) }}%，
+              相对 510300 净超额 {{ Number(v150ValidationRef.netExcessMeanPct || 0).toFixed(2) }}%，
+              Profit Factor {{ Number(v150ValidationRef.profitFactor || 0).toFixed(2) }}，
+              推荐日单侧 90% 下界 {{ Number(v150ValidationRef.dailyLowerBound90Pct || 0).toFixed(2) }}%。
+            </div>
+            <div v-if="v150ValidationRef?.unmetConditions?.length" style="margin-top: 4px;">
+              未满足：{{ v150ValidationRef.unmetConditions.join('；') }}
+            </div>
+          </n-alert>
+          <n-alert
+            v-if="strategyCohortRef === '1.5.0' && v150HealthWarningsRef.length"
+            type="error"
+            :show-icon="false"
+            title="V1.5.0 不可变运行健康告警"
+            style="margin-top: 8px;"
+          >
+            <div v-for="warning in v150HealthWarningsRef" :key="warning">{{ warning }}</div>
+          </n-alert>
         </div>
         <div class="yield-stats-toolbar-hint">
           <n-text depth="3">当前页专注收益率统计与可视化；个股明细、分钟回放和手动补算仍保留在“股票收益率”栏目。</n-text>
@@ -770,6 +811,9 @@ function dailyOverviewWarningText() {
           <n-text depth="3">范围：{{ dailyOverviewRangeText() }}</n-text>
           <n-text depth="3">数据时间：{{ dailyOverviewDataRef?.dataAsOf || '--' }}</n-text>
           <n-text depth="3">口径：{{ dailyOverviewDataRef?.calcMode || 'strict' }}</n-text>
+          <n-text v-if="dailyOverviewDataRef?.portfolioCapital" depth="3">
+            虚拟本金：{{ Number(dailyOverviewDataRef.portfolioCapital).toLocaleString('zh-CN') }} 元；组合权益已扣整手交易费用
+          </n-text>
         </div>
         <n-alert
           v-if="dailyOverviewWarningText()"

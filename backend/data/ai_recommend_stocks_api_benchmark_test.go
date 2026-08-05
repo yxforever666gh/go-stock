@@ -151,7 +151,7 @@ func TestParseSSEBenchmarkQuoteDay(t *testing.T) {
 
 func TestCalculateSSEBenchmarkRateByItems_Integration(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	items := []models.AiRecommendStocksYieldItem{
 		{
 			StockCode:           "600111.SH",
@@ -251,6 +251,56 @@ func TestCalculateCashflowMatchedBenchmark_UsesETFNetTradeCosts(t *testing.T) {
 	}
 	if benchmarkXirr == 0 {
 		t.Fatal("expected non-zero benchmark XIRR")
+	}
+}
+
+func TestCalculateCashflowMatchedBenchmark_V150UsesExecutableETFConvention(t *testing.T) {
+	initV150YieldBenchmarkTestDB(t)
+	loc := cnLocation()
+	day1 := time.Date(2026, 4, 14, 0, 0, 0, 0, loc)
+	day2 := time.Date(2026, 4, 15, 0, 0, 0, 0, loc)
+	buyCost := calcBuyTradeCostForVersion("1.5.0", 10, tradingMarketSZ).NetAmount
+	entry := yieldDailyOverviewEntry{
+		RecommendID:      150,
+		SummaryVersion:   "1.5.0",
+		StockCode:        "000001.SZ",
+		BuyTime:          day1.Add(10 * time.Hour),
+		BuyDay:           day1,
+		SellDay:          day2,
+		CurrentDay:       day2,
+		BuyAmount:        10,
+		SellAmount:       11,
+		HasSellAmount:    true,
+		BuyCostNet:       buyCost,
+		RealizedValueNet: calcSellTradeCostForVersion("1.5.0", 10, 11, tradingMarketSZ).NetAmount,
+		SellTime:         day2.Add(14*time.Hour + 45*time.Minute).Format("2006-01-02 15:04:05"),
+	}
+	prices := &yieldDailyOverviewPriceSeries{Code: defaultBenchmarkModelCode, CloseByDay: map[string]float64{
+		day1.Format(time.DateOnly): 4,
+		day2.Format(time.DateOnly): 4.4,
+	}}
+	seedV150BenchmarkMinuteBars(t,
+		minuteBar{TradeTime: entry.BuyTime, Open: 4, High: 4, Low: 4, Close: 4},
+		minuteBar{TradeTime: day2.Add(14*time.Hour + 45*time.Minute), Open: 4.4, High: 4.4, Low: 4.4, Close: 4.4},
+	)
+
+	series, itemRateMap, _, _, _, _, _, _, ok := calculateCashflowMatchedBenchmark([]yieldDailyOverviewEntry{entry}, []time.Time{day1, day2}, prices)
+	if !ok {
+		t.Fatal("expected V1.5 benchmark calculation to succeed")
+	}
+	buy := calcBenchmarkETFBuyTradeForVersion("1.5.0", buyCost, 4)
+	sell := calcBenchmarkETFSellTradeForVersion("1.5.0", buy.Shares, 4.4)
+	wantEndValue := round2(sell.NetAmount + buy.UnusedCash)
+	wantRate := round2((wantEndValue - buyCost) / buyCost * 100)
+	if got := itemRateMap[150]; got != wantRate {
+		t.Fatalf("V1.5 item benchmark rate=%.2f, want %.2f", got, wantRate)
+	}
+	wantEquity := round2(100_000 + wantEndValue - buyCost)
+	if got := series.ValueByDay[day2.Format(time.DateOnly)]; got != wantEquity {
+		t.Fatalf("V1.5 benchmark account equity=%.2f, want %.2f", got, wantEquity)
+	}
+	if got := series.NavByDay[day2.Format(time.DateOnly)]; got != round4(wantEquity/100_000) {
+		t.Fatalf("V1.5 benchmark NAV=%.4f, want %.4f", got, round4(wantEquity/100_000))
 	}
 }
 

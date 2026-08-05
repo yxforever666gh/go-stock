@@ -33,8 +33,9 @@ func latestMarketSummaryAfter(question string, startedAt time.Time) *models.AIRe
 }
 
 func TestRunMarketSummaryOnce(t *testing.T) {
+	requireIntegration(t)
 	if os.Getenv("GO_STOCK_ENABLE_MARKET_SUMMARY_TEST") != "1" {
-		t.Skip("set GO_STOCK_ENABLE_MARKET_SUMMARY_TEST=1 to run")
+		t.Skip("set GO_STOCK_ENABLE_MARKET_SUMMARY_TEST=1 in addition to GO_STOCK_RUN_INTEGRATION=1 to run")
 	}
 
 	dbPath := strings.TrimSpace(os.Getenv("GO_STOCK_DB_PATH"))
@@ -44,7 +45,7 @@ func TestRunMarketSummaryOnce(t *testing.T) {
 
 	setRuntimeEventsEnabled(false)
 	setWebEventHub(nil)
-	db.Init(dbPath)
+	initDatabaseForTest(t, dbPath)
 	db.Dao = db.Dao.Session(&gorm.Session{Logger: gormlogger.Default.LogMode(gormlogger.Silent)})
 	data.InitAnalyzeSentiment()
 	AutoMigrate()
@@ -86,4 +87,13 @@ func TestRunMarketSummaryOnce(t *testing.T) {
 		attempts,
 		int(time.Since(startedAt).Seconds()),
 	)
+}
+
+func TestV150DisablesQuantityDrivenSecondModelRound(t *testing.T) {
+	if shouldRunMarketSummaryModelSupplement("1.5.0") {
+		t.Fatal("V1.5.0 must not start a second model round to manufacture candidates")
+	}
+	if !shouldRunMarketSummaryModelSupplement("1.4.2") {
+		t.Fatal("historical V1.4.2 runtime behavior must remain frozen")
+	}
 }

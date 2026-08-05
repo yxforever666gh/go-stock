@@ -33,6 +33,7 @@ const tableScrollX = 2500
 const strategyCohortRef = ref('all')
 const strategyCohortOptions = [
   { label: 'All', value: 'all' },
+  { label: 'V1.5.0', value: '1.5.0' },
   { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },
   { label: 'V1.4.0', value: '1.4.0' },
@@ -498,6 +499,14 @@ function deleteAiRecommendStocks(id) {
   </n-input-group>
   <div style="margin-top: 8px;">
     <n-text depth="3">当前分层：{{ strategyCohortLabel() }}</n-text>
+    <n-alert
+      v-if="strategyCohortRef === '1.5.0'"
+      type="warning"
+      :show-icon="false"
+      style="margin-top: 8px;"
+    >
+      V1.5.0 已进入生产推荐，收益结论仍处于前向验证中；请同时关注数据健康告警和真实组合净值。
+    </n-alert>
     <n-text depth="3" style="margin-left: 12px;">推荐记录页默认看全量历史；可切换 V1.3.6、V1.3.2 或 V1.3.1 对比不同阶段记录。</n-text>
   </div>
 

@@ -39,8 +39,14 @@ func TestNormalizeStrategyCohortV132Aliases(t *testing.T) {
 		})
 	}
 
-	if marketSummaryCurrentVersion != marketSummaryVersion142 {
-		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion142)
+	if marketSummaryCurrentVersion != marketSummaryVersion150 {
+		t.Fatalf("marketSummaryCurrentVersion = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion150)
+	}
+}
+
+func TestV150NeverEntersLegacyV136Gate(t *testing.T) {
+	if isV136Recommend(models.AiRecommendStocks{SummaryVersion: marketSummaryVersion150}) {
+		t.Fatal("V1.5 backend-owned recommendations must never enter the V1.3.6/V1.4.x repair gate")
 	}
 }
 

@@ -162,6 +162,8 @@ func normalizeAiRecommendStockBaseFields(recommend *models.AiRecommendStocks) {
 	recommend.ExpectedCycle = strings.TrimSpace(recommend.ExpectedCycle)
 	recommend.RecommendStatus = normalizeRecommendStatus(recommend.RecommendStatus)
 	recommend.SummaryVersion = strings.TrimSpace(recommend.SummaryVersion)
+	recommend.StrategyRunID = strings.TrimSpace(recommend.StrategyRunID)
+	recommend.StrategyRuleID = strings.TrimSpace(recommend.StrategyRuleID)
 	recommend.ActivationRuleJSON = strings.TrimSpace(recommend.ActivationRuleJSON)
 	recommend.ActivationRuleVersion = strings.TrimSpace(recommend.ActivationRuleVersion)
 	recommend.ActivationRuleSource = strings.TrimSpace(recommend.ActivationRuleSource)
@@ -305,6 +307,12 @@ func validateAiRecommendStockForSave(recommend *models.AiRecommendStocks, buyMin
 }
 
 func (s *AiRecommendStocksService) CreateAiRecommendStocks(recommend *models.AiRecommendStocks) error {
+	// Preserve the generic API's empty-version input compatibility; normalization
+	// assigns its historical default. Any explicitly requested old cohort is
+	// rejected so callers cannot deliberately append to a frozen release.
+	if recommend != nil && strings.TrimSpace(recommend.SummaryVersion) != "" && isFrozenLegacyStrategyRecord(recommend) {
+		return fmt.Errorf("strategy cohort %s is frozen; new records are not permitted", strings.TrimSpace(recommend.SummaryVersion))
+	}
 	if err := normalizeAiRecommendStockForSave(recommend); err != nil {
 		return err
 	}
@@ -333,6 +341,9 @@ func (s *AiRecommendStocksService) BatchCreateAiRecommendStocks(recommends []*mo
 	for idx, item := range recommends {
 		if item == nil {
 			continue
+		}
+		if strings.TrimSpace(item.SummaryVersion) != "" && isFrozenLegacyStrategyRecord(item) {
+			return fmt.Errorf("strategy cohort %s is frozen; new records are not permitted", strings.TrimSpace(item.SummaryVersion))
 		}
 		if err := normalizeAiRecommendStockForSave(item); err != nil {
 			return fmt.Errorf("第%d条推荐记录不完整: %w", idx+1, err)

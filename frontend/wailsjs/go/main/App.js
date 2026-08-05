@@ -114,10 +114,6 @@ export function GetAiRecommendStocksYieldList(arg1) {
   return window['go']['main']['App']['GetAiRecommendStocksYieldList'](arg1);
 }
 
-export function GetAiRecommendYieldTaskStatus() {
-  return window['go']['main']['App']['GetAiRecommendYieldTaskStatus']();
-}
-
 export function GetAiRecommendYieldDailyOverview(arg1) {
   return window['go']['main']['App']['GetAiRecommendYieldDailyOverview'](arg1);
 }
@@ -130,16 +126,8 @@ export function GetAiRecommendYieldMinuteChart(arg1) {
   return window['go']['main']['App']['GetAiRecommendYieldMinuteChart'](arg1);
 }
 
-export function GetMarketSummaryRunDiagnostics(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryRunDiagnostics'](arg1);
-}
-
-export function GetMarketSummaryEmptyRunCount(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryEmptyRunCount'](arg1);
-}
-
-export function GetMarketSummaryBlockedReasonTop(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryBlockedReasonTop'](arg1);
+export function GetAiRecommendYieldTaskStatus() {
+  return window['go']['main']['App']['GetAiRecommendYieldTaskStatus']();
 }
 
 export function GetConfig() {
@@ -176,6 +164,22 @@ export function GetIndustryMoneyRankSina(arg1, arg2) {
 
 export function GetIndustryRank(arg1, arg2) {
   return window['go']['main']['App']['GetIndustryRank'](arg1, arg2);
+}
+
+export function GetMarketSummaryBlockedReasonTop(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryBlockedReasonTop'](arg1);
+}
+
+export function GetMarketSummaryEmptyRunCount(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryEmptyRunCount'](arg1);
+}
+
+export function GetMarketSummaryProductionDowngradeReasonTop(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryProductionDowngradeReasonTop'](arg1);
+}
+
+export function GetMarketSummaryRunDiagnostics(arg1) {
+  return window['go']['main']['App']['GetMarketSummaryRunDiagnostics'](arg1);
 }
 
 export function GetMoneyRankSina(arg1) {

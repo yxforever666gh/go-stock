@@ -250,7 +250,7 @@ func TestMergeAggregateYieldStateWithRecordStates_PreferActivatedRecordState(t *
 }
 
 func TestBuildYieldRecordStateFromRecommendClearsInvalidExistingSell(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-state-sanity.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-state-sanity.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate stock basic failed: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestParseRecommendEntryRange_PrefersTextRangeWhenStructuredValueCollapsed(t
 }
 
 func TestBuildYieldRecordStateFromRecommend_UsesTextRangeWhenStructuredValueCollapsed(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-state-text-range.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-state-text-range.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate stock basic failed: %v", err)
 	}
@@ -432,7 +432,7 @@ func TestBuildYieldRecordStateFromRecommend_SkipWhenRecommendStatusAvoid(t *test
 }
 
 func TestBuildYieldRecordStateFromRecommend_BeforeCutoffInsufficientEvidenceWithoutObservationNotSkipped(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-state-before-cutoff-insufficient-evidence.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-state-before-cutoff-insufficient-evidence.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate stock basic failed: %v", err)
 	}
@@ -494,15 +494,15 @@ func TestBuildYieldRecordStateFromRecommend_BeforeCutoffInsufficientEvidenceWith
 }
 
 func TestSyncRecommendActivationStatusFromRecordStates(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-sync-recommend-activation.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-sync-recommend-activation.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
 
 	rows := []models.AiRecommendStocks{
-		{ActivationStatus: "pending", ActivationInvalidReason: "旧原因"},
-		{ActivationStatus: "pending", ActivationInvalidReason: "应清空"},
-		{ActivationStatus: "pending", ActivationInvalidReason: "应保留为空"},
+		{SummaryVersion: marketSummaryVersion150, ActivationStatus: "pending", ActivationInvalidReason: "旧原因"},
+		{SummaryVersion: marketSummaryVersion150, ActivationStatus: "pending", ActivationInvalidReason: "应清空"},
+		{SummaryVersion: marketSummaryVersion150, ActivationStatus: "pending", ActivationInvalidReason: "应保留为空"},
 	}
 	for i := range rows {
 		if err := db.Dao.Create(&rows[i]).Error; err != nil {
@@ -679,7 +679,7 @@ func TestApplyStrictPendingStateToYieldItem_RecordDirtyOverridesOnlyMatchingReco
 }
 
 func TestMarkActivationWindowPolicyBugDirtyCodes_UsesRecordLevelDirty(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-record-level-dirty.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-record-level-dirty.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -688,6 +688,7 @@ func TestMarkActivationWindowPolicyBugDirtyCodes_UsesRecordLevelDirty(t *testing
 	readyTime := time.Date(2026, 6, 1, 11, 30, 0, 0, loc)
 	staleTime := time.Date(2026, 4, 22, 11, 30, 0, 0, loc)
 	readyRec := models.AiRecommendStocks{
+		SummaryVersion:       marketSummaryVersion150,
 		StockCode:            "688017.SH",
 		StockName:            "绿的谐波",
 		DataTime:             &readyTime,
@@ -699,6 +700,7 @@ func TestMarkActivationWindowPolicyBugDirtyCodes_UsesRecordLevelDirty(t *testing
 		t.Fatalf("seed ready recommend failed: %v", err)
 	}
 	staleRec := models.AiRecommendStocks{
+		SummaryVersion:       marketSummaryVersion150,
 		StockCode:            "688017.SH",
 		StockName:            "绿的谐波",
 		DataTime:             &staleTime,
@@ -761,12 +763,13 @@ func TestMarkActivationWindowPolicyBugDirtyCodes_UsesRecordLevelDirty(t *testing
 }
 
 func TestUpsertYieldRecordStates_ClearsDirtyForTerminalRecordStates(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-clear-dirty-terminal.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-clear-dirty-terminal.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}, &models.AiRecommendYieldDirtyCode{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
 
 	rec := models.AiRecommendStocks{
+		SummaryVersion:     marketSummaryVersion150,
 		StockCode:          "002328.SZ",
 		StockName:          "新朋股份",
 		ActivationStatus:   "pending",

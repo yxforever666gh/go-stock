@@ -1,7 +1,6 @@
 package data
 
 import (
-	"go-stock/backend/db"
 	"testing"
 )
 
@@ -11,7 +10,7 @@ import (
 // -----------------------------------------------------------------------------------
 func TestGetDaily(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	tushareApi := NewTushareApi(GetSettingConfig())
 	res := tushareApi.GetDaily("00927.HK", "20250101", "20250217", 30)
 	t.Log(res)
@@ -20,7 +19,7 @@ func TestGetDaily(t *testing.T) {
 
 func TestGetUSDaily(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	tushareApi := NewTushareApi(GetSettingConfig())
 
 	res := tushareApi.GetDaily("gb_AAPL", "20250101", "20250217", 30)

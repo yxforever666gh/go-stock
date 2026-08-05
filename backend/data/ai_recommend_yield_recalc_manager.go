@@ -1,10 +1,12 @@
 package data
 
 import (
+	"errors"
 	"fmt"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 	"sort"
 	"strings"
 	"sync"
@@ -372,7 +374,7 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 		markAiRecommendYieldRecalcError(runtime.meta.ID, err)
 		return err
 	}
-	if len(targets.aggrMap) == 0 && len(targets.records) == 0 {
+	if len(targets.records) == 0 {
 		err = clearAiRecommendYieldSnapshots(runtime.meta.ID)
 		if err != nil {
 			markAiRecommendYieldRecalcError(runtime.meta.ID, err)
@@ -380,11 +382,11 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 		return err
 	}
 
-	writer := newAiRecommendYieldSnapshotWriter(runtime.meta.ID, len(targets.targetCodes)+len(targets.targetRecords)+1)
+	writer := newAiRecommendYieldSnapshotWriter(runtime.meta.ID, len(targets.targetRecords)+1)
 	if writer.recalcTotal > 0 {
 		_ = updateYieldRecalcProgress(runtime.meta.ID, writer.recalcDone, writer.recalcTotal)
 	}
-	if len(targets.targetCodes) == 0 && len(targets.targetRecords) == 0 {
+	if len(targets.targetRecords) == 0 {
 		return nil
 	}
 
@@ -427,12 +429,10 @@ func rebuildAiRecommendYieldSnapshot(force bool, reason string, scope map[string
 	}
 
 	fullRecalc := isFullAiRecommendYieldRecalc(force, scope, targets)
-	if fullRecalc {
-		if err = cleanupAiRecommendYieldSnapshots(targets.allCodes, targets.allRecordIDs); err != nil {
-			markAiRecommendYieldRecalcError(runtime.meta.ID, err)
-			return err
-		}
-	}
+	// ai_recommend_yield_state is keyed only by stock code and therefore cannot
+	// isolate strategy versions. It is a frozen legacy aggregate in 1.5.0: do
+	// not update or prune it. V1.5 performance is persisted only in per-record
+	// states and the immutable strategy portfolio/event tables.
 	if reason == "manual_minute_download" {
 		runtime.manualDownloadWarning = buildManualDownloadCoverageWarning(runtime.meta, 5)
 	}
@@ -693,25 +693,27 @@ func buildAiRecommendYieldRecalcRuntime(meta *models.AiRecommendYieldMeta, now t
 func loadAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, scope map[string]struct{}, force bool) (*aiRecommendYieldTargets, error) {
 	coverableStart := minuteCoverableStartMinute(runtime.latestDate)
 
-	aggrMap, err := loadAiRecommendYieldAggregatesAfter(coverableStart)
-	if err != nil {
-		return nil, err
-	}
 	records, err := loadAiRecommendYieldRecordsAfter(coverableStart)
 	if err != nil {
 		return nil, err
 	}
-	existingMap, err := loadExistingYieldStateMap()
-	if err != nil {
-		return nil, err
-	}
+	// The aggregate table has no SummaryVersion column. Keep it frozen and do
+	// not even construct aggregate recalculation tasks for 1.5.0.
+	aggrMap := map[string]*aiRecommendYieldAggregate{}
+	existingMap := map[string]*models.AiRecommendYieldState{}
 	existingRecordMap, err := loadExistingYieldRecordStateMap()
 	if err != nil {
 		return nil, err
 	}
 
-	allCodes := make([]string, 0, len(aggrMap))
-	for code := range aggrMap {
+	allCodeSet := make(map[string]struct{}, len(records))
+	for _, rec := range records {
+		if code := normalizeRecommendStockCode(rec.StockCode); code != "" {
+			allCodeSet[code] = struct{}{}
+		}
+	}
+	allCodes := make([]string, 0, len(allCodeSet))
+	for code := range allCodeSet {
 		allCodes = append(allCodes, code)
 	}
 	sort.Strings(allCodes)
@@ -720,7 +722,11 @@ func loadAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, scope m
 	targetRecords := buildRecalcTargetRecords(records, scope, force)
 
 	if runtime.ctx.Reason != "manual_minute_download" {
-		priceMap, priceTimeMap := fetchCurrentPriceMapFn(aggrMap)
+		quoteScope := make(map[string]*aiRecommendYieldAggregate, len(allCodes))
+		for _, code := range allCodes {
+			quoteScope[code] = &aiRecommendYieldAggregate{StockCode: code}
+		}
+		priceMap, priceTimeMap := fetchCurrentPriceMapFn(quoteScope)
 		runtime.ctx.CurrentPriceMap = priceMap
 		runtime.ctx.CurrentPriceTimeMap = priceTimeMap
 	}
@@ -738,15 +744,8 @@ func loadAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, scope m
 }
 
 func clearAiRecommendYieldSnapshots(metaID uint) error {
-	if err := db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendYieldState{}).Error; err != nil {
-		return err
-	}
-	if err := db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendYieldRecordState{}).Error; err != nil {
-		return err
-	}
-	if err := db.Dao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&models.AiRecommendMinuteBar{}).Error; err != nil {
-		return err
-	}
+	// Empty V1.5 input is not permission to erase frozen 1.4.2 snapshots or
+	// shared market-data caches.
 	return updateYieldRecalcProgress(metaID, 0, 0)
 }
 
@@ -902,6 +901,70 @@ func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targ
 	if len(tasks) == 0 {
 		return nil
 	}
+	legacyTasks, v150Records := splitAiRecommendYieldCalcTasksByVersion(tasks)
+	if len(legacyTasks) > 0 {
+		if err := processAiRecommendYieldCalcTasksConcurrently(legacyTasks, runtime.ctx, writer); err != nil {
+			return err
+		}
+	}
+	if len(v150Records) > 0 {
+		return processMarketSummaryV150RecordsInEventOrder(v150Records, runtime.ctx, writer)
+	}
+	return nil
+}
+
+type marketSummaryV150ScheduledRecord struct {
+	record       models.AiRecommendStocks
+	existing     *models.AiRecommendYieldRecordState
+	rank         int
+	ruleID       string
+	checkpoints  []time.Time
+	runtimeState *models.AiRecommendYieldRecordState
+	terminal     bool
+}
+
+type marketSummaryV150ScheduledStep struct {
+	at     time.Time
+	record *marketSummaryV150ScheduledRecord
+}
+
+// Both the independent execution monitor and legacy yield-refresh entrypoints
+// reuse the same V1.5 event replay. Serialize the complete timeline (not only
+// individual fills) so concurrent UI refreshes can never interleave ranks or
+// observe a partially processed portfolio.
+var marketSummaryV150EventReplayMu sync.Mutex
+
+func splitAiRecommendYieldCalcTasksByVersion(tasks []aiRecommendYieldCalcTask) ([]aiRecommendYieldCalcTask, []*marketSummaryV150ScheduledRecord) {
+	legacy := make([]aiRecommendYieldCalcTask, 0, len(tasks))
+	v150Records := make([]*marketSummaryV150ScheduledRecord, 0)
+	for _, task := range tasks {
+		legacyRecords := make([]models.AiRecommendStocks, 0, len(task.Records))
+		for _, record := range task.Records {
+			if strings.TrimSpace(record.SummaryVersion) == marketSummaryVersion150 {
+				v150Records = append(v150Records, &marketSummaryV150ScheduledRecord{
+					record:   record,
+					existing: task.ExistingRecord[record.ID],
+					rank:     int(^uint(0) >> 1),
+					ruleID:   strings.TrimSpace(record.StrategyRuleID),
+				})
+				continue
+			}
+			legacyRecords = append(legacyRecords, record)
+		}
+		if len(legacyRecords) == 0 && task.Aggregate == nil {
+			continue
+		}
+		legacyTask := task
+		legacyTask.Records = legacyRecords
+		legacy = append(legacy, legacyTask)
+	}
+	return legacy, v150Records
+}
+
+func processAiRecommendYieldCalcTasksConcurrently(tasks []aiRecommendYieldCalcTask, ctx yieldBuildContext, writer *aiRecommendYieldSnapshotWriter) error {
+	if len(tasks) == 0 {
+		return nil
+	}
 
 	workerCount := yieldCalcWorkerCount()
 	if workerCount > len(tasks) {
@@ -943,7 +1006,7 @@ func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targ
 		go func() {
 			defer wg.Done()
 			for task := range taskCh {
-				resultCh <- executeAiRecommendYieldCalcTaskWithTimeout(task, runtime.ctx)
+				resultCh <- executeAiRecommendYieldCalcTaskWithTimeout(task, ctx)
 			}
 		}()
 	}
@@ -956,6 +1019,353 @@ func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targ
 	close(resultCh)
 
 	return <-writerDoneCh
+}
+
+// processMarketSummaryV150RecordsInEventOrder replays every possible portfolio
+// mutation on a single deterministic timeline. A record is revisited only at
+// completed 15-minute bars from its prospective/existing entry onward. This
+// keeps exit and entry events globally ordered while avoiding the legacy
+// per-symbol worker fan-out that can admit two fills from the same stale state.
+func processMarketSummaryV150RecordsInEventOrder(records []*marketSummaryV150ScheduledRecord, ctx yieldBuildContext, writer *aiRecommendYieldSnapshotWriter) error {
+	if len(records) == 0 {
+		return nil
+	}
+	marketSummaryV150EventReplayMu.Lock()
+	defer marketSummaryV150EventReplayMu.Unlock()
+	loadMarketSummaryV150ExecutionRanks(records)
+	sortMarketSummaryV150ScheduledRecords(records)
+	onlineEventReplay := !ctx.DisableMinuteFetch
+	var observationErr error
+	if onlineEventReplay {
+		// Provider/cache I/O is completed before the deterministic checkpoint
+		// loop. Append only a real observation for the wall-clock execution day;
+		// historical checkpoints are never backdated and therefore remain
+		// fail-closed when their own day has no frozen observation.
+		observationFailures := refreshMarketSummaryV150CurrentExecutionDayObservations(records, ctx)
+		if ctx.FailOnV150ObservationRefreshError && len(observationFailures) > 0 {
+			observationErr = newMarketSummaryV150ExecutionObservationError(observationFailures)
+			eligible := make([]*marketSummaryV150ScheduledRecord, 0, len(records)-len(observationFailures))
+			for _, scheduled := range records {
+				if scheduled == nil {
+					continue
+				}
+				symbol := normalizeRecommendStockCode(scheduled.record.StockCode)
+				if _, failed := observationFailures[symbol]; failed {
+					continue
+				}
+				eligible = append(eligible, scheduled)
+			}
+			records = eligible
+		}
+	}
+
+	checkpoints := make(map[int64][]*marketSummaryV150ScheduledRecord)
+	checkpointTimes := make([]time.Time, 0)
+	for _, record := range records {
+		record.checkpoints = buildMarketSummaryV150RecordCheckpoints(record.record, ctx)
+		for _, checkpoint := range record.checkpoints {
+			key := checkpoint.UnixNano()
+			if _, exists := checkpoints[key]; !exists {
+				checkpointTimes = append(checkpointTimes, checkpoint)
+			}
+			checkpoints[key] = append(checkpoints[key], record)
+		}
+	}
+	for _, step := range orderMarketSummaryV150ScheduledSteps(checkpointTimes, checkpoints) {
+		checkpoint := step.at
+		scheduled := step.record
+		stepCtx := ctx
+		stepCtx.Now = checkpoint
+		stepCtx.V150EvaluationCutoff = checkpoint
+		stepCtx.LatestTradeDate = normalizeDailyTradeDate(checkpoint)
+		stepCtx.InTradingSession = isCNTradingSession(checkpoint.In(cnLocation()))
+		stepCtx.Force = true
+		stepCtx.DisableMinuteFetch = true
+		stepCtx.RequireV150ExecutionObservation = ctx.RequireV150ExecutionObservation || onlineEventReplay
+		if scheduled == nil || scheduled.terminal {
+			continue
+		}
+		state := buildYieldRecordStateFromRecommend(scheduled.record, scheduled.effectiveExisting(), stepCtx)
+		scheduled.setRuntimeState(state)
+		scheduled.terminal = isMarketSummaryV150TerminalRecordState(state)
+	}
+
+	// Rebuild the materialized projection once at the requested final cutoff.
+	// All event-producing bars were already processed above in causal order, so
+	// these calls are idempotent and cannot reorder portfolio admission.
+	finalCtx := ctx
+	finalCtx.Force = true
+	finalCtx.DisableMinuteFetch = true
+	finalCtx.RequireV150ExecutionObservation = ctx.RequireV150ExecutionObservation || onlineEventReplay
+	for _, scheduled := range records {
+		state := buildYieldRecordStateFromRecommend(scheduled.record, scheduled.effectiveExisting(), finalCtx)
+		if err := writer.AppendRecordState(state); err != nil {
+			return err
+		}
+	}
+	return observationErr
+}
+
+// refreshMarketSummaryV150CurrentExecutionDayObservations is the online I/O
+// boundary for the serial event-order replay. It deliberately observes only
+// the actual current CN execution day. A historical recalculation may consume
+// an already-frozen observation but can never manufacture one retroactively.
+func refreshMarketSummaryV150CurrentExecutionDayObservations(records []*marketSummaryV150ScheduledRecord, ctx yieldBuildContext) map[string]error {
+	result := make(map[string]error)
+	if ctx.DisableMinuteFetch || ctx.Now.IsZero() {
+		return result
+	}
+	wallClockNow := marketSummaryV150ExecutionSecurityNow().In(cnLocation())
+	executionDay := normalizeDailyTradeDate(ctx.Now)
+	if wallClockNow.IsZero() || executionDay.IsZero() || !executionDay.Equal(normalizeDailyTradeDate(wallClockNow)) || !isCNOpenTradeDaySafe(executionDay) {
+		return result
+	}
+	attempted := make(map[string]struct{}, len(records))
+	for _, scheduled := range records {
+		if scheduled == nil {
+			continue
+		}
+		if !ctx.FailOnV150ObservationRefreshError {
+			if existing := scheduled.effectiveExisting(); existing != nil && isMarketSummaryV150TerminalRecordState(*existing) {
+				continue
+			}
+		}
+		symbol := normalizeRecommendStockCode(scheduled.record.StockCode)
+		if symbol == "" || strings.TrimSpace(scheduled.record.StrategyRunID) == "" {
+			continue
+		}
+		if _, duplicate := attempted[symbol]; duplicate {
+			continue
+		}
+		attempted[symbol] = struct{}{}
+		var observationErrors []error
+		if _, err := refreshMarketSummaryV150ExecutionSecurityObservation(scheduled.record.StrategyRunID, symbol, true); err != nil {
+			observationErrors = append(observationErrors, err)
+			logErrorEvery(
+				"market-summary-v150-execution-security-"+symbol,
+				5*time.Minute,
+				"v1.5 execution security observation failed: symbol=%s executionDay=%s err=%v",
+				symbol,
+				executionDay.Format(time.DateOnly),
+				err,
+			)
+		}
+		if _, err := refreshMarketSummaryV150CorporateActionObservation(scheduled.record.StrategyRunID, symbol, executionDay, true); err != nil {
+			observationErrors = append(observationErrors, err)
+			logErrorEvery(
+				"market-summary-v150-corporate-action-"+symbol,
+				5*time.Minute,
+				"v1.5 corporate action observation failed: symbol=%s executionDay=%s err=%v",
+				symbol,
+				executionDay.Format(time.DateOnly),
+				err,
+			)
+		}
+		if len(observationErrors) > 0 {
+			result[symbol] = errors.Join(observationErrors...)
+		}
+	}
+	return result
+}
+
+func orderMarketSummaryV150ScheduledSteps(checkpointTimes []time.Time, checkpoints map[int64][]*marketSummaryV150ScheduledRecord) []marketSummaryV150ScheduledStep {
+	times := append([]time.Time(nil), checkpointTimes...)
+	sort.Slice(times, func(i, j int) bool { return times[i].Before(times[j]) })
+	steps := make([]marketSummaryV150ScheduledStep, 0)
+	for _, checkpoint := range times {
+		batch := append([]*marketSummaryV150ScheduledRecord(nil), checkpoints[checkpoint.UnixNano()]...)
+		sortMarketSummaryV150ScheduledRecords(batch)
+		for _, record := range batch {
+			steps = append(steps, marketSummaryV150ScheduledStep{at: checkpoint, record: record})
+		}
+	}
+	return steps
+}
+
+func (record *marketSummaryV150ScheduledRecord) effectiveExisting() *models.AiRecommendYieldRecordState {
+	if record == nil {
+		return nil
+	}
+	if record.runtimeState != nil {
+		return record.runtimeState
+	}
+	return record.existing
+}
+
+func (record *marketSummaryV150ScheduledRecord) setRuntimeState(state models.AiRecommendYieldRecordState) {
+	if record == nil {
+		return
+	}
+	copyState := state
+	record.runtimeState = &copyState
+}
+
+func isMarketSummaryV150TerminalRecordState(state models.AiRecommendYieldRecordState) bool {
+	if state.Frozen || isSoldPositionStatus(state.PositionStatus) {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(state.ActivationStatus)) {
+	case "skipped", "expired", "invalid", "ineligible":
+		return true
+	default:
+		return false
+	}
+}
+
+func sortMarketSummaryV150ScheduledRecords(records []*marketSummaryV150ScheduledRecord) {
+	sort.SliceStable(records, func(i, j int) bool {
+		left, right := records[i], records[j]
+		if left == nil || right == nil {
+			return right == nil
+		}
+		if left.rank != right.rank {
+			return left.rank < right.rank
+		}
+		if left.ruleID != right.ruleID {
+			return left.ruleID < right.ruleID
+		}
+		leftCode := normalizeRecommendStockCode(left.record.StockCode)
+		rightCode := normalizeRecommendStockCode(right.record.StockCode)
+		if leftCode != rightCode {
+			return leftCode < rightCode
+		}
+		return left.record.ID < right.record.ID
+	})
+}
+
+func loadMarketSummaryV150ExecutionRanks(records []*marketSummaryV150ScheduledRecord) {
+	if db.Dao == nil || len(records) == 0 || !db.Dao.Migrator().HasTable(&models.RuleSnapshot{}) || !db.Dao.Migrator().HasTable(&models.CandidateSnapshot{}) {
+		return
+	}
+	ruleIDs := make([]string, 0, len(records))
+	byRule := make(map[string]*marketSummaryV150ScheduledRecord, len(records))
+	for _, record := range records {
+		if record == nil || record.ruleID == "" {
+			continue
+		}
+		ruleIDs = append(ruleIDs, record.ruleID)
+		byRule[record.ruleID] = record
+	}
+	if len(ruleIDs) == 0 {
+		return
+	}
+	type rankRow struct {
+		RuleID string
+		Rank   int
+	}
+	rows := make([]rankRow, 0, len(ruleIDs))
+	if err := db.Dao.Table("strategy_rule_snapshot AS r").
+		Select("r.rule_id AS rule_id, c.rank AS rank").
+		Joins("LEFT JOIN strategy_candidate_snapshot AS c ON c.candidate_id = r.candidate_id AND c.run_id = r.run_id").
+		Where("r.rule_id IN ? AND r.strategy_version = ? AND r.frozen_at IS NOT NULL", ruleIDs, marketSummaryVersion150).
+		Scan(&rows).Error; err != nil {
+		return
+	}
+	for _, row := range rows {
+		if record := byRule[strings.TrimSpace(row.RuleID)]; record != nil && row.Rank > 0 {
+			record.rank = row.Rank
+		}
+	}
+}
+
+func buildMarketSummaryV150RecordCheckpoints(record models.AiRecommendStocks, ctx yieldBuildContext) []time.Time {
+	frozen, err := loadMarketSummaryV150FrozenExecutionPlan(record)
+	if err != nil {
+		return nil
+	}
+	evaluatedThrough := marketSummaryV150ExecutionEvaluatedThrough(ctx)
+	if evaluatedThrough.IsZero() || !evaluatedThrough.After(frozen.Plan.ValidFromAt) {
+		return nil
+	}
+	windowStart := frozen.Plan.ValidFromAt.AddDate(0, 0, -30)
+	code := normalizeRecommendStockCode(record.StockCode)
+	var raw []minuteBar
+	if ctx.DisableMinuteFetch {
+		raw, _ = syncMinuteBarsFromCacheOnly(code, windowStart, evaluatedThrough)
+	} else {
+		raw, _ = syncMinuteBars(code, windowStart, evaluatedThrough, ctx.CrawlTimeout, false)
+	}
+	bars, _ := buildMarketSummaryV150CompletedBars(raw, evaluatedThrough, frozen.Plan.ValidFromAt)
+	if len(bars) == 0 {
+		return nil
+	}
+
+	startIndex := marketSummaryV150ExistingEntryBarIndex(frozen.Rule.RuleID, bars, evaluatedThrough)
+	if startIndex < 0 {
+		startIndex = marketSummaryV150ProspectiveEntryBarIndex(frozen.Plan, bars)
+	}
+	if startIndex < 0 || startIndex >= len(bars) {
+		return nil
+	}
+
+	checkpoints := make([]time.Time, 0, len(bars)-startIndex)
+	seenDay := make(map[string]struct{})
+	for index := startIndex; index < len(bars); index++ {
+		bar := bars[index]
+		if bar.End.IsZero() {
+			continue
+		}
+		// v150.Bar.End is the final nanosecond inside the interval, while the
+		// minute cache normalizes an evaluation cutoff to whole minutes. Replay
+		// at the exclusive completion boundary so the just-completed bar is
+		// visible (for example, the 10:00 bar becomes eligible at 10:15, not at
+		// 10:14 after cutoff normalization).
+		completedAt := bar.End.Add(time.Nanosecond)
+		if completedAt.After(evaluatedThrough) {
+			continue
+		}
+		checkpoints = append(checkpoints, completedAt)
+		if !ctx.DisableMinuteFetch {
+			dayKey := bar.Start.In(cnLocation()).Format(time.DateOnly)
+			if _, loaded := seenDay[dayKey]; !loaded {
+				_, _ = loadMarketSummaryV150PreviousClose(code, bar.Start, true)
+				seenDay[dayKey] = struct{}{}
+			}
+		}
+	}
+	return checkpoints
+}
+
+func marketSummaryV150ExistingEntryBarIndex(ruleID string, bars []v150.Bar, evaluatedThrough time.Time) int {
+	if db.Dao == nil || strings.TrimSpace(ruleID) == "" || !db.Dao.Migrator().HasTable(&models.OrderEvent{}) {
+		return -1
+	}
+	var event models.OrderEvent
+	if err := db.Dao.Where("rule_id = ? AND strategy_version = ? AND event_type = ? AND event_at <= ? AND frozen_at IS NOT NULL", strings.TrimSpace(ruleID), marketSummaryVersion150, string(v150.EventFill), evaluatedThrough).
+		Order("event_at ASC, sequence ASC, event_id ASC").First(&event).Error; err != nil {
+		return -1
+	}
+	for index := range bars {
+		if !bars[index].Start.Before(event.EventAt) {
+			return index
+		}
+	}
+	return -1
+}
+
+func marketSummaryV150ProspectiveEntryBarIndex(plan v150.TradePlan, bars []v150.Bar) int {
+	state := v150.ActivationState{}
+	var previous v150.Bar
+	for index := range bars {
+		bar := bars[index]
+		if bar.Start.Before(plan.ValidFromAt) {
+			previous = bar
+			continue
+		}
+		signal, nextState := v150.DetectActivation(plan, previous, bar, state)
+		state = nextState
+		if signal.Reason == v150.RejectActivationExpired {
+			return -1
+		}
+		if signal.Triggered {
+			if index+1 < len(bars) {
+				return index + 1
+			}
+			return -1
+		}
+		previous = bar
+	}
+	return -1
 }
 
 func executeAiRecommendYieldCalcTaskWithTimeout(task aiRecommendYieldCalcTask, ctx yieldBuildContext) aiRecommendYieldCalcResult {
@@ -1305,13 +1715,12 @@ func prefetchAiRecommendMinuteCoverage(runtime *aiRecommendYieldRecalcRuntime, t
 }
 
 func cleanupAiRecommendYieldSnapshots(allCodes []string, allRecordIDs []uint) error {
-	if err := cleanRemovedYieldStates(allCodes); err != nil {
-		return err
-	}
-	if err := cleanRemovedYieldRecordStates(allRecordIDs); err != nil {
-		return err
-	}
-	return cleanMinuteCacheForTrackedCodes(allCodes)
+	// Versionless aggregate rows and legacy record states are frozen. Deleting
+	// stale V1.5 record states will require a versioned state schema; until then
+	// retaining an orphan is safer than deleting historical data.
+	_ = allCodes
+	_ = allRecordIDs
+	return nil
 }
 
 func markAiRecommendYieldRecalcError(metaID uint, err error) {

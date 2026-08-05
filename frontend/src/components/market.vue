@@ -78,7 +78,6 @@ const nowTab = ref('市场快讯')
 const indexInterval = ref(null)
 const indexIndustryRank = ref(null)
 const stockCode = ref('')
-const enableTools = ref(true)
 const thinkingMode = ref(true)
 const summaryCronEnabled = ref(true)
 const summaryCronTimes = ref('09:40,11:30,14:30')
@@ -273,7 +272,7 @@ async function submitMarketSummary(questionText) {
   setDraftQuestion(normalizedQuestion, false)
   setLastSummaryQuestion(normalizedQuestion)
   try {
-    await SummaryStockNews(normalizedQuestion, aiConfigId.value, sysPromptId.value, enableTools.value, thinkingMode.value)
+    await SummaryStockNews(normalizedQuestion, aiConfigId.value, sysPromptId.value, true, thinkingMode.value)
   } catch (err) {
     summaryRunning.value = false
     loading.value = false
@@ -729,15 +728,12 @@ onBeforeUnmount(() => {
         <n-text depth="2">{{ summaryStatusText }}</n-text>
       </n-flex>
       <n-flex justify="left" style="margin-bottom: 10px">
-        <n-switch v-model:value="enableTools" :round="false">
-          <template #checked>启用AI函数工具调用</template>
-          <template #unchecked>不启用AI函数工具调用</template>
-        </n-switch>
+        <n-tag :bordered="false" type="success">V1.5 后端证据链已强制启用</n-tag>
         <n-switch v-model:value="thinkingMode" :round="false">
           <template #checked>启用思考模式</template>
           <template #unchecked>不启用思考模式</template>
         </n-switch>
-        <n-gradient-text type="error" style="margin-left: 10px">*AI函数工具调用可以增强AI获取数据的能力,但会消耗更多tokens。</n-gradient-text>
+        <n-gradient-text type="error" style="margin-left: 10px">*候选、证据、排序和交易计划必须经过后端冻结链路；失败时不会回退旧版文本解析。</n-gradient-text>
         <n-tag :bordered="false" type="info">{{ summaryOutputHint }}</n-tag>
       </n-flex>
       <n-flex justify="space-between" style="margin-bottom: 10px">

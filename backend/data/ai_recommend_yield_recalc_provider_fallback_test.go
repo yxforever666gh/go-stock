@@ -42,7 +42,7 @@ func TestFetchMinuteBarsFromProviders_PublicHistoricalWindowReturnsGuidanceError
 
 func TestFetchMinuteBarsFromProviders_PublicHistoricalWindowFallsBackToDiemengWhenPrivateConfigured(t *testing.T) {
 	appconfig.ResetRuntimeOverride()
-	db.Init(filepath.Join(t.TempDir(), "yield-public-historical-private-fallback.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-public-historical-private-fallback.db"))
 	if err := db.Dao.AutoMigrate(&Settings{}, &AIConfig{}); err != nil {
 		t.Fatalf("auto migrate settings failed: %v", err)
 	}

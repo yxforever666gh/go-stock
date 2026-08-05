@@ -20,7 +20,7 @@ func TestNewRealtimeRestyClientDisablesProxy(t *testing.T) {
 }
 
 func TestNewFetchRestyClientDisablesProxyWhenForced(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "proxy-force.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-force.db"))
 	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
 		t.Fatalf("migrate settings failed: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestNewFetchRestyClientDisablesProxyWhenForced(t *testing.T) {
 }
 
 func TestNewFetchRestyClientUsesSettingsProxyWhenForceDisabled(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "proxy-enabled.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-enabled.db"))
 	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
 		t.Fatalf("migrate settings failed: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestNewFetchRestyClientUsesSettingsProxyWhenForceDisabled(t *testing.T) {
 }
 
 func TestNewSettingsProxyRestyClientIfConfiguredUsesProxy(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "proxy-settings-only.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-settings-only.db"))
 	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
 		t.Fatalf("migrate settings failed: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestNewSettingsProxyRestyClientIfConfiguredUsesProxy(t *testing.T) {
 func TestDataFetchClientsDisableProxyByDefault(t *testing.T) {
 	t.Setenv("GO_STOCK_DIEMENG_PROXY_MODE", "")
 	t.Setenv("GO_STOCK_AKSHARE_PROXY_MODE", "")
-	db.Init(filepath.Join(t.TempDir(), "proxy-test.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-test.db"))
 
 	stockAPI := NewStockDataApi()
 	assertRestyProxyDisabled(t, stockAPI.client)
@@ -126,12 +126,14 @@ func TestDiemengEffectiveBaseURLUsesDataHostWithoutMohomoparty(t *testing.T) {
 }
 
 func TestDiemengEffectiveBaseURLKeepsConfiguredHostWithMohomopartyProxy(t *testing.T) {
-	t.Setenv("HTTPS_PROXY", "http://mohomoparty:7890")
 	t.Setenv("HTTP_PROXY", "")
 	t.Setenv("ALL_PROXY", "")
 	t.Setenv("http_proxy", "")
 	t.Setenv("https_proxy", "")
 	t.Setenv("all_proxy", "")
+	// Windows treats environment-variable names case-insensitively, so set the
+	// value after clearing both spellings above.
+	t.Setenv("HTTPS_PROXY", "http://mohomoparty:7890")
 	appconfig.ResetRuntimeOverride()
 	t.Cleanup(appconfig.ResetRuntimeOverride)
 

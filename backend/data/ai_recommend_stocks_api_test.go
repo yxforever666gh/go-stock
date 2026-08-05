@@ -1035,7 +1035,7 @@ func TestCreateAiRecommendStocksRejectsSameDayDuplicateStock(t *testing.T) {
 		requestAiRecommendYieldScopedRecalcForMutationFn = prevRequestRecalc
 	})
 
-	db.Init(filepath.Join(t.TempDir(), "ai-recommend-daily-duplicate.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "ai-recommend-daily-duplicate.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -1084,7 +1084,7 @@ func TestBatchCreateAiRecommendStocksRejectsSameDayDuplicateStockInBatch(t *test
 		requestAiRecommendYieldScopedRecalcForMutationFn = prevRequestRecalc
 	})
 
-	db.Init(filepath.Join(t.TempDir(), "ai-recommend-batch-duplicate.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "ai-recommend-batch-duplicate.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

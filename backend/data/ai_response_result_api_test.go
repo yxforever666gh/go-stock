@@ -1,7 +1,6 @@
 package data
 
 import (
-	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"testing"
 )
@@ -12,7 +11,8 @@ import (
 //-----------------------------------------------------------------------------------
 
 func TestAIResponseResultService_GetAIResponseResultList(t *testing.T) {
-	db.Init("../../data/stock.db")
+	requireIntegration(t)
+	initDatabaseForTest(t, "../../data/stock.db")
 	service := NewAIResponseResultService()
 	list, err := service.GetAIResponseResultList(models.AIResponseResultQuery{
 		Page:     1,

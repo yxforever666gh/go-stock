@@ -1,6 +1,7 @@
 package data
 
 import (
+	"fmt"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"strings"
@@ -17,6 +18,9 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksByID(id uint) (*models.Ai
 
 // UpdateAiRecommendStocks 更新AI推荐股票记录
 func (s *AiRecommendStocksService) UpdateAiRecommendStocks(id uint, recommend *models.AiRecommendStocks) error {
+	if err := validateRecommendationUpdate(id, recommend); err != nil {
+		return err
+	}
 	existingCodes := loadRecommendScopeCodesByIDs([]uint{id})
 	result := db.Dao.Model(&models.AiRecommendStocks{}).Where("id = ?", id).Updates(recommend)
 	if result.Error == nil {
@@ -33,8 +37,51 @@ func (s *AiRecommendStocksService) UpdateAiRecommendStocks(id uint, recommend *m
 	return result.Error
 }
 
+func validateRecommendationUpdate(id uint, update *models.AiRecommendStocks) error {
+	if id == 0 {
+		return nil
+	}
+	var current models.AiRecommendStocks
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Select("id", "summary_version", "execution_state", "recommend_status").
+		First(&current, id).Error; err != nil {
+		return err
+	}
+	if isFrozenLegacyStrategyRecord(&current) {
+		return fmt.Errorf("strategy cohort %s is frozen; recommendation %d is read-only", strings.TrimSpace(current.SummaryVersion), current.ID)
+	}
+	if update == nil {
+		return nil
+	}
+	if version := strings.TrimSpace(update.SummaryVersion); version != "" && version != strings.TrimSpace(current.SummaryVersion) {
+		return fmt.Errorf("summary_version is immutable: %s -> %s", strings.TrimSpace(current.SummaryVersion), version)
+	}
+	if isAnalysisOnlyRecommend(&current) {
+		// GORM's struct Updates keeps zero-value fields unchanged. Mirror that
+		// behavior here and validate the effective post-update state, including
+		// records represented as analysis_only solely by missing_market_data.
+		effective := current
+		if strings.TrimSpace(update.ExecutionState) != "" {
+			effective.ExecutionState = update.ExecutionState
+			if normalizeRecommendExecutionState(update.ExecutionState) != recommendExecutionAnalysisOnly {
+				return fmt.Errorf("%s: recommendation %d", marketSummaryAnalysisOnlyIrreversibleReason, current.ID)
+			}
+		}
+		if strings.TrimSpace(update.RecommendStatus) != "" {
+			effective.RecommendStatus = update.RecommendStatus
+		}
+		if !isAnalysisOnlyRecommend(&effective) {
+			return fmt.Errorf("%s: recommendation %d", marketSummaryAnalysisOnlyIrreversibleReason, current.ID)
+		}
+	}
+	return nil
+}
+
 // DeleteAiRecommendStocks 根据ID删除AI推荐股票记录
 func (s *AiRecommendStocksService) DeleteAiRecommendStocks(id uint) error {
+	if err := rejectFrozenLegacyRecommendationMutation([]uint{id}); err != nil {
+		return err
+	}
 	scopeCodes := loadRecommendScopeCodesByIDs([]uint{id})
 	// 使用软删除
 	result := db.Dao.Where("id = ?", id).Delete(&models.AiRecommendStocks{})
@@ -50,6 +97,9 @@ func (s *AiRecommendStocksService) DeleteAiRecommendStocks(id uint) error {
 
 // BatchDeleteAiRecommendStocks 批量删除AI推荐股票记录
 func (s *AiRecommendStocksService) BatchDeleteAiRecommendStocks(ids []uint) error {
+	if err := rejectFrozenLegacyRecommendationMutation(ids); err != nil {
+		return err
+	}
 	scopeCodes := loadRecommendScopeCodesByIDs(ids)
 	// 使用软删除
 	result := db.Dao.Where("id IN ?", ids).Delete(&models.AiRecommendStocks{})
@@ -61,6 +111,25 @@ func (s *AiRecommendStocksService) BatchDeleteAiRecommendStocks(ids []uint) erro
 		requestAiRecommendYieldRecalcWithScope(false, "recommend_batch_deleted", scopeCodes)
 	}
 	return result.Error
+}
+
+func rejectFrozenLegacyRecommendationMutation(ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	rows := make([]models.AiRecommendStocks, 0, len(ids))
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Select("id", "summary_version").
+		Where("id IN ?", ids).
+		Find(&rows).Error; err != nil {
+		return err
+	}
+	for idx := range rows {
+		if isFrozenLegacyStrategyRecord(&rows[idx]) {
+			return fmt.Errorf("strategy cohort %s is frozen; recommendation %d is read-only", strings.TrimSpace(rows[idx].SummaryVersion), rows[idx].ID)
+		}
+	}
+	return nil
 }
 
 func loadRecommendScopeCodesByIDs(ids []uint) []string {

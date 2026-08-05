@@ -80,7 +80,7 @@ func TestEnsureMarketSummaryRecommendStocksSavedHumanizesRemarks(t *testing.T) {
 }
 
 func TestAIResponseResultServiceGetListHumanizesMarketSummaryContent(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-humanize-report.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-humanize-report.db"))
 	if err := db.Dao.AutoMigrate(&models.AIResponseResult{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -115,7 +115,7 @@ func TestAIResponseResultServiceGetListHumanizesMarketSummaryContent(t *testing.
 }
 
 func TestRunMarketSummaryHumanizeCompatFixIsIdempotent(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-humanize-compat.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-humanize-compat.db"))
 	if err := db.Dao.AutoMigrate(&models.AIResponseResult{}, &models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestRunMarketSummaryHumanizeCompatFixIsIdempotent(t *testing.T) {
 		ActivationRuleJSON:       testActivationRuleJSON,
 		RecommendBuyPrice:        "168-169",
 		RecommendStatus:          "valid",
-		SummaryVersion:           marketSummaryPhase3Version,
+		SummaryVersion:           marketSummaryVersion150,
 		ExecutionState:           recommendExecutionConditional,
 		RecommendStopProfitPrice: "178-185",
 		RecommendStopLossPrice:   "159",
@@ -153,7 +153,7 @@ func TestRunMarketSummaryHumanizeCompatFixIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunMarketSummaryHumanizeCompatFix first run failed: %v", err)
 	}
-	if first.ReportsUpdated != 1 || first.RemarksUpdated != 1 {
+	if first.ReportsScanned != 0 || first.ReportsUpdated != 0 || first.RemarksUpdated != 1 {
 		t.Fatalf("unexpected first fix result: %+v", first)
 	}
 
@@ -169,8 +169,8 @@ func TestRunMarketSummaryHumanizeCompatFixIsIdempotent(t *testing.T) {
 	if err := db.Dao.First(&gotReport, report.ID).Error; err != nil {
 		t.Fatalf("reload report failed: %v", err)
 	}
-	if strings.Contains(gotReport.Content, "activationRuleJson") || strings.Contains(gotReport.Content, `"signalType"`) {
-		t.Fatalf("expected fixed report to hide machine json, got %s", gotReport.Content)
+	if gotReport.Content != report.Content {
+		t.Fatalf("versionless historical report was rewritten: before=%q after=%q", report.Content, gotReport.Content)
 	}
 
 	var gotRecommend models.AiRecommendStocks

@@ -13,7 +13,7 @@ func initMinuteCacheTestDB(t *testing.T, name string) {
 	t.Helper()
 	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")
 	t.Setenv("GO_STOCK_MINUTE_DUAL_WRITE", "")
-	db.Init(filepath.Join(t.TempDir(), name))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), name))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate legacy minute table failed: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestMinuteCacheRangeMergesMinuteDBAndLegacyRange(t *testing.T) {
 func TestMinuteCacheDualWrite(t *testing.T) {
 	t.Setenv("GO_STOCK_MINUTE_DUAL_WRITE", "1")
 	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")
-	db.Init(filepath.Join(t.TempDir(), "minute-cache-dual-write.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "minute-cache-dual-write.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate legacy minute table failed: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestMinuteCacheDualWrite(t *testing.T) {
 func TestMinuteCacheDeleteCleansMinuteAndLegacy(t *testing.T) {
 	t.Setenv("GO_STOCK_MINUTE_DUAL_WRITE", "1")
 	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")
-	db.Init(filepath.Join(t.TempDir(), "minute-cache-delete.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "minute-cache-delete.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate legacy minute table failed: %v", err)
 	}

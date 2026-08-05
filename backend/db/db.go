@@ -146,6 +146,76 @@ func Init(sqlitePath string) {
 	InitMinute(resolveMinutePathForMainPath(sqlitePath))
 }
 
+// InitReadOnly opens the primary database and its sibling minute cache without
+// running schema initialization, migrations, PRAGMAs that write, or directory
+// creation. It is used by audit commands that must be safe against the live
+// cache even when the caller does not make a temporary copy first.
+func InitReadOnly(sqlitePath string) (string, error) {
+	if strings.TrimSpace(sqlitePath) == "" {
+		sqlitePath = appconfig.Load().DB.Path
+	}
+	mainPath := strings.TrimSpace(removeBusyTimeoutPragma(sqlitePath))
+	mainDSN, resolvedMainPath, err := readOnlySQLiteDSN(mainPath)
+	if err != nil {
+		return "", err
+	}
+	mainDB, err := openSQLite(mainDSN, newDBLogger())
+	if err != nil {
+		return "", err
+	}
+	mainSQL, err := mainDB.DB()
+	if err != nil {
+		return "", err
+	}
+	mainSQL.SetMaxIdleConns(1)
+	mainSQL.SetMaxOpenConns(1)
+	mainSQL.SetConnMaxLifetime(time.Hour)
+
+	minutePath := resolveMinutePathForMainPath(resolvedMainPath)
+	minuteDSN, resolvedMinutePath, minutePathErr := readOnlySQLiteDSN(minutePath)
+	var minuteDB *gorm.DB
+	if minutePathErr != nil && !os.IsNotExist(minutePathErr) {
+		return "", minutePathErr
+	}
+	if minutePathErr == nil {
+		minuteDB, err = openSQLite(minuteDSN, newDBLogger())
+		if err == nil {
+			minuteSQL, sqlErr := minuteDB.DB()
+			if sqlErr != nil {
+				return "", sqlErr
+			}
+			minuteSQL.SetMaxIdleConns(1)
+			minuteSQL.SetMaxOpenConns(1)
+			minuteSQL.SetConnMaxLifetime(time.Hour)
+		}
+	}
+	if err != nil && resolvedMinutePath != "" {
+		return "", err
+	}
+	Dao = mainDB
+	MinuteDao = minuteDB
+	return resolvedMainPath, nil
+}
+
+func readOnlySQLiteDSN(rawPath string) (string, string, error) {
+	path := strings.TrimSpace(removeBusyTimeoutPragma(rawPath))
+	if path == "" || path == ":memory:" || strings.HasPrefix(path, "file:") {
+		return "", "", os.ErrInvalid
+	}
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := os.Stat(absPath); err != nil {
+		return "", absPath, err
+	}
+	dsn := "file:" + filepath.ToSlash(absPath) + "?mode=ro&_pragma=query_only(1)"
+	if timeout := resolveDBBusyTimeoutMs(); timeout > 0 {
+		dsn += "&_pragma=busy_timeout(" + strconv.Itoa(timeout) + ")"
+	}
+	return dsn, absPath, nil
+}
+
 func InitMinute(sqlitePath string) {
 	dbLogger := newDBLogger()
 	if sqlitePath == "" {

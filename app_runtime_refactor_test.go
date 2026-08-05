@@ -53,8 +53,12 @@ func TestBuildSyncedTelegraph(t *testing.T) {
 }
 
 func TestShouldSummaryFailover(t *testing.T) {
-	if shouldSummaryFailover(summaryRunResult{text: "ok"}) {
-		t.Fatal("non-empty text should not failover")
+	plainTextFailover := shouldSummaryFailover(summaryRunResult{text: "ok"})
+	if marketSummaryRequiresV150Backend() && !plainTextFailover {
+		t.Fatal("V1.5 plain text without a frozen backend decision should failover")
+	}
+	if !marketSummaryRequiresV150Backend() && plainTextFailover {
+		t.Fatal("legacy non-empty text should not failover")
 	}
 	if !shouldSummaryFailover(summaryRunResult{}) {
 		t.Fatal("empty result should failover")

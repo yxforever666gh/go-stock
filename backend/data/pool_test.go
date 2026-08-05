@@ -1,7 +1,6 @@
 package data
 
 import (
-	"go-stock/backend/db"
 	"sync"
 	"testing"
 	"time"
@@ -9,7 +8,7 @@ import (
 
 func TestPool(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 
 	pool := NewBrowserPool(1)
 	defer pool.Close()

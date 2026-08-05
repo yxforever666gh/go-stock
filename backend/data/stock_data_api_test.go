@@ -26,7 +26,7 @@ import (
 
 func TestGetTelegraph(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 
 	//telegraphs := GetTelegraphList(30)
 	//for _, telegraph := range *telegraphs {
@@ -40,7 +40,7 @@ func TestGetTelegraph(t *testing.T) {
 
 func TestGetFinancialReports(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	//GetFinancialReports("sz000802", 30)
 	//GetFinancialReports("hk00927", 30)
 	//GetFinancialReports("gb_aapl", 30)
@@ -52,7 +52,7 @@ func TestGetFinancialReports(t *testing.T) {
 
 func TestGetTelegraphSearch(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	searchWords := "半导体 新能源汽车 机器人"
 	//url := "https://www.cls.cn/searchPage?keyword=%E9%97%BB%E6%B3%B0%E7%A7%91%E6%8A%80&type=telegram"
 	messages := SearchStockInfo(searchWords, "telegram", 30)
@@ -64,7 +64,7 @@ func TestGetTelegraphSearch(t *testing.T) {
 }
 func TestCailianpressWeb(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	searchWords := "半导体 新能源汽车 机器人"
 	res := NewMarketNewsApi().CailianpressWeb(searchWords)
 	md := util.MarkdownTableWithTitle(searchWords+"财联社新闻", res.List)
@@ -73,13 +73,13 @@ func TestCailianpressWeb(t *testing.T) {
 
 func TestSearchStockInfoByCode(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	SearchStockInfoByCode("sh600745")
 }
 
 func TestSearchStockPriceInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	SearchStockPriceInfo("博安生物", "hk06955", 30)
 	SearchStockPriceInfo("上海贝岭", "sh600171", 30)
 	//SearchStockPriceInfo("苹果公司", "gb_aapl", 30)
@@ -91,14 +91,14 @@ func TestSearchStockPriceInfo(t *testing.T) {
 }
 func TestGetStockMinutePriceData(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	data, date := NewStockDataApi().GetStockMinutePriceData("usTSLA.OQ")
 	logger.SugaredLogger.Infof("date:%s", date)
 	logger.SugaredLogger.Infof("%+#v", *data)
 }
 func TestGetKLineData(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	k := NewStockDataApi().GetKLineData("sh600171", "240", 30)
 	//for _, kline := range *k {
 	//	logger.SugaredLogger.Infof("%+#v", kline)
@@ -113,7 +113,7 @@ func TestGetKLineData(t *testing.T) {
 }
 func TestGetHK_KLineData(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	k := NewStockDataApi().GetHK_KLineData("hk01810", "day", 1)
 	jsonData, _ := json.Marshal(*k)
 	markdownTable, err := JSONToMarkdownTable(jsonData)
@@ -126,7 +126,7 @@ func TestGetHK_KLineData(t *testing.T) {
 
 func TestGetHKStockInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	//NewStockDataApi().GetHKStockInfo(200)
 	//NewStockDataApi().GetSinaHKStockInfo()
 	//m:105,m:106,m:107  //美股
@@ -204,7 +204,7 @@ func TestParseFullSingleStockData(t *testing.T) {
 
 func TestNewStockDataApi(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	stockDataApi := NewStockDataApi()
 	datas, _ := stockDataApi.GetStockCodeRealTimeData("sz002352", "sh600859", "sh600745", "gb_tsla", "hk09660", "hk00700")
 	for _, data := range *datas {
@@ -214,7 +214,7 @@ func TestNewStockDataApi(t *testing.T) {
 
 func TestGetStockBaseInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	stockDataApi := NewStockDataApi()
 	stockDataApi.GetStockBaseInfo()
 	//stocks := &[]StockBasic{}
@@ -240,7 +240,7 @@ func TestReadFile(t *testing.T) {
 	if err := json.Unmarshal(file, res); err != nil {
 		t.Fatalf("unmarshal stock_basic.json failed: %v", err)
 	}
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	//[EXCHANGE IS_HS NAME INDUSTRY LIST_STATUS ACT_NAME ID CURR_TYPE AREA LIST_DATE DELIST_DATE ACT_ENT_TYPE TS_CODE SYMBOL CN_SPELL ASSET_CLASS ACT_TYPE CREATE_TIME CREATE_BY UPDATE_TIME FULLNAME ENNAME UPDATE_BY]
 	for _, item := range res.Data.Items {
 		stock := &StockBasic{}
@@ -270,7 +270,7 @@ func TestReadFile(t *testing.T) {
 
 func TestFollowedList(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	stockDataApi := NewStockDataApi()
 	stockDataApi.GetFollowList(1)
 
@@ -278,14 +278,14 @@ func TestFollowedList(t *testing.T) {
 
 func TestStockDataApi_GetIndexBasic(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	stockDataApi := NewStockDataApi()
 	stockDataApi.GetIndexBasic()
 }
 
 func TestName(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 
 	stockBasics := &[]StockBasic{}
 	resp, err := resty.New().SetProxy("").R().
@@ -309,7 +309,7 @@ func TestName(t *testing.T) {
 }
 func TestGetStockMoneyData(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	stockDataApi := NewStockDataApi()
 	res := stockDataApi.GetStockMoneyData()
 	logger.SugaredLogger.Infof("%s", util.MarkdownTableWithTitle("今日个股资金流向Top50", res.Data.Diff))
@@ -317,7 +317,7 @@ func TestGetStockMoneyData(t *testing.T) {
 
 func TestGetStockConceptInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	stockDataApi := NewStockDataApi()
 	res := stockDataApi.GetStockConceptInfo("601138.SH")
 	logger.SugaredLogger.Infof("%s", util.MarkdownTableWithTitle("601138.SH所属概念/板块信息", res.Result.Data))

@@ -13,7 +13,7 @@ import (
 
 func TestBuildYieldRecordStateFromRecommend_ActivatesWhenPrevDayActivityPasses(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-prev-activity-pass.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-prev-activity-pass.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestBuildYieldRecordStateFromRecommend_ActivatesWhenPrevDayActivityPasses(t
 
 func TestBuildYieldRecordStateFromRecommend_RemainsPendingWhenPrevDayActivityWeaker(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-prev-activity-block.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-prev-activity-block.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestBuildYieldRecordStateFromRecommend_RemainsPendingWhenPrevDayActivityWea
 
 func TestBuildYieldRecordStateFromRecommend_BlocksWhenPrevDayActivityMissing(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-prev-activity-missing.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-prev-activity-missing.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -104,7 +104,7 @@ func TestBuildYieldRecordStateFromRecommend_BlocksWhenPrevDayActivityMissing(t *
 
 func TestBuildYieldStateFromAggregate_BlocksWhenPrevDayActivityMissing(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-prev-activity-aggregate.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-prev-activity-aggregate.db"))
 	if err := db.Dao.AutoMigrate(&Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

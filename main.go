@@ -8,6 +8,7 @@ import (
 	"go-stock/backend/db"
 	log "go-stock/backend/logger"
 	"go-stock/internal/bootstrap"
+	"go-stock/internal/cli"
 	appconfig "go-stock/internal/config"
 	"os"
 	"runtime/debug"
@@ -45,6 +46,11 @@ var OFFICIAL_STATEMENT string
 var BuildKey string
 
 func main() {
+	// Keep the documented cache-only replay command available from the project
+	// root (`go run . strategy-backtest ...`) without starting the GUI runtime.
+	if len(os.Args) > 1 && (os.Args[1] == "strategy-backtest" || os.Args[1] == "strategy-rule-replay") {
+		os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
+	}
 	cfg := appconfig.Load()
 	if len(os.Args) > 1 && os.Args[1] == "migrate-minute-db" {
 		runMinuteDBMigration(cfg)

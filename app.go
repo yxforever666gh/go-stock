@@ -34,6 +34,8 @@ type App struct {
 	yieldEmailTaskMu   sync.Mutex
 	yieldEmailTaskBusy bool
 	yieldEmailCronMu   sync.Mutex
+	v150ExecutionOnce  sync.Once
+	v150ExecutionTask  *marketSummaryV150ExecutionRuntime
 	domReadyMu         sync.Mutex
 	domReadyDone       bool
 }

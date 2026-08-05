@@ -199,7 +199,7 @@ func TestResolveActivationRuleScan_TriggersBreakoutPath(t *testing.T) {
 
 func TestNormalizeAiRecommendStockForSave_DowngradesMarketSummaryPriceMismatchToAnalysisOnly(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-mismatch-save.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-mismatch-save.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestNormalizeAiRecommendStockForSave_DowngradesMarketSummaryPriceMismatchTo
 
 func TestNormalizeAiRecommendStockForSave_MissingMinuteKeepsRecoverableMarketSummaryPending(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-missing-minute-pending.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-missing-minute-pending.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestNormalizeAiRecommendStockForSave_MissingMinuteKeepsRecoverableMarketSum
 
 func TestRepairHistoricalMarketSummaryActivationIssues_InvalidatesMismatchAndUpgradesRules(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-activation-repair.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-activation-repair.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -339,7 +339,7 @@ func TestRepairHistoricalMarketSummaryActivationIssues_InvalidatesMismatchAndUpg
 		BuySignal:                "价格触发：未来3个交易日内股价回到168-172元区间后，连续2根15分钟K线收于170元上方；量能触发：对应15分钟成交额≥近5个15分钟均额的1.3倍，且量比≥1.5；逻辑触发：AI算力主线未证伪",
 		InvalidCondition:         "时间失效：未来3个交易日内未触发；价格失效：跌破163",
 		RecommendStatus:          "valid",
-		SummaryVersion:           marketSummaryPhase3Version,
+		SummaryVersion:           marketSummaryVersion150,
 		ActivationRuleSource:     "market_summary",
 		ActivationRuleVersion:    activationRuleVersionV1,
 		ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":168,"thresholdMax":172,"volumeRatio":1.5,"confirmBars":2,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":3}`,
@@ -364,7 +364,7 @@ func TestRepairHistoricalMarketSummaryActivationIssues_InvalidatesMismatchAndUpg
 		BuySignal:                "价格触发：未来5个交易日内股价进入355-365元区间，并连续2根30分钟K线站上360元；量能触发：30分钟成交额≥近5个30分钟均额的1.2倍，且不低于上一交易日同一时段成交额的1.1倍；逻辑触发：展会催化未证伪",
 		InvalidCondition:         "时间失效：未来5个交易日内未触发；价格失效：跌破346",
 		RecommendStatus:          "valid",
-		SummaryVersion:           marketSummaryPhase3Version,
+		SummaryVersion:           marketSummaryVersion150,
 		ActivationRuleSource:     "market_summary",
 		ActivationRuleVersion:    activationRuleVersionV1,
 		ActivationRuleJSON:       `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"prev_day_same_slot_amount","operator":">=","thresholdValue":355,"thresholdMax":365,"volumeRatio":1.2,"confirmBars":2,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`,
@@ -439,9 +439,9 @@ func TestRepairHistoricalMarketSummaryActivationIssues_InvalidatesMismatchAndUpg
 	}
 }
 
-func TestRepairHistoricalMarketSummaryActivationIssues_RecoversCorruptedDualPathRule(t *testing.T) {
+func TestRepairHistoricalMarketSummaryActivationIssues_LeavesFrozenLegacyDualPathRuleUnchanged(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-activation-repair-recover.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-activation-repair-recover.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestRepairHistoricalMarketSummaryActivationIssues_RecoversCorruptedDualPath
 		BuySignal:                "缺少可信实时价格/量能数据，本次仅保留逻辑分析，不生成交易计划",
 		InvalidCondition:         marketSummaryAnalysisOnlySkipReason,
 		RecommendStatus:          "missing_market_data",
-		SummaryVersion:           marketSummaryPhase3Version,
+		SummaryVersion:           marketSummaryVersion142,
 		ActivationRuleSource:     "market_summary",
 		ActivationRuleVersion:    activationRuleVersionV1,
 		ActivationRuleJSON:       `{"version":"v3","mode":"any_of","paths":[{"name":"pullback","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":20,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5},{"name":"breakout","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":407,"volumeRatio":1.05,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}]}`,
@@ -507,7 +507,7 @@ func TestRepairHistoricalMarketSummaryActivationIssues_RecoversCorruptedDualPath
 	if err != nil {
 		t.Fatalf("RepairHistoricalMarketSummaryActivationIssues failed: %v", err)
 	}
-	if stats.RuleUpgraded != 1 {
+	if stats.Scanned != 0 || stats.RuleUpgraded != 0 || stats.Downgraded != 0 {
 		t.Fatalf("unexpected stats: %+v", stats)
 	}
 
@@ -515,51 +515,20 @@ func TestRepairHistoricalMarketSummaryActivationIssues_RecoversCorruptedDualPath
 	if err := db.Dao.First(&got, row.ID).Error; err != nil {
 		t.Fatalf("load row failed: %v", err)
 	}
-	if got.RecommendStatus != "valid" {
-		t.Fatalf("recommend status = %s, want valid", got.RecommendStatus)
-	}
-	if got.ExecutionState != recommendExecutionConditional {
-		t.Fatalf("execution state = %s, want conditional", got.ExecutionState)
-	}
-	if got.ActivationStatus != "pending" {
-		t.Fatalf("activation status = %s, want pending", got.ActivationStatus)
-	}
-	if got.RecommendBuyPrice != "398.8-401.2" && got.RecommendBuyPrice != "398.80-401.20" {
-		t.Fatalf("recommend buy price = %s, want 398.8-401.2", got.RecommendBuyPrice)
-	}
-	if got.ActivationInvalidReason != "" {
-		t.Fatalf("activation invalid reason = %s, want empty", got.ActivationInvalidReason)
-	}
-	rule, err := parseActivationRuleJSON(got.ActivationRuleJSON)
-	if err != nil {
-		t.Fatalf("parse repaired rule failed: %v", err)
-	}
-	if len(rule.Paths) != 2 {
-		t.Fatalf("paths len = %d, want 2", len(rule.Paths))
-	}
-	if rule.Paths[0].Name != "pullback" || rule.Paths[0].SignalType != "price_range_with_volume" {
-		t.Fatalf("unexpected pullback path: %+v", rule.Paths[0])
-	}
-	if rule.Paths[0].ThresholdValue != 398.8 || rule.Paths[0].ThresholdMax != 401.2 {
-		t.Fatalf("unexpected pullback thresholds: %+v", rule.Paths[0])
-	}
-	if rule.Paths[1].Name != "breakout" || rule.Paths[1].SignalType != "price_breakout_with_volume" {
-		t.Fatalf("unexpected breakout path: %+v", rule.Paths[1])
-	}
-	if rule.Paths[1].ThresholdValue != 404.8 {
-		t.Fatalf("breakout threshold = %.2f, want 404.8", rule.Paths[1].ThresholdValue)
-	}
-	if rule.Paths[1].ThresholdMax <= rule.Paths[1].ThresholdValue {
-		t.Fatalf("breakout thresholdMax = %.2f, want above %.2f", rule.Paths[1].ThresholdMax, rule.Paths[1].ThresholdValue)
-	}
-	if rule.Paths[1].ThresholdMax >= 430 {
-		t.Fatalf("breakout thresholdMax = %.2f, want below stop profit", rule.Paths[1].ThresholdMax)
+	if got.SummaryVersion != marketSummaryVersion142 ||
+		got.RecommendStatus != row.RecommendStatus ||
+		got.ExecutionState != row.ExecutionState ||
+		got.ActivationStatus != row.ActivationStatus ||
+		got.RecommendBuyPrice != row.RecommendBuyPrice ||
+		got.ActivationRuleJSON != row.ActivationRuleJSON ||
+		got.ActivationInvalidReason != row.ActivationInvalidReason {
+		t.Fatalf("frozen legacy row changed: before=%+v after=%+v", row, got)
 	}
 }
 
 func TestRecoverPendingMarketSummaryRecommendationsForScope_RecoversMissingMarketDataAfterMinuteArrives(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-recover-pending-minute.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-recover-pending-minute.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldDirtyCode{},
@@ -594,7 +563,7 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_RecoversMissingMarke
 		BuySignal:                "缺少可信实时价格/量能数据，本次仅保留逻辑分析，不生成交易计划",
 		InvalidCondition:         marketSummaryAnalysisOnlySkipReason,
 		RecommendStatus:          "missing_market_data",
-		SummaryVersion:           marketSummaryPhase3Version,
+		SummaryVersion:           marketSummaryVersion150,
 		ActivationRuleSource:     "market_summary",
 		ActivationRuleJSON:       `{"version":"v3","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":21.3,"thresholdMax":21.9,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5},{"name":"breakout","signalType":"price_breakout_with_volume","evaluationWindow":"5m","baseline":"avg_amount_5x5m","operator":">=","thresholdValue":22.65,"volumeRatio":1.05,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}]}`,
 		ActivationStatus:         "skipped",
@@ -609,42 +578,31 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_RecoversMissingMarke
 	if err != nil {
 		t.Fatalf("recoverPendingMarketSummaryRecommendationsForScope failed: %v", err)
 	}
-	if len(changed) != 1 || changed[0] != "002297.SZ" {
-		t.Fatalf("changed = %#v, want 002297.SZ", changed)
+	if len(changed) != 0 {
+		t.Fatalf("changed = %#v, want analysis_only to remain terminal", changed)
 	}
 
 	var got models.AiRecommendStocks
 	if err := db.Dao.First(&got, row.ID).Error; err != nil {
 		t.Fatalf("load row failed: %v", err)
 	}
-	if got.RecommendStatus != "valid" {
-		t.Fatalf("recommend status = %s, want valid", got.RecommendStatus)
+	if got.RecommendStatus != "missing_market_data" {
+		t.Fatalf("recommend status = %s, want missing_market_data", got.RecommendStatus)
 	}
-	if got.ExecutionState != recommendExecutionConditional {
-		t.Fatalf("execution state = %s, want conditional", got.ExecutionState)
+	if got.ExecutionState != recommendExecutionAnalysisOnly {
+		t.Fatalf("execution state = %s, want analysis_only", got.ExecutionState)
 	}
-	if got.ActivationStatus != "pending" {
-		t.Fatalf("activation status = %s, want pending", got.ActivationStatus)
+	if got.ActivationStatus != "skipped" {
+		t.Fatalf("activation status = %s, want skipped", got.ActivationStatus)
 	}
-	if got.RecommendBuyPrice != "21.30-21.90" {
-		t.Fatalf("recommend buy price = %s, want 21.30-21.90", got.RecommendBuyPrice)
-	}
-	if got.RecommendStopProfitPrice != "23.30-24.20" {
-		t.Fatalf("stop profit = %s, want 23.30-24.20", got.RecommendStopProfitPrice)
-	}
-	if got.RecommendStopLossPrice != "20.80" {
-		t.Fatalf("stop loss = %s, want 20.80", got.RecommendStopLossPrice)
-	}
-
-	var dirty models.AiRecommendYieldDirtyCode
-	if err := db.Dao.Where("stock_code = ?", "002297.SZ").First(&dirty).Error; err != nil {
-		t.Fatalf("expected dirty code after recovery: %v", err)
+	if got.RecommendBuyPrice != "" || got.RecommendStopProfitPrice != "" || got.RecommendStopLossPrice != "" {
+		t.Fatalf("analysis_only trade fields were manufactured: %+v", got)
 	}
 }
 
-func TestRecoverPendingMarketSummaryRecommendationsForScope_RefillsExitPlanFromStoredReport(t *testing.T) {
+func TestRecoverPendingMarketSummaryRecommendationsForScope_DoesNotRefillFrozenLegacyExitPlan(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-recover-stored-report.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-recover-stored-report.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldDirtyCode{},
@@ -692,7 +650,7 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_RefillsExitPlanFromS
 		RecommendStopLossPrice:   "",
 		ExecutionState:           recommendExecutionConditional,
 		RecommendStatus:          "valid",
-		SummaryVersion:           marketSummaryPhase3Version,
+		SummaryVersion:           marketSummaryVersion142,
 		ActivationRuleSource:     "market_summary",
 		ActivationRuleJSON:       `{"version":"v3","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","thresholdValue":21.3,"thresholdMax":21.9,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount"},{"name":"breakout","signalType":"price_breakout_with_volume","thresholdValue":22.65,"volumeRatio":1.05,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount"}]}`,
 		ActivationStatus:         "pending",
@@ -707,34 +665,28 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_RefillsExitPlanFromS
 	if err != nil {
 		t.Fatalf("recoverPendingMarketSummaryRecommendationsForScope failed: %v", err)
 	}
-	if len(changed) != 1 || changed[0] != "002297.SZ" {
-		t.Fatalf("changed = %#v, want 002297.SZ", changed)
+	if len(changed) != 0 {
+		t.Fatalf("changed = %#v, want frozen legacy row unchanged", changed)
 	}
 
 	var got models.AiRecommendStocks
 	if err := db.Dao.First(&got, row.ID).Error; err != nil {
 		t.Fatalf("load row failed: %v", err)
 	}
-	if got.RecommendStopProfitPrice != "23.30-24.20" {
-		t.Fatalf("stop profit = %s, want 23.30-24.20", got.RecommendStopProfitPrice)
-	}
-	if got.RecommendStopLossPrice != "20.80" {
-		t.Fatalf("stop loss = %s, want 20.80", got.RecommendStopLossPrice)
+	if got.RecommendStopProfitPrice != "" || got.RecommendStopLossPrice != "" {
+		t.Fatalf("frozen legacy exit plan was refilled: stopProfit=%s stopLoss=%s", got.RecommendStopProfitPrice, got.RecommendStopLossPrice)
 	}
 	if got.ActivationStatus != "pending" || got.RecommendStatus != "valid" {
 		t.Fatalf("unexpected recovered status: recommend=%s activation=%s", got.RecommendStatus, got.ActivationStatus)
 	}
-	if strings.Contains(got.InvalidCondition, "缺少真实价格/量能数据") {
-		t.Fatalf("invalid condition still has stale missing-data reason: %s", got.InvalidCondition)
-	}
-	if !strings.Contains(got.InvalidCondition, "未来 5 个交易日内未同时触发价格与量能条件") {
-		t.Fatalf("invalid condition = %s, want stored report invalid condition", got.InvalidCondition)
+	if got.InvalidCondition != row.InvalidCondition {
+		t.Fatalf("frozen legacy invalid condition changed: before=%q after=%q", row.InvalidCondition, got.InvalidCondition)
 	}
 }
 
-func TestRecoverPendingMarketSummaryRecommendationsForScope_ReplacesStaleMissingDataInvalidCondition(t *testing.T) {
+func TestRecoverPendingMarketSummaryRecommendationsForScope_DoesNotReplaceFrozenLegacyInvalidCondition(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-recover-stale-invalid-condition.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-recover-stale-invalid-condition.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldDirtyCode{},
@@ -784,7 +736,7 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_ReplacesStaleMissing
 		RecommendStopLossPrice:      "20.80",
 		ExecutionState:              recommendExecutionConditional,
 		RecommendStatus:             "valid",
-		SummaryVersion:              marketSummaryPhase3Version,
+		SummaryVersion:              marketSummaryVersion142,
 		ActivationRuleSource:        "market_summary",
 		ActivationRuleJSON:          `{"version":"v3","mode":"any_of","paths":[{"name":"pullback","signalType":"price_range_with_volume","thresholdValue":21.3,"thresholdMax":21.9,"volumeRatio":1.15,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount"},{"name":"breakout","signalType":"price_breakout_with_volume","thresholdValue":22.65,"volumeRatio":1.15,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount"}]}`,
 		ActivationStatus:            "activated",
@@ -800,19 +752,16 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_ReplacesStaleMissing
 	if err != nil {
 		t.Fatalf("recoverPendingMarketSummaryRecommendationsForScope failed: %v", err)
 	}
-	if len(changed) != 1 || changed[0] != "002297.SZ" {
-		t.Fatalf("changed = %#v, want 002297.SZ", changed)
+	if len(changed) != 0 {
+		t.Fatalf("changed = %#v, want frozen legacy row unchanged", changed)
 	}
 
 	var got models.AiRecommendStocks
 	if err := db.Dao.First(&got, row.ID).Error; err != nil {
 		t.Fatalf("load row failed: %v", err)
 	}
-	if strings.Contains(got.InvalidCondition, "缺少真实价格/量能数据") {
-		t.Fatalf("invalid condition still has stale missing-data reason: %s", got.InvalidCondition)
-	}
-	if !strings.Contains(got.InvalidCondition, "未来 5 个交易日内未同时触发价格与量能条件") {
-		t.Fatalf("invalid condition = %s, want stored report invalid condition", got.InvalidCondition)
+	if got.InvalidCondition != row.InvalidCondition {
+		t.Fatalf("frozen legacy invalid condition changed: before=%q after=%q", row.InvalidCondition, got.InvalidCondition)
 	}
 	if got.RecommendStopProfitPrice != "23.30-24.20" || got.RecommendStopLossPrice != "20.80" {
 		t.Fatalf("exit plan changed unexpectedly: stopProfit=%s stopLoss=%s", got.RecommendStopProfitPrice, got.RecommendStopLossPrice)
@@ -821,7 +770,7 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_ReplacesStaleMissing
 
 func TestRecoverPendingMarketSummaryRecommendationsForScope_UsesCacheOnly(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-recover-cache-only.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-recover-cache-only.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldDirtyCode{},
@@ -897,7 +846,7 @@ func TestRecoverPendingMarketSummaryRecommendationsForScope_UsesCacheOnly(t *tes
 
 func TestRecoverPendingMarketSummaryRecommendationsForScope_SkipsAnalysisOnlyRemarksSignal(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-skip-remarks-only.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-skip-remarks-only.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldDirtyCode{},

@@ -7,6 +7,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 	"math"
 	"regexp"
 	"sort"
@@ -37,21 +38,26 @@ type yieldDailyOverviewCacheState struct {
 }
 
 type yieldDailyOverviewEntry struct {
-	RecommendID      uint
-	StockCode        string
-	StockName        string
-	BuyTime          time.Time
-	BuyDay           time.Time
-	SellDay          time.Time
-	CurrentDay       time.Time
-	BuyAmount        float64
-	CurrentPrice     float64
-	SellAmount       float64
-	HasSellAmount    bool
-	BuyCostNet       float64
-	RealizedValueNet float64
-	CurrentPriceTime string
-	SellTime         string
+	RecommendID               uint
+	SummaryVersion            string
+	StockCode                 string
+	StockName                 string
+	BuyTime                   time.Time
+	BuyDay                    time.Time
+	SellDay                   time.Time
+	CurrentDay                time.Time
+	BuyAmount                 float64
+	CurrentPrice              float64
+	SellAmount                float64
+	HasSellAmount             bool
+	BuyCostNet                float64
+	RealizedValueNet          float64
+	CurrentPriceTime          string
+	SellTime                  string
+	V150LedgerAccountingReady bool
+	V150LedgerClosed          bool
+	V150LedgerQuantity        float64
+	V150LedgerCorporateCash   float64
 }
 
 type yieldDailyOverviewPriceSeries struct {
@@ -79,6 +85,7 @@ type benchmarkSummaryResult struct {
 	MedianExcessYieldRate     float64
 	MedianExcessYieldRateText string
 	ItemRateByRecommendID     map[uint]float64
+	Warnings                  []string
 }
 
 type strategySummaryResult struct {
@@ -91,6 +98,7 @@ type strategySummaryResult struct {
 type benchmarkDailySeries struct {
 	Code                  string
 	Name                  string
+	PositionCount         int
 	CloseByDay            map[string]float64
 	ValueByDay            map[string]float64
 	CumulativeAmountByDay map[string]float64
@@ -102,11 +110,13 @@ type benchmarkDailySeries struct {
 
 type benchmarkCashflowPosition struct {
 	RecommendID      uint
+	SummaryVersion   string
 	BuyDay           time.Time
 	EndDay           time.Time
 	EndTime          time.Time
 	InvestedNet      float64
 	Shares           float64
+	CashRemainder    float64
 	SellAmount       float64
 	HasSellAmount    bool
 	CurrentPrice     float64
@@ -535,6 +545,14 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		query = &models.AiRecommendStocksQuery{}
 	}
 	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
+	v150HealthWarnings := make([]string, 0)
+	if isV150CostVersion(query.StrategyCohort) {
+		if warnings, warningErr := loadV150ImmutableRunHealthWarnings(30); warningErr != nil {
+			logger.SugaredLogger.Warnf("load v1.5 yield health warnings failed: %v", warningErr)
+		} else {
+			v150HealthWarnings = append(v150HealthWarnings, warnings...)
+		}
+	}
 
 	EnsureDiemengSelfCheckAsync("yield_list")
 	if err := ensureYieldMetaSchema(); err != nil {
@@ -701,7 +719,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 				return fallbackPage, nil
 			}
 		}
-		return &models.AiRecommendStocksYieldPageData{
+		emptyPage := &models.AiRecommendStocksYieldPageData{
 			List:                      []models.AiRecommendStocksYieldItem{},
 			Total:                     0,
 			Page:                      page,
@@ -755,7 +773,12 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			DiemengHealthStatus:       diemengHealthStatus,
 			DiemengHealthSummary:      diemengHealthSummary,
 			DiemengHealthCheckedAt:    diemengHealthCheckedAt,
-		}, nil
+		}
+		if isV150CostVersion(query.StrategyCohort) {
+			emptyPage.V150Validation, _ = loadV150ForwardValidation()
+			emptyPage.V150HealthWarnings = dedupeNonEmptyStrings(v150HealthWarnings, 0)
+		}
+		return emptyPage, nil
 	}
 
 	if yieldMode == aiRecommendYieldModeFast {
@@ -805,6 +828,20 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
 	benchmarkSummary := calculateBenchmarkSummaryByItems(items)
+	if isV150CostVersion(query.StrategyCohort) {
+		v150HealthWarnings = dedupeNonEmptyStrings(append(
+			append(v150HealthWarnings, collectV150YieldValuationHealthWarnings(items)...),
+			benchmarkSummary.Warnings...,
+		), 0)
+	}
+	var v150Validation *models.StrategyValidationStatus
+	if isV150CostVersion(query.StrategyCohort) {
+		v150Validation, err = loadV150ForwardValidation()
+		if err != nil {
+			logger.SugaredLogger.Warnf("load v1.5 forward validation failed: %v", err)
+			v150Validation = calculateV150ForwardValidation(items)
+		}
+	}
 	total := int64(len(items))
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
 	offset := (page - 1) * pageSize
@@ -835,6 +872,8 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		TotalPages:                 totalPages,
 		CalcMode:                   aiRecommendYieldModeStrict,
 		StrategyCohort:             query.StrategyCohort,
+		V150Validation:             v150Validation,
+		V150HealthWarnings:         v150HealthWarnings,
 		TotalYieldRate:             totalYieldRate,
 		TotalYieldRateText:         totalYieldRateText,
 		BenchmarkCode:              benchmarkSummary.Code,
@@ -2286,6 +2325,12 @@ func buildStrictAggregateYieldItems(
 			metricItems = append(metricItems, item)
 		}
 	}
+	for idx := range listItems {
+		applyV150YieldValuationAvailability(&listItems[idx], timeNow().In(cnLocation()))
+	}
+	for idx := range metricItems {
+		applyV150YieldValuationAvailability(&metricItems[idx], timeNow().In(cnLocation()))
+	}
 
 	return listItems, metricItems
 }
@@ -2323,9 +2368,17 @@ func buildStrictYieldRecordItems(
 			item.DataStatusReason = issue.RawReason
 		}
 		applyStrictPendingStateToYieldItem(&item, dirtyScope, hasStrictSnapshotForRecommendRecord(rec, recordStateMap, stateMap))
+		asOf := timeNow().In(cnLocation())
+		applyV150YieldValuationAvailability(&item, asOf)
+		if err := attachV150YieldLedgerProjection(&item, rec, asOf); err != nil {
+			logger.SugaredLogger.Warnf("attach v1.5 sealed ledger projection failed: recommend_id=%d run=%s rule=%s err=%v", rec.ID, rec.StrategyRunID, rec.StrategyRuleID, err)
+		}
 		items = append(items, item)
 	}
 	applyRecommendRepeatCount(items)
+	for idx := range items {
+		applyV150YieldValuationAvailability(&items[idx], timeNow().In(cnLocation()))
+	}
 	return items
 }
 
@@ -2622,6 +2675,7 @@ func mapRecommendAggregateStateToYieldItem(
 		applyAggregateStateBacktestEligibility(&item, state)
 	}
 	applyInactiveYieldDefaults(&item)
+	applyV150YieldValuationAvailability(&item, timeNow().In(cnLocation()))
 	return item
 }
 
@@ -2697,6 +2751,7 @@ func mapRecommendRecordStateToYieldItem(rec models.AiRecommendStocks, state mode
 	item := models.AiRecommendStocksYieldItem{
 		RecommendID:             rec.ID,
 		RowKey:                  yieldRowKeyFromRecommend(rec, code),
+		SummaryVersion:          strings.TrimSpace(rec.SummaryVersion),
 		StockCode:               code,
 		StockName:               strings.TrimSpace(rec.StockName),
 		ModelNames:              strings.TrimSpace(rec.ModelName),
@@ -2781,15 +2836,24 @@ func mapRecommendRecordStateToYieldItem(rec models.AiRecommendStocks, state mode
 	if item.CurrentPrice <= 0 {
 		item.CurrentPrice = item.BuyAmount
 	}
-	if item.ActivationStatus == "activated" && item.BuyAmount > 0 {
+	if isV150CostVersion(item.SummaryVersion) {
+		// V1.5 record state is a materialized projection of the sealed lifecycle
+		// ledger. Do not overwrite cash dividends or adjusted share quantity by
+		// recomputing from the two raw display prices here.
+		item.YieldRate = round2(state.YieldRate)
+		item.YieldRateText = strings.TrimSpace(state.YieldRateText)
+		if item.YieldRateText == "" {
+			item.YieldRateText = "--"
+		}
+	} else if item.ActivationStatus == "activated" && item.BuyAmount > 0 {
 		if item.SellAmount != nil && *item.SellAmount > 0 {
-			result := calculateNetYield(item.StockCode, item.BuyAmount, *item.SellAmount)
+			result := calculateNetYieldForVersion(item.SummaryVersion, item.StockCode, item.BuyAmount, *item.SellAmount)
 			if result.Valid {
 				item.YieldRate = result.YieldRate
 				item.YieldRateText = result.YieldText
 			}
 		} else if item.CurrentPrice > 0 {
-			result := calculateNetYield(item.StockCode, item.BuyAmount, item.CurrentPrice)
+			result := calculateNetYieldForVersion(item.SummaryVersion, item.StockCode, item.BuyAmount, item.CurrentPrice)
 			if result.Valid {
 				item.YieldRate = result.YieldRate
 				item.YieldRateText = result.YieldText
@@ -2798,6 +2862,7 @@ func mapRecommendRecordStateToYieldItem(rec models.AiRecommendStocks, state mode
 	}
 	applyRecommendBacktestEligibilityOverride(&item, &rec)
 	applyInactiveYieldDefaults(&item)
+	applyV150YieldValuationAvailability(&item, timeNow().In(cnLocation()))
 	return item
 }
 
@@ -2819,6 +2884,7 @@ func mapRecommendRecordToYieldItem(rec models.AiRecommendStocks, stateMap map[st
 	item := models.AiRecommendStocksYieldItem{
 		RecommendID:             rec.ID,
 		RowKey:                  yieldRowKeyFromRecommend(rec, code),
+		SummaryVersion:          strings.TrimSpace(rec.SummaryVersion),
 		StockCode:               code,
 		StockName:               strings.TrimSpace(rec.StockName),
 		ModelNames:              strings.TrimSpace(rec.ModelName),
@@ -2904,15 +2970,26 @@ func mapRecommendRecordToYieldItem(rec models.AiRecommendStocks, stateMap map[st
 		item.CurrentPrice = item.BuyAmount
 	}
 
-	if item.ActivationStatus == "activated" && item.BuyAmount > 0 {
+	if isV150CostVersion(item.SummaryVersion) {
+		// A missing per-record V1.5 projection must stay unavailable. Aggregate
+		// state may carry a ledger-derived metric, but raw buy/sell prices are not
+		// a valid fallback once corporate actions can change cash and quantity.
+		if hasState {
+			item.YieldRate = round2(state.YieldRate)
+			item.YieldRateText = strings.TrimSpace(state.YieldRateText)
+		}
+		if item.YieldRateText == "" {
+			item.YieldRateText = "--"
+		}
+	} else if item.ActivationStatus == "activated" && item.BuyAmount > 0 {
 		if item.SellAmount != nil && *item.SellAmount > 0 {
-			result := calculateNetYield(item.StockCode, item.BuyAmount, *item.SellAmount)
+			result := calculateNetYieldForVersion(item.SummaryVersion, item.StockCode, item.BuyAmount, *item.SellAmount)
 			if result.Valid {
 				item.YieldRate = result.YieldRate
 				item.YieldRateText = result.YieldText
 			}
 		} else if item.CurrentPrice > 0 {
-			result := calculateNetYield(item.StockCode, item.BuyAmount, item.CurrentPrice)
+			result := calculateNetYieldForVersion(item.SummaryVersion, item.StockCode, item.BuyAmount, item.CurrentPrice)
 			if result.Valid {
 				item.YieldRate = result.YieldRate
 				item.YieldRateText = result.YieldText
@@ -2921,6 +2998,7 @@ func mapRecommendRecordToYieldItem(rec models.AiRecommendStocks, stateMap map[st
 	}
 	applyRecommendBacktestEligibilityOverride(&item, &rec)
 	applyInactiveYieldDefaults(&item)
+	applyV150YieldValuationAvailability(&item, timeNow().In(cnLocation()))
 
 	return item
 }
@@ -3016,6 +3094,40 @@ func yieldRowKeyFromRecommend(rec models.AiRecommendStocks, normalizedCode strin
 }
 
 func calculateYieldTotalByItems(items []models.AiRecommendStocksYieldItem) (float64, string) {
+	if containsV150YieldItem(items) {
+		totalNetPnL := 0.0
+		included := 0
+		for _, item := range items {
+			if !isV150CostVersion(item.SummaryVersion) {
+				// Cohort aggregation is version-homogeneous by contract. Refuse a
+				// mixed slice instead of silently dropping the legacy side.
+				return 0, "--"
+			}
+			if (strings.TrimSpace(item.BacktestEligibility) != "" && strings.TrimSpace(item.BacktestEligibility) != recommendBacktestEligible) ||
+				strings.TrimSpace(item.ActivationStatus) != "activated" {
+				continue
+			}
+			if !item.V150LedgerAccountingReady {
+				// A partial portfolio is not a portfolio result. Missing/stale marks
+				// or a rejected ledger make the whole aggregate unavailable.
+				return 0, "--"
+			}
+			totalNetPnL += item.V150LedgerNetPnL
+			included++
+		}
+		if included == 0 {
+			return 0, "--"
+		}
+		// V1.5 is one reusable 100,000 CNY virtual portfolio. Entry cash from
+		// sequential trades is turnover, not new capital, so summing it into the
+		// denominator would mechanically suppress the portfolio return.
+		capital := v150.FixedStrategyV150Config().PortfolioCash
+		if capital <= 0 {
+			return 0, "--"
+		}
+		totalYieldRate := round2(totalNetPnL / capital * 100)
+		return totalYieldRate, formatSignedPercent(totalYieldRate)
+	}
 	totalBuy := 0.0
 	totalValue := 0.0
 	for _, item := range items {
@@ -3028,7 +3140,10 @@ func calculateYieldTotalByItems(items []models.AiRecommendStocksYieldItem) (floa
 		if item.BuyAmount <= 0 {
 			continue
 		}
-		buyCost := calcBuyTradeCost(item.BuyAmount, resolveTradingMarket(item.StockCode))
+		if !v150YieldItemHasUsableExitValue(item, timeNow().In(cnLocation())) {
+			continue
+		}
+		buyCost := calcBuyTradeCostForVersion(item.SummaryVersion, item.BuyAmount, resolveTradingMarket(item.StockCode))
 		if buyCost.NetAmount <= 0 {
 			continue
 		}
@@ -3039,7 +3154,7 @@ func calculateYieldTotalByItems(items []models.AiRecommendStocksYieldItem) (floa
 		} else if item.CurrentPrice > 0 {
 			valuePrice = item.CurrentPrice
 		}
-		sellNet := calcSellTradeCost(item.BuyAmount, valuePrice, resolveTradingMarket(item.StockCode))
+		sellNet := calcSellTradeCostForVersion(item.SummaryVersion, item.BuyAmount, valuePrice, resolveTradingMarket(item.StockCode))
 		if sellNet.NetAmount <= 0 {
 			continue
 		}
@@ -3053,6 +3168,15 @@ func calculateYieldTotalByItems(items []models.AiRecommendStocksYieldItem) (floa
 }
 
 func calculateBenchmarkSummaryByItems(items []models.AiRecommendStocksYieldItem) benchmarkSummaryResult {
+	// V1.5 comparability is keyed to exact cached minute quotes at the strategy
+	// fill/valuation timestamps. A date-only cache key (and especially its stale
+	// fallback) can silently preserve a result after those quotes change from
+	// missing to available, so the current cohort is always recomputed cache-only.
+	if containsV150YieldItem(items) {
+		result := calculateBenchmarkSummaryByItemsCore(items)
+		applyBenchmarkRatesToItems(items, result)
+		return result
+	}
 	cacheKey, hasWindow := buildBenchmarkSummaryCacheKey(items)
 	if hasWindow {
 		if result, ok := loadBenchmarkSummaryCache(cacheKey, false); ok {
@@ -3076,12 +3200,49 @@ func calculateBenchmarkSummaryByItems(items []models.AiRecommendStocksYieldItem)
 	return result
 }
 
+func containsV150YieldItem(items []models.AiRecommendStocksYieldItem) bool {
+	for _, item := range items {
+		if isV150CostVersion(item.SummaryVersion) {
+			return true
+		}
+	}
+	return false
+}
+
 func calculateBenchmarkSummaryByItemsCore(items []models.AiRecommendStocksYieldItem) benchmarkSummaryResult {
 	result := defaultBenchmarkSummaryResult()
+	hasV150 := containsV150YieldItem(items)
+	if hasV150 {
+		for _, item := range items {
+			if !isV150CostVersion(item.SummaryVersion) {
+				result.Warnings = append(result.Warnings, v150BenchmarkPartialHealthCode)
+				return result
+			}
+		}
+	}
+	for idx := range items {
+		if !isV150CostVersion(items[idx].SummaryVersion) {
+			continue
+		}
+		items[idx].BenchmarkYieldRate = 0
+		items[idx].BenchmarkYieldRateText = "--"
+		items[idx].ExcessYieldRate = 0
+		items[idx].ExcessYieldRateText = "--"
+	}
 	entries := buildYieldDailyOverviewEntries(items)
 	if len(entries) == 0 {
+		if hasV150 {
+			for _, item := range items {
+				if (strings.TrimSpace(item.BacktestEligibility) == "" || strings.TrimSpace(item.BacktestEligibility) == recommendBacktestEligible) &&
+					strings.TrimSpace(item.ActivationStatus) == "activated" {
+					result.Warnings = append(result.Warnings, v150BenchmarkPartialHealthCode)
+					break
+				}
+			}
+		}
 		return result
 	}
+	result.Warnings = collectV150BenchmarkHealthWarnings(entries)
 	strategySummary := calculateStrategySummaryByEntries(entries)
 	result.StrategyXirr = strategySummary.StrategyXirr
 	result.StrategyXirrText = strategySummary.StrategyXirrText
@@ -3093,12 +3254,39 @@ func calculateBenchmarkSummaryByItemsCore(items []models.AiRecommendStocksYieldI
 	}
 	tradingDays, benchmarkPriceSeries, err := loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay)
 	if err != nil || len(tradingDays) == 0 || benchmarkPriceSeries == nil {
+		if containsV150YieldItem(items) {
+			result.Warnings = dedupeNonEmptyStrings(append(result.Warnings, v150BenchmarkDailySeriesHealthCode), 0)
+		}
 		return result
 	}
-	benchmarkSeries, itemRateMap, _, benchmarkXirr, _, winRate, medianExcess, comparableCount, ok := calculateCashflowMatchedBenchmark(entries, tradingDays, benchmarkPriceSeries)
+	benchmarkWarnings := make([]string, 0)
+	benchmarkSeries, itemRateMap, matchedStrategyXirr, benchmarkXirr, _, winRate, medianExcess, comparableCount, ok := calculateCashflowMatchedBenchmark(entries, tradingDays, benchmarkPriceSeries, &benchmarkWarnings)
+	result.Warnings = dedupeNonEmptyStrings(append(result.Warnings, benchmarkWarnings...), 0)
 	if !ok {
 		return result
 	}
+	if hasV150 {
+		for _, item := range items {
+			if (strings.TrimSpace(item.BacktestEligibility) != "" && strings.TrimSpace(item.BacktestEligibility) != recommendBacktestEligible) ||
+				strings.TrimSpace(item.ActivationStatus) != "activated" {
+				continue
+			}
+			if !item.V150LedgerAccountingReady {
+				result.Warnings = dedupeNonEmptyStrings(append(result.Warnings, v150BenchmarkPartialHealthCode), 0)
+				return result
+			}
+			if _, comparable := itemRateMap[item.RecommendID]; !comparable {
+				// A partial benchmark is not a portfolio benchmark. One missing exact
+				// buy/exit quote makes every aggregate benchmark/excess metric unavailable.
+				result.Warnings = dedupeNonEmptyStrings(append(result.Warnings, v150BenchmarkPartialHealthCode), 0)
+				return result
+			}
+		}
+		if comparableCount == 0 {
+			return result
+		}
+	}
+	result.ItemRateByRecommendID = itemRateMap
 	for idx := range items {
 		rate, hasRate := itemRateMap[items[idx].RecommendID]
 		if !hasRate {
@@ -3113,22 +3301,34 @@ func calculateBenchmarkSummaryByItemsCore(items []models.AiRecommendStocksYieldI
 		}
 	}
 	lastTradeDate := tradingDays[len(tradingDays)-1].Format("2006-01-02")
-	benchmarkAmount := round2(benchmarkSeries.CumulativeAmountByDay[lastTradeDate])
-	costBasis := 0.0
-	for _, entry := range entries {
-		costBasis += entry.BuyCostNet
-	}
-	result.Rate = 0
-	if costBasis > 0 {
-		result.Rate = round2(benchmarkAmount / costBasis * 100)
+	if hasV150 {
+		benchmarkRate, complete := benchmarkSeries.CumulativeRateByDay[lastTradeDate]
+		if !complete {
+			result.Warnings = dedupeNonEmptyStrings(append(result.Warnings, v150BenchmarkPartialHealthCode), 0)
+			return result
+		}
+		result.Rate = round2(benchmarkRate)
 		result.RateText = formatSignedPercent(result.Rate)
+	} else {
+		benchmarkAmount := round2(benchmarkSeries.CumulativeAmountByDay[lastTradeDate])
+		costBasis := 0.0
+		for _, entry := range entries {
+			costBasis += entry.BuyCostNet
+		}
+		if costBasis > 0 {
+			result.Rate = round2(benchmarkAmount / costBasis * 100)
+			result.RateText = formatSignedPercent(result.Rate)
+		}
 	}
-	totalYieldRate, _ := calculateYieldTotalByItems(items)
+	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
+	if totalYieldRateText == "--" {
+		return result
+	}
 	result.ExcessYieldRate = round2(totalYieldRate - result.Rate)
 	result.ExcessYieldRateText = formatSignedPercent(result.ExcessYieldRate)
 	result.BenchmarkXirr = benchmarkXirr
 	result.BenchmarkXirrText = formatSignedPercent(benchmarkXirr)
-	result.ExcessXirr = round2(result.StrategyXirr - benchmarkXirr)
+	result.ExcessXirr = round2(matchedStrategyXirr - benchmarkXirr)
 	result.ExcessXirrText = formatSignedPercent(result.ExcessXirr)
 	if comparableCount > 0 {
 		result.WinRateVsBenchmark = winRate
@@ -3246,6 +3446,19 @@ func resolveStrategyExitCashflow(entry yieldDailyOverviewEntry) (time.Time, floa
 func calculateStrategyMaxDrawdownByEntries(entries []yieldDailyOverviewEntry) (float64, bool) {
 	if len(entries) == 0 {
 		return 0, false
+	}
+	if isV150CostVersion(entries[0].SummaryVersion) {
+		for _, entry := range entries[1:] {
+			if !isV150CostVersion(entry.SummaryVersion) {
+				return 0, false
+			}
+		}
+		return calculateV150StrategyMaxDrawdownByEntries(entries)
+	}
+	for _, entry := range entries[1:] {
+		if isV150CostVersion(entry.SummaryVersion) {
+			return 0, false
+		}
 	}
 	startDay, endDay, ok := resolveYieldDailyOverviewWindow(entries)
 	if !ok {
@@ -3585,6 +3798,7 @@ func calculateCashflowMatchedBenchmark(
 	entries []yieldDailyOverviewEntry,
 	tradingDays []time.Time,
 	priceSeries *yieldDailyOverviewPriceSeries,
+	warningTargets ...*[]string,
 ) (*benchmarkDailySeries, map[uint]float64, float64, float64, float64, float64, float64, int, bool) {
 	if len(entries) == 0 || len(tradingDays) == 0 || priceSeries == nil {
 		return nil, nil, 0, 0, 0, 0, 0, 0, false
@@ -3596,60 +3810,94 @@ func calculateCashflowMatchedBenchmark(
 	excesses := make([]float64, 0, len(entries))
 	winCount := 0
 	comparableCount := 0
+	recordWarning := func(entry yieldDailyOverviewEntry, reason string) {
+		if strings.TrimSpace(reason) == "" {
+			return
+		}
+		for _, target := range warningTargets {
+			if target != nil {
+				*target = append(*target, v150BenchmarkHealthWarning(entry, reason))
+			}
+		}
+	}
 	for _, entry := range entries {
 		buyClose := priceSeries.CloseByDay[entry.BuyDay.Format("2006-01-02")]
-		if buyClose <= 0 || entry.BuyCostNet <= 0 {
-			continue
-		}
-		benchmarkBuy := calcBenchmarkETFBuyTrade(entry.BuyCostNet, buyClose)
-		if !benchmarkBuy.Valid || benchmarkBuy.Shares <= 0 {
+		if entry.BuyCostNet <= 0 {
 			continue
 		}
 		endDay := entry.CurrentDay
 		endTime := time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 15, 0, 0, 0, cnLocation())
-		if !entry.SellDay.IsZero() {
-			endDay = entry.SellDay
-			if sellTime, ok := parseYieldOverviewDisplayTime(entry.SellTime); ok {
-				endTime = sellTime
-			} else {
-				endTime = time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 15, 0, 0, 0, cnLocation())
+		endPrice := 0.0
+		if isV150CostVersion(entry.SummaryVersion) {
+			matchedBuy, matchedEnd, matchedEndTime, reason := resolveV150BenchmarkMatchedPrices(entry)
+			if reason != "" {
+				recordWarning(entry, reason)
+				continue
 			}
-		} else if currentTime, ok := parseYieldOverviewDisplayTime(entry.CurrentPriceTime); ok {
-			endTime = currentTime
+			buyClose = matchedBuy
+			endPrice = matchedEnd
+			endTime = matchedEndTime
+			endDay = normalizeYieldOverviewTradeDay(matchedEndTime)
+		} else {
+			if buyClose <= 0 {
+				continue
+			}
+			if !entry.SellDay.IsZero() {
+				endDay = entry.SellDay
+				if sellTime, ok := parseYieldOverviewDisplayTime(entry.SellTime); ok {
+					endTime = sellTime
+				} else {
+					endTime = time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 15, 0, 0, 0, cnLocation())
+				}
+			} else if currentTime, ok := parseYieldOverviewDisplayTime(entry.CurrentPriceTime); ok {
+				endTime = currentTime
+			}
+			endPrice = priceSeries.CloseByDay[endDay.Format("2006-01-02")]
+			if entry.HasSellAmount && endPrice <= 0 {
+				endPrice = buyClose
+			}
+			if !entry.HasSellAmount && endDay.Equal(entry.CurrentDay) {
+				endPrice = resolveBenchmarkEndPrice(defaultBenchmarkCode, endPrice, endDay)
+			}
+			if endPrice <= 0 {
+				endPrice = buyClose
+			}
 		}
-		endPrice := priceSeries.CloseByDay[endDay.Format("2006-01-02")]
-		if entry.HasSellAmount && endPrice <= 0 {
-			endPrice = buyClose
-		}
-		if !entry.HasSellAmount && endDay.Equal(entry.CurrentDay) {
-			endPrice = resolveBenchmarkEndPrice(defaultBenchmarkCode, endPrice, endDay)
-		}
-		if endPrice <= 0 {
-			endPrice = buyClose
+		benchmarkBuy := calcBenchmarkETFBuyTradeForVersion(entry.SummaryVersion, entry.BuyCostNet, buyClose)
+		if !benchmarkBuy.Valid || benchmarkBuy.Shares <= 0 {
+			continue
 		}
 		position := benchmarkCashflowPosition{
 			RecommendID:      entry.RecommendID,
+			SummaryVersion:   entry.SummaryVersion,
 			BuyDay:           entry.BuyDay,
 			EndDay:           endDay,
 			EndTime:          endTime,
 			InvestedNet:      entry.BuyCostNet,
 			Shares:           benchmarkBuy.Shares,
+			CashRemainder:    benchmarkBuy.UnusedCash,
 			SellAmount:       endPrice,
 			HasSellAmount:    entry.HasSellAmount,
 			CurrentPrice:     endPrice,
 			CurrentDay:       entry.CurrentDay,
 			CurrentPriceTime: entry.CurrentPriceTime,
 		}
+		benchmarkSell := calcBenchmarkETFSellTradeForVersion(position.SummaryVersion, position.Shares, endPrice)
+		if !benchmarkSell.Valid || benchmarkSell.NetAmount <= 0 {
+			continue
+		}
+		benchmarkEndValue := benchmarkSell.NetAmount + position.CashRemainder
+		// Keep the benchmark position available for immutable historical NAV even
+		// when an open V1.5 strategy mark has since become stale. Current per-item
+		// comparison remains unavailable until both sides have a valid current mark.
+		positions = append(positions, position)
 		strategyEndValue := entry.RealizedValueNet
 		if !entry.HasSellAmount {
 			strategyEndValue = resolveStrategyCurrentNetValue(entry)
 		}
-		benchmarkSell := calcBenchmarkETFSellTrade(position.Shares, endPrice)
-		if !benchmarkSell.Valid || benchmarkSell.NetAmount <= 0 {
+		if isV150CostVersion(entry.SummaryVersion) && strategyEndValue <= 0 {
 			continue
 		}
-		benchmarkEndValue := benchmarkSell.NetAmount
-		positions = append(positions, position)
 		strategyCashflows = append(strategyCashflows, xirrCashflow{At: entry.BuyTime, Amount: -entry.BuyCostNet})
 		benchmarkCashflows = append(benchmarkCashflows, xirrCashflow{At: entry.BuyTime, Amount: -entry.BuyCostNet})
 		strategyCashflows = append(strategyCashflows, xirrCashflow{At: endTime, Amount: strategyEndValue})
@@ -3670,7 +3918,15 @@ func calculateCashflowMatchedBenchmark(
 	dailyRateByDay := make(map[string]float64, len(tradingDays))
 	navByDay := make(map[string]float64, len(tradingDays))
 
+	v150Portfolio := len(entries) > 0
+	for _, entry := range entries {
+		if !isV150CostVersion(entry.SummaryVersion) {
+			v150Portfolio = false
+			break
+		}
+	}
 	prevValue := 0.0
+	prevCumulativeAmount := 0.0
 	nav := 1.0
 	moneyMarketDailyRate := moneyMarketAnnualRate / 365.0 / 100.0
 	for _, tradeDay := range tradingDays {
@@ -3682,11 +3938,17 @@ func calculateCashflowMatchedBenchmark(
 			if tradeDay.Before(entry.BuyDay) {
 				continue
 			}
+			if isV150CostVersion(entry.SummaryVersion) {
+				if _, comparable := itemRateMap[entry.RecommendID]; !comparable {
+					continue
+				}
+			}
 			costBasisNet += entry.BuyCostNet
 			if shouldIncludeYieldDailyOverviewEntryInDailyCost(entry, tradeDay) {
 				dailyHoldingCostNet += entry.BuyCostNet
 			}
 		}
+		completeDay := true
 		for _, position := range positions {
 			if tradeDay.Before(position.BuyDay) {
 				continue
@@ -3696,13 +3958,42 @@ func calculateCashflowMatchedBenchmark(
 				price = position.SellAmount
 			}
 			if price <= 0 {
+				if v150Portfolio {
+					completeDay = false
+					break
+				}
 				continue
 			}
-			benchmarkValue := calcBenchmarkETFSellTrade(position.Shares, price)
+			benchmarkValue := calcBenchmarkETFSellTradeForVersion(position.SummaryVersion, position.Shares, price)
 			if !benchmarkValue.Valid || benchmarkValue.NetAmount <= 0 {
 				continue
 			}
-			totalValue += benchmarkValue.NetAmount
+			totalValue += benchmarkValue.NetAmount + position.CashRemainder
+		}
+		if v150Portfolio {
+			// V1.5 uses a fixed 100,000-yuan virtual account. New principal is not
+			// return: only aggregate position PnL changes equity and NAV.
+			if !completeDay {
+				continue
+			}
+			cumulativeAmount := round2(totalValue - costBasisNet)
+			dailyAmount := round2(cumulativeAmount - prevCumulativeAmount)
+			previousEquity := 100_000 + prevCumulativeAmount
+			equity := round2(100_000 + cumulativeAmount)
+			benchmarkDailyRate := 0.0
+			if previousEquity > 0 {
+				benchmarkDailyRate = round2(dailyAmount / previousEquity * 100)
+			}
+			benchmarkCumulativeRate := round2(cumulativeAmount / 100_000 * 100)
+			nav = round4(equity / 100_000)
+			valueByDay[tradeDate] = equity
+			cumulativeAmountByDay[tradeDate] = cumulativeAmount
+			dailyAmountByDay[tradeDate] = dailyAmount
+			cumulativeRateByDay[tradeDate] = benchmarkCumulativeRate
+			dailyRateByDay[tradeDate] = benchmarkDailyRate
+			navByDay[tradeDate] = nav
+			prevCumulativeAmount = cumulativeAmount
+			continue
 		}
 		cumulativeAmount := round2(totalValue - costBasisNet)
 		dailyAmount := round2(totalValue - prevValue)
@@ -3760,7 +4051,10 @@ func calculateCashflowMatchedBenchmark(
 
 	strategyXirr, strategyOK := calculateXirr(strategyCashflows)
 	benchmarkXirr, benchmarkOK := calculateXirr(benchmarkCashflows)
-	maxDrawdown := calculateMaxDrawdownByDailyRates(entries, tradingDays)
+	maxDrawdown := 0.0
+	if !v150Portfolio {
+		maxDrawdown = calculateMaxDrawdownByDailyRates(entries, tradingDays)
+	}
 	winRate := 0.0
 	if comparableCount > 0 {
 		winRate = round2(float64(winCount) / float64(comparableCount) * 100)
@@ -3769,6 +4063,7 @@ func calculateCashflowMatchedBenchmark(
 	series := &benchmarkDailySeries{
 		Code:                  defaultBenchmarkModelCode,
 		Name:                  defaultBenchmarkName,
+		PositionCount:         len(positions),
 		CloseByDay:            priceSeries.CloseByDay,
 		ValueByDay:            valueByDay,
 		CumulativeAmountByDay: cumulativeAmountByDay,
@@ -3788,10 +4083,29 @@ func calculateCashflowMatchedBenchmark(
 
 func resolveStrategyCurrentNetValue(entry yieldDailyOverviewEntry) float64 {
 	price := entry.CurrentPrice
+	if isV150CostVersion(entry.SummaryVersion) {
+		if !entry.V150LedgerAccountingReady || entry.V150LedgerClosed || entry.V150LedgerQuantity <= 0 || math.Trunc(entry.V150LedgerQuantity) != entry.V150LedgerQuantity ||
+			price <= 0 || !v150YieldCurrentPriceIsFresh(entry.CurrentPriceTime, timeNow().In(cnLocation())) {
+			return 0
+		}
+		cfg := v150.FixedStrategyV150Config()
+		mark := v150.CalculateTradeCost(
+			v150.SideSell,
+			v150.ResolveMarket(entry.StockCode),
+			price,
+			int(entry.V150LedgerQuantity),
+			cfg.SlippageScenarios()[0],
+			cfg,
+		)
+		if mark.CashFlow <= 0 {
+			return 0
+		}
+		return round2(mark.CashFlow + entry.V150LedgerCorporateCash)
+	}
 	if price <= 0 {
 		price = entry.BuyAmount
 	}
-	sellNet := calcSellTradeCost(entry.BuyAmount, price, resolveTradingMarket(entry.StockCode))
+	sellNet := calcSellTradeCostForVersion(entry.SummaryVersion, entry.BuyAmount, price, resolveTradingMarket(entry.StockCode))
 	return round2(sellNet.NetAmount)
 }
 
@@ -4276,6 +4590,14 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 	if query != nil {
 		strategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
 	}
+	v150HealthWarnings := make([]string, 0)
+	if isV150CostVersion(strategyCohort) || (strategyCohort == strategyCohortCurrent && isV150CostVersion(marketSummaryCurrentVersion)) {
+		if warnings, warningErr := loadV150ImmutableRunHealthWarnings(30); warningErr != nil {
+			logger.SugaredLogger.Warnf("load v1.5 fallback yield health warnings failed: %v", warningErr)
+		} else {
+			v150HealthWarnings = append(v150HealthWarnings, warnings...)
+		}
+	}
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
 	meta := models.AiRecommendYieldMeta{}
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -4296,6 +4618,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 			PageSize:                  pageSize,
 			TotalPages:                0,
 			StrategyCohort:            strategyCohort,
+			V150HealthWarnings:        dedupeNonEmptyStrings(v150HealthWarnings, 0),
 			TotalYieldRate:            0,
 			TotalYieldRateText:        "--",
 			BenchmarkCode:             defaultBenchmarkModelCode,
@@ -4353,6 +4676,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		return nil, err
 	}
 	resultItems := make([]models.AiRecommendStocksYieldItem, 0, len(records))
+	ledgerAsOf := timeNow().In(cnLocation())
 	for _, rec := range records {
 		item := mapRecommendRecordToYieldItemWithRecordState(rec, recordStateMap, stateMap)
 		if override, ok := overrideMap[rec.ID]; ok {
@@ -4362,6 +4686,10 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 			item.DataStatus = "计算中"
 			item.DataStatusReason = "快照生成中"
 		}
+		applyV150YieldValuationAvailability(&item, ledgerAsOf)
+		if err := attachV150YieldLedgerProjection(&item, rec, ledgerAsOf); err != nil {
+			logger.SugaredLogger.Warnf("attach v1.5 fallback sealed ledger projection failed: recommend_id=%d run=%s rule=%s err=%v", rec.ID, rec.StrategyRunID, rec.StrategyRuleID, err)
+		}
 		resultItems = append(resultItems, item)
 	}
 	applyRecommendRepeatCountByCodeMap(resultItems, rawRepeatCountMap)
@@ -4369,6 +4697,12 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(resultItems)
 	benchmarkSummary := calculateBenchmarkSummaryByItems(resultItems)
+	if isV150CostVersion(strategyCohort) || (strategyCohort == strategyCohortCurrent && isV150CostVersion(marketSummaryCurrentVersion)) {
+		v150HealthWarnings = dedupeNonEmptyStrings(append(
+			append(v150HealthWarnings, collectV150YieldValuationHealthWarnings(resultItems)...),
+			benchmarkSummary.Warnings...,
+		), 0)
+	}
 
 	total := int64(len(resultItems))
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
@@ -4392,6 +4726,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		PageSize:                   pageSize,
 		TotalPages:                 totalPages,
 		StrategyCohort:             strategyCohort,
+		V150HealthWarnings:         v150HealthWarnings,
 		TotalYieldRate:             totalYieldRate,
 		TotalYieldRateText:         totalYieldRateText,
 		BenchmarkCode:              benchmarkSummary.Code,
@@ -4586,11 +4921,26 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		}
 		items = append(items, item)
 	}
+	for idx := range items {
+		applyV150YieldValuationAvailability(&items[idx], timeNow().In(cnLocation()))
+	}
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
 	diagnostics := calculateYieldDiagnosticSummary(records, items)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
 	benchmarkSummary := calculateBenchmarkSummaryByItems(items)
+	v150HealthWarnings := make([]string, 0)
+	if isV150CostVersion(strategyCohort) || (strategyCohort == strategyCohortCurrent && isV150CostVersion(marketSummaryCurrentVersion)) {
+		if warnings, warningErr := loadV150ImmutableRunHealthWarnings(30); warningErr != nil {
+			logger.SugaredLogger.Warnf("load v1.5 fast yield health warnings failed: %v", warningErr)
+		} else {
+			v150HealthWarnings = append(v150HealthWarnings, warnings...)
+		}
+		v150HealthWarnings = dedupeNonEmptyStrings(append(
+			append(v150HealthWarnings, collectV150YieldValuationHealthWarnings(items)...),
+			benchmarkSummary.Warnings...,
+		), 0)
+	}
 	total := int64(len(items))
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
 	offset := (page - 1) * pageSize
@@ -4613,6 +4963,7 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 		TotalPages:                 totalPages,
 		CalcMode:                   aiRecommendYieldModeFast,
 		StrategyCohort:             strategyCohort,
+		V150HealthWarnings:         v150HealthWarnings,
 		TotalYieldRate:             totalYieldRate,
 		TotalYieldRateText:         totalYieldRateText,
 		BenchmarkCode:              benchmarkSummary.Code,
@@ -4715,13 +5066,7 @@ func loadCurrentPriceSnapshotForRecommendRecords(records []models.AiRecommendSto
 		if code == "" {
 			continue
 		}
-		if price, ok := parseBuyPrice(info.Price); ok {
-			priceMap[code] = round2(price)
-		}
-		priceTime := strings.TrimSpace(strings.TrimSpace(info.Date) + " " + strings.TrimSpace(info.Time))
-		if priceTime != "" {
-			priceTimeMap[code] = priceTime
-		}
+		storeCurrentPriceSnapshot(priceMap, priceTimeMap, code, info.Price, info.Date, info.Time)
 	}
 	return priceMap, priceTimeMap
 }
@@ -4739,10 +5084,10 @@ func applyLatestCurrentPriceSnapshot(
 		if code == "" {
 			continue
 		}
-		if currentPrice, ok := currentPriceMap[code]; ok && currentPrice > 0 {
+		currentPrice, hasPrice := currentPriceMap[code]
+		ts := strings.TrimSpace(currentPriceTimeMap[code])
+		if hasPrice && currentPrice > 0 && ts != "" {
 			items[idx].CurrentPrice = round2(currentPrice)
-		}
-		if ts := strings.TrimSpace(currentPriceTimeMap[code]); ts != "" {
 			items[idx].CurrentPriceTime = ts
 		}
 	}
@@ -4755,6 +5100,25 @@ func mapRecommendRecordToFastYieldItem(
 	strictStateMap map[uint]models.AiRecommendYieldRecordState,
 	dirtyScope aiRecommendYieldDirtyScope,
 ) models.AiRecommendStocksYieldItem {
+	if isV150CostVersion(rec.SummaryVersion) {
+		// Fast mode may change presentation latency, never V1.5 accounting. Reuse
+		// the strict materialized lifecycle when present and otherwise remain
+		// unavailable instead of manufacturing a raw-price trade.
+		item := mapRecommendRecordToYieldItem(rec, map[string]models.AiRecommendYieldState{})
+		hasStrict := false
+		if state, ok := strictStateMap[rec.ID]; ok {
+			item = mapRecommendRecordStateToYieldItem(rec, state)
+			hasStrict = true
+		}
+		item.CalcMode = aiRecommendYieldModeFast
+		applyStrictPendingStateToYieldItem(&item, dirtyScope, hasStrict)
+		asOf := timeNow().In(cnLocation())
+		applyV150YieldValuationAvailability(&item, asOf)
+		if hasStrict {
+			_ = attachV150YieldLedgerProjection(&item, rec, asOf)
+		}
+		return item
+	}
 	code := normalizeRecommendStockCode(rec.StockCode)
 	recordTime := recommendRecordTime(rec)
 	signalView := resolveRecommendSignalView(rec)
@@ -4771,6 +5135,7 @@ func mapRecommendRecordToFastYieldItem(
 	item := models.AiRecommendStocksYieldItem{
 		RecommendID:             rec.ID,
 		RowKey:                  yieldRowKeyFromRecommend(rec, code),
+		SummaryVersion:          strings.TrimSpace(rec.SummaryVersion),
 		CalcMode:                aiRecommendYieldModeFast,
 		StockCode:               code,
 		StockName:               strings.TrimSpace(rec.StockName),
@@ -4855,6 +5220,7 @@ func mapRecommendRecordToFastYieldItem(
 	if item.CurrentPrice <= 0 {
 		item.CurrentPrice = item.BuyAmount
 	}
+	applyV150YieldValuationAvailability(&item, timeNow().In(cnLocation()))
 
 	if stopProfitAmount != nil && item.CurrentPrice >= *stopProfitAmount {
 		sell := round2(*stopProfitAmount)
@@ -4875,13 +5241,13 @@ func mapRecommendRecordToFastYieldItem(
 	}
 
 	if item.SellAmount != nil && *item.SellAmount > 0 {
-		result := calculateNetYield(item.StockCode, item.BuyAmount, *item.SellAmount)
+		result := calculateNetYieldForVersion(item.SummaryVersion, item.StockCode, item.BuyAmount, *item.SellAmount)
 		if result.Valid {
 			item.YieldRate = result.YieldRate
 			item.YieldRateText = result.YieldText
 		}
 	} else if item.CurrentPrice > 0 {
-		result := calculateNetYield(item.StockCode, item.BuyAmount, item.CurrentPrice)
+		result := calculateNetYieldForVersion(item.SummaryVersion, item.StockCode, item.BuyAmount, item.CurrentPrice)
 		if result.Valid {
 			item.YieldRate = result.YieldRate
 			item.YieldRateText = result.YieldText
@@ -4890,6 +5256,7 @@ func mapRecommendRecordToFastYieldItem(
 
 	applyRecommendBacktestEligibilityOverride(&item, &rec)
 	applyInactiveYieldDefaults(&item)
+	applyV150YieldValuationAvailability(&item, timeNow().In(cnLocation()))
 	return item
 }
 

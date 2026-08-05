@@ -27,7 +27,11 @@ type StockInfoData struct {
 }
 
 func TestStockInfoHK(t *testing.T) {
+	if os.Getenv("GO_STOCK_RUN_INTEGRATION") != "1" {
+		t.Skip("skip integration test; set GO_STOCK_RUN_INTEGRATION=1 to enable")
+	}
 	db.Init("../../data/stock.db")
+	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(&StockInfoHK{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

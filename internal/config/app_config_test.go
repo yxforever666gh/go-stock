@@ -1,6 +1,7 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -127,7 +128,7 @@ func TestLoadOverridesAndFallbacks(t *testing.T) {
 	if cfg.DB.BusyTimeoutMS != 8000 || cfg.DB.LogLevel != "warn" {
 		t.Fatalf("unexpected db config: %+v", cfg.DB)
 	}
-	expectedDBPath := "/tmp/go-stock-runtime/data/stock.db?cache_size=-524288&journal_mode=WAL"
+	expectedDBPath := filepath.Join("/tmp/go-stock-runtime", "data", "stock.db") + "?cache_size=-524288&journal_mode=WAL"
 	if cfg.DB.Path != expectedDBPath {
 		t.Fatalf("unexpected db path: %s", cfg.DB.Path)
 	}

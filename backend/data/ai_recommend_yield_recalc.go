@@ -242,7 +242,7 @@ func markAiRecommendYieldDirtyRecords(recommendIDs []uint, reason string, mode s
 	}, 0, len(ids))
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Select("id, stock_code").
-		Where("id IN ?", ids).
+		Where("id IN ? AND summary_version = ?", ids, marketSummaryVersion150).
 		Find(&rows).Error; err != nil {
 		return err
 	}
@@ -277,14 +277,8 @@ func upsertAiRecommendYieldDirtyRows(rows []models.AiRecommendYieldDirtyCode) er
 }
 
 func cleanupLegacyRuleFixCodeLevelDirtyRows() error {
-	return db.Dao.Model(&models.AiRecommendYieldDirtyCode{}).
-		Where("recommend_id = 0 OR recommend_id IS NULL").
-		Where("reason IN ?", []string{
-			"激活扫描窗口或旧突破追价上限规则已修复，等待 strict 重算",
-			"V1.3.2 VWAP 单位归一化规则已修复，等待 strict 重算",
-			"买入价不低于止盈价，等待按突破追价上限规则重算",
-		}).
-		Delete(&models.AiRecommendYieldDirtyCode{}).Error
+	// Old repair markers are part of the frozen legacy audit trail.
+	return nil
 }
 
 func loadDirtyAiRecommendYieldCodes(mode string) ([]string, error) {
@@ -372,22 +366,11 @@ func markInvalidActivationExitPlanDirtyCodes(mode string) error {
 	if db.Dao == nil {
 		return nil
 	}
-	scope := make(map[string]struct{})
 	recordIDs := make([]uint, 0, 16)
-	stateRows := make([]models.AiRecommendYieldState, 0, 16)
-	if err := db.Dao.Model(&models.AiRecommendYieldState{}).
-		Where("activation_status = ? AND buy_amount > 0 AND stop_profit_amount IS NOT NULL AND buy_amount >= stop_profit_amount", "activated").
-		Find(&stateRows).Error; err != nil && !isSQLiteNoSuchTable(err) {
-		return err
-	}
-	for _, row := range stateRows {
-		code := normalizeRecommendStockCode(row.StockCode)
-		if code != "" {
-			scope[code] = struct{}{}
-		}
-	}
 	recordRows := make([]models.AiRecommendYieldRecordState, 0, 16)
 	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+		Joins("JOIN ai_recommend_stocks AS rec ON rec.id = ai_recommend_yield_record_state.recommend_id AND rec.deleted_at IS NULL").
+		Where("rec.summary_version = ?", marketSummaryVersion150).
 		Where("activation_status = ? AND buy_amount > 0 AND stop_profit_amount IS NOT NULL AND buy_amount >= stop_profit_amount", "activated").
 		Find(&recordRows).Error; err != nil && !isSQLiteNoSuchTable(err) {
 		return err
@@ -401,7 +384,7 @@ func markInvalidActivationExitPlanDirtyCodes(mode string) error {
 	if err := markAiRecommendYieldDirtyRecords(recordIDs, reason, mode); err != nil {
 		return err
 	}
-	return markAiRecommendYieldDirtyCodes(keysFromScopeMap(scope), reason, mode)
+	return nil
 }
 
 func markActivationWindowPolicyBugDirtyCodes(mode string) error {
@@ -420,6 +403,7 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 		Select("r.id AS recommend_id, r.stock_code, COALESCE(r.data_time, r.created_at) AS signal_at, r.activation_rule_json, COALESCE(s.data_status_reason, '') AS state_reason, COALESCE(r.activation_invalid_reason, '') AS record_reason").
 		Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
 		Where("r.deleted_at IS NULL").
+		Where("r.summary_version = ?", marketSummaryVersion150).
 		Where("r.activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
 		Where("(COALESCE(s.activation_status, r.activation_status, '') = ? OR COALESCE(s.data_status, '') = ?)", "pending", "待激活").
 		Find(&rows).Error
@@ -448,43 +432,9 @@ func markActivationWindowPolicyBugDirtyCodes(mode string) error {
 }
 
 func markV132VWAPScaleDirtyCodes(mode string) error {
-	if db.Dao == nil {
-		return nil
-	}
-	rows := make([]struct {
-		RecommendID             uint
-		StockCode               string
-		DataStatusReason        string
-		ActivationInvalidReason string
-	}, 0, 16)
-	err := db.Dao.Table("ai_recommend_stocks AS r").
-		Select("r.id AS recommend_id, r.stock_code, COALESCE(s.data_status_reason, '') AS data_status_reason, COALESCE(r.activation_invalid_reason, '') AS activation_invalid_reason").
-		Joins("LEFT JOIN ai_recommend_yield_record_state AS s ON s.recommend_id = r.id").
-		Where("r.deleted_at IS NULL").
-		Where("r.summary_version = ?", marketSummaryVersionV132).
-		Where("(COALESCE(s.data_status_reason, '') LIKE ? OR COALESCE(r.activation_invalid_reason, '') LIKE ?)", "%VWAP%", "%VWAP%").
-		Find(&rows).Error
-	if err != nil {
-		if isSQLiteNoSuchTable(err) {
-			return nil
-		}
-		return err
-	}
-	recordIDs := make([]uint, 0, len(rows))
-	for _, row := range rows {
-		if row.RecommendID == 0 {
-			continue
-		}
-		reason := strings.TrimSpace(firstNonEmptyText(row.DataStatusReason, row.ActivationInvalidReason))
-		if reasonIndicatesV132VWAPScaleBug(reason) {
-			recordIDs = append(recordIDs, row.RecommendID)
-		}
-	}
-	return markAiRecommendYieldDirtyRecords(
-		recordIDs,
-		"V1.3.2 VWAP 单位归一化规则已修复，等待 strict 重算",
-		mode,
-	)
+	// V1.3.2 and every cohort through 1.4.2 are frozen at release time.
+	_ = mode
+	return nil
 }
 
 func reasonIndicatesActivationWindowPolicyBug(reason string, signalAt time.Time) bool {
@@ -609,9 +559,8 @@ func applyFrozenSellPriceFix(meta *models.AiRecommendYieldMeta) error {
 	if strings.TrimSpace(meta.FrozenSellPriceFixVersion) == frozenSellPriceFixVersion {
 		return nil
 	}
-	if err := rewriteFrozenSellSnapshots(loadFrozenYieldStateSnapshots, frozenYieldStateUpdater{}); err != nil {
-		return err
-	}
+	// ai_recommend_yield_state has no strategy-version key and is frozen as the
+	// 1.4.2 aggregate. Never rewrite it during a 1.5 startup migration.
 	if err := rewriteFrozenSellSnapshots(loadFrozenYieldRecordSnapshots, frozenYieldRecordUpdater{}); err != nil {
 		return err
 	}
@@ -642,8 +591,13 @@ func loadFrozenYieldStateSnapshots() ([]frozenSellPriceSnapshot, error) {
 }
 
 func loadFrozenYieldRecordSnapshots() ([]frozenSellPriceSnapshot, error) {
+	if db.Dao == nil || !db.Dao.Migrator().HasTable(&models.AiRecommendStocks{}) {
+		return []frozenSellPriceSnapshot{}, nil
+	}
 	rows := make([]models.AiRecommendYieldRecordState, 0, 64)
 	if err := db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+		Joins("JOIN ai_recommend_stocks AS rec ON rec.id = ai_recommend_yield_record_state.recommend_id AND rec.deleted_at IS NULL").
+		Where("rec.summary_version = ?", marketSummaryVersion150).
 		Where("frozen = ? AND sell_time IS NOT NULL AND realized_sell_amount IS NOT NULL AND position_status IN ?", true, []string{"已止盈", "已止损"}).
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -716,21 +670,25 @@ func (f frozenYieldRecordSnapshot) getStopProfitAmount() *float64   { return f.S
 func (f frozenYieldRecordSnapshot) getStopLossAmount() *float64     { return f.StopLossAmount }
 
 func (frozenYieldStateUpdater) updateSellSnapshot(id uint, sellPrice, yield float64, yieldText string, updatedAt time.Time) error {
-	return db.Dao.Model(&models.AiRecommendYieldState{}).Where("id = ?", id).Updates(map[string]any{
-		"realized_sell_amount": sellPrice,
-		"yield_rate":           yield,
-		"yield_rate_text":      yieldText,
-		"updated_at":           updatedAt,
-	}).Error
+	// Versionless aggregates are frozen legacy data.
+	_ = id
+	_ = sellPrice
+	_ = yield
+	_ = yieldText
+	_ = updatedAt
+	return nil
 }
 
 func (frozenYieldRecordUpdater) updateSellSnapshot(id uint, sellPrice, yield float64, yieldText string, updatedAt time.Time) error {
-	return db.Dao.Model(&models.AiRecommendYieldRecordState{}).Where("id = ?", id).Updates(map[string]any{
-		"realized_sell_amount": sellPrice,
-		"yield_rate":           yield,
-		"yield_rate_text":      yieldText,
-		"updated_at":           updatedAt,
-	}).Error
+	return db.Dao.Model(&models.AiRecommendYieldRecordState{}).
+		Where("id = ?", id).
+		Where("recommend_id IN (?)", db.Dao.Model(&models.AiRecommendStocks{}).Select("id").Where("summary_version = ?", marketSummaryVersion150)).
+		Updates(map[string]any{
+			"realized_sell_amount": sellPrice,
+			"yield_rate":           yield,
+			"yield_rate_text":      yieldText,
+			"updated_at":           updatedAt,
+		}).Error
 }
 
 func correctedFrozenSellPrice(status string, stopProfit, stopLoss *float64, bar minuteBar) (float64, bool) {
@@ -744,18 +702,17 @@ func correctedFrozenSellPrice(status string, stopProfit, stopLoss *float64, bar 
 }
 
 func syncYieldStateIdentityFields() error {
-	now := time.Now()
-	return db.Dao.Exec(`
-UPDATE ai_recommend_yield_state
-SET recommend_category = '',
-    recommend_time = signal_time,
-    updated_at = ?
-WHERE COALESCE(recommend_category, '') <> ''
-   OR COALESCE(recommend_time, '') <> COALESCE(signal_time, '')
-`, now).Error
+	// The aggregate table cannot distinguish 1.4.2 from 1.5.0. Preserve every
+	// existing row byte-for-byte instead of applying startup identity repairs.
+	return nil
 }
 
 func syncYieldRecordStateIdentityFields() error {
+	if db.Dao == nil ||
+		!db.Dao.Migrator().HasTable(&models.AiRecommendStocks{}) ||
+		!db.Dao.Migrator().HasTable(&models.AiRecommendYieldRecordState{}) {
+		return nil
+	}
 	now := time.Now()
 	return db.Dao.Exec(`
 UPDATE ai_recommend_yield_record_state
@@ -771,6 +728,7 @@ WHERE EXISTS (
     SELECT 1
     FROM ai_recommend_stocks ars
     WHERE ars.id = ai_recommend_yield_record_state.recommend_id
+	  AND ars.summary_version = '1.5.0'
       AND (
         COALESCE(ai_recommend_yield_record_state.stock_code, '') <> COALESCE(ars.stock_code, '')
         OR COALESCE(ai_recommend_yield_record_state.stock_name, '') <> COALESCE(ars.stock_name, '')
@@ -856,7 +814,8 @@ func ensureYieldMetaSchema() error {
 }
 
 func loadYieldScopeCodesForQuery(query *models.AiRecommendStocksQuery) ([]string, error) {
-	q := db.Dao.Model(&models.AiRecommendStocks{})
+	q := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("summary_version = ?", marketSummaryVersion150)
 
 	if query != nil {
 		if query.StockCode != "" {
@@ -1029,6 +988,7 @@ func loadAiRecommendYieldAggregatesAfter(coverableStartMinute time.Time) (map[st
 func loadAiRecommendYieldRecordsAfter(coverableStartMinute time.Time) ([]models.AiRecommendStocks, error) {
 	records := make([]models.AiRecommendStocks, 0, 128)
 	err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&records).Error
 	if err != nil {
@@ -1140,13 +1100,7 @@ func fetchCurrentPriceMap(aggrMap map[string]*aiRecommendYieldAggregate) (map[st
 		if normalizedCode == "" {
 			continue
 		}
-		if price, ok := parseBuyPrice(info.Price); ok {
-			priceMap[normalizedCode] = round2(price)
-		}
-		priceTime := strings.TrimSpace(strings.TrimSpace(info.Date) + " " + strings.TrimSpace(info.Time))
-		if priceTime != "" {
-			priceTimeMap[normalizedCode] = priceTime
-		}
+		storeCurrentPriceSnapshot(priceMap, priceTimeMap, normalizedCode, info.Price, info.Date, info.Time)
 	}
 	return priceMap, priceTimeMap
 }

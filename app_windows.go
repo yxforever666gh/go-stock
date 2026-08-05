@@ -56,6 +56,14 @@ func MonitorStockPrices(a *App) {
 	go emitEvent(a.ctx, "realtime_profit", fmt.Sprintf("  %.2f", snapshot.Total))
 }
 
+// onReady is the Windows systray ready callback. Keep it equivalent to the
+// existing Darwin startup behavior: record readiness and show the Wails
+// window, without launching any helper process or secondary window.
+func onReady(a *App) {
+	logger.SugaredLogger.Infof("systray onReady")
+	runtime.WindowShow(a.ctx)
+}
+
 func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 	defer PanicHandler()
 	dialog, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{

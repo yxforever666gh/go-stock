@@ -11,7 +11,7 @@ import (
 )
 
 func TestEnsureYieldMetaSchema_AddsManualAuditColumnsToLegacyTable(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-meta-legacy.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-meta-legacy.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate recommend table failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestEnsureYieldMetaSchema_AddsManualAuditColumnsToLegacyTable(t *testing.T)
 }
 
 func TestPersistManualYieldAudit_WritesFinishedSummary(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-manual-audit-persist.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-manual-audit-persist.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate recommend table failed: %v", err)
 	}
@@ -361,7 +361,7 @@ func TestRecalcManagerPendingForceKeepsScopeAndReason(t *testing.T) {
 }
 
 func TestLoadAiRecommendYieldTargets_ManualDownloadSkipsRealtimePriceFetch(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-targets-skip-realtime.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-targets-skip-realtime.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldState{},
@@ -375,6 +375,7 @@ func TestLoadAiRecommendYieldTargets_ManualDownloadSkipsRealtimePriceFetch(t *te
 	now := time.Date(2026, 4, 30, 15, 30, 0, 0, loc)
 	recordTime := time.Date(2026, 4, 29, 9, 40, 0, 0, loc)
 	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersion150,
 		DataTime:                    &recordTime,
 		StockCode:                   "002297.SZ",
 		StockName:                   "博云新材",
@@ -432,7 +433,7 @@ func TestLoadAiRecommendYieldTargets_ManualDownloadSkipsRealtimePriceFetch(t *te
 }
 
 func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-scope-filter.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-scope-filter.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldRecordState{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -441,6 +442,7 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 	ruleJSON := `{"signalType":"price_range_with_volume","evaluationWindow":"5m","baseline":"manual_amount","operator":">=","thresholdValue":10,"thresholdMax":10.5,"volumeRatio":1,"confirmBars":1,"volumeWindow":5,"volumeMetric":"amount","expireTradeDays":5}`
 	rows := []models.AiRecommendStocks{
 		{
+			SummaryVersion:           marketSummaryVersion150,
 			StockCode:                "300001.SZ",
 			StockName:                "特锐德",
 			RecommendCategory:        "conditional",
@@ -456,6 +458,7 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 			DataTime:                 &now,
 		},
 		{
+			SummaryVersion:           marketSummaryVersion150,
 			StockCode:                "300002.SZ",
 			StockName:                "神州泰岳",
 			RecommendCategory:        "conditional",
@@ -471,6 +474,7 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 			DataTime:                 &now,
 		},
 		{
+			SummaryVersion:           marketSummaryVersion150,
 			StockCode:                "300003.SZ",
 			StockName:                "乐普医疗",
 			RecommendCategory:        "conditional",
@@ -486,6 +490,7 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 			DataTime:                 &now,
 		},
 		{
+			SummaryVersion:           marketSummaryVersion150,
 			StockCode:                "300004.SZ",
 			StockName:                "南风股份",
 			RecommendCategory:        "conditional",
@@ -546,19 +551,20 @@ func TestFilterManualDownloadScopeCodes_SkipsTerminalAndAnalysisOnlyRecords(t *t
 	if err != nil {
 		t.Fatalf("filterManualDownloadScopeCodes failed: %v", err)
 	}
-	if len(got) != 3 || got[0] != "300003.SZ" || got[1] != "300004.SZ" || got[2] != "300005.SZ" {
+	if len(got) != 2 || got[0] != "300003.SZ" || got[1] != "300004.SZ" {
 		t.Fatalf("unexpected filtered scope: %#v", got)
 	}
 }
 
 func TestLoadManualDownloadScopeCodesByRecoverablePlans_IncludesMissingExitPlan(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-download-recoverable-plan.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-download-recoverable-plan.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
 	loc := cnLocation()
 	dataTime := time.Date(2026, 4, 29, 9, 40, 0, 0, loc)
 	row := models.AiRecommendStocks{
+		SummaryVersion:           marketSummaryVersion150,
 		DataTime:                 &dataTime,
 		StockCode:                "002297.SZ",
 		StockName:                "博云新材",

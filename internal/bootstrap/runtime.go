@@ -5,6 +5,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/persistence"
 	appconfig "go-stock/internal/config"
 	"go-stock/internal/service"
 	"os"
@@ -52,6 +53,9 @@ func InitCLIStorage(dataDir, dbPath string) (string, error) {
 	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
 		return "", err
 	}
+	if err := persistence.MigrateStrategyPersistence(db.Dao); err != nil {
+		return "", err
+	}
 	if err := data.EnsureSettingsRecord(); err != nil {
 		return "", err
 	}
@@ -82,7 +86,7 @@ func EnsureRuntimeDirs(cfg appconfig.AppConfig) {
 }
 
 func AutoMigrate() {
-	if err := db.Dao.AutoMigrate(
+	appModels := []any{
 		&data.StockInfo{},
 		&data.StockBasic{},
 		&data.FollowedStock{},
@@ -117,8 +121,13 @@ func AutoMigrate() {
 		&models.CronTaskRun{},
 		&models.EmailSendLog{},
 		&models.MarketSummaryRunDiagnostic{},
-	); err != nil {
+	}
+	if err := db.Dao.AutoMigrate(appModels...); err != nil {
 		logger.SugaredLogger.Errorf("auto migrate failed: %v", err)
+		return
+	}
+	if err := persistence.MigrateStrategyPersistence(db.Dao); err != nil {
+		logger.SugaredLogger.Errorf("strategy persistence migration failed: %v", err)
 		return
 	}
 	data.ResetInterruptedAiRecommendYieldTasksOnStartup()

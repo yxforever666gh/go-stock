@@ -163,11 +163,28 @@ func NormalizeMarketSummaryQuestion(question string) string {
 }
 
 func BuildMarketSummaryExecutionQuestion(question string) string {
+	return buildMarketSummaryExecutionQuestionForVersion(question, marketSummaryVersion142)
+}
+
+// BuildMarketSummaryExecutionQuestionForVersion keeps the frozen 1.4.2 prompt
+// contract while allowing 1.5.0 to advertise its independent deterministic
+// daily cap. The LLM still cannot choose which candidates enter production.
+func BuildMarketSummaryExecutionQuestionForVersion(question, summaryVersion string) string {
+	return buildMarketSummaryExecutionQuestionForVersion(question, summaryVersion)
+}
+
+func buildMarketSummaryExecutionQuestionForVersion(question, summaryVersion string) string {
 	content := NormalizeMarketSummaryQuestion(question)
 	if content == "" {
 		content = DefaultMarketSummaryQuestion
 	}
 	policy := ResolveMarketSummaryRecommendationCountPolicy(content)
+	if strings.TrimSpace(summaryVersion) == marketSummaryVersion150 {
+		cap := marketSummaryV150RiskOnDailyCap()
+		if policy.ProductionTarget > cap {
+			policy.ProductionTarget = cap
+		}
+	}
 	return strings.TrimSpace(content + "\n\n" + strings.TrimSpace(marketSummaryOutputInstruction) + "\n\n" + policy.Instruction())
 }
 
@@ -192,5 +209,5 @@ func RenderMarketSummaryTemplate(text string) string {
 }
 
 func ResolveMarketSummaryQuestion(question string) string {
-	return BuildMarketSummaryExecutionQuestion(question)
+	return BuildMarketSummaryExecutionQuestionForVersion(question, marketSummaryCurrentVersion)
 }

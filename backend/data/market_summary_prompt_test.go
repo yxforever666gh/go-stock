@@ -125,3 +125,14 @@ func TestBuildMarketSummaryExecutionQuestion(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildMarketSummaryExecutionQuestionV150UsesIndependentDailyCap(t *testing.T) {
+	got := BuildMarketSummaryExecutionQuestionForVersion("从最近市场资讯里提炼可交易主线，并推荐3只A股", marketSummaryVersion150)
+	if !strings.Contains(got, "目标输出 3 只股票，其中最多 2 只可作为可交易生产候选") {
+		t.Fatalf("expected V1.5 prompt to use its fixed risk-on cap, got: %s", got)
+	}
+	legacy := BuildMarketSummaryExecutionQuestion("从最近市场资讯里提炼可交易主线，并推荐3只A股")
+	if !strings.Contains(legacy, "目标输出 3 只股票，其中最多 3 只可作为可交易生产候选") {
+		t.Fatalf("expected frozen legacy prompt contract, got: %s", legacy)
+	}
+}

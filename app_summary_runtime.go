@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
@@ -20,11 +22,44 @@ type summaryRunResult struct {
 	errs          []string
 	routeLog      *data.MarketSummaryRouteLogSnapshot
 	verified      []data.MarketSummaryVerifiedCandidateSnapshot
+	v150Run       *data.MarketSummaryV150RunSnapshot
 }
 
 type marketSummaryRuntimeMeta struct {
 	routeLog *data.MarketSummaryRouteLogSnapshot
 	verified []data.MarketSummaryVerifiedCandidateSnapshot
+	v150Run  *data.MarketSummaryV150RunSnapshot
+}
+
+const marketSummaryV150BackendMissingReason = "V1.5 后端冻结决策缺失；已禁止回退旧版 Markdown 解析"
+
+func marketSummaryRequiresV150Backend() bool {
+	return strings.TrimSpace(data.MarketSummaryCurrentVersion()) == "1.5.0"
+}
+
+func usableMarketSummaryRunResult(res summaryRunResult) bool {
+	if marketSummaryRequiresV150Backend() {
+		// A valid frozen run is the production fact. Presentation text may be
+		// empty (notably on risk_off/no_trade) and must never prevent the
+		// structured no_trade result from being persisted.
+		return res.v150Run != nil &&
+			strings.TrimSpace(res.v150Run.RunContext.RunID) != "" &&
+			strings.TrimSpace(res.v150Run.RunContext.StrategyVersion) == data.MarketSummaryCurrentVersion()
+	}
+	return strings.TrimSpace(res.text) != ""
+}
+
+func rejectMissingV150BackendResult(res summaryRunResult) summaryRunResult {
+	if !marketSummaryRequiresV150Backend() || usableMarketSummaryRunResult(res) {
+		return res
+	}
+	for _, item := range res.errs {
+		if strings.TrimSpace(item) == marketSummaryV150BackendMissingReason {
+			return res
+		}
+	}
+	res.errs = append(res.errs, marketSummaryV150BackendMissingReason)
+	return res
 }
 
 func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) {
@@ -57,13 +92,18 @@ func (a *App) runSummaryStockNewsTask(question string, aiConfigId int, sysPrompt
 	}
 
 	res := summaryRunResult{}
+	if marketSummaryRequiresV150Backend() && !enableTools {
+		logger.SugaredLogger.Warn("V1.5 市场总结忽略无工具模式请求：后端分阶段证据链为强制路径")
+		go emitEvent(a.ctx, "warnMsg", "V1.5 必须使用后端分阶段证据链，已强制启用工具模式")
+		enableTools = true
+	}
 	for idx, targetAiConfigId := range order {
 		if idx > 0 {
 			logger.SugaredLogger.Warnf("市场资讯AI总结切换备用模型重试。from=%d to=%d attempt=%d errs=%v", order[idx-1], targetAiConfigId, idx+1, res.errs)
 			go emitEvent(a.ctx, "warnMsg", "市场资讯AI总结已自动切换到备用模型继续重试")
 		}
 		current := a.runSummaryWithFallback(targetAiConfigId, question, sysPromptId, enableTools, think)
-		if current.text != "" {
+		if usableMarketSummaryRunResult(current) {
 			res = current
 			break
 		}
@@ -82,6 +122,12 @@ func (a *App) runSummaryStockNewsTask(question string, aiConfigId int, sysPrompt
 }
 
 func (a *App) runSummaryWithFallback(targetAiConfigId int, question string, sysPromptId *int, withTools bool, thinking bool) summaryRunResult {
+	if marketSummaryRequiresV150Backend() {
+		// V1.5 data collection, deterministic ranking and frozen trade plans are
+		// produced only by the phased backend path. A plain-model retry can
+		// produce presentation text but cannot produce an auditable decision.
+		return rejectMissingV150BackendResult(a.runSummaryOnce(targetAiConfigId, question, sysPromptId, true, thinking))
+	}
 	res := a.runSummaryOnce(targetAiConfigId, question, sysPromptId, withTools, thinking)
 	if withTools && (res.text == "" || len(res.errs) > 0) {
 		if isLikelyRequestLevelFailure(res.errs) {
@@ -170,6 +216,7 @@ func (a *App) runSummaryOnce(targetAiConfigId int, question string, sysPromptId 
 		errs:          errs,
 		routeLog:      resMeta.routeLog,
 		verified:      resMeta.verified,
+		v150Run:       resMeta.v150Run,
 	}
 }
 
@@ -192,6 +239,15 @@ func applyMarketSummaryMetaMessage(target *marketSummaryRuntimeMeta, msg map[str
 			var verified []data.MarketSummaryVerifiedCandidateSnapshot
 			if json.Unmarshal(b, &verified) == nil {
 				target.verified = verified
+			}
+		}
+	}
+	if raw, ok := msg["v150Run"]; ok {
+		b, err := json.Marshal(raw)
+		if err == nil {
+			var run data.MarketSummaryV150RunSnapshot
+			if json.Unmarshal(b, &run) == nil && strings.TrimSpace(run.RunContext.RunID) != "" {
+				target.v150Run = &run
 			}
 		}
 	}
@@ -272,7 +328,7 @@ func isLikelyNetworkOrTimeoutErr(raw string) bool {
 }
 
 func shouldSummaryFailover(res summaryRunResult) bool {
-	if strings.TrimSpace(res.text) != "" {
+	if usableMarketSummaryRunResult(res) {
 		return false
 	}
 	if len(res.errs) == 0 {
@@ -313,7 +369,29 @@ func shouldSummaryFailover(res summaryRunResult) bool {
 }
 
 func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time) {
+	if marketSummaryRequiresV150Backend() && !usableMarketSummaryRunResult(res) {
+		res = rejectMissingV150BackendResult(res)
+		reason := marketSummaryV150BackendMissingReason
+		if strings.TrimSpace(res.text) == "" {
+			reason = "V1.5 后端冻结决策与展示报告均缺失；本轮未生产"
+		}
+		logger.SugaredLogger.Warn(reason)
+		a.persistMarketSummaryDiagnostic(res, startedAt, time.Now(), &models.MarketSummaryRecommendSaveResult{
+			BlockedCount:   1,
+			BlockedReasons: []models.MarketSummaryBlockedReasonItem{{Reason: reason, Count: 1}},
+		})
+		go emitEvent(a.ctx, "warnMsg", reason)
+		return
+	}
+	if marketSummaryRequiresV150Backend() {
+		a.persistMarketSummaryV150RunResult(res, startedAt)
+		return
+	}
 	if res.text == "" {
+		return
+	}
+	if res.v150Run != nil {
+		a.persistMarketSummaryV150RunResult(res, startedAt)
 		return
 	}
 
@@ -395,11 +473,83 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 	}
 }
 
+// persistMarketSummaryV150RunResult is intentionally separate from the legacy
+// Markdown parser. Scores, targets, state and rule JSON are taken only from the
+// frozen backend decision carried in res.v150Run; res.text is presentation-only.
+func (a *App) persistMarketSummaryV150RunResult(res summaryRunResult, startedAt time.Time) {
+	providerName := resolveAIProviderName(res.aiConfigId, res.modelName)
+	report := &models.AIResponseResult{
+		ProviderName: strings.TrimSpace(providerName),
+		StockCode:    "市场资讯",
+		StockName:    "市场资讯",
+		ModelName:    strings.TrimSpace(res.modelName),
+		ChatId:       res.chatID,
+		Question:     strings.TrimSpace(res.finalQuestion),
+		Content:      data.HumanizeMarketSummaryReport(res.text),
+	}
+	report.CreatedAt = startedAt
+	if db.Dao != nil {
+		if err := db.Dao.Create(report).Error; err != nil {
+			logger.SugaredLogger.Warnf("V1.5 市场报告保存失败: %v", err)
+		}
+	}
+
+	var saveResult *models.MarketSummaryRecommendSaveResult
+	var persistErr error
+	if db.Dao == nil {
+		persistErr = fmt.Errorf("V1.5 数据库未初始化")
+	} else {
+		persistContext := a.ctx
+		if persistContext == nil {
+			persistContext = context.Background()
+		}
+		saveResult, persistErr = data.PersistMarketSummaryV150Decision(persistContext, db.Dao, res.v150Run, providerName, res.modelName)
+	}
+	if persistErr != nil {
+		logger.SugaredLogger.Warnf("V1.5 决策持久化失败（不会回退到旧模型解析）: %v", persistErr)
+		if saveResult == nil {
+			saveResult = &models.MarketSummaryRecommendSaveResult{
+				BlockedCount:   1,
+				BlockedReasons: []models.MarketSummaryBlockedReasonItem{{Reason: persistErr.Error(), Count: 1}},
+			}
+		}
+	} else if saveResult != nil {
+		logger.SugaredLogger.Infof(
+			"V1.5 后端决策持久化完成: run=%s candidates=%d production=%d saved=%d noTrade=%s",
+			res.v150Run.RunContext.RunID,
+			len(res.v150Run.Candidates),
+			len(res.v150Run.Production),
+			saveResult.SavedCount,
+			res.v150Run.NoTradeReason,
+		)
+	}
+	a.persistMarketSummaryDiagnostic(res, startedAt, time.Now(), saveResult)
+
+	setting := a.services.Config.GetConfig()
+	if setting != nil && setting.Settings != nil && setting.YieldEmailEnable && setting.MarketSummaryEmailEnable {
+		if !a.tryAcquireYieldEmailTask() {
+			logger.SugaredLogger.Warn("V1.5 市场报告邮件已跳过：上一封邮件仍在发送")
+			return
+		}
+		defer a.releaseYieldEmailTask()
+		if err := a.services.AI.SendMarketSummaryEmail("summary_auto", report, summarizeSummaryRunError(res)); err != nil {
+			logger.SugaredLogger.Warnf("V1.5 市场报告邮件发送失败: %v", err)
+		}
+	}
+}
+
 func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, reportText, providerName string, res summaryRunResult, startedAt time.Time, firstResult *models.MarketSummaryRecommendSaveResult, firstOutputRowsOmitted int) *models.MarketSummaryRecommendSaveResult {
 	if firstResult == nil {
 		return firstResult
 	}
 	countPolicy := data.ResolveMarketSummaryRecommendationCountPolicy(res.finalQuestion)
+	if !shouldRunMarketSummaryModelSupplement(data.MarketSummaryCurrentVersion()) {
+		firstResult.SupplementTriggered = false
+		firstResult.SupplementText = "V1.5.0 已禁用为凑数量而发起的第二轮模型生成；结构字段仅在首次持久化前逐条规范化，单条失败不会影响同批记录。"
+		reportText, _ = data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
+		updateMarketSummaryReportRuntimeResult(report, reportText, firstResult.SupplementText, res.routeLog, countPolicy, firstResult, firstOutputRowsOmitted)
+		return firstResult
+	}
 	targetProduction := countPolicy.ProductionTarget
 	reportText, _ = data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
 	updateReport := func(note string, outputRowsOmitted int) {
@@ -485,6 +635,10 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 		logger.SugaredLogger.Infof("市场资讯AI总结二轮补位保存成功: new=%d upgraded=%d production=%d", secondResult.SavedCount, secondResult.UpgradedCount, secondResult.ProductionCount)
 	}
 	return firstResult
+}
+
+func shouldRunMarketSummaryModelSupplement(version string) bool {
+	return strings.TrimSpace(version) != "1.5.0"
 }
 
 func updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy data.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {

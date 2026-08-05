@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,7 +15,6 @@ import (
 	"time"
 
 	"github.com/duke-git/lancet/v2/mathutil"
-	"github.com/duke-git/lancet/v2/random"
 	"github.com/tidwall/gjson"
 	"gorm.io/gorm"
 )
@@ -25,7 +26,8 @@ const marketSummaryVersion136 = "1.3.6"
 const marketSummaryVersion140 = "1.4.0"
 const marketSummaryVersion141 = "1.4.1"
 const marketSummaryVersion142 = "1.4.2"
-const marketSummaryCurrentVersion = marketSummaryVersion142
+const marketSummaryVersion150 = "1.5.0"
+const marketSummaryCurrentVersion = marketSummaryVersion150
 
 const (
 	strategyCohortCurrent = "current"
@@ -42,6 +44,7 @@ func marketSummaryKnownVersions() []string {
 		marketSummaryVersion140,
 		marketSummaryVersion141,
 		marketSummaryVersion142,
+		marketSummaryVersion150,
 	}
 }
 
@@ -55,6 +58,8 @@ func normalizeStrategyCohort(raw string, defaultCohort string) string {
 		return normalizeStrategyCohort(defaultCohort, "")
 	case strategyCohortCurrent, strategyCohortAll, strategyCohortLegacy:
 		return text
+	case "1.5.0", "v1.5.0", "150", "v150":
+		return marketSummaryVersion150
 	case "1.4.2", "v1.4.2", "142", "v142":
 		return marketSummaryVersion142
 	case "1.4.1", "v1.4.1", "141", "v141":
@@ -88,7 +93,7 @@ func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
 		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
 	case strategyCohortLegacy:
 		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", marketSummaryKnownVersions())
-	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142:
+	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142, marketSummaryVersion150:
 		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
 	default:
 		return q
@@ -100,6 +105,18 @@ func isCurrentStrategyCohortRecord(rec *models.AiRecommendStocks) bool {
 		return false
 	}
 	return strings.TrimSpace(rec.SummaryVersion) == marketSummaryCurrentVersion
+}
+
+// isFrozenLegacyStrategyRecord is intentionally narrow: the 1.5.0 release
+// contract freezes the 1.4.2 cohort without retroactively changing CRUD
+// semantics for unversioned, phase or other historical cohorts.
+func isFrozenLegacyStrategyRecord(rec *models.AiRecommendStocks) bool {
+	if rec == nil {
+		return false
+	}
+	version := strings.ToLower(strings.TrimSpace(rec.SummaryVersion))
+	version = strings.TrimPrefix(version, "v")
+	return version == marketSummaryVersion142
 }
 
 type marketSummaryRouteBudget struct {
@@ -119,6 +136,8 @@ type marketSummaryRouteLog struct {
 	RunSlot              string                   `json:"runSlot,omitempty"`
 	WindowStart          string                   `json:"windowStart,omitempty"`
 	WindowEnd            string                   `json:"windowEnd,omitempty"`
+	NewsWindowStatus     NewsWindowStatus         `json:"newsWindowStatus,omitempty"`
+	NewsWindowWarning    string                   `json:"newsWindowWarning,omitempty"`
 	Budget               marketSummaryRouteBudget `json:"budget"`
 	TotalCalls           int                      `json:"totalCalls"`
 	PerCategoryCalls     map[string]int           `json:"perCategoryCalls"`
@@ -134,27 +153,34 @@ type marketSummaryRouteLog struct {
 type MarketSummaryRouteLogSnapshot = marketSummaryRouteLog
 
 type marketSummaryDiscoverySnippet struct {
-	Title   string `json:"title"`
-	Summary string `json:"summary,omitempty"`
-	Time    string `json:"time,omitempty"`
-	Source  string `json:"source,omitempty"`
+	Title       string `json:"title"`
+	Summary     string `json:"summary,omitempty"`
+	Time        string `json:"time,omitempty"`
+	Source      string `json:"source,omitempty"`
+	SourceAt    string `json:"sourceAt,omitempty"`
+	AvailableAt string `json:"availableAt,omitempty"`
+	EvidenceID  string `json:"evidenceId,omitempty"`
 }
 
 type marketSummaryDiscoveryInput struct {
-	Question            string                                `json:"question"`
-	CurrentTime         string                                `json:"currentTime"`
-	MarketStage         string                                `json:"marketStage,omitempty"`
-	RunSlot             string                                `json:"runSlot,omitempty"`
-	WindowStart         string                                `json:"windowStart,omitempty"`
-	WindowEnd           string                                `json:"windowEnd,omitempty"`
-	Budget              marketSummaryRouteBudget              `json:"budget"`
-	MarketNews          []marketSummaryDiscoverySnippet       `json:"marketNews,omitempty"`
-	EventCalendar       []marketSummaryDiscoverySnippet       `json:"eventCalendar,omitempty"`
-	IndustryHeat        []marketSummaryDiscoverySnippet       `json:"industryHeat,omitempty"`
-	HotStrategies       []marketSummaryDiscoverySnippet       `json:"hotStrategies,omitempty"`
-	LongTigerBrief      []marketSummaryDiscoverySnippet       `json:"longTigerBrief,omitempty"`
-	IndicatorCandidates []marketSummaryIndicatorCandidate     `json:"indicatorCandidates,omitempty"`
-	SkippedReviews      []marketSummarySkippedReviewCandidate `json:"skippedReviews,omitempty"`
+	Question            string                            `json:"question"`
+	CurrentTime         string                            `json:"currentTime"`
+	MarketStage         string                            `json:"marketStage,omitempty"`
+	RunSlot             string                            `json:"runSlot,omitempty"`
+	WindowStart         string                            `json:"windowStart,omitempty"`
+	WindowEnd           string                            `json:"windowEnd,omitempty"`
+	Budget              marketSummaryRouteBudget          `json:"budget"`
+	MarketNews          []marketSummaryDiscoverySnippet   `json:"marketNews,omitempty"`
+	EventCalendar       []marketSummaryDiscoverySnippet   `json:"eventCalendar,omitempty"`
+	IndustryHeat        []marketSummaryDiscoverySnippet   `json:"industryHeat,omitempty"`
+	HotStrategies       []marketSummaryDiscoverySnippet   `json:"hotStrategies,omitempty"`
+	LongTigerBrief      []marketSummaryDiscoverySnippet   `json:"longTigerBrief,omitempty"`
+	IndicatorCandidates []marketSummaryIndicatorCandidate `json:"indicatorCandidates,omitempty"`
+	// AllIndicatorCandidates is kept out of model payloads. V1.5 ranks the
+	// complete deterministic pool before selecting the top 18 for evidence
+	// verification, while the legacy model prompt keeps its bounded input.
+	AllIndicatorCandidates []marketSummaryIndicatorCandidate     `json:"-"`
+	SkippedReviews         []marketSummarySkippedReviewCandidate `json:"skippedReviews,omitempty"`
 }
 
 type marketSummarySkippedReviewCandidate struct {
@@ -238,6 +264,7 @@ type marketSummaryVerifiedCandidate struct {
 	NegativeSignals   []string                      `json:"negativeSignals,omitempty"`
 	VerdictHints      []string                      `json:"verdictHints,omitempty"`
 	FeasiblePlans     []marketSummaryFeasiblePlan   `json:"feasiblePlans,omitempty"`
+	VerifiedAt        time.Time                     `json:"verifiedAt"`
 }
 
 type MarketSummaryVerifiedCandidateSnapshot = marketSummaryVerifiedCandidate
@@ -437,6 +464,15 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 		}
 		emitSummaryToolStatus(ch, "phase3.discovery.fetch", "success", nil, 0)
 
+		// V1.5 is a backend-owned deterministic strategy. The complete indicator
+		// universe is ranked before the top-18 evidence pass and the legacy final
+		// recommendation model is deliberately not invoked. Consequently model
+		// prose cannot alter scores, targets, execution state, or candidate order.
+		if marketSummaryCurrentVersion == marketSummaryVersion150 {
+			o.runMarketSummaryV150Phase(ch, displayQuestion, discoveryInput, longTigerRaw, logState)
+			return
+		}
+
 		logState.addCall("discovery_model")
 		emitSummaryToolStatus(ch, "phase3.discovery.model", "running", nil, 0)
 		discoveryResult, chatID, modelName, err := o.runMarketSummaryDiscovery(discoveryInput)
@@ -497,6 +533,179 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 	return ch
 }
 
+func (o *OpenAi) runMarketSummaryV150Phase(
+	ch chan map[string]any,
+	displayQuestion string,
+	input marketSummaryDiscoveryInput,
+	longTigerRaw []models.LongTigerRankData,
+	logState *marketSummaryRouteLog,
+) {
+	emitSummaryToolStatus(ch, "v150.deterministic.rank", "running", nil, 0)
+	run, err := prepareMarketSummaryV150ForPhase(input, parseMarketSummaryRouteStartedAt(logState), logState)
+	if err != nil {
+		logState.addNote("v1.5 preparation failed: %v", err)
+		emitSummaryToolStatus(ch, "v150.deterministic.rank", "error", err, 0)
+		ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
+		return
+	}
+	routes := buildMarketSummaryV150VerificationRoutes(run)
+	logState.DiscoveryCandidateCt = len(run.Candidates)
+	logState.addNote("v1.5 backend rank complete candidates=%d eligibleTop18=%d", len(run.Candidates), len(routes))
+	emitSummaryToolStatus(ch, "v150.deterministic.rank", "success", nil, 0)
+
+	verified := make([]marketSummaryVerifiedCandidate, 0, len(routes))
+	if run.Regime.NoTrade {
+		logState.addNote("v1.5 risk_off: evidence fetch skipped and structured no_trade will be persisted")
+	} else if len(routes) > 0 {
+		emitSummaryToolStatus(ch, "v150.evidence.verify", "running", nil, 0)
+		// The verifier fetches factual evidence/price snapshots only. It is not an
+		// LLM ranking or recommendation pass and it receives the already-fixed
+		// top-18 order from the strategy package.
+		verificationInput := input
+		verificationDiscovery := &marketSummaryDiscoveryResult{CandidateStocks: routes}
+		verified = verifyMarketSummaryCandidates(verificationInput, verificationDiscovery, longTigerRaw, input.Budget, logState)
+		emitSummaryToolStatus(ch, "v150.evidence.verify", "success", nil, 0)
+	}
+	logState.VerifiedCandidateCt = len(verified)
+
+	runEventModel, eventGateReason := applyMarketSummaryV150NewsEventGate(run, logState.NewsWindowStatus)
+	if !run.Regime.NoTrade && !runEventModel {
+		status := strings.TrimPrefix(eventGateReason, "news_")
+		warning := errors.New("event model skipped because news window status is " + status)
+		logState.addNote("v1.5 event evidence degraded: %s", eventGateReason)
+		emitSummaryToolStatus(ch, "v150.event.model", "warning", warning, 0)
+	} else if runEventModel {
+		emitSummaryToolStatus(ch, "v150.event.model", "running", nil, 0)
+		logState.addCall("event_model")
+		if err := o.verifyMarketSummaryV150Events(run, verified); err != nil {
+			// Event-model failure is candidate-local degradation: every selected
+			// candidate receives event score 0, while deterministic technical
+			// eligibility and the rest of the batch continue.
+			degradeMarketSummaryV150EventCandidates(run, run.VerificationSymbols, "model_batch_failed:"+strings.TrimSpace(err.Error()))
+			logState.addNote("v1.5 event model degraded: %v", err)
+			emitSummaryToolStatus(ch, "v150.event.model", "warning", err, 0)
+		} else {
+			emitSummaryToolStatus(ch, "v150.event.model", "success", nil, 0)
+		}
+	}
+	if !run.Regime.NoTrade && len(run.VerificationSymbols) > 0 {
+		emitSummaryToolStatus(ch, "v150.quote.refresh", "running", nil, 0)
+		refreshed, failed := refreshMarketSummaryV150VerificationQuotes(run)
+		logState.addNote("v1.5 final quote refresh refreshed=%d failed=%d", refreshed, failed)
+		if failed > 0 {
+			emitSummaryToolStatus(ch, "v150.quote.refresh", "warning", fmt.Errorf("%d final quotes missing or stale", failed), 0)
+		} else {
+			emitSummaryToolStatus(ch, "v150.quote.refresh", "success", nil, 0)
+		}
+	}
+
+	portfolio, portfolioErr := loadMarketSummaryV150PortfolioState(db.Dao, time.Now())
+	if portfolioErr != nil {
+		warning := "portfolio_state_degraded:" + strings.TrimSpace(portfolioErr.Error())
+		run.Warnings = append(run.Warnings, warning)
+		logState.addNote("v1.5 %s", warning)
+		run.PortfolioStateStatus = "failed"
+		portfolio = cloneV150PortfolioState(v150.PortfolioState{})
+	} else {
+		run.PortfolioStateStatus = "ok"
+	}
+	// Evidence and portfolio state fetched above are part of the frozen input.
+	// Advance the cutoff only after both are locally available; ranking remains
+	// tied to the earlier RunContext.AsOf snapshot.
+	run.RunContext.DataCutoffAt = time.Now()
+	run.PortfolioBefore = cloneV150PortfolioState(portfolio)
+	decisionAt := time.Now()
+	if err := finalizeMarketSummaryV150Run(run, verified, portfolio, decisionAt); err != nil {
+		logState.addNote("v1.5 decision failed: %v", err)
+		emitSummaryToolStatus(ch, "v150.decision", "error", err, 0)
+		ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
+		return
+	}
+	if err := refreshMarketSummaryV150DataHash(run); err != nil {
+		logState.addNote("v1.5 data hash refresh failed: %v", err)
+		emitSummaryToolStatus(ch, "v150.decision", "error", err, 0)
+		ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
+		return
+	}
+	run.Warnings = dedupeNonEmptyStrings(run.Warnings, 256)
+	for _, warning := range run.Warnings {
+		logState.addNote("health_warning:%s", warning)
+	}
+	logState.addNote(
+		"v1.5 decision complete production=%d noTrade=%s configHash=%s dataHash=%s modelHash=%s promptHash=%s warnings=%d",
+		len(run.Production), run.NoTradeReason, run.RunContext.ConfigHash, run.DataHash, run.ModelHash, run.PromptHash, len(run.Warnings),
+	)
+	emitSummaryToolStatus(ch, "v150.decision", "success", nil, 0)
+
+	report := renderMarketSummaryV150Report(run)
+	logState.finish()
+	ch <- map[string]any{
+		"code":     1,
+		"question": displayQuestion,
+		"content":  report,
+		"chatId":   run.RunContext.RunID,
+		"model":    firstNonEmptyText(strings.TrimSpace(o.Model), marketSummaryV150LocalModelSpec),
+	}
+	ch <- map[string]any{
+		"event":              "summaryStockNewsMeta",
+		"code":               1,
+		"routeLog":           logState,
+		"verifiedCandidates": verified,
+		"v150Run":            run,
+	}
+	logger.SugaredLogger.Infof("market summary v1.5 route completed: %s", mustJSON(logState))
+}
+
+func parseMarketSummaryRouteStartedAt(logState *marketSummaryRouteLog) time.Time {
+	if logState != nil {
+		if value, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(logState.StartedAt)); err == nil && !value.IsZero() {
+			return value
+		}
+		if value, err := time.ParseInLocation(time.DateTime, strings.TrimSpace(logState.StartedAt), cnLocation()); err == nil && !value.IsZero() {
+			return value
+		}
+	}
+	return time.Now()
+}
+
+func renderMarketSummaryV150Report(run *MarketSummaryV150RunSnapshot) string {
+	if run == nil {
+		return "Go-Stock 1.5.0：本轮无有效策略运行。"
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "# Go-Stock 1.5.0 市场决策（前向验证中）\n\n")
+	fmt.Fprintf(&out, "- 市场状态：%s\n", run.Regime.Regime)
+	fmt.Fprintf(&out, "- 完整候选：%d；确定性排序后核验：%d；生产计划：%d\n", len(run.Candidates), len(run.VerificationSymbols), len(run.Production))
+	fmt.Fprintf(&out, "- 运行 ID：%s\n", run.RunContext.RunID)
+	if len(run.Warnings) > 0 {
+		fmt.Fprintf(&out, "- 数据健康告警：%s\n", strings.Join(run.Warnings, "；"))
+	}
+	if len(run.Production) == 0 {
+		fmt.Fprintf(&out, "\n结构化 no_trade：%s\n", firstNonEmptyText(run.NoTradeReason, marketSummaryV150NoLegalCandidate))
+		return strings.TrimSpace(out.String())
+	}
+	out.WriteString("\n| 排名 | 股票 | 路径 | 分数 | 入场区间 | 止损 | 目标 |\n")
+	out.WriteString("|---:|---|---|---:|---:|---:|---:|\n")
+	for _, item := range run.Production {
+		candidate, _ := marketSummaryV150CandidateBySymbol(run, item.Symbol)
+		entryMin, entryMax := marketSummaryV150PlanEntryRange(item.Plan)
+		fmt.Fprintf(
+			&out,
+			"| %d | %s(%s) | %s | %d | %.2f–%.2f | %.2f | %.2f |\n",
+			item.Rank,
+			firstNonEmptyText(candidate.Candidate.Name, candidate.Source.StockName),
+			item.Symbol,
+			item.Plan.Path,
+			item.Score.Total,
+			entryMin,
+			entryMax,
+			item.Plan.Stop,
+			item.Plan.Target,
+		)
+	}
+	return strings.TrimSpace(out.String())
+}
+
 func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRouteBudget, logState *marketSummaryRouteLog) (marketSummaryDiscoveryInput, []models.LongTigerRankData, marketSummaryTimeWindow, error) {
 	now := time.Now()
 	window := resolveMarketSummaryTimeWindowAt(now)
@@ -521,7 +730,7 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 	logState.addCall("indicator_pool")
 
 	var (
-		news                *[]*models.Telegraph
+		newsWindow          NewsWindowResult
 		calendar            []any
 		industryRank        map[string]any
 		hotStrategyRaw      map[string]any
@@ -533,8 +742,15 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 	wg.Add(6)
 	go func() {
 		defer wg.Done()
-		news = runWithTimeout(4*time.Second, (*[]*models.Telegraph)(nil), func() *[]*models.Telegraph {
-			return NewMarketNewsApi().GetNews24HoursList("最近24小时市场资讯", random.RandInt(180, 260))
+		newsWindow = runWithTimeout(4*time.Second, NewsWindowResult{
+			Items:   []*models.Telegraph{},
+			Status:  NewsWindowStatusFailed,
+			From:    window.Start,
+			To:      window.End,
+			Warning: "market news window query timed out",
+		}, func() NewsWindowResult {
+			result, _ := NewMarketNewsApi().GetNewsWindow(nil, window.Start, window.End)
+			return result
 		})
 	}()
 	go func() {
@@ -563,16 +779,24 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 	}()
 	go func() {
 		defer wg.Done()
-		indicatorCandidates = buildMarketSummaryIndicatorCandidatePool(marketSummaryIndicatorCandidateLimit, logState)
+		if marketSummaryCurrentVersion == marketSummaryVersion150 {
+			indicatorCandidates = buildMarketSummaryV150IndicatorCandidatePool(logState)
+		} else {
+			indicatorCandidates = buildMarketSummaryIndicatorCandidatePool(marketSummaryIndicatorCandidateLimit, logState)
+		}
 	}()
 	wg.Wait()
+	logState.NewsWindowStatus = newsWindow.Status
+	logState.NewsWindowWarning = strings.TrimSpace(newsWindow.Warning)
+	logState.addNote("market news window status=%s items=%d warning=%s", newsWindow.Status, len(newsWindow.Items), strings.TrimSpace(newsWindow.Warning))
 	input.IndicatorCandidates = limitMarketSummaryIndicatorCandidates(indicatorCandidates, marketSummaryIndicatorAIInputLimit)
+	input.AllIndicatorCandidates = append([]marketSummaryIndicatorCandidate(nil), indicatorCandidates...)
 	logState.IndicatorCandidateCt = len(indicatorCandidates)
 	logState.IndicatorAIInputCt = len(input.IndicatorCandidates)
 
 	input.MarketNews = make([]marketSummaryDiscoverySnippet, 0, 28)
-	if news != nil {
-		for _, item := range *news {
+	if newsWindow.Status == NewsWindowStatusOK && len(newsWindow.Items) > 0 {
+		for _, item := range newsWindow.Items {
 			if item == nil {
 				continue
 			}
@@ -591,7 +815,21 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 			if title == "" {
 				continue
 			}
-			input.MarketNews = append(input.MarketNews, marketSummaryDiscoverySnippet{Title: truncateText(title, 120), Summary: truncateText(summary, 180), Time: item.Time, Source: item.Source})
+			sourceAt := ""
+			if item.DataTime != nil && !item.DataTime.IsZero() {
+				sourceAt = item.DataTime.Format(time.RFC3339Nano)
+			} else if parsed, ok := parseMarketSummaryWindowTime(item.Time); ok {
+				sourceAt = parsed.Format(time.RFC3339Nano)
+			}
+			availableAt := ""
+			if !item.CreatedAt.IsZero() {
+				availableAt = item.CreatedAt.Format(time.RFC3339Nano)
+			}
+			input.MarketNews = append(input.MarketNews, marketSummaryDiscoverySnippet{
+				Title: truncateText(title, 120), Summary: truncateText(summary, 180), Time: item.Time, Source: item.Source,
+				SourceAt: sourceAt, AvailableAt: availableAt,
+				EvidenceID: fmt.Sprintf("telegraph:%d:%s", item.ID, marketSummaryV150StableHash(title+"|"+sourceAt)),
+			})
 			if len(input.MarketNews) >= 24 {
 				break
 			}
@@ -613,7 +851,16 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 			if title == "" {
 				return true
 			}
-			input.EventCalendar = append(input.EventCalendar, marketSummaryDiscoverySnippet{Title: truncateText(title, 120), Time: date, Source: "财联社日历"})
+			calendarAvailableAt := time.Now()
+			calendarSourceAt := ""
+			if parsed, ok := parseMarketSummaryWindowTime(date); ok {
+				calendarSourceAt = parsed.Format(time.RFC3339Nano)
+			}
+			input.EventCalendar = append(input.EventCalendar, marketSummaryDiscoverySnippet{
+				Title: truncateText(title, 120), Time: date, Source: "财联社日历",
+				SourceAt: calendarSourceAt, AvailableAt: calendarAvailableAt.Format(time.RFC3339Nano),
+				EvidenceID: "calendar:" + marketSummaryV150StableHash(title+"|"+date),
+			})
 			return len(input.EventCalendar) < 12
 		})
 	}
@@ -1494,6 +1741,7 @@ func verifySingleMarketSummaryCandidate(input marketSummaryDiscoveryInput, candi
 	result.PositiveSignals = dedupeNonEmptyStrings(positive, 6)
 	result.NegativeSignals = dedupeNonEmptyStrings(negative, 6)
 	result.VerdictHints = dedupeNonEmptyStrings(verdictHints, 4)
+	result.VerifiedAt = time.Now()
 	return result
 }
 
@@ -1852,7 +2100,7 @@ func buildPhase3FinalMessages(sysPrompt string, question string, discoveryInput 
 33. 若复审结论为“等待激活 / 重新纳入 / 改判可交易”，必须重写买入区间、止盈区间、止损位、买入依据、失效条件，这些字段会覆盖收益率页面对应股票行；
 34. 若没有可复审对象，也必须保留“# 跳过复审”标题，并在表格中明确写“暂无需要复审的已跳过股票”；
 35. “# 交易计划说明”中必须明确写出本次筛选窗口，格式示例：本次筛选窗口：2026-04-09 09:30:00 至 2026-04-09 11:32:00；
-36. 不要输出旧版兼容字段，也不要回到标签式分层表达。`) + "\n\n" + BuildMarketSummaryExecutionQuestion(question)
+	36. 不要输出旧版兼容字段，也不要回到标签式分层表达。`) + "\n\n" + BuildMarketSummaryExecutionQuestionForVersion(question, marketSummaryCurrentVersion)
 	messages = append(messages, map[string]any{"role": "user", "content": instruction})
 	messages = append(messages, map[string]any{"role": "user", "content": strings.TrimSpace(`
 V1.4.2 交易计划可行性硬约束：

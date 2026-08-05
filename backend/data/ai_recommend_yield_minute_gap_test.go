@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildManualMinuteGapCoverageTasks_IncludesRangeStartGap(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-gap-range-start.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-gap-range-start.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
@@ -262,7 +262,7 @@ func TestMinuteBarsCoverTradingSessionsAllowsSuspendedEmptySession(t *testing.T)
 }
 
 func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-gap-close-retry.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-gap-close-retry.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
@@ -383,7 +383,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesUntilRealGapCovered(t *testing.T) 
 }
 
 func TestCloseManualMinuteCoverageGaps_MarksUncoverableAfterRetryExhausted(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-gap-uncoverable.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-gap-uncoverable.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
@@ -481,7 +481,7 @@ func TestCloseManualMinuteCoverageGaps_MarksUncoverableAfterRetryExhausted(t *te
 }
 
 func TestCloseManualMinuteCoverageGaps_RetriesExistingUncoverableGap(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-gap-retry-uncoverable.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-gap-retry-uncoverable.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
@@ -596,7 +596,7 @@ func TestCloseManualMinuteCoverageGaps_RetriesExistingUncoverableGap(t *testing.
 }
 
 func TestCloseManualMinuteCoverageGaps_MarksContinuityGapUncoverableAfterRetryExhausted(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-gap-continuity-uncoverable.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-gap-continuity-uncoverable.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},

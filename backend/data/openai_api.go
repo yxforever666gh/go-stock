@@ -423,10 +423,21 @@ func (o *OpenAi) NewSummaryStockNewsStreamWithTools(userQuestion string, sysProm
 		//}()
 
 		runFetch("MarketNews24h", func() ([]map[string]interface{}, error) {
-			news := NewMarketNewsApi().GetNews24HoursList("最新24小时市场资讯", random.RandInt(200, 1000))
+			windowEnd := time.Now()
+			news, err := NewMarketNewsApi().GetNewsWindow(nil, windowEnd.Add(-24*time.Hour), windowEnd)
+			if err != nil {
+				return nil, err
+			}
+			if news.Status != NewsWindowStatusOK {
+				return nil, fmt.Errorf("market news window status=%s: %s", news.Status, strings.TrimSpace(news.Warning))
+			}
 			messageText := strings.Builder{}
-			for _, telegraph := range *news {
-				messageText.WriteString("## " + telegraph.DataTime.Format("2006-01-02 15:04:05") + ":" + "\n")
+			for _, telegraph := range news.Items {
+				eventTime := strings.TrimSpace(telegraph.Time)
+				if telegraph.DataTime != nil && !telegraph.DataTime.IsZero() {
+					eventTime = telegraph.DataTime.Format("2006-01-02 15:04:05")
+				}
+				messageText.WriteString("## " + eventTime + ":" + "\n")
 				messageText.WriteString("### " + telegraph.Content + "\n")
 			}
 			return []map[string]interface{}{
@@ -454,7 +465,7 @@ func (o *OpenAi) NewSummaryStockNewsStreamWithTools(userQuestion string, sysProm
 		}
 
 		displayQuestion := NormalizeMarketSummaryQuestion(userQuestion)
-		executionQuestion := BuildMarketSummaryExecutionQuestion(displayQuestion)
+		executionQuestion := BuildMarketSummaryExecutionQuestionForVersion(displayQuestion, marketSummaryCurrentVersion)
 		msg = append(msg, map[string]interface{}{
 			"role":    "user",
 			"content": "执行要求：如果最终结论中推荐了任何A股股票，必须在输出最终答案前调用 CreateAiRecommendStocks 或 BatchCreateAiRecommendStocks 将推荐股票写入股票推荐记录；推荐多只时优先调用 BatchCreateAiRecommendStocks。禁止只输出股票名称和区间却不调用保存工具。",
@@ -666,11 +677,17 @@ func (o *OpenAi) NewSummaryStockNewsStream(userQuestion string, sysPromptId *int
 			msg = append(msg, result.messages...)
 		}
 
-		news := NewMarketNewsApi().GetNews24HoursList("最近24小时市场资讯", random.RandInt(200, 1000))
+		windowEnd := time.Now()
+		news, newsErr := NewMarketNewsApi().GetNewsWindow(nil, windowEnd.Add(-24*time.Hour), windowEnd)
+		if newsErr != nil || news.Status != NewsWindowStatusOK {
+			logger.SugaredLogger.Errorf("load market news window failed: status=%s warning=%s err=%v", news.Status, strings.TrimSpace(news.Warning), newsErr)
+		}
 		messageText := strings.Builder{}
-		for _, telegraph := range *news {
-			messageText.WriteString("## " + telegraph.Time + ":" + "\n")
-			messageText.WriteString("### " + telegraph.Content + "\n")
+		if news.Status == NewsWindowStatusOK {
+			for _, telegraph := range news.Items {
+				messageText.WriteString("## " + telegraph.Time + ":" + "\n")
+				messageText.WriteString("### " + telegraph.Content + "\n")
+			}
 		}
 		//logger.SugaredLogger.Infof("市场资讯 messageText=\n%s", messageText.String())
 
@@ -683,7 +700,7 @@ func (o *OpenAi) NewSummaryStockNewsStream(userQuestion string, sysPromptId *int
 			"content": messageText.String(),
 		})
 		displayQuestion := NormalizeMarketSummaryQuestion(userQuestion)
-		executionQuestion := BuildMarketSummaryExecutionQuestion(displayQuestion)
+		executionQuestion := BuildMarketSummaryExecutionQuestionForVersion(displayQuestion, marketSummaryCurrentVersion)
 		msg = append(msg, map[string]interface{}{
 			"role":    "user",
 			"content": executionQuestion,
@@ -996,15 +1013,16 @@ func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptI
 
 		go func() {
 			defer wg.Done()
-			messages := NewMarketNewsApi().GetNews24HoursList("", random.RandInt(200, 1000))
-			if messages == nil || len(*messages) == 0 {
+			windowEnd := time.Now()
+			messages, err := NewMarketNewsApi().GetNewsWindow(nil, windowEnd.Add(-24*time.Hour), windowEnd)
+			if err != nil || messages.Status != NewsWindowStatusOK || len(messages.Items) == 0 {
 				logger.SugaredLogger.Error("获取市场资讯失败")
 				//ch <- "***❗获取市场资讯失败,分析结果可能不准确***<hr>"
 				//go runtime.EventsEmit(o.ctx, "warnMsg", "❗获取市场资讯失败,分析结果可能不准确")
 				return
 			}
 			var messageText strings.Builder
-			for _, telegraph := range *messages {
+			for _, telegraph := range messages.Items {
 				messageText.WriteString("## " + telegraph.Time + ":" + "\n")
 				messageText.WriteString("### " + telegraph.Content + "\n")
 			}

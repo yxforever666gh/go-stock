@@ -63,11 +63,11 @@ func TestFinalizeMarketSummaryFeasiblePlanAllowsLargeDownside(t *testing.T) {
 	}
 }
 
-func TestApplyMarketSummaryFeasiblePlanFallbackFillsStructuredTradeFields(t *testing.T) {
+func TestApplyMarketSummaryFeasiblePlanFallbackDoesNotPromoteAnalysisOnly(t *testing.T) {
 	draft := &marketSummaryRecommendDraft{
 		StockCode:               "000001.SZ",
 		StockName:               "Ping An Bank",
-		SummaryVersion:          marketSummaryVersion142,
+		SummaryVersion:          marketSummaryVersion150,
 		ExecutionState:          recommendExecutionAnalysisOnly,
 		RecommendStatus:         "invalid",
 		EventStrength:           80,
@@ -98,20 +98,17 @@ func TestApplyMarketSummaryFeasiblePlanFallbackFillsStructuredTradeFields(t *tes
 
 	applyMarketSummaryFeasiblePlanFallback([]*marketSummaryRecommendDraft{draft}, []MarketSummaryVerifiedCandidateSnapshot{candidate})
 
-	if got := normalizeRecommendExecutionState(draft.ExecutionState); got != recommendExecutionConditional {
-		t.Fatalf("execution state = %s, want conditional", got)
+	if got := normalizeRecommendExecutionState(draft.ExecutionState); got != recommendExecutionAnalysisOnly {
+		t.Fatalf("execution state = %s, want analysis_only", got)
 	}
-	if draft.RecommendBuyPriceMin <= 0 || draft.RecommendBuyPriceMax <= 0 {
-		t.Fatalf("buy range not filled: min=%.2f max=%.2f", draft.RecommendBuyPriceMin, draft.RecommendBuyPriceMax)
+	if draft.RecommendBuyPriceMin != 0 || draft.RecommendBuyPriceMax != 0 {
+		t.Fatalf("analysis-only buy range was manufactured: min=%.2f max=%.2f", draft.RecommendBuyPriceMin, draft.RecommendBuyPriceMax)
 	}
-	if draft.RecommendStopProfitPrice == "" || draft.RecommendStopLossPrice == "" {
-		t.Fatalf("stop profit/loss should be filled, got profit=%q loss=%q", draft.RecommendStopProfitPrice, draft.RecommendStopLossPrice)
+	if draft.RecommendStopProfitPrice != "" || draft.RecommendStopLossPrice != "" {
+		t.Fatalf("analysis-only stop prices were manufactured: profit=%q loss=%q", draft.RecommendStopProfitPrice, draft.RecommendStopLossPrice)
 	}
-	if strings.TrimSpace(draft.ActivationRuleJSON) == "" {
-		t.Fatalf("activation rule JSON should be filled")
-	}
-	if reason := marketSummaryDraftProductionRejectionReason(draft); reason != "" {
-		t.Fatalf("fallback draft should pass production rejection check, got %q", reason)
+	if strings.TrimSpace(draft.ActivationRuleJSON) != "" {
+		t.Fatalf("analysis-only activation rule should remain empty")
 	}
 }
 

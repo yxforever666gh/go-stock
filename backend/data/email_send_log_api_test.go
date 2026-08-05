@@ -12,7 +12,7 @@ import (
 
 func initEmailSendLogTestDB(t *testing.T) {
 	t.Helper()
-	db.Init(filepath.Join(t.TempDir(), "email-send-log-test.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "email-send-log-test.db"))
 	if err := db.Dao.AutoMigrate(&models.EmailSendLog{}); err != nil {
 		t.Fatalf("auto migrate email send log failed: %v", err)
 	}

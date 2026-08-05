@@ -15,7 +15,7 @@ import (
 func setupMarketSummaryRecommendBackfillRealtimeEnv(t *testing.T, dbName string) {
 	t.Helper()
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), dbName))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), dbName))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -369,7 +369,7 @@ func TestCollectMarketSummaryRecommendStocksForSaveSkipsAvoid(t *testing.T) {
 }
 
 func TestCollectMarketSummaryRecommendStocksForSaveSkipsSameDayExistingStock(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-backfill-test.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-backfill-test.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -439,7 +439,7 @@ func TestCollectMarketSummaryRecommendStocksForSaveSkipsSameDayExistingStock(t *
 }
 
 func TestEnsureMarketSummaryRecommendStocksSavedSkipsObservationalRows(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-observe-skip.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-observe-skip.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -536,7 +536,7 @@ func TestEnsureMarketSummaryRecommendStocksSavedFromRuntimeReport20260407_1130(t
 
 func TestEnsureMarketSummaryRecommendStocksSavedDowngradesPriceMismatchToAnalysisOnly(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-price-mismatch.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-price-mismatch.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -579,7 +579,7 @@ func TestEnsureMarketSummaryRecommendStocksSavedDowngradesPriceMismatchToAnalysi
 
 func TestPrepareMarketSummaryReportForPersistence_DropsDuplicatesAndHumanizesAnalysisOnlyRows(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "market-summary-prepare-report.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-prepare-report.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -635,7 +635,7 @@ func TestPrepareMarketSummaryReportForPersistence_DropsDuplicatesAndHumanizesAna
 }
 
 func TestEnsureMarketSummaryYieldOverridesSaved(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "market-summary-yield-override.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "market-summary-yield-override.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendStocks{}, &models.AiRecommendYieldOverride{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -657,7 +657,7 @@ func TestEnsureMarketSummaryYieldOverridesSaved(t *testing.T) {
 		RecommendCategory: "observe",
 		RecommendStatus:   "insufficient_evidence",
 		ExecutionState:    recommendExecutionConditional,
-		SummaryVersion:    marketSummaryPhase3Version,
+		SummaryVersion:    marketSummaryVersion150,
 		RiskRemarks:       "波动较大",
 		Remarks:           "seed skipped",
 	}
@@ -678,7 +678,7 @@ func TestEnsureMarketSummaryYieldOverridesSaved(t *testing.T) {
 		RecommendCategory:           "observe",
 		RecommendStatus:             "insufficient_evidence",
 		ExecutionState:              recommendExecutionConditional,
-		SummaryVersion:              marketSummaryPhase3Version,
+		SummaryVersion:              marketSummaryVersion150,
 		RiskRemarks:                 "追高风险",
 		Remarks:                     "seed reactivate",
 	}
@@ -717,55 +717,32 @@ func TestEnsureMarketSummaryYieldOverridesSaved(t *testing.T) {
 `
 
 	saved, err := EnsureMarketSummaryYieldOverridesSaved(summary, startedAt)
-	if err != nil {
-		t.Fatalf("EnsureMarketSummaryYieldOverridesSaved failed: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Fatalf("V1.5 post-release review error = %v, want immutable rejection", err)
 	}
-	if saved != 2 {
-		t.Fatalf("expected save count 2, got %d", saved)
+	if saved != 0 {
+		t.Fatalf("V1.5 post-release review saved %d mutable overrides, want 0", saved)
 	}
+	var rejectedCount int64
+	if countErr := db.Dao.Model(&models.AiRecommendYieldOverride{}).Count(&rejectedCount).Error; countErr != nil {
+		t.Fatalf("count rejected overrides: %v", countErr)
+	}
+	if rejectedCount != 0 {
+		t.Fatalf("V1.5 post-release review persisted %d override rows", rejectedCount)
+	}
+	var unchangedSkipped, unchangedReactivate models.AiRecommendStocks
+	if loadErr := db.Dao.First(&unchangedSkipped, skipped.ID).Error; loadErr != nil {
+		t.Fatalf("reload skipped recommendation: %v", loadErr)
+	}
+	if loadErr := db.Dao.First(&unchangedReactivate, reactivate.ID).Error; loadErr != nil {
+		t.Fatalf("reload reactivate recommendation: %v", loadErr)
+	}
+	if unchangedSkipped.ActivationStatus != skipped.ActivationStatus || unchangedSkipped.RecommendBuyPrice != skipped.RecommendBuyPrice ||
+		unchangedReactivate.ActivationStatus != reactivate.ActivationStatus || unchangedReactivate.RecommendBuyPrice != reactivate.RecommendBuyPrice {
+		t.Fatalf("V1.5 post-release review changed frozen recommendations: skipped=%+v reactivate=%+v", unchangedSkipped, unchangedReactivate)
+	}
+	return
 
-	rows := make([]models.AiRecommendYieldOverride, 0, 2)
-	if err := db.Dao.Order("recommend_id asc").Find(&rows).Error; err != nil {
-		t.Fatalf("query overrides failed: %v", err)
-	}
-	if len(rows) != 2 {
-		t.Fatalf("expected 2 override rows, got %d", len(rows))
-	}
-
-	if rows[0].RecommendID != skipped.ID {
-		t.Fatalf("unexpected first recommend id: %d", rows[0].RecommendID)
-	}
-	if rows[0].ActivationStatusOverride != "skipped" {
-		t.Fatalf("expected skipped override, got %s", rows[0].ActivationStatusOverride)
-	}
-	if !strings.Contains(rows[0].DataStatusReason, "继续跳过") && !strings.Contains(rows[0].DataStatusReason, "仍未形成") {
-		t.Fatalf("unexpected skipped reason: %s", rows[0].DataStatusReason)
-	}
-
-	if rows[1].RecommendID != reactivate.ID {
-		t.Fatalf("unexpected second recommend id: %d", rows[1].RecommendID)
-	}
-	if rows[1].ActivationStatusOverride != "pending" {
-		t.Fatalf("expected pending override, got %s", rows[1].ActivationStatusOverride)
-	}
-	if rows[1].RecommendBuyPrice != "34.5-35.2" {
-		t.Fatalf("unexpected buy range: %s", rows[1].RecommendBuyPrice)
-	}
-	if rows[1].RecommendStopProfitPrice != "37.2-38.6" {
-		t.Fatalf("unexpected stop profit range: %s", rows[1].RecommendStopProfitPrice)
-	}
-	if rows[1].RecommendStopLossPrice != "33.8" {
-		t.Fatalf("unexpected stop loss: %s", rows[1].RecommendStopLossPrice)
-	}
-	if !strings.Contains(rows[1].BuySignal, "价格触发") {
-		t.Fatalf("unexpected buy signal: %s", rows[1].BuySignal)
-	}
-	if !strings.Contains(rows[1].InvalidCondition, "时间失效") {
-		t.Fatalf("unexpected invalid condition: %s", rows[1].InvalidCondition)
-	}
-	if !strings.Contains(rows[1].DataStatusReason, "改判恢复收益率跟踪") {
-		t.Fatalf("unexpected review reason: %s", rows[1].DataStatusReason)
-	}
 }
 
 func TestDowngradeMarketSummaryDraftPreservesFirstRepairSource(t *testing.T) {

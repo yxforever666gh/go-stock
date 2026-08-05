@@ -10,7 +10,7 @@ import (
 )
 
 func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObservation(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "legacy-skip-repair.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "legacy-skip-repair.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldState{},
@@ -25,6 +25,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 	afterCutoff := time.Date(2026, 4, 6, 10, 0, 0, 0, loc)
 
 	reopen := models.AiRecommendStocks{
+		SummaryVersion:           marketSummaryVersion150,
 		DataTime:                 &beforeCutoff,
 		ModelName:                "test-model",
 		StockCode:                "002112.SZ",
@@ -38,6 +39,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 		InvalidCondition:         "板块不联动或跌破24.30",
 	}
 	observation := models.AiRecommendStocks{
+		SummaryVersion:           marketSummaryVersion150,
 		DataTime:                 &beforeCutoff,
 		ModelName:                "test-model",
 		StockCode:                "300081.SZ",
@@ -51,6 +53,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 		InvalidCondition:         "跌破9.30",
 	}
 	avoid := models.AiRecommendStocks{
+		SummaryVersion:    marketSummaryVersion150,
 		DataTime:          &beforeCutoff,
 		ModelName:         "test-model",
 		StockCode:         "603019.SH",
@@ -60,6 +63,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 		InvalidCondition:  "跌破关键支撑",
 	}
 	manualSkipped := models.AiRecommendStocks{
+		SummaryVersion:           marketSummaryVersion150,
 		DataTime:                 &beforeCutoff,
 		ModelName:                "test-model",
 		StockCode:                "002384.SZ",
@@ -73,6 +77,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 		InvalidCondition:         "跌破30.20",
 	}
 	postCutoff := models.AiRecommendStocks{
+		SummaryVersion:           marketSummaryVersion150,
 		DataTime:                 &afterCutoff,
 		ModelName:                "test-model",
 		StockCode:                "300308.SZ",
@@ -140,8 +145,8 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 	if stats.RecordStatesReset != 1 {
 		t.Fatalf("record reset = %d, want 1", stats.RecordStatesReset)
 	}
-	if stats.AggregateReset != 1 {
-		t.Fatalf("aggregate reset = %d, want 1", stats.AggregateReset)
+	if stats.AggregateReset != 0 {
+		t.Fatalf("aggregate reset = %d, want 0 (versionless aggregate is frozen)", stats.AggregateReset)
 	}
 	if stats.RecalcQueuedCodes != 1 {
 		t.Fatalf("queued codes = %d, want 1", stats.RecalcQueuedCodes)
@@ -170,7 +175,7 @@ func TestRepairHistoricalLegacySkippedRecommendations_ReopensOnlyPreCutoffNonObs
 	}
 
 	assertStatus("record", reopen.ID, "pending")
-	assertStatus("aggregate", reopen.StockCode, "pending")
+	assertStatus("aggregate", reopen.StockCode, "skipped")
 	assertStatus("record", observation.ID, "skipped")
 	assertStatus("aggregate", observation.StockCode, "skipped")
 	assertStatus("record", avoid.ID, "skipped")

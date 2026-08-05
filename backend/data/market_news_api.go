@@ -26,6 +26,7 @@ import (
 	"github.com/robertkrimen/otto"
 	"github.com/samber/lo"
 	"github.com/tidwall/gjson"
+	"gorm.io/gorm"
 )
 
 // @Author spark
@@ -35,9 +36,48 @@ import (
 type MarketNewsApi struct {
 }
 
+type NewsWindowStatus string
+
+const (
+	NewsWindowStatusOK     NewsWindowStatus = "ok"
+	NewsWindowStatusEmpty  NewsWindowStatus = "empty"
+	NewsWindowStatusFailed NewsWindowStatus = "failed"
+	NewsWindowStatusStale  NewsWindowStatus = "stale"
+
+	defaultNewsWindowLimit = 200
+	maximumNewsWindowLimit = 1000
+
+	marketNewsFetchKeyCLSTelegraphAPI = "cls_telegraph_api"
+	marketNewsFetchKeyCLSTelegraphWeb = "cls_telegraph_web"
+	marketNewsFetchKeySinaLive        = "sina_live_news"
+	marketNewsFetchKeyTradingView     = "tradingview_news"
+
+	marketNewsSourceCLSTelegraph = "财联社电报"
+	marketNewsSourceSina         = "新浪财经"
+	marketNewsSourceTradingView  = "外媒"
+)
+
+// NewsWindowResult describes an explicit event-time window read. Sources is
+// the normalized source filter; an empty slice means all persisted sources.
+type NewsWindowResult struct {
+	Items   []*models.Telegraph `json:"items"`
+	Status  NewsWindowStatus    `json:"status"`
+	Sources []string            `json:"sources"`
+	From    time.Time           `json:"from"`
+	To      time.Time           `json:"to"`
+	Warning string              `json:"warning,omitempty"`
+}
+
 type marketNewsFetchMeta struct {
 	NetworkPath  string
 	FallbackUsed bool
+	Source       string
+	AttemptedAt  time.Time
+	CompletedAt  time.Time
+	Succeeded    bool
+	Completed    bool
+	Error        string
+	sequence     uint64
 }
 
 type marketNewsFetchOutcome struct {
@@ -53,6 +93,7 @@ type marketNewsFetchAttempt struct {
 var (
 	marketNewsFetchMetaMu       sync.RWMutex
 	marketNewsFetchMetaBySource = map[string]marketNewsFetchMeta{}
+	marketNewsFetchSequence     uint64
 	sinaJSONPEnvelopeRegexp     = regexp.MustCompile(`(?s)^try\{callback\((.*)\);\}catch\(e\)\{\};?$`)
 	sinaJSONPCallbackRegexp     = regexp.MustCompile(`(?s)^callback\((.*)\)$`)
 )
@@ -84,7 +125,72 @@ func GetMarketNewsFetchMeta(source string) map[string]any {
 		result["networkPath"] = meta.NetworkPath
 	}
 	result["fallbackUsed"] = meta.FallbackUsed
+	if meta.Source != "" {
+		result["source"] = meta.Source
+	}
+	if !meta.AttemptedAt.IsZero() {
+		result["attemptedAt"] = meta.AttemptedAt.Format(time.RFC3339Nano)
+	}
+	if !meta.CompletedAt.IsZero() {
+		result["completedAt"] = meta.CompletedAt.Format(time.RFC3339Nano)
+	}
+	if meta.Completed {
+		if meta.Succeeded {
+			result["status"] = "success"
+		} else {
+			result["status"] = "failed"
+		}
+	} else if !meta.AttemptedAt.IsZero() {
+		result["status"] = "in_progress"
+	}
+	if meta.Error != "" {
+		result["error"] = meta.Error
+	}
 	return result
+}
+
+func marketNewsBeginFetch(key, source string) uint64 {
+	key = strings.TrimSpace(key)
+	source = strings.TrimSpace(source)
+	if key == "" || source == "" {
+		return 0
+	}
+	marketNewsFetchMetaMu.Lock()
+	defer marketNewsFetchMetaMu.Unlock()
+	marketNewsFetchSequence++
+	sequence := marketNewsFetchSequence
+	marketNewsFetchMetaBySource[key] = marketNewsFetchMeta{
+		Source:      source,
+		AttemptedAt: time.Now(),
+		sequence:    sequence,
+	}
+	return sequence
+}
+
+func marketNewsFinishFetch(key string, sequence uint64, networkPath string, fallbackUsed bool, fetchErr error) {
+	key = strings.TrimSpace(key)
+	if key == "" || sequence == 0 {
+		return
+	}
+	marketNewsFetchMetaMu.Lock()
+	defer marketNewsFetchMetaMu.Unlock()
+	meta, exists := marketNewsFetchMetaBySource[key]
+	// A slow older request must never overwrite a newer observation for the
+	// same endpoint. The sequence is allocated under the same mutex at start.
+	if !exists || meta.sequence != sequence {
+		return
+	}
+	meta.NetworkPath = strings.TrimSpace(networkPath)
+	meta.FallbackUsed = fallbackUsed
+	meta.CompletedAt = time.Now()
+	meta.Completed = true
+	meta.Succeeded = fetchErr == nil
+	if fetchErr != nil {
+		meta.Error = strings.TrimSpace(fetchErr.Error())
+	} else {
+		meta.Error = ""
+	}
+	marketNewsFetchMetaBySource[key] = meta
 }
 
 func marketNewsFetchURL(url string, timeout time.Duration, configure func(*resty.Request)) (*marketNewsFetchOutcome, error) {
@@ -247,6 +353,12 @@ func normalizeSinaJSONPBody(body []byte) ([]byte, error) {
 
 func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 	var telegraphs []models.Telegraph
+	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphAPI, marketNewsSourceCLSTelegraph)
+	fetchErr := errors.New("CLS telegraph API fetch did not complete")
+	networkPath := ""
+	defer func() {
+		marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphAPI, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
+	}()
 	url := "https://www.cls.cn/nodeapi/telegraphList"
 	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
 		req.SetHeader("Referer", "https://www.cls.cn/").
@@ -254,26 +366,30 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 	})
 	if err != nil {
 		logger.SugaredLogger.Errorf("TelegraphList err:%v", err)
-		marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{})
+		fetchErr = err
 		return &telegraphs
 	}
-	marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{
-		NetworkPath:  outcome.networkPath,
-		FallbackUsed: outcome.networkPath != "direct",
-	})
+	networkPath = outcome.networkPath
 
 	res := map[string]any{}
 	if err = json.Unmarshal(outcome.body, &res); err != nil {
 		logger.SugaredLogger.Errorf("TelegraphList unmarshal err:%v", err)
+		fetchErr = fmt.Errorf("decode CLS telegraph API response: %w", err)
 		return &telegraphs
 	}
 
 	if v, _ := convertor.ToInt(res["error"]); v == 0 {
 		data := safeMap(res["data"])
 		if data == nil {
+			fetchErr = errors.New("CLS telegraph API response is missing data")
 			return m.GetNewTelegraph(30)
 		}
-		rollData := safeSlice(data["roll_data"])
+		rollValue, exists := data["roll_data"]
+		rollData, rollDataOK := rollValue.([]any)
+		if !exists || !rollDataOK {
+			fetchErr = errors.New("CLS telegraph API response is missing data.roll_data")
+			return m.GetNewTelegraph(30)
+		}
 		for _, v := range rollData {
 			news := safeMap(v)
 			if news == nil {
@@ -291,7 +407,7 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 				Time:            dataTime.Format("15:04:05"),
 				DataTime:        &dataTime,
 				Url:             safeString(news["shareurl"]),
-				Source:          "财联社电报",
+				Source:          marketNewsSourceCLSTelegraph,
 				IsRed:           safeString(news["level"]) != "C",
 				SentimentResult: AnalyzeSentiment(content).Description,
 			}
@@ -330,35 +446,48 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 		}
 		//db.Dao.Model(&models.Telegraph{}).Create(&telegraphs)
 		//logger.SugaredLogger.Debugf("telegraphs: %+v", &telegraphs)
+	} else {
+		fetchErr = fmt.Errorf("CLS telegraph API returned error code %d", v)
+		return &telegraphs
 	}
 
+	fetchErr = nil
 	return &telegraphs
 }
 
 func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 	url := "https://www.cls.cn/telegraph"
 	var telegraphs []models.Telegraph
+	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphWeb, marketNewsSourceCLSTelegraph)
+	fetchErr := errors.New("CLS telegraph web fetch did not complete")
+	networkPath := ""
+	defer func() {
+		marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphWeb, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
+	}()
 	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
 		req.SetHeader("Referer", "https://www.cls.cn/").
 			SetHeader("User-Agent", stringsBuilderUserAgent())
 	})
 	if err != nil {
 		logger.SugaredLogger.Errorf("GetNewTelegraph err:%v", err)
-		marketNewsSetFetchMeta("cls_telegraph_web", marketNewsFetchMeta{})
+		fetchErr = err
 		return &telegraphs
 	}
-	marketNewsSetFetchMeta("cls_telegraph_web", marketNewsFetchMeta{
-		NetworkPath:  outcome.networkPath,
-		FallbackUsed: outcome.networkPath != "direct",
-	})
+	networkPath = outcome.networkPath
 	document, err := goquery.NewDocumentFromReader(strings.NewReader(string(outcome.body)))
 	if err != nil {
 		logger.SugaredLogger.Errorf("GetNewTelegraph parse err:%v", err)
+		fetchErr = fmt.Errorf("parse CLS telegraph page: %w", err)
 		return &telegraphs
 	}
 
-	document.Find(".telegraph-content-box").Each(func(i int, selection *goquery.Selection) {
-		telegraph := models.Telegraph{Source: "财联社电报"}
+	telegraphNodes := document.Find(".telegraph-content-box")
+	if telegraphNodes.Length() == 0 {
+		fetchErr = errors.New("CLS telegraph page is missing telegraph content nodes")
+		return &telegraphs
+	}
+	telegraphNodes.Each(func(i int, selection *goquery.Selection) {
+		telegraph := models.Telegraph{Source: marketNewsSourceCLSTelegraph}
 		spans := selection.Find("span")
 		if spans.Length() == 2 {
 			telegraph.Time = strings.TrimSpace(spans.First().Text())
@@ -407,6 +536,7 @@ func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 
 		}
 	})
+	fetchErr = nil
 	return &telegraphs
 }
 func (m MarketNewsApi) GetNewsList(source string, limit int) *[]*models.Telegraph {
@@ -497,6 +627,12 @@ func (m MarketNewsApi) GetTelegraphListWithPaging(source string, page, pageSize 
 
 func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 	news := &[]models.Telegraph{}
+	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
+	fetchErr := errors.New("Sina live news fetch did not complete")
+	networkPath := ""
+	defer func() {
+		marketNewsFinishFetch(marketNewsFetchKeySinaLive, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
+	}()
 	url := "https://zhibo.sina.com.cn/api/zhibo/feed?callback=callback&page=1&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1&pagesize=20&id=4161089&type=0&_=" + strconv.FormatInt(time.Now().Unix(), 10)
 	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
 		req.SetHeader("Referer", "https://finance.sina.com.cn").
@@ -504,27 +640,38 @@ func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 	})
 	if err != nil {
 		logger.SugaredLogger.Errorf("GetSinaNews err:%v", err)
-		marketNewsSetFetchMeta("sina_live_news", marketNewsFetchMeta{})
+		fetchErr = err
 		return news
 	}
-	marketNewsSetFetchMeta("sina_live_news", marketNewsFetchMeta{
-		NetworkPath:  outcome.networkPath,
-		FallbackUsed: outcome.networkPath != "direct",
-	})
+	networkPath = outcome.networkPath
 	jsonBody, err := normalizeSinaJSONPBody(outcome.body)
 	if err != nil {
 		logger.SugaredLogger.Errorf("GetSinaNews normalize body err:%v", err)
+		fetchErr = fmt.Errorf("normalize Sina live news response: %w", err)
 		return news
 	}
 	payload := map[string]any{}
 	err = json.Unmarshal(jsonBody, &payload)
 	if err != nil {
 		logger.SugaredLogger.Errorf("GetSinaNews json.Unmarshal err:%v", err)
+		fetchErr = fmt.Errorf("decode Sina live news response: %w", err)
 		return news
 	}
-	resultData := safeMap(safeMap(safeMap(payload["result"])["data"])["feed"])
+	result := safeMap(payload["result"])
+	resultPayload := safeMap(result["data"])
+	resultData := safeMap(resultPayload["feed"])
+	if result == nil || resultPayload == nil || resultData == nil {
+		fetchErr = errors.New("Sina live news response is missing result.data.feed")
+		return news
+	}
+	listValue, exists := resultData["list"]
+	list, listOK := listValue.([]any)
+	if !exists || !listOK {
+		fetchErr = errors.New("Sina live news response is missing feed.list")
+		return news
+	}
 	var telegraphs []models.Telegraph
-	for _, item := range safeSlice(resultData["list"]) {
+	for _, item := range list {
 		data := safeMap(item)
 		if data == nil {
 			continue
@@ -534,7 +681,7 @@ func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 		if content == "" || createTime == "" {
 			continue
 		}
-		telegraph := models.Telegraph{Source: "新浪财经"}
+		telegraph := models.Telegraph{Source: marketNewsSourceSina}
 		telegraph.Content = content
 		telegraph.Title = strutil.SubInBetween(content, "【", "】")
 		parts := strings.Split(createTime, " ")
@@ -586,6 +733,7 @@ func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 			}
 		}
 	}
+	fetchErr = nil
 	if len(telegraphs) > 0 {
 		return &telegraphs
 	}
@@ -993,6 +1141,11 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 	client := newFetchRestyClient()
 	TVNews := &[]models.TVNews{}
 	news := &[]models.Telegraph{}
+	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeyTradingView, marketNewsSourceTradingView)
+	fetchErr := errors.New("TradingView news fetch did not complete")
+	defer func() {
+		marketNewsFinishFetch(marketNewsFetchKeyTradingView, fetchSequence, "", false, fetchErr)
+	}()
 	//	url := "https://news-mediator.tradingview.com/news-flow/v2/news?filter=lang:zh-Hans&filter=area:WLD&client=screener&streaming=false"
 	//url := "https://news-mediator.tradingview.com/news-flow/v2/news?filter=area%3AWLD&filter=lang%3Azh-Hans&client=screener&streaming=false"
 	url := "https://news-mediator.tradingview.com/news-flow/v2/news?filter=lang%3Azh-Hans&client=screener&streaming=false"
@@ -1005,18 +1158,43 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 		Get(url)
 	if err != nil {
 		logErrorEvery("MarketNewsApi.TradingViewNews.fetch", 10*time.Minute, "TradingViewNews err:%s", err.Error())
+		fetchErr = err
+		return news
+	}
+	if resp == nil {
+		fetchErr = errors.New("TradingView news returned an empty response")
+		return news
+	}
+	if resp.StatusCode() >= 400 {
+		fetchErr = fmt.Errorf("TradingView news returned HTTP %d", resp.StatusCode())
+		return news
+	}
+	if len(resp.Body()) == 0 {
+		fetchErr = errors.New("TradingView news returned an empty body")
 		return news
 	}
 	respMap := map[string]any{}
 	err = json.Unmarshal(resp.Body(), &respMap)
 	if err != nil {
+		fetchErr = fmt.Errorf("decode TradingView news response: %w", err)
 		return news
 	}
-	items, err := json.Marshal(respMap["items"])
+	itemsValue, exists := respMap["items"]
+	if !exists {
+		fetchErr = errors.New("TradingView news response is missing items")
+		return news
+	}
+	if _, itemsOK := itemsValue.([]any); !itemsOK {
+		fetchErr = errors.New("TradingView news response items is not an array")
+		return news
+	}
+	items, err := json.Marshal(itemsValue)
 	if err != nil {
+		fetchErr = fmt.Errorf("encode TradingView news items: %w", err)
 		return news
 	}
 	if err := json.Unmarshal(items, TVNews); err != nil {
+		fetchErr = fmt.Errorf("decode TradingView news items: %w", err)
 		return news
 	}
 
@@ -1041,7 +1219,7 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 			DataTime:        &dataTime,
 			IsRed:           false,
 			Time:            dataTime.Format("15:04:05"),
-			Source:          "外媒",
+			Source:          marketNewsSourceTradingView,
 			Url:             fmt.Sprintf("https://cn.tradingview.com/news/%s", a.Id),
 			SentimentResult: sentimentResult,
 		}
@@ -1054,9 +1232,10 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 		if cnt > 0 {
 			continue
 		}
-		db.Dao.Model(&models.Telegraph{}).Where("time=? and title=? and source=?", telegraph.Time, telegraph.Title, "外媒").FirstOrCreate(&telegraph)
+		db.Dao.Model(&models.Telegraph{}).Where("time=? and title=? and source=?", telegraph.Time, telegraph.Title, marketNewsSourceTradingView).FirstOrCreate(&telegraph)
 		*news = append(*news, *telegraph)
 	}
+	fetchErr = nil
 	return news
 }
 func (m MarketNewsApi) TradingViewNewsDetail(id string) *models.TVNewsDetail {
@@ -1506,6 +1685,244 @@ func (m MarketNewsApi) CailianpressWeb(searchWords string) *models.CailianpressW
 	logger.SugaredLogger.Debug(res)
 
 	return res
+}
+
+// GetNewsWindow reads persisted news by its event time. CreatedAt is used only
+// for legacy rows whose DataTime is nil or zero; it is never allowed to
+// override a non-zero event timestamp.
+func (m MarketNewsApi) GetNewsWindow(sources []string, from, to time.Time) (NewsWindowResult, error) {
+	sources = normalizeNewsWindowSources(sources)
+	if to.IsZero() {
+		to = time.Now()
+	}
+	if from.IsZero() {
+		from = to.Add(-24 * time.Hour)
+	}
+	result := NewsWindowResult{
+		Items:   []*models.Telegraph{},
+		Status:  NewsWindowStatusEmpty,
+		Sources: sources,
+		From:    from,
+		To:      to,
+	}
+	if to.Before(from) {
+		err := fmt.Errorf("invalid news window: from %s is after to %s", from.Format(time.RFC3339), to.Format(time.RFC3339))
+		result.Status = NewsWindowStatusFailed
+		result.Warning = err.Error()
+		return result, err
+	}
+	limit := defaultNewsWindowLimit
+	if db.Dao == nil {
+		err := errors.New("market news database is not initialized")
+		result.Status = NewsWindowStatusFailed
+		result.Warning = err.Error()
+		return result, err
+	}
+
+	zeroTimeCutoff := time.Date(2, time.January, 1, 0, 0, 0, 0, time.UTC)
+	baseQuery := func() *gorm.DB {
+		query := db.Dao.Model(&models.Telegraph{}).Preload("TelegraphTags")
+		if len(sources) > 0 {
+			query = query.Where("source IN ?", sources)
+		}
+		return query
+	}
+	query := baseQuery().
+		Where(`(
+			(data_time IS NOT NULL AND data_time > ? AND data_time >= ? AND data_time <= ?)
+			OR
+			((data_time IS NULL OR data_time <= ?) AND created_at >= ? AND created_at <= ?)
+		)`, zeroTimeCutoff, from, to, zeroTimeCutoff, from, to)
+	rows := make([]*models.Telegraph, 0, limit)
+	if err := query.Order("data_time DESC, is_red DESC, created_at DESC, id DESC").Limit(limit).Find(&rows).Error; err != nil {
+		wrapped := fmt.Errorf("query market news window: %w", err)
+		result.Status = NewsWindowStatusFailed
+		result.Warning = wrapped.Error()
+		return result, wrapped
+	}
+
+	result.Items = dedupeNewsWindowItems(rows)
+	if len(result.Items) == 0 {
+		// Query success alone cannot distinguish an upstream-empty feed from a
+		// failed refresh. Only a completed fetch attempt that belongs to this
+		// event-time window can promote an otherwise empty read to failed.
+		if fetchErr := marketNewsFetchFailureForWindow(sources, from, to); fetchErr != nil {
+			result.Status = NewsWindowStatusFailed
+			result.Warning = fetchErr.Error()
+			return result, fetchErr
+		}
+		// A bounded stale probe distinguishes an actually empty source from a
+		// source whose newest persisted event predates the requested window.
+		// Keeping this separate from the window query prevents old event-time
+		// rows with fresh ingestion timestamps from being treated as current.
+		staleRows := make([]*models.Telegraph, 0, limit)
+		staleQuery := baseQuery().Where(`(
+			(data_time IS NOT NULL AND data_time > ? AND data_time < ? AND data_time <= ?)
+			OR
+			((data_time IS NULL OR data_time <= ?) AND created_at < ? AND created_at <= ?)
+		)`, zeroTimeCutoff, from, to, zeroTimeCutoff, from, to)
+		if err := staleQuery.Order("data_time DESC, is_red DESC, created_at DESC, id DESC").Limit(limit).Find(&staleRows).Error; err != nil {
+			wrapped := fmt.Errorf("query stale market news window: %w", err)
+			result.Status = NewsWindowStatusFailed
+			result.Warning = wrapped.Error()
+			return result, wrapped
+		}
+		result.Items = dedupeNewsWindowItems(staleRows)
+		if len(result.Items) == 0 {
+			result.Status = NewsWindowStatusEmpty
+			result.Warning = "no market news at or before the requested window end"
+			return result, nil
+		}
+	}
+	if err := hydrateNewsWindowSubjectTags(result.Items); err != nil {
+		wrapped := fmt.Errorf("load market news tags: %w", err)
+		result.Status = NewsWindowStatusFailed
+		result.Warning = wrapped.Error()
+		return result, wrapped
+	}
+	if newsWindowItemsAreStale(result.Items, from) {
+		result.Status = NewsWindowStatusStale
+		result.Warning = "all market news event times are older than the requested window"
+		return result, nil
+	}
+	result.Status = NewsWindowStatusOK
+	return result, nil
+}
+
+func marketNewsFetchFailureForWindow(sources []string, from, to time.Time) error {
+	selectedSources := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		selectedSources[strings.TrimSpace(source)] = struct{}{}
+	}
+	allRealSources := len(selectedSources) == 0
+	latestBySource := make(map[string]marketNewsFetchMeta, 3)
+	keys := []string{
+		marketNewsFetchKeyCLSTelegraphAPI,
+		marketNewsFetchKeyCLSTelegraphWeb,
+		marketNewsFetchKeySinaLive,
+		marketNewsFetchKeyTradingView,
+	}
+	marketNewsFetchMetaMu.RLock()
+	for _, key := range keys {
+		meta, ok := marketNewsFetchMetaBySource[key]
+		if !ok || !meta.Completed || meta.AttemptedAt.IsZero() {
+			continue
+		}
+		if !allRealSources {
+			if _, selected := selectedSources[meta.Source]; !selected {
+				continue
+			}
+		}
+		// A refresh normally finishes just after a fixed decision cutoff. A
+		// small grace interval keeps that causally related attempt attached to
+		// the window without allowing today's failure to poison historical reads.
+		if meta.CompletedAt.Before(from) || meta.CompletedAt.After(to.Add(30*time.Minute)) {
+			continue
+		}
+		if current, exists := latestBySource[meta.Source]; !exists || meta.sequence > current.sequence {
+			latestBySource[meta.Source] = meta
+		}
+	}
+	marketNewsFetchMetaMu.RUnlock()
+
+	failures := make([]string, 0, len(latestBySource))
+	for _, source := range []string{marketNewsSourceCLSTelegraph, marketNewsSourceSina, marketNewsSourceTradingView} {
+		meta, exists := latestBySource[source]
+		if !exists || meta.Succeeded {
+			continue
+		}
+		detail := strings.TrimSpace(meta.Error)
+		if detail == "" {
+			detail = "unknown fetch error"
+		}
+		failures = append(failures, fmt.Sprintf("%s: %s", source, detail))
+	}
+	if len(failures) == 0 {
+		return nil
+	}
+	return fmt.Errorf("market news fetch failed for requested window: %s", strings.Join(failures, "; "))
+}
+
+func normalizeNewsWindowSources(sources []string) []string {
+	result := make([]string, 0, len(sources))
+	seen := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			continue
+		}
+		if _, exists := seen[source]; exists {
+			continue
+		}
+		seen[source] = struct{}{}
+		result = append(result, source)
+	}
+	return result
+}
+
+func dedupeNewsWindowItems(rows []*models.Telegraph) []*models.Telegraph {
+	result := make([]*models.Telegraph, 0, len(rows))
+	seen := make(map[string]struct{}, len(rows))
+	for _, item := range rows {
+		if item == nil {
+			continue
+		}
+		key := strings.TrimSpace(item.Content)
+		if key == "" {
+			key = strings.TrimSpace(item.Title)
+		}
+		if key != "" {
+			if _, exists := seen[key]; exists {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
+		result = append(result, item)
+	}
+	return result
+}
+
+func hydrateNewsWindowSubjectTags(items []*models.Telegraph) error {
+	for _, item := range items {
+		if item == nil || len(item.TelegraphTags) == 0 {
+			continue
+		}
+		tags := make([]models.Tags, 0, len(item.TelegraphTags))
+		tagIDs := lo.Map(item.TelegraphTags, func(item models.TelegraphTags, _ int) uint {
+			return item.TagId
+		})
+		if err := db.Dao.Model(&models.Tags{}).Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
+			return err
+		}
+		item.SubjectTags = lo.Map(tags, func(item models.Tags, _ int) string {
+			return item.Name
+		})
+	}
+	return nil
+}
+
+func newsWindowItemsAreStale(items []*models.Telegraph, from time.Time) bool {
+	if from.IsZero() {
+		return false
+	}
+	hasEventTime := false
+	for _, item := range items {
+		if item == nil {
+			continue
+		}
+		eventTime := item.CreatedAt
+		if item.DataTime != nil && !item.DataTime.IsZero() {
+			eventTime = *item.DataTime
+		}
+		if eventTime.IsZero() {
+			continue
+		}
+		hasEventTime = true
+		if !eventTime.Before(from) {
+			return false
+		}
+	}
+	return hasEventTime
 }
 
 func (m MarketNewsApi) GetNews24HoursList(source string, limit int) *[]*models.Telegraph {

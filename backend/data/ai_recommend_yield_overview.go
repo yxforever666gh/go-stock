@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"go-stock/backend/db"
+	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"sort"
 	"strings"
@@ -22,15 +23,20 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 	if err != nil {
 		return nil, err
 	}
-	if cached, ok := loadYieldDailyOverviewCache(signature); ok {
-		return cached, nil
+	useMutableCache := !isV150CostVersion(query.StrategyCohort)
+	if useMutableCache {
+		if cached, ok := loadYieldDailyOverviewCache(signature); ok {
+			return cached, nil
+		}
 	}
 
 	result, err := s.buildYieldDailyOverview(query)
 	if err != nil {
 		return nil, err
 	}
-	storeYieldDailyOverviewCache(signature, result)
+	if useMutableCache {
+		storeYieldDailyOverviewCache(signature, result)
+	}
 	return cloneYieldDailyOverviewData(result), nil
 }
 
@@ -51,20 +57,40 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 	latestTradeDate = time.Date(latestTradeDate.Year(), latestTradeDate.Month(), latestTradeDate.Day(), 0, 0, 0, 0, loc)
 	coverableStart := minuteCoverableStartMinute(latestTradeDate)
 
-	records, err := listAiRecommendStocksForYield(query, coverableStart)
+	// V1.5 is reconstructed from its immutable order ledger and cache-only
+	// prices. The legacy minute download horizon must not hide an older sealed
+	// position from the 100,000-yuan portfolio.
+	recordCoverableStart := coverableStart
+	if isV150CostVersion(query.StrategyCohort) {
+		recordCoverableStart = time.Time{}
+	}
+	records, err := listAiRecommendStocksForYield(query, recordCoverableStart)
 	if err != nil {
 		return nil, err
 	}
 	records = collapseRecommendRecordsSameDayByCode(records)
 
 	result := &models.AiRecommendYieldDailyOverviewData{
-		CalcMode:         aiRecommendYieldModeStrict,
-		BenchmarkCode:    defaultBenchmarkModelCode,
-		BenchmarkName:    defaultBenchmarkName,
-		StrategyCohort:   query.StrategyCohort,
-		TotalRecordCount: len(records),
-		Warnings:         []string{},
-		Points:           []models.AiRecommendYieldDailyOverviewPoint{},
+		CalcMode:           aiRecommendYieldModeStrict,
+		BenchmarkCode:      defaultBenchmarkModelCode,
+		BenchmarkName:      defaultBenchmarkName,
+		StrategyCohort:     query.StrategyCohort,
+		TotalRecordCount:   len(records),
+		Warnings:           []string{},
+		V150HealthWarnings: []string{},
+		Points:             []models.AiRecommendYieldDailyOverviewPoint{},
+	}
+	if isV150CostVersion(query.StrategyCohort) {
+		if warnings, warningErr := loadV150ImmutableRunHealthWarnings(30); warningErr != nil {
+			logger.SugaredLogger.Warnf("load v1.5 immutable run health warnings failed: %v", warningErr)
+		} else {
+			result.V150HealthWarnings = warnings
+		}
+		result.ValidationStatus = "forward_validation"
+		if validation, validationErr := loadV150ForwardValidation(); validationErr == nil && validation != nil {
+			result.ValidationStatus = validation.Status
+		}
+		result.PortfolioCapital = 100_000
 	}
 	if len(records) == 0 {
 		result.Warnings = append(result.Warnings, "当前没有可用于统计的推荐记录")
@@ -89,10 +115,24 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 	}
 
 	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, nil)
+	v150DailyLedgers := map[uint]v150YieldDailyOrderLedger{}
+	if isV150CostVersion(query.StrategyCohort) {
+		var ledgerWarnings []string
+		v150DailyLedgers, ledgerWarnings = loadV150YieldDailyOrderLedgers(records, now)
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(
+			append(result.V150HealthWarnings, ledgerWarnings...),
+			collectV150YieldValuationHealthWarnings(items)...,
+		), 0)
+	}
 	entries := make([]yieldDailyOverviewEntry, 0, len(items))
 	inactiveSkipped := 0
 	for _, item := range items {
 		entry, ok := buildYieldDailyOverviewEntry(item)
+		if !ok && isV150CostVersion(item.SummaryVersion) {
+			if ledger, exists := v150DailyLedgers[item.RecommendID]; exists {
+				entry, ok = buildV150YieldDailyOverviewEntryFromLedger(item, ledger)
+			}
+		}
 		if !ok {
 			inactiveSkipped += 1
 			continue
@@ -107,6 +147,15 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 		result.Warnings = append(result.Warnings, "当前没有可用于绘图的已激活严格记录")
 		return result, nil
 	}
+	if isV150CostVersion(query.StrategyCohort) {
+		entries = reconcileV150YieldDailyOverviewEntriesWithLedger(entries, v150DailyLedgers)
+	}
+	if isV150CostVersion(query.StrategyCohort) {
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(
+			result.V150HealthWarnings,
+			collectV150BenchmarkHealthWarnings(entries)...,
+		), 0)
+	}
 
 	startDay, endDay, ok := resolveYieldDailyOverviewWindow(entries)
 	if !ok {
@@ -115,8 +164,20 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 		return result, nil
 	}
 
-	tradingDays, benchmarkSeries, err := loadYieldDailyOverviewTradingDays(startDay, endDay)
+	var tradingDays []time.Time
+	var benchmarkSeries *yieldDailyOverviewPriceSeries
+	if isV150CostVersion(query.StrategyCohort) {
+		tradingDays, benchmarkSeries, err = loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay)
+	} else {
+		tradingDays, benchmarkSeries, err = loadYieldDailyOverviewTradingDays(startDay, endDay)
+	}
 	if err != nil {
+		if isV150CostVersion(query.StrategyCohort) {
+			result.SkippedRecordCount = result.TotalRecordCount
+			result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, v150BenchmarkDailySeriesHealthCode), 0)
+			result.Warnings = append(result.Warnings, "V1.5 基准缓存不可用，未生成组合净值")
+			return result, nil
+		}
 		return nil, err
 	}
 	if len(tradingDays) == 0 {
@@ -125,30 +186,71 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 		return result, nil
 	}
 
-	priceSeriesMap, missingCodes, err := loadYieldDailyOverviewPriceSeries(entries, tradingDays)
+	var priceSeriesMap map[string]*yieldDailyOverviewPriceSeries
+	var missingCodes []string
+	if isV150CostVersion(query.StrategyCohort) {
+		priceSeriesMap, missingCodes, err = loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
+	} else {
+		priceSeriesMap, missingCodes, err = loadYieldDailyOverviewPriceSeries(entries, tradingDays)
+	}
 	if err != nil {
 		return nil, err
 	}
 
 	filteredEntries := make([]yieldDailyOverviewEntry, 0, len(entries))
 	for _, entry := range entries {
-		if _, ok := priceSeriesMap[entry.StockCode]; !ok {
+		// A V1.5 position remains part of the fixed 100,000-yuan account even
+		// when its mark is missing. The point builder must omit that entire day;
+		// dropping the position here would publish a deceptively partial NAV.
+		if _, ok := priceSeriesMap[entry.StockCode]; !ok && !isV150CostVersion(entry.SummaryVersion) {
 			continue
 		}
 		filteredEntries = append(filteredEntries, entry)
 	}
 	if len(missingCodes) > 0 {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 只股票缺少日线数据，已从全库走势中跳过：%s", len(missingCodes), strings.Join(missingCodes, "、")))
+		if isV150CostVersion(query.StrategyCohort) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%d 只股票缺少完整原始分钟收盘；受影响的组合交易日已省略：%s", len(missingCodes), strings.Join(missingCodes, "、")))
+		} else {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%d 只股票缺少日线数据，已从全库走势中跳过：%s", len(missingCodes), strings.Join(missingCodes, "、")))
+		}
 	}
 	if len(filteredEntries) == 0 {
 		result.SkippedRecordCount = result.TotalRecordCount
 		result.Warnings = append(result.Warnings, "全部候选股票都缺少可用日线数据")
 		return result, nil
 	}
+	if gapCount := countYieldDailyOverviewPriceGaps(filteredEntries, tradingDays, priceSeriesMap); gapCount > 0 {
+		if isV150CostVersion(query.StrategyCohort) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("原始分钟收盘存在 %d 个点时缺口；受影响组合日已省略", gapCount))
+		} else {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("日线存在 %d 个点时缺口；已拒绝使用旧收盘价静默前填", gapCount))
+		}
+	}
 
-	points := buildYieldDailyOverviewPoints(filteredEntries, tradingDays, priceSeriesMap, benchmarkSeries)
+	if isV150CostVersion(query.StrategyCohort) {
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(
+			result.V150HealthWarnings,
+			collectV150YieldDailyPriceGapWarnings(filteredEntries, tradingDays, priceSeriesMap)...,
+		), 0)
+	}
+
+	points, pointWarnings := buildYieldDailyOverviewPointsWithV150Ledgers(
+		filteredEntries,
+		tradingDays,
+		priceSeriesMap,
+		benchmarkSeries,
+		v150DailyLedgers,
+	)
+	if isV150CostVersion(query.StrategyCohort) {
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, pointWarnings...), 0)
+	}
 	if len(points) == 0 {
-		result.SkippedRecordCount = result.TotalRecordCount
+		if isV150CostVersion(query.StrategyCohort) {
+			result.IncludedRecordCount = len(filteredEntries)
+			result.SkippedRecordCount = result.TotalRecordCount - result.IncludedRecordCount
+		} else {
+			result.SkippedRecordCount = result.TotalRecordCount
+		}
 		result.Warnings = append(result.Warnings, "未能生成有效的按交易日收益点位")
 		return result, nil
 	}
@@ -159,7 +261,21 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 	result.IncludedRecordCount = len(filteredEntries)
 	result.SkippedRecordCount = result.TotalRecordCount - result.IncludedRecordCount
 	result.Points = points
+	appendV150RollingReturnWarning(result)
 	return result, nil
+}
+
+func appendV150RollingReturnWarning(result *models.AiRecommendYieldDailyOverviewData) {
+	if result == nil || !isV150CostVersion(result.StrategyCohort) || len(result.Points) < 21 {
+		return
+	}
+	start := result.Points[len(result.Points)-21].PortfolioEquity
+	end := result.Points[len(result.Points)-1].PortfolioEquity
+	if start <= 0 || end >= start {
+		return
+	}
+	changePct := (end/start - 1) * 100
+	result.Warnings = append(result.Warnings, fmt.Sprintf("V1.5.0 最近20个交易日组合净收益为 %.2f%%，已触发滚动负收益告警", changePct))
 }
 
 func buildYieldDailyOverviewSignature(query *models.AiRecommendStocksQuery) (string, error) {
@@ -195,8 +311,23 @@ func buildYieldDailyOverviewSignature(query *models.AiRecommendStocksQuery) (str
 	if err != nil {
 		return "", err
 	}
+	strategyRunStamp := tableStamp{}
+	if isV150CostVersion(query.StrategyCohort) && db.Dao.Migrator().HasTable(&models.StrategyRunSnapshot{}) {
+		strategyRuns := db.Dao.Model(&models.StrategyRunSnapshot{}).
+			Where("strategy_version = ? AND mode = ? AND frozen_at IS NOT NULL", marketSummaryVersion150, "production")
+		if err := strategyRuns.Count(&strategyRunStamp.Count).Error; err != nil {
+			return "", err
+		}
+		var maxDecisionAt sql.NullString
+		if err := strategyRuns.Select("MAX(decision_at)").Scan(&maxDecisionAt).Error; err != nil {
+			return "", err
+		}
+		if ts, ok := parseYieldDailyOverviewTimestamp(maxDecisionAt.String); ok {
+			strategyRunStamp.MaxAt = ts
+		}
+	}
 	return fmt.Sprintf(
-		"cohort:%s|record:%d:%d|recommend:%d:%d|override:%d:%d",
+		"cohort:%s|record:%d:%d|recommend:%d:%d|override:%d:%d|v150run:%d:%d",
 		normalizeStrategyCohort(query.StrategyCohort, strategyCohortAll),
 		recordStamp.Count,
 		recordStamp.MaxAt.UnixNano(),
@@ -204,6 +335,8 @@ func buildYieldDailyOverviewSignature(query *models.AiRecommendStocksQuery) (str
 		recommendStamp.MaxAt.UnixNano(),
 		overrideStamp.Count,
 		overrideStamp.MaxAt.UnixNano(),
+		strategyRunStamp.Count,
+		strategyRunStamp.MaxAt.UnixNano(),
 	), nil
 }
 
@@ -231,6 +364,9 @@ func cloneYieldDailyOverviewData(data *models.AiRecommendYieldDailyOverviewData)
 	if data.Warnings != nil {
 		cloned.Warnings = append([]string(nil), data.Warnings...)
 	}
+	if data.V150HealthWarnings != nil {
+		cloned.V150HealthWarnings = append([]string(nil), data.V150HealthWarnings...)
+	}
 	if data.Points != nil {
 		cloned.Points = append([]models.AiRecommendYieldDailyOverviewPoint(nil), data.Points...)
 	}
@@ -247,37 +383,48 @@ func buildYieldDailyOverviewEntry(item models.AiRecommendStocksYieldItem) (yield
 	if item.BuyAmount <= 0 {
 		return yieldDailyOverviewEntry{}, false
 	}
-
 	buyTime, ok := resolveYieldDailyOverviewBuyTime(item)
 	if !ok {
 		return yieldDailyOverviewEntry{}, false
 	}
 	market := resolveTradingMarket(item.StockCode)
-	buyCost := calcBuyTradeCost(item.BuyAmount, market)
+	buyCost := calcBuyTradeCostForVersion(item.SummaryVersion, item.BuyAmount, market)
 	if buyCost.NetAmount <= 0 {
 		return yieldDailyOverviewEntry{}, false
 	}
 
 	entry := yieldDailyOverviewEntry{
-		RecommendID:      item.RecommendID,
-		StockCode:        normalizeRecommendStockCode(item.StockCode),
-		StockName:        strings.TrimSpace(item.StockName),
-		BuyTime:          buyTime,
-		BuyDay:           normalizeYieldOverviewTradeDay(buyTime),
-		BuyAmount:        round2(item.BuyAmount),
-		CurrentPrice:     round2(item.CurrentPrice),
-		BuyCostNet:       round2(buyCost.NetAmount),
-		CurrentPriceTime: strings.TrimSpace(item.CurrentPriceTime),
-		SellTime:         strings.TrimSpace(item.SellTime),
+		RecommendID:               item.RecommendID,
+		SummaryVersion:            strings.TrimSpace(item.SummaryVersion),
+		StockCode:                 normalizeRecommendStockCode(item.StockCode),
+		StockName:                 strings.TrimSpace(item.StockName),
+		BuyTime:                   buyTime,
+		BuyDay:                    normalizeYieldOverviewTradeDay(buyTime),
+		BuyAmount:                 round2(item.BuyAmount),
+		CurrentPrice:              round2(item.CurrentPrice),
+		BuyCostNet:                round2(buyCost.NetAmount),
+		CurrentPriceTime:          strings.TrimSpace(item.CurrentPriceTime),
+		SellTime:                  strings.TrimSpace(item.SellTime),
+		V150LedgerAccountingReady: item.V150LedgerAccountingReady,
+		V150LedgerClosed:          item.V150LedgerClosed,
+		V150LedgerQuantity:        item.V150LedgerQuantity,
+		V150LedgerCorporateCash:   item.V150LedgerCorporateCash,
 	}
-
 	if item.SellAmount != nil && *item.SellAmount > 0 {
 		entry.SellAmount = round2(*item.SellAmount)
 		entry.HasSellAmount = true
-		sellNet := calcSellTradeCost(item.BuyAmount, *item.SellAmount, market)
+		sellNet := calcSellTradeCostForVersion(item.SummaryVersion, item.BuyAmount, *item.SellAmount, market)
 		entry.RealizedValueNet = round2(sellNet.NetAmount)
 		if sellTime, ok := parseYieldOverviewDisplayTime(item.SellTime); ok {
 			entry.SellDay = normalizeYieldOverviewTradeDay(sellTime)
+		}
+	}
+	if isV150CostVersion(item.SummaryVersion) && item.V150LedgerAccountingReady {
+		if item.V150LedgerEntryCash > 0 {
+			entry.BuyCostNet = round2(item.V150LedgerEntryCash)
+		}
+		if item.V150LedgerClosed && item.V150LedgerNetValue > 0 {
+			entry.RealizedValueNet = round2(item.V150LedgerNetValue)
 		}
 	}
 	if currentTime, ok := parseYieldOverviewDisplayTime(item.CurrentPriceTime); ok {
@@ -286,7 +433,7 @@ func buildYieldDailyOverviewEntry(item models.AiRecommendStocksYieldItem) (yield
 	if entry.CurrentDay.IsZero() {
 		entry.CurrentDay = normalizeYieldOverviewTradeDay(timeNow().In(cnLocation()))
 	}
-	if !entry.HasSellAmount && entry.CurrentPrice <= 0 {
+	if !entry.HasSellAmount && entry.CurrentPrice <= 0 && !isV150CostVersion(entry.SummaryVersion) {
 		entry.CurrentPrice = entry.BuyAmount
 	}
 	if !entry.SellDay.IsZero() && entry.SellDay.Before(entry.BuyDay) {
@@ -359,45 +506,41 @@ func loadYieldDailyOverviewTradingDaysWithRemote(startDay, endDay time.Time, all
 		return nil, nil, errors.New("读取沪深300ETF日线失败")
 	}
 
-	loc := cnLocation()
+	days, benchmark := buildYieldDailyOverviewBenchmarkSeries(bars, startDay, endDay)
+	return days, benchmark, nil
+}
+
+// buildYieldDailyOverviewBenchmarkSeries intentionally keeps only dates backed
+// by an observed benchmark close. Synthesising a weekday or carrying the prior
+// close forward would make stale 510300 data look current and contaminate the
+// portfolio curve and V1.5.0 forward-validation excess returns.
+func buildYieldDailyOverviewBenchmarkSeries(
+	bars []dailyBar,
+	startDay, endDay time.Time,
+) ([]time.Time, *yieldDailyOverviewPriceSeries) {
 	days := make([]time.Time, 0, len(bars))
-	rawCloseByDay := make(map[string]float64, len(bars))
+	dayByKey := make(map[string]time.Time, len(bars))
+	closeByDay := make(map[string]float64, len(bars))
 	for _, bar := range bars {
 		day := normalizeDailyTradeDate(bar.TradeDate)
-		if day.IsZero() || day.Before(startDay) || day.After(endDay) {
+		if day.IsZero() || day.Before(startDay) || day.After(endDay) || bar.Close <= 0 {
 			continue
 		}
-		days = append(days, day)
-		if bar.Close > 0 {
-			rawCloseByDay[day.Format("2006-01-02")] = round2(bar.Close)
-		}
-	}
-	if len(days) == 0 {
-		return nil, nil, nil
-	}
-
-	lastDay := days[len(days)-1]
-	if endDay.After(lastDay) && endDay.Weekday() != time.Saturday && endDay.Weekday() != time.Sunday {
-		endCandidate := time.Date(endDay.In(loc).Year(), endDay.In(loc).Month(), endDay.In(loc).Day(), 0, 0, 0, 0, loc)
-		if endCandidate.After(lastDay) {
-			days = append(days, endCandidate)
-		}
-	}
-	closeByDay := make(map[string]float64, len(days))
-	lastClose := 0.0
-	for _, day := range days {
 		key := day.Format("2006-01-02")
-		if closePrice, ok := rawCloseByDay[key]; ok && closePrice > 0 {
-			lastClose = closePrice
-		}
-		if lastClose > 0 {
-			closeByDay[key] = round2(lastClose)
-		}
+		dayByKey[key] = day
+		closeByDay[key] = round2(bar.Close)
 	}
+	if len(dayByKey) == 0 {
+		return nil, nil
+	}
+	for _, day := range dayByKey {
+		days = append(days, day)
+	}
+	sort.Slice(days, func(i, j int) bool { return days[i].Before(days[j]) })
 	return days, &yieldDailyOverviewPriceSeries{
 		Code:       defaultBenchmarkModelCode,
 		CloseByDay: closeByDay,
-	}, nil
+	}
 }
 
 func loadYieldDailyOverviewPriceSeries(
@@ -531,15 +674,11 @@ func loadYieldDailyOverviewPriceSeriesByCode(
 		return nil, nil
 	}
 
-	closeByDay := make(map[string]float64, len(tradingDays))
-	lastClose := 0.0
+	closeByDay := make(map[string]float64, len(rawCloseByDay))
 	for _, day := range tradingDays {
 		key := day.Format("2006-01-02")
 		if closePrice, ok := rawCloseByDay[key]; ok && closePrice > 0 {
-			lastClose = closePrice
-		}
-		if lastClose > 0 {
-			closeByDay[key] = round2(lastClose)
+			closeByDay[key] = round2(closePrice)
 		}
 	}
 	if len(closeByDay) == 0 {
@@ -551,19 +690,98 @@ func loadYieldDailyOverviewPriceSeriesByCode(
 	}, nil
 }
 
+func countYieldDailyOverviewPriceGaps(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
+) int {
+	count := 0
+	for _, entry := range entries {
+		series := priceSeriesMap[entry.StockCode]
+		if series == nil {
+			continue
+		}
+		for _, tradeDay := range tradingDays {
+			if tradeDay.Before(entry.BuyDay) || (entry.HasSellAmount && !entry.SellDay.IsZero() && !tradeDay.Before(entry.SellDay)) {
+				continue
+			}
+			if !entry.CurrentDay.IsZero() && tradeDay.Equal(entry.CurrentDay) && entry.CurrentPrice > 0 {
+				continue
+			}
+			if series.CloseByDay[tradeDay.Format("2006-01-02")] <= 0 {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func collectV150YieldDailyPriceGapWarnings(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
+) []string {
+	warnings := make([]string, 0)
+	for _, entry := range entries {
+		if !isV150CostVersion(entry.SummaryVersion) {
+			continue
+		}
+		series := priceSeriesMap[entry.StockCode]
+		for _, tradeDay := range tradingDays {
+			if tradeDay.Before(entry.BuyDay) || (entry.HasSellAmount && !entry.SellDay.IsZero() && !tradeDay.Before(entry.SellDay)) {
+				continue
+			}
+			tradeDate := tradeDay.Format(time.DateOnly)
+			if !entry.CurrentDay.IsZero() && tradeDay.Equal(entry.CurrentDay) && entry.CurrentPrice > 0 {
+				continue
+			}
+			if series != nil && series.CloseByDay[tradeDate] > 0 {
+				continue
+			}
+			code := normalizeRecommendStockCode(entry.StockCode)
+			if code == "" {
+				code = fmt.Sprintf("recommend:%d", entry.RecommendID)
+			}
+			warnings = append(warnings, code+":"+v150YieldDailyRawMinutePriceHealthCode+":"+tradeDate)
+		}
+	}
+	return dedupeNonEmptyStrings(warnings, 0)
+}
+
 func buildYieldDailyOverviewPoints(
 	entries []yieldDailyOverviewEntry,
 	tradingDays []time.Time,
 	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
 	benchmarkSeries *yieldDailyOverviewPriceSeries,
 ) []models.AiRecommendYieldDailyOverviewPoint {
+	points, _ := buildYieldDailyOverviewPointsWithV150Ledgers(entries, tradingDays, priceSeriesMap, benchmarkSeries, nil)
+	return points
+}
+
+func buildYieldDailyOverviewPointsWithV150Ledgers(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
+	benchmarkSeries *yieldDailyOverviewPriceSeries,
+	v150DailyLedgers map[uint]v150YieldDailyOrderLedger,
+) ([]models.AiRecommendYieldDailyOverviewPoint, []string) {
 	var benchmarkMatchedSeries *benchmarkDailySeries
+	v150Portfolio := len(entries) > 0
+	for _, entry := range entries {
+		if !isV150CostVersion(entry.SummaryVersion) {
+			v150Portfolio = false
+			break
+		}
+	}
 	if benchmarkSeries != nil {
 		if series, _, _, _, _, _, _, _, ok := calculateCashflowMatchedBenchmark(entries, tradingDays, benchmarkSeries); ok {
-			benchmarkMatchedSeries = series
+			if !v150Portfolio || series.PositionCount == len(entries) {
+				benchmarkMatchedSeries = series
+			}
 		}
 	}
 	points := make([]models.AiRecommendYieldDailyOverviewPoint, 0, len(tradingDays))
+	warnings := make([]string, 0)
 	prevCumulativeAmount := 0.0
 	strategyNav := 1.0
 	for _, tradeDay := range tradingDays {
@@ -572,11 +790,39 @@ func buildYieldDailyOverviewPoints(
 		dailyHoldingCostNet := 0.0
 		cumulativeAmount := 0.0
 		holdingCount := 0
+		completePoint := true
 		for _, entry := range entries {
 			if tradeDay.Before(entry.BuyDay) {
 				continue
 			}
 			series := priceSeriesMap[entry.StockCode]
+			if isV150CostVersion(entry.SummaryVersion) {
+				ledger, ledgerOK := v150DailyLedgers[entry.RecommendID]
+				if !ledgerOK {
+					if v150Portfolio {
+						completePoint = false
+					}
+					warnings = append(warnings, v150YieldDailyPointWarning(entry, tradeDate, v150YieldDailyLedgerMissingHealthCode))
+					continue
+				}
+				value, reason := resolveV150YieldDailyLedgerValue(entry, ledger, tradeDate, tradeDay, series)
+				if reason != "" {
+					if v150Portfolio {
+						completePoint = false
+					}
+					warnings = append(warnings, v150YieldDailyPointWarning(entry, tradeDate, reason))
+					continue
+				}
+				costBasisNet += value.EntryCash
+				cumulativeAmount += value.NetValue - value.EntryCash
+				if value.DailyCostEligible {
+					dailyHoldingCostNet += value.EntryCash
+				}
+				if value.Holding {
+					holdingCount++
+				}
+				continue
+			}
 			if series == nil {
 				continue
 			}
@@ -593,6 +839,12 @@ func buildYieldDailyOverviewPoints(
 				holdingCount += 1
 			}
 		}
+		// Never publish a partial V1.5 portfolio point. Omitting only the
+		// unavailable day preserves prior immutable points and avoids treating a
+		// missing holding price as zero PnL or as a vanished position.
+		if v150Portfolio && !completePoint {
+			continue
+		}
 
 		dailyAmount := cumulativeAmount - prevCumulativeAmount
 		cumulativeYieldRate := 0.0
@@ -604,26 +856,50 @@ func buildYieldDailyOverviewPoints(
 			dailyYieldRate = round2(dailyAmount / dailyHoldingCostNet * 100)
 			strategyNav = round4(strategyNav * (1 + dailyYieldRate/100))
 		}
+		portfolioEquity := 0.0
+		if v150Portfolio {
+			portfolioEquity = round2(100_000 + cumulativeAmount)
+			previousEquity := 100_000 + prevCumulativeAmount
+			cumulativeYieldRate = round2(cumulativeAmount / 100_000 * 100)
+			if previousEquity > 0 {
+				dailyYieldRate = round2(dailyAmount / previousEquity * 100)
+			}
+			strategyNav = round4(portfolioEquity / 100_000)
+		}
 		benchmarkClose := 0.0
 		benchmarkCumulativeAmount := 0.0
 		benchmarkDailyAmount := 0.0
 		benchmarkCumulativeRate := 0.0
 		benchmarkDailyRate := 0.0
 		benchmarkNav := 1.0
-		if benchmarkMatchedSeries != nil {
-			benchmarkClose = round2(benchmarkSeries.CloseByDay[tradeDate])
-			benchmarkCumulativeAmount = round2(benchmarkMatchedSeries.CumulativeAmountByDay[tradeDate])
-			benchmarkDailyAmount = round2(benchmarkMatchedSeries.DailyAmountByDay[tradeDate])
-			benchmarkCumulativeRate = round2(benchmarkMatchedSeries.CumulativeRateByDay[tradeDate])
-			benchmarkDailyRate = round2(benchmarkMatchedSeries.DailyRateByDay[tradeDate])
-			benchmarkNav = round4(benchmarkMatchedSeries.NavByDay[tradeDate])
+		benchmarkDayAvailable := false
+		if v150Portfolio {
+			benchmarkNav = 0
 		}
-		excessCumulativeAmount := round2(cumulativeAmount - benchmarkCumulativeAmount)
-		excessDailyAmount := round2(dailyAmount - benchmarkDailyAmount)
-		excessCumulativeRate := round2(cumulativeYieldRate - benchmarkCumulativeRate)
-		excessDailyRate := round2(dailyYieldRate - benchmarkDailyRate)
+		if benchmarkMatchedSeries != nil {
+			if navValue, ok := benchmarkMatchedSeries.NavByDay[tradeDate]; ok {
+				benchmarkDayAvailable = true
+				benchmarkClose = round2(benchmarkSeries.CloseByDay[tradeDate])
+				benchmarkCumulativeAmount = round2(benchmarkMatchedSeries.CumulativeAmountByDay[tradeDate])
+				benchmarkDailyAmount = round2(benchmarkMatchedSeries.DailyAmountByDay[tradeDate])
+				benchmarkCumulativeRate = round2(benchmarkMatchedSeries.CumulativeRateByDay[tradeDate])
+				benchmarkDailyRate = round2(benchmarkMatchedSeries.DailyRateByDay[tradeDate])
+				benchmarkNav = round4(navValue)
+			}
+		}
+		excessCumulativeAmount := 0.0
+		excessDailyAmount := 0.0
+		excessCumulativeRate := 0.0
+		excessDailyRate := 0.0
+		if benchmarkDayAvailable || !v150Portfolio {
+			excessCumulativeAmount = round2(cumulativeAmount - benchmarkCumulativeAmount)
+			excessDailyAmount = round2(dailyAmount - benchmarkDailyAmount)
+			excessCumulativeRate = round2(cumulativeYieldRate - benchmarkCumulativeRate)
+			excessDailyRate = round2(dailyYieldRate - benchmarkDailyRate)
+		}
 		points = append(points, models.AiRecommendYieldDailyOverviewPoint{
 			TradeDate:                       tradeDate,
+			PortfolioEquity:                 portfolioEquity,
 			CostBasisNet:                    round2(costBasisNet),
 			DailyHoldingCostNet:             round2(dailyHoldingCostNet),
 			HoldingCount:                    holdingCount,
@@ -645,7 +921,7 @@ func buildYieldDailyOverviewPoints(
 		})
 		prevCumulativeAmount = cumulativeAmount
 	}
-	return points
+	return points, dedupeNonEmptyStrings(warnings, 0)
 }
 
 func shouldIncludeYieldDailyOverviewEntryInDailyCost(entry yieldDailyOverviewEntry, tradeDay time.Time) bool {
@@ -676,9 +952,9 @@ func resolveYieldDailyOverviewNetValue(
 		price = series.CloseByDay[tradeDate]
 	}
 	if price <= 0 {
-		price = entry.BuyAmount
+		return 0, false, false
 	}
-	sellNet := calcSellTradeCost(entry.BuyAmount, price, resolveTradingMarket(entry.StockCode))
+	sellNet := calcSellTradeCostForVersion(entry.SummaryVersion, entry.BuyAmount, price, resolveTradingMarket(entry.StockCode))
 	if sellNet.NetAmount <= 0 {
 		return 0, false, false
 	}

@@ -15,8 +15,9 @@ func TestApplyFrozenSellPriceFixCorrectsGapOpenAndMarksVersion(t *testing.T) {
 	if loc == nil {
 		loc = time.Local
 	}
-	db.Init(filepath.Join(t.TempDir(), "frozen-sell-fix.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "frozen-sell-fix.db"))
 	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
 		&models.AiRecommendYieldState{},
 		&models.AiRecommendYieldRecordState{},
@@ -35,6 +36,15 @@ func TestApplyFrozenSellPriceFixCorrectsGapOpenAndMarksVersion(t *testing.T) {
 	stopProfit := 110.0
 	oldSell := 110.0
 	buyAmount := 100.0
+	recommend := models.AiRecommendStocks{
+		SummaryVersion: marketSummaryVersion150,
+		StockCode:      "300001.SZ",
+		StockName:      "test",
+		DataTime:       &buyTime,
+	}
+	if err := db.Dao.Create(&recommend).Error; err != nil {
+		t.Fatalf("create v1.5 recommendation failed: %v", err)
+	}
 
 	state := models.AiRecommendYieldState{
 		StockCode:          "300001.SZ",
@@ -54,7 +64,7 @@ func TestApplyFrozenSellPriceFixCorrectsGapOpenAndMarksVersion(t *testing.T) {
 	}
 
 	record := models.AiRecommendYieldRecordState{
-		RecommendID:        99,
+		RecommendID:        recommend.ID,
 		StockCode:          "300001.SZ",
 		StockName:          "测试股票",
 		BuyTime:            &buyTime,
@@ -98,11 +108,11 @@ func TestApplyFrozenSellPriceFixCorrectsGapOpenAndMarksVersion(t *testing.T) {
 	if err := db.Dao.First(&gotState, state.ID).Error; err != nil {
 		t.Fatalf("reload yield state failed: %v", err)
 	}
-	if gotState.RealizedSellAmount == nil || math.Abs(*gotState.RealizedSellAmount-115.0) > 0.0001 {
-		t.Fatalf("expected corrected state sell price 115.0, got %+v", gotState.RealizedSellAmount)
+	if gotState.RealizedSellAmount == nil || math.Abs(*gotState.RealizedSellAmount-oldSell) > 0.0001 {
+		t.Fatalf("expected frozen legacy aggregate sell price %.1f, got %+v", oldSell, gotState.RealizedSellAmount)
 	}
-	if gotState.YieldRateText != "+14.47%" {
-		t.Fatalf("expected corrected state yield +14.47%%, got %s", gotState.YieldRateText)
+	if gotState.YieldRateText != "+10.00%" {
+		t.Fatalf("expected frozen legacy aggregate yield +10.00%%, got %s", gotState.YieldRateText)
 	}
 
 	var gotRecord models.AiRecommendYieldRecordState

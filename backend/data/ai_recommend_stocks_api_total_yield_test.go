@@ -73,3 +73,33 @@ func TestCalculateYieldTotalByItems_IgnoresIneligibleItems(t *testing.T) {
 		t.Fatalf("expected total text --, got %s", totalText)
 	}
 }
+
+func TestCalculateYieldTotalByItemsV150UsesReusablePortfolioCapital(t *testing.T) {
+	items := []models.AiRecommendStocksYieldItem{
+		{SummaryVersion: "1.5.0", ActivationStatus: "activated", BacktestEligibility: recommendBacktestEligible,
+			V150LedgerAccountingReady: true, V150LedgerEntryCash: 9000, V150LedgerNetPnL: 100},
+		{SummaryVersion: "1.5.0", ActivationStatus: "activated", BacktestEligibility: recommendBacktestEligible,
+			V150LedgerAccountingReady: true, V150LedgerEntryCash: 9900, V150LedgerNetPnL: 200},
+	}
+	total, text := calculateYieldTotalByItems(items)
+	if total != .3 || text != "+0.30%" {
+		t.Fatalf("sequential V1.5 turnover inflated denominator: total=%.4f text=%q", total, text)
+	}
+}
+
+func TestCalculateYieldTotalByItemsV150RejectsPartialOrMixedLedger(t *testing.T) {
+	ready := models.AiRecommendStocksYieldItem{
+		SummaryVersion: "1.5.0", ActivationStatus: "activated", BacktestEligibility: recommendBacktestEligible,
+		V150LedgerAccountingReady: true, V150LedgerNetPnL: 100,
+	}
+	missing := ready
+	missing.V150LedgerAccountingReady = false
+	if _, text := calculateYieldTotalByItems([]models.AiRecommendStocksYieldItem{ready, missing}); text != "--" {
+		t.Fatalf("partial ledger produced a portfolio result: %q", text)
+	}
+	legacy := ready
+	legacy.SummaryVersion = "1.4.2"
+	if _, text := calculateYieldTotalByItems([]models.AiRecommendStocksYieldItem{ready, legacy}); text != "--" {
+		t.Fatalf("mixed cohort silently dropped one side: %q", text)
+	}
+}

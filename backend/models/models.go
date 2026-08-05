@@ -1045,6 +1045,8 @@ type AiRecommendStocks struct {
 	ActivationInvalidReason     string                           `json:"activationInvalidReason" md:"激活规则无效原因"`
 	RecommendStatus             string                           `json:"recommendStatus" md:"推荐状态"`
 	SummaryVersion              string                           `json:"summaryVersion" md:"总结版本"`
+	StrategyRunID               string                           `json:"strategyRunId,omitempty" gorm:"size:96;index" md:"策略运行ID"`
+	StrategyRuleID              string                           `json:"strategyRuleId,omitempty" gorm:"size:128;index" md:"策略规则ID"`
 	RiskRemarks                 string                           `json:"riskRemarks" md:"风险提示"`
 	Remarks                     string                           `json:"remarks" md:"备注"`
 	LatestOpeningReview         *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty" gorm:"-"`
@@ -1216,6 +1218,7 @@ type AiRecommendStocksPageData struct {
 type AiRecommendStocksYieldItem struct {
 	RecommendID               uint                             `json:"recommendId"`
 	RowKey                    string                           `json:"rowKey"`
+	SummaryVersion            string                           `json:"summaryVersion,omitempty"`
 	CalcMode                  string                           `json:"calcMode,omitempty"`
 	StrictReady               bool                             `json:"strictReady"`
 	StrictPendingReason       string                           `json:"strictPendingReason,omitempty"`
@@ -1262,6 +1265,17 @@ type AiRecommendStocksYieldItem struct {
 	DataStatus                string                           `json:"dataStatus"`
 	DataStatusReason          string                           `json:"dataStatusReason,omitempty"`
 	LatestOpeningReview       *AiRecommendOpeningReviewSummary `json:"latestOpeningReview,omitempty"`
+	// V1.5 ledger accounting is an in-memory, read-only projection of sealed
+	// strategy_order_event rows. It is deliberately excluded from the API and
+	// ORM schema; aggregate metrics consume it instead of reconstructing cash
+	// flows from raw display prices after splits/dividends.
+	V150LedgerAccountingReady bool    `json:"-" gorm:"-"`
+	V150LedgerClosed          bool    `json:"-" gorm:"-"`
+	V150LedgerEntryCash       float64 `json:"-" gorm:"-"`
+	V150LedgerNetValue        float64 `json:"-" gorm:"-"`
+	V150LedgerNetPnL          float64 `json:"-" gorm:"-"`
+	V150LedgerQuantity        float64 `json:"-" gorm:"-"`
+	V150LedgerCorporateCash   float64 `json:"-" gorm:"-"`
 }
 
 type AiRecommendYieldMinuteBarDTO struct {
@@ -1307,6 +1321,7 @@ type AiRecommendYieldMinuteChartData struct {
 
 type AiRecommendYieldDailyOverviewPoint struct {
 	TradeDate                       string  `json:"tradeDate"`
+	PortfolioEquity                 float64 `json:"portfolioEquity"`
 	CostBasisNet                    float64 `json:"costBasisNet"`
 	DailyHoldingCostNet             float64 `json:"dailyHoldingCostNet"`
 	HoldingCount                    int     `json:"holdingCount"`
@@ -1335,10 +1350,13 @@ type AiRecommendYieldDailyOverviewData struct {
 	BenchmarkCode       string                               `json:"benchmarkCode"`
 	BenchmarkName       string                               `json:"benchmarkName"`
 	StrategyCohort      string                               `json:"strategyCohort,omitempty"`
+	ValidationStatus    string                               `json:"validationStatus,omitempty"`
+	PortfolioCapital    float64                              `json:"portfolioCapital,omitempty"`
 	TotalRecordCount    int                                  `json:"totalRecordCount"`
 	IncludedRecordCount int                                  `json:"includedRecordCount"`
 	SkippedRecordCount  int                                  `json:"skippedRecordCount"`
 	Warnings            []string                             `json:"warnings"`
+	V150HealthWarnings  []string                             `json:"v150HealthWarnings,omitempty"`
 	Points              []AiRecommendYieldDailyOverviewPoint `json:"points"`
 }
 
@@ -1370,6 +1388,8 @@ type AiRecommendStocksYieldPageData struct {
 	MedianExcessYieldRate      float64                      `json:"medianExcessYieldRate"`
 	MedianExcessYieldRateText  string                       `json:"medianExcessYieldRateText"`
 	StrategyCohort             string                       `json:"strategyCohort,omitempty"`
+	V150Validation             *StrategyValidationStatus    `json:"v150Validation,omitempty"`
+	V150HealthWarnings         []string                     `json:"v150HealthWarnings,omitempty"`
 	SameDayActivationRate      float64                      `json:"sameDayActivationRate"`
 	SameDayActivationRateText  string                       `json:"sameDayActivationRateText,omitempty"`
 	StaleActivationRate        float64                      `json:"staleActivationRate"`
@@ -1411,6 +1431,22 @@ type AiRecommendStocksYieldPageData struct {
 	DiemengHealthStatus        string                       `json:"diemengHealthStatus,omitempty"`
 	DiemengHealthSummary       string                       `json:"diemengHealthSummary,omitempty"`
 	DiemengHealthCheckedAt     string                       `json:"diemengHealthCheckedAt,omitempty"`
+}
+
+// StrategyValidationStatus is deliberately evidence based. A release tag
+// never changes Status to validated; only the frozen forward sample can.
+type StrategyValidationStatus struct {
+	Status                 string   `json:"status"`
+	Label                  string   `json:"label"`
+	TradingDayCount        int      `json:"tradingDayCount"`
+	ClosedTradeCount       int      `json:"closedTradeCount"`
+	ComparableTradeCount   int      `json:"comparableTradeCount"`
+	RecommendationDayCount int      `json:"recommendationDayCount"`
+	NetMeanPct             float64  `json:"netMeanPct"`
+	NetExcessMeanPct       float64  `json:"netExcessMeanPct"`
+	ProfitFactor           float64  `json:"profitFactor"`
+	DailyLowerBound90Pct   float64  `json:"dailyLowerBound90Pct"`
+	UnmetConditions        []string `json:"unmetConditions"`
 }
 
 // AiRecommendYieldComprehensiveStats 综合统计（消除幸存者偏差）

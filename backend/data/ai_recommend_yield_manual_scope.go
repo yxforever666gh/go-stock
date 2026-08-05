@@ -8,9 +8,6 @@ import (
 )
 
 func loadScopeCodesForManualDownload() ([]string, error) {
-	if err := markV132VWAPScaleDirtyCodes(aiRecommendYieldModeStrict); err != nil {
-		return nil, err
-	}
 	loaders := []func() ([]string, error){
 		loadManualDownloadScopeCodesByCoverage,
 		loadManualDownloadScopeCodesByRecoverablePlans,
@@ -30,7 +27,13 @@ func loadScopeCodesForManualDownload() ([]string, error) {
 			}, loaders...)
 		}
 	}
-	return mergeManualDownloadScopeCodes(loaders...)
+	codes, err := mergeManualDownloadScopeCodes(loaders...)
+	if err != nil {
+		return nil, err
+	}
+	// Coverage and dirty-code tables are versionless. Resolve their codes back
+	// through V1.5 recommendations before scheduling any write-producing work.
+	return filterManualDownloadScopeCodes(codes)
 }
 
 func mergeManualDownloadScopeCodes(loaders ...func() ([]string, error)) ([]string, error) {
@@ -62,6 +65,7 @@ func filterManualDownloadScopeCodes(codes []string) ([]string, error) {
 	rows := make([]models.AiRecommendStocks, 0, len(normalized)*2)
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("stock_code IN ?", keysFromScopeMap(normalized)).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -149,6 +153,7 @@ func loadManualDownloadScopeCodesByRecoverablePlans() ([]string, error) {
 	rows := make([]models.AiRecommendStocks, 0, 16)
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
 		Where("activation_rule_source IN ?", []string{"market_summary", "market_summary_embedded"}).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Order("COALESCE(data_time, created_at) ASC, id ASC").
 		Find(&rows).Error; err != nil {
 		return nil, err

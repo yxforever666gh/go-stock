@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildYieldRecordStateFromRecommendKeepsPendingBeforeEntryRangeTriggered(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "yield-activation.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-activation.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestBuildYieldRecordStateFromRecommendKeepsPendingBeforeEntryRangeTriggered
 
 func TestBuildYieldRecordStateFromRecommend_BeforeCutoffUsesLegacyDirectActivation(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-legacy-direct-activation.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-legacy-direct-activation.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestBuildYieldRecordStateFromRecommend_BeforeCutoffUsesLegacyDirectActivati
 
 func TestBuildYieldRecordStateFromRecommend_DoesNotActivateBreakoutAboveMaxEntry(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-activation-stop-profit-guard.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-activation-stop-profit-guard.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestBuildYieldRecordStateFromRecommend_DoesNotActivateBreakoutAboveMaxEntry
 
 func TestBuildYieldRecordStateFromRecommend_IntradayOpeningPolicyDoesNotBlockSameDayActivation(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-intraday-opening-policy.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-intraday-opening-policy.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestBuildYieldRecordStateFromRecommend_IntradayOpeningPolicyDoesNotBlockSam
 
 func TestBuildYieldRecordStateFromRecommend_At0940DoesNotWaitForNextOpeningReview(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-0940-opening-policy.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-0940-opening-policy.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestBuildYieldRecordStateFromRecommend_At0940DoesNotWaitForNextOpeningRevie
 
 func TestBuildYieldRecordStateFromRecommend_At1130ScansSingleMinuteBar(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-1130-single-minute.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-1130-single-minute.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -285,7 +285,7 @@ func TestBuildYieldRecordStateFromRecommend_At1130ScansSingleMinuteBar(t *testin
 }
 
 func TestListMinuteBarsFromCacheAllowsSingleMinuteWindow(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "minute-cache-single-window.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "minute-cache-single-window.db"))
 	if err := db.Dao.AutoMigrate(&models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -333,7 +333,7 @@ func TestResolveActivationRuleScanNormalizesLegacyBreakoutThresholdMax(t *testin
 
 func TestBuildYieldRecordStateFromRecommend_BeforeCutoffClampsActivationTimeToSignalTime(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-legacy-direct-activation-clamp.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-legacy-direct-activation-clamp.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestBuildYieldRecordStateFromRecommend_BeforeCutoffClampsActivationTimeToSi
 
 func TestBuildYieldRecordStateFromRecommend_OvernightRecalcKeepsPriorTradeDayActivation(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-overnight-keep-prior-activation.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-overnight-keep-prior-activation.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -419,7 +419,7 @@ func TestBuildYieldRecordStateFromRecommend_OvernightRecalcKeepsPriorTradeDayAct
 
 func TestBuildYieldRecordStateFromRecommend_SameDayOnlyAllowsHistoricalNextDayActivation(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-samedayonly-historical.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-samedayonly-historical.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -462,7 +462,7 @@ func TestBuildYieldRecordStateFromRecommend_SameDayOnlyAllowsHistoricalNextDayAc
 
 func TestBuildYieldRecordStateFromRecommend_OpeningGapAboveMaxChaseSkipsOpenOnly(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-opening-high-skip-open-only.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-opening-high-skip-open-only.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}
@@ -506,7 +506,7 @@ func TestBuildYieldRecordStateFromRecommend_OpeningGapAboveMaxChaseSkipsOpenOnly
 
 func TestBuildYieldRecordStateFromRecommend_OpeningGapBelowStopInvalidates(t *testing.T) {
 	withStubbedMinuteProviders(t)
-	db.Init(filepath.Join(t.TempDir(), "yield-opening-low-invalid.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "yield-opening-low-invalid.db"))
 	if err := db.Dao.AutoMigrate(&StockBasic{}, &Settings{}, &models.AiRecommendMinuteBar{}); err != nil {
 		t.Fatalf("auto migrate failed: %v", err)
 	}

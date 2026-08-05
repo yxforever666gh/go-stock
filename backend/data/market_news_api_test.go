@@ -2,7 +2,6 @@ package data
 
 import (
 	"encoding/json"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/util"
@@ -24,7 +23,7 @@ import (
 
 func TestGetSinaNews(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	InitAnalyzeSentiment()
 	news := NewMarketNewsApi().GetSinaNews(30)
 	for i, telegraph := range *news {
@@ -82,14 +81,14 @@ func TestTopStocksRankingList(t *testing.T) {
 
 func TestLongTiger(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 
 	NewMarketNewsApi().LongTiger("2025-06-08")
 }
 
 func TestStockResearchReport(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	resp := NewMarketNewsApi().StockResearchReport("688082", 7)
 	for _, a := range resp {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -101,7 +100,7 @@ func TestStockResearchReport(t *testing.T) {
 
 func TestIndustryResearchReport(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	resp := NewMarketNewsApi().IndustryResearchReport("", 7)
 	for _, a := range resp {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -114,7 +113,7 @@ func TestIndustryResearchReport(t *testing.T) {
 
 func TestStockNotice(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	resp := NewMarketNewsApi().StockNotice("600584,600900")
 	for _, a := range resp {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -124,7 +123,7 @@ func TestStockNotice(t *testing.T) {
 
 func TestEMDictCode(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	resp := NewMarketNewsApi().EMDictCode("016", freecache.NewCache(100))
 	for _, a := range resp {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -145,14 +144,14 @@ func TestEMDictCode(t *testing.T) {
 
 func TestTradingViewNews(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	InitAnalyzeSentiment()
 	NewMarketNewsApi().TradingViewNews()
 }
 
 func TestXUEQIUHotStock(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewMarketNewsApi().XUEQIUHotStock(50, "10")
 	for _, a := range *res {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -164,7 +163,7 @@ func TestXUEQIUHotStock(t *testing.T) {
 
 func TestHotEvent(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewMarketNewsApi().HotEvent(50)
 	for _, a := range *res {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -174,7 +173,7 @@ func TestHotEvent(t *testing.T) {
 
 func TestHotTopic(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewMarketNewsApi().HotTopic(10)
 	for _, a := range res {
 		logger.SugaredLogger.Debugf("value: %+v", a)
@@ -184,7 +183,7 @@ func TestHotTopic(t *testing.T) {
 
 func TestInvestCalendar(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewMarketNewsApi().InvestCalendar("2025-06")
 	for _, a := range res {
 		bytes, err := json.Marshal(a)
@@ -200,7 +199,7 @@ func TestInvestCalendar(t *testing.T) {
 
 func TestClsCalendar(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewMarketNewsApi().ClsCalendar()
 	md := strings.Builder{}
 	for _, a := range res {
@@ -257,13 +256,13 @@ func TestGetIndustryReportInfo(t *testing.T) {
 
 func TestReutersNew(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	NewMarketNewsApi().ReutersNew()
 }
 
 func TestInteractiveAnswer(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	datas := NewMarketNewsApi().InteractiveAnswer(1, 100, "立讯精密")
 	logger.SugaredLogger.Debugf("PageSize:%d", datas.PageSize)
 	md := util.MarkdownTableWithTitle("投资互动", datas.Results)
@@ -272,7 +271,7 @@ func TestInteractiveAnswer(t *testing.T) {
 }
 func TestGetNewsList2(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	news := NewMarketNewsApi().GetNewsList2("财联社电报", random.RandInt(100, 500))
 	messageText := strings.Builder{}
 	for _, telegraph := range *news {
@@ -284,7 +283,7 @@ func TestGetNewsList2(t *testing.T) {
 
 func TestTelegraphList(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	InitAnalyzeSentiment()
 	NewMarketNewsApi().TelegraphList(30)
 }

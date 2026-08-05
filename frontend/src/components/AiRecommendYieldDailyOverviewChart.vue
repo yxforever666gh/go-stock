@@ -116,6 +116,9 @@ function buildRateTooltip(params, points) {
     `${isDaily ? '当日持仓成本' : '组合净买入'}: ${formatMoney(displayedCost)}`,
     `持仓数: ${Number(point.holdingCount || 0)}`
   ]
+  if (!isDaily && Number(point.portfolioEquity || 0) > 0) {
+    lines.push(`真实组合权益（初始 100,000 元）: ${formatMoney(point.portfolioEquity)}`)
+  }
   return lines.join('<br/>')
 }
 
@@ -139,6 +142,9 @@ function buildAmountTooltip(params, points) {
     `${isDaily ? '当日持仓成本' : '组合净买入'}: ${formatMoney(displayedCost)}`,
     `持仓数: ${Number(point.holdingCount || 0)}`
   ]
+  if (!isDaily && Number(point.portfolioEquity || 0) > 0) {
+    lines.push(`真实组合权益（初始 100,000 元）: ${formatMoney(point.portfolioEquity)}`)
+  }
   return lines.join('<br/>')
 }
 

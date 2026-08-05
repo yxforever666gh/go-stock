@@ -32,6 +32,13 @@ func normalizeDailyTradeDate(t time.Time) time.Time {
 }
 
 func listDailyBarsFromCache(stockCode string, startDay, endDay time.Time) ([]dailyBar, error) {
+	// Some read-only overview callers legitimately run before the database has
+	// been initialised (notably isolated tests and early UI startup). Treat that
+	// exactly like an empty cache; callers already surface the missing-series
+	// warning and must never attempt a remote fallback in cache-only mode.
+	if db.Dao == nil {
+		return []dailyBar{}, nil
+	}
 	code := strings.ToUpper(strings.TrimSpace(stockCode))
 	if code == "" {
 		return []dailyBar{}, nil
@@ -157,23 +164,27 @@ func loadDailyBarsWithCache(modelCode, quoteCode string, startDay, endDay time.T
 	if startDay.IsZero() || endDay.IsZero() || endDay.Before(startDay) {
 		return []dailyBar{}, nil
 	}
+	observedAt := time.Now().In(cnLocation())
 	if db.Dao == nil {
-		return fetchDailyBarsFromRemote(quoteCode, startDay, endDay, klineDays), nil
+		return cacheableCompletedDailyBars(fetchDailyBarsFromRemote(quoteCode, startDay, endDay, klineDays), observedAt), nil
 	}
 
 	cached, err := listDailyBarsFromCache(modelCode, startDay, endDay)
 	if err != nil {
 		return nil, err
 	}
-	if dailyBarsCoverTradingWindow(cached, startDay, endDay) {
+	if dailyBarsCoverTradingWindowAt(cached, startDay, endDay, observedAt) {
 		return cached, nil
 	}
 
-	fetched := fetchDailyBarsFromRemote(quoteCode, startDay, endDay, klineDays)
+	fetched := cacheableCompletedDailyBars(fetchDailyBarsFromRemote(quoteCode, startDay, endDay, klineDays), observedAt)
 	if len(fetched) == 0 {
 		return cached, nil
 	}
-	if _, upsertErr := upsertDailyBarsToCache(modelCode, fetched, "sina"); upsertErr != nil {
+	// StockDataApi.GetKLineData requests Tencent's qfq series. Persist the
+	// adjustment provenance; treating it as an unadjusted Sina close would make
+	// later freshness/corporate-action audits impossible.
+	if _, upsertErr := upsertDailyBarsToCache(modelCode, fetched, "tencent_qfq"); upsertErr != nil {
 		return cached, upsertErr
 	}
 	return listDailyBarsFromCache(modelCode, startDay, endDay)
@@ -196,4 +207,42 @@ func dailyBarsCoverTradingWindow(bars []dailyBar, startDay, endDay time.Time) bo
 	first := normalizeDailyTradeDate(bars[0].TradeDate)
 	last := normalizeDailyTradeDate(bars[len(bars)-1].TradeDate)
 	return !first.After(startDay) && !last.Before(endDay)
+}
+
+// dailyBarsCoverTradingWindowAt deliberately treats a request through the
+// current China trading day as refreshable. A provider can expose today's
+// still-forming 240-minute bar during the session; considering that date a
+// complete cache hit would prevent the final close from replacing it later.
+func dailyBarsCoverTradingWindowAt(bars []dailyBar, startDay, endDay, observedAt time.Time) bool {
+	if !dailyBarsCoverTradingWindow(bars, startDay, endDay) {
+		return false
+	}
+	observedDay := normalizeDailyTradeDate(observedAt)
+	requestedEnd := normalizeDailyTradeDate(endDay)
+	return observedDay.IsZero() || requestedEnd.IsZero() || !requestedEnd.Equal(observedDay)
+}
+
+// cacheableCompletedDailyBars keeps a forming current-day bar out of the
+// durable daily cache. Historical bars and the current bar after the 15:00
+// close remain cacheable. Combined with dailyBarsCoverTradingWindowAt, this
+// also refreshes a legacy partial row after the close instead of accepting its
+// date alone as proof of completeness.
+func cacheableCompletedDailyBars(bars []dailyBar, observedAt time.Time) []dailyBar {
+	if len(bars) == 0 || observedAt.IsZero() {
+		return bars
+	}
+	local := observedAt.In(cnLocation())
+	observedDay := normalizeDailyTradeDate(local)
+	marketClose := time.Date(local.Year(), local.Month(), local.Day(), 15, 0, 0, 0, local.Location())
+	if !local.Before(marketClose) {
+		return bars
+	}
+	result := make([]dailyBar, 0, len(bars))
+	for _, bar := range bars {
+		if normalizeDailyTradeDate(bar.TradeDate).Equal(observedDay) {
+			continue
+		}
+		result = append(result, bar)
+	}
+	return result
 }

@@ -10,7 +10,7 @@ import (
 )
 
 func TestLoadScopeCodesForManualDownload_MergesDirtyAndCoverageScopes(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-scope-merge.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-scope-merge.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
@@ -37,6 +37,7 @@ func TestLoadScopeCodesForManualDownload_MergesDirtyAndCoverageScopes(t *testing
 	coverageRecordTime := time.Date(2026, 5, 28, 14, 30, 0, 0, loc)
 	rows := []models.AiRecommendStocks{
 		{
+			SummaryVersion:              marketSummaryVersion150,
 			DataTime:                    &dirtyRecordTime,
 			StockCode:                   "300001.SZ",
 			StockName:                   "特锐德",
@@ -53,6 +54,7 @@ func TestLoadScopeCodesForManualDownload_MergesDirtyAndCoverageScopes(t *testing
 			RecommendStopProfitPriceMax: 12,
 		},
 		{
+			SummaryVersion:              marketSummaryVersion150,
 			DataTime:                    &coverageRecordTime,
 			StockCode:                   "301293.SZ",
 			StockName:                   "三博脑科",
@@ -111,7 +113,7 @@ func TestLoadScopeCodesForManualDownload_MergesDirtyAndCoverageScopes(t *testing
 }
 
 func TestLoadManualDownloadScopeCodesByCoverage_IncludesUncoverable(t *testing.T) {
-	db.Init(filepath.Join(t.TempDir(), "manual-scope-uncoverable.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "manual-scope-uncoverable.db"))
 	if err := db.Dao.AutoMigrate(
 		&models.AiRecommendStocks{},
 		&models.AiRecommendYieldMeta{},
@@ -135,6 +137,7 @@ func TestLoadManualDownloadScopeCodesByCoverage_IncludesUncoverable(t *testing.T
 
 	recordTime := time.Date(2026, 5, 29, 9, 40, 0, 0, loc)
 	rec := models.AiRecommendStocks{
+		SummaryVersion:              marketSummaryVersion150,
 		DataTime:                    &recordTime,
 		StockCode:                   "301293.SZ",
 		StockName:                   "三博脑科",

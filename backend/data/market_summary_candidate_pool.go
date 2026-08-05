@@ -24,16 +24,17 @@ type marketSummaryIndicatorTemplate struct {
 }
 
 type marketSummaryIndicatorCandidate struct {
-	StockName      string            `json:"stockName"`
-	StockCode      string            `json:"stockCode"`
-	Direction      string            `json:"direction,omitempty"`
-	BkName         string            `json:"bkName,omitempty"`
-	Source         string            `json:"source,omitempty"`
-	Score          int               `json:"score"`
-	ScoreBreakdown map[string]int    `json:"scoreBreakdown,omitempty"`
-	Reason         string            `json:"reason,omitempty"`
-	Metrics        map[string]string `json:"metrics,omitempty"`
-	SourceNames    []string          `json:"sourceNames,omitempty"`
+	StockName         string                            `json:"stockName"`
+	StockCode         string                            `json:"stockCode"`
+	Direction         string                            `json:"direction,omitempty"`
+	BkName            string                            `json:"bkName,omitempty"`
+	Source            string                            `json:"source,omitempty"`
+	Score             int                               `json:"score"`
+	ScoreBreakdown    map[string]int                    `json:"scoreBreakdown,omitempty"`
+	Reason            string                            `json:"reason,omitempty"`
+	Metrics           map[string]string                 `json:"metrics,omitempty"`
+	SourceNames       []string                          `json:"sourceNames,omitempty"`
+	IndicatorEvidence []MarketSummaryV150EvidenceTiming `json:"indicatorEvidence,omitempty"`
 }
 
 var marketSummaryIndicatorTemplates = []marketSummaryIndicatorTemplate{
@@ -68,9 +69,18 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 	if limit <= 0 {
 		limit = marketSummaryIndicatorCandidateLimit
 	}
+	return buildMarketSummaryIndicatorCandidatePoolMode(limit, false, logState)
+}
+
+func buildMarketSummaryV150IndicatorCandidatePool(logState *marketSummaryRouteLog) []marketSummaryIndicatorCandidate {
+	return buildMarketSummaryIndicatorCandidatePoolMode(0, true, logState)
+}
+
+func buildMarketSummaryIndicatorCandidatePoolMode(limit int, v150Mode bool, logState *marketSummaryRouteLog) []marketSummaryIndicatorCandidate {
 	type templateResult struct {
-		template marketSummaryIndicatorTemplate
-		rows     []map[string]any
+		template    marketSummaryIndicatorTemplate
+		rows        []map[string]any
+		availableAt time.Time
 	}
 	results := make([]templateResult, len(marketSummaryIndicatorTemplates))
 	var wg sync.WaitGroup
@@ -81,14 +91,17 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 			res := runWithTimeout(5*time.Second, map[string]any{}, func() map[string]any {
 				return NewSearchStockApi(item.Query).SearchStock(marketSummaryIndicatorSearchPageSize)
 			})
-			results[i] = templateResult{template: item, rows: extractSearchStockRows(res)}
+			results[i] = templateResult{template: item, rows: extractSearchStockRows(res), availableAt: time.Now()}
 		}(idx, tpl)
 	}
 	wg.Wait()
 
 	index := map[string]*marketSummaryIndicatorCandidate{}
 	sectorStrength := loadMarketSummarySectorStrengthMap()
-	recentFailures := loadMarketSummaryRecentFailurePenaltyMap(10)
+	var recentFailures map[string]int
+	if !v150Mode {
+		recentFailures = loadMarketSummaryRecentFailurePenaltyMap(10)
+	}
 	for _, result := range results {
 		if len(result.rows) == 0 && logState != nil {
 			logState.addNote("indicator template %s returned 0 rows", result.template.Name)
@@ -98,7 +111,13 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 			if candidate.StockCode == "" || candidate.StockName == "" {
 				continue
 			}
-			applyMarketSummaryCandidateQualityScore(&candidate, sectorStrength, recentFailures)
+			candidate.IndicatorEvidence = []MarketSummaryV150EvidenceTiming{{
+				EvidenceID:   "indicator:" + result.template.Name + ":" + candidate.StockCode,
+				EvidenceType: "indicator_candidate_pool", SourceAt: result.availableAt, AvailableAt: result.availableAt,
+			}}
+			if !v150Mode {
+				applyMarketSummaryCandidateQualityScore(&candidate, sectorStrength, recentFailures)
+			}
 			existing := index[candidate.StockCode]
 			if existing == nil {
 				index[candidate.StockCode] = &candidate
@@ -106,6 +125,7 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 			}
 			existing.Score += maxInt(4, result.template.Weight/3)
 			existing.SourceNames = dedupeNonEmptyStrings(append(existing.SourceNames, result.template.Name), 8)
+			existing.IndicatorEvidence = append(existing.IndicatorEvidence, candidate.IndicatorEvidence...)
 			if existing.Direction == "" {
 				existing.Direction = candidate.Direction
 			}
@@ -121,25 +141,67 @@ func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummary
 		}
 	}
 
+	items := finalizeMarketSummaryIndicatorCandidatePool(index, limit, v150Mode, sectorStrength)
+	if logState != nil {
+		logState.addNote("indicator candidate pool size=%d v150Raw=%t", len(items), v150Mode)
+	}
+	return items
+}
+
+func finalizeMarketSummaryIndicatorCandidatePool(index map[string]*marketSummaryIndicatorCandidate, limit int, v150Mode bool, sectorStrength map[string]int) []marketSummaryIndicatorCandidate {
 	items := make([]marketSummaryIndicatorCandidate, 0, len(index))
 	for _, item := range index {
 		item.SourceNames = dedupeNonEmptyStrings(item.SourceNames, 8)
+		item.IndicatorEvidence = dedupeMarketSummaryV150IndicatorEvidence(item.IndicatorEvidence)
 		item.Reason = buildIndicatorCandidateReason(*item)
+		if v150Mode {
+			if item.ScoreBreakdown == nil {
+				item.ScoreBreakdown = map[string]int{}
+			}
+			// V1.5 consumes only the contemporaneous sector-relative feature from
+			// the old pool metadata. Legacy failure penalties, feasibility scores,
+			// and the pool Score never rank or truncate the V1.5 universe.
+			item.ScoreBreakdown["sectorStrength"] = sectorStrength[strings.TrimSpace(firstNonEmptyText(item.BkName, item.Direction))]
+			delete(item.ScoreBreakdown, "recentFailurePenalty")
+			delete(item.ScoreBreakdown, "tradePlanFeasibility")
+			delete(item.ScoreBreakdown, "dataCompleteness")
+		}
 		items = append(items, *item)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
+		if v150Mode {
+			return items[i].StockCode < items[j].StockCode
+		}
 		if items[i].Score != items[j].Score {
 			return items[i].Score > items[j].Score
 		}
 		return items[i].StockCode < items[j].StockCode
 	})
-	if len(items) > limit {
+	if limit > 0 && len(items) > limit {
 		items = items[:limit]
 	}
-	if logState != nil {
-		logState.addNote("indicator candidate pool size=%d", len(items))
-	}
 	return items
+}
+
+func dedupeMarketSummaryV150IndicatorEvidence(items []MarketSummaryV150EvidenceTiming) []MarketSummaryV150EvidenceTiming {
+	index := make(map[string]MarketSummaryV150EvidenceTiming, len(items))
+	for _, item := range items {
+		key := strings.TrimSpace(item.EvidenceID)
+		if key == "" || item.SourceAt.IsZero() || item.AvailableAt.IsZero() {
+			continue
+		}
+		index[key] = item
+	}
+	keys := make([]string, 0, len(index))
+	for key := range index {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	result := make([]MarketSummaryV150EvidenceTiming, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, index[key])
+	}
+	return result
 }
 
 func extractSearchStockRows(res map[string]any) []map[string]any {

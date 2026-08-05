@@ -2,7 +2,6 @@ package data
 
 import (
 	"encoding/json"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/util"
@@ -16,7 +15,7 @@ import (
 
 func TestSearchStock(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 
 	e := convertor.ToString(math.Floor(float64(9*random.RandFloat(0, 1, 12) + 1)))
 	for i := 0; i < 19; i++ {
@@ -66,14 +65,14 @@ func TestSearchStock(t *testing.T) {
 
 func TestGetStockFinancialInfo(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewStockDataApi().GetStockFinancialInfo("600519.SH")
 	MD := util.MarkdownTableWithTitle("股票财报信息", res.Result.Data)
 	logger.SugaredLogger.Infof("res:\n%s", MD)
 }
 func TestGetStockHolderNum(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewStockDataApi().GetStockHolderNum("600519.SH")
 	MD := util.MarkdownTableWithTitle("股票股东人数信息", res.Result.Data)
 	logger.SugaredLogger.Infof("res:\n%s", MD)
@@ -81,7 +80,7 @@ func TestGetStockHolderNum(t *testing.T) {
 
 func TestSearchStockApi_HotStrategy(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewSearchStockApi("").HotStrategy()
 	bytes, err := json.Marshal(res)
 	if err != nil {
@@ -104,7 +103,7 @@ func TestSearchStockApi_HotStrategy(t *testing.T) {
 }
 func TestSearchStockApi_HotStrategyTable(t *testing.T) {
 	requireIntegration(t)
-	db.Init("../../data/stock.db")
+	initDatabaseForTest(t, "../../data/stock.db")
 	res := NewSearchStockApi("").StrategySquare()
 	logger.SugaredLogger.Infof("res:%+v", res)
 }

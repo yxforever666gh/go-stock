@@ -8,7 +8,6 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
-	"gorm.io/gorm"
 )
 
 const yieldOverrideSourceMarketSummaryRejudge = "market_summary_rejudge"
@@ -91,44 +90,17 @@ func upsertAiRecommendYieldOverride(override *models.AiRecommendYieldOverride) e
 	}
 
 	rec := models.AiRecommendStocks{}
-	if err := db.Dao.Model(&models.AiRecommendStocks{}).Select("id", "stock_code").First(&rec, override.RecommendID).Error; err != nil {
+	if err := db.Dao.Model(&models.AiRecommendStocks{}).Select("id", "stock_code", "summary_version").First(&rec, override.RecommendID).Error; err != nil {
 		return err
 	}
-	if override.StockCode == "" {
-		override.StockCode = normalizeRecommendStockCode(rec.StockCode)
+	if isFrozenLegacyStrategyRecord(&rec) {
+		return fmt.Errorf("strategy cohort %s is frozen; yield overrides are not permitted", strings.TrimSpace(rec.SummaryVersion))
 	}
-
-	existing := models.AiRecommendYieldOverride{}
-	err := db.Dao.Model(&models.AiRecommendYieldOverride{}).Where("recommend_id = ?", override.RecommendID).First(&existing).Error
-	if err == nil {
-		override.ID = existing.ID
-		if override.ReviewRound <= 0 {
-			override.ReviewRound = existing.ReviewRound + 1
-		}
-		return saveAiRecommendYieldOverrideAndMarkDirty(override)
+	version := strings.TrimSpace(rec.SummaryVersion)
+	if version == "" {
+		version = "unversioned"
 	}
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
-	}
-	if override.ReviewRound <= 0 {
-		override.ReviewRound = 1
-	}
-	return saveAiRecommendYieldOverrideAndMarkDirty(override)
-}
-
-func saveAiRecommendYieldOverrideAndMarkDirty(override *models.AiRecommendYieldOverride) error {
-	if override == nil {
-		return errors.New("收益率复审覆盖不能为空")
-	}
-	if err := db.Dao.Save(override).Error; err != nil {
-		return err
-	}
-	scopeCodes := make([]string, 0, 1)
-	if code := normalizeRecommendStockCode(override.StockCode); code != "" {
-		scopeCodes = append(scopeCodes, code)
-	}
-	_ = markAiRecommendYieldDirtyCodes(scopeCodes, "跳过复审覆盖后等待严格模式回算", aiRecommendYieldModeStrict)
-	return nil
+	return fmt.Errorf("strategy cohort %s is immutable; mutable yield overrides are disabled", version)
 }
 
 func loadYieldOverrideMapByRecommendIDs(ids []uint) (map[uint]models.AiRecommendYieldOverride, error) {
@@ -198,6 +170,15 @@ func applyYieldOverrideToRecommend(rec *models.AiRecommendStocks, override *mode
 	if rec == nil || override == nil {
 		return
 	}
+	if isV150CostVersion(rec.SummaryVersion) {
+		// V1.5 recommendations are immutable projections of frozen candidate,
+		// rule and order snapshots. Applying a mutable historical repair here
+		// would alter eligibility before the ledger-backed yield mapper runs.
+		return
+	}
+	analysisOnly := isAnalysisOnlyRecommend(rec)
+	originalCategory := rec.RecommendCategory
+	originalStatus := rec.RecommendStatus
 	if override.RecommendBuyPrice != "" {
 		rec.RecommendBuyPrice = override.RecommendBuyPrice
 		rec.RecommendBuyPriceMin = override.RecommendBuyPriceMin
@@ -231,22 +212,38 @@ func applyYieldOverrideToRecommend(rec *models.AiRecommendStocks, override *mode
 	}
 	switch override.ActivationStatusOverride {
 	case "pending", "activated":
+		if analysisOnly {
+			break
+		}
 		rec.RecommendCategory = "conditional"
 		rec.RecommendStatus = "valid"
 		if strings.TrimSpace(rec.ExecutionState) == "" {
 			rec.ExecutionState = recommendExecutionConditional
 		}
 	case "ineligible":
-		rec.RecommendStatus = "ineligible"
+		if !analysisOnly {
+			rec.RecommendStatus = "ineligible"
+		}
 	case "skipped":
 		// Keep original category/status so the row still behaves like skipped, but
 		// prefer the latest invalid condition when present.
+	}
+	if analysisOnly {
+		rec.ExecutionState = recommendExecutionAnalysisOnly
+		rec.RecommendCategory = originalCategory
+		rec.RecommendStatus = originalStatus
 	}
 	rec.RecommendReason = buildRecommendReasonCompat(rec)
 }
 
 func applyYieldOverrideToYieldItem(item *models.AiRecommendStocksYieldItem, override *models.AiRecommendYieldOverride) {
 	if item == nil || override == nil {
+		return
+	}
+	if isV150CostVersion(item.SummaryVersion) {
+		// V1.5 execution and accounting are projections of frozen rules and the
+		// append-only order ledger. A mutable display override must never change
+		// activation, prices, or eligibility for this cohort.
 		return
 	}
 	if override.RecommendBuyPrice != "" {
@@ -278,7 +275,7 @@ func applyYieldOverrideToYieldItem(item *models.AiRecommendStocksYieldItem, over
 	if strings.TrimSpace(override.DataStatusReason) != "" {
 		item.DataStatusReason = strings.TrimSpace(override.DataStatusReason)
 	}
-	if override.ActivationStatusOverride != "" {
+	if override.ActivationStatusOverride != "" && normalizeRecommendExecutionState(item.ExecutionState) != recommendExecutionAnalysisOnly {
 		item.ActivationStatus = override.ActivationStatusOverride
 		switch override.ActivationStatusOverride {
 		case "pending":
@@ -300,6 +297,7 @@ func loadYieldOverrideCandidatesForRecentTradeDays(tradeDays int, now time.Time)
 	}
 	records := make([]models.AiRecommendStocks, 0, 64)
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).
+		Where("summary_version = ?", marketSummaryVersion150).
 		Order("COALESCE(data_time, created_at) DESC, id DESC").
 		Find(&records).Error; err != nil {
 		return nil, err
@@ -355,6 +353,9 @@ func loadYieldOverrideTargetRecord(recommendID uint) (*models.AiRecommendStocks,
 	rec := models.AiRecommendStocks{}
 	if err := db.Dao.Model(&models.AiRecommendStocks{}).First(&rec, recommendID).Error; err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(rec.SummaryVersion) != marketSummaryVersion150 {
+		return nil, fmt.Errorf("strategy cohort %s is frozen; yield override target is read-only", strings.TrimSpace(rec.SummaryVersion))
 	}
 	list, err := applyYieldOverridesToRecommendRecords([]models.AiRecommendStocks{rec})
 	if err != nil {

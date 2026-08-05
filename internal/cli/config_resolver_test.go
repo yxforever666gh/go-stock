@@ -13,6 +13,7 @@ func initTestDB(t *testing.T) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "stock.db")
 	db.Init(dbPath)
+	t.Cleanup(func() { _ = db.Close() })
 	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
 		t.Fatalf("migrate failed: %v", err)
 	}
