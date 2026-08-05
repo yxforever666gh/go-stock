@@ -2,23 +2,23 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：1.5.0
+## 当前版本：App 1.5.1 / Strategy 1.5.0
 
-> V1.5.0 已用于生产推荐与模拟收益，但收益状态仍为“前向验证中”。它不包含券商自动下单，也不会改写或重算 V1.4.2 历史数据。
+> Strategy 1.5.0 的代码、配置和回放 hash 已冻结；系统治理期间生产模式保持 `paused`。暂停期不生成或补写推荐，恢复后的首个正常定时窗口才开始前向验证。它不包含券商自动下单，也不会改写或重算 V1.4.2 及以前的历史数据。
 
 - 5–10 个交易日波段策略，每日最多新增 2 只、同时最多持有 5 只；风险关闭时明确保存 `no_trade`。
 - 10 万元虚拟账户、单笔目标仓位 1 万元，按 A 股 100 股整手和实际成交金额计费。
 - LLM 只做结构化事件证据核验，候选评分、排序、交易计划与执行状态全部由确定性规则生成。
 - 15 分钟执行监控和公司行为处理均以不可变事件账本为准；缺失或不可解释的数据只拒绝对应股票并告警。
 - 可使用 `go run . strategy-backtest --version 1.5.0 --from YYYY-MM-DD --to YYYY-MM-DD` 对冻结快照做 cache-only 事件回放。
-- 详见 [V1.5.0 发布说明](./RELEASE_NOTES_1.5.0.md)。
+- 详见 [App 1.5.1 发布说明](./RELEASE_NOTES_1.5.1.md)、[Strategy 1.5.0 发布说明](./RELEASE_NOTES_1.5.0.md)和[版本升级规范](./docs/VERSION_UPGRADE_POLICY.md)。
 
 - 旧版（截至 V1.4.2）市场总结仍保留其历史候选池诊断与补位展示；V1.5.0 不再发起第二轮模型生成，且不会借修复流程新增或复活候选。
 - 设置页面全部配置统一保存在本地 SQLite，包括 AI API Key、分钟线 Token 和 SMTP 授权码；完整导出包含明文密钥。
 - 普通运行日志不再输出完整设置或 Agent 配置，SQLite SQL 日志使用参数化查询。
 - 前端推荐记录、股票收益率、收益率统计筛选入口均支持 `V1.5.0`；历史 `V1.4.2 / V1.4.1 / V1.4.0 / V1.3.6 / V1.3.2 / V1.3.1` 保持可选。
 
-基于 Go、Wails、Vue 3 和 Naive UI 的本地优先股票分析工具，支持桌面模式和本地 Web 模式，聚焦于自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告。
+基于 Go、Vue 3 和 Naive UI 的本地优先股票分析工具。当前只发布 Windows 本机 Web 产品，监听地址限制为 loopback；Wails 桌面兼容代码正在分阶段退场。
 
 [Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [公开检查清单](./PUBLIC_RELEASE_CHECKLIST.md) | [仓库展示信息](./PUBLIC_REPO_METADATA.md)
 
@@ -27,7 +27,7 @@
 ## 项目定位
 
 - 本地优先：核心数据、运行时目录与大部分分析链路在本地完成，不依赖必须在线的中心化控制台
-- 双模式运行：同时支持 Wails 桌面壳与本地 Web 模式
+- 单一发布形态：只构建和部署 Windows 本机 Web 服务，桌面与 macOS/Linux 目标不再发行
 - AI 工作台：覆盖市场资讯总结、个股分析、推荐记录与收益率跟踪
 - 工程化可维护：应用层 API、前端路由与重型逻辑已完成分层收敛，更适合继续迭代
 

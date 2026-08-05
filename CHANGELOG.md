@@ -1,5 +1,16 @@
 # 更新日志
 
+## 1.5.1 - 2026-08-06
+
+### 应用治理
+
+- 新增统一发布清单，独立记录 App `1.5.1`、Strategy `1.5.0` 和主库/分钟库 schema version；构建注入 commit、时间和 dirty 状态，启动计算运行产物 SHA256。
+- 新增持久化 `paused/live` 策略运行门禁，默认暂停且仅允许 CLI 变更；历史 cohort 只读，启动不再自动 repair/backfill。
+- 新增同步编号迁移、checksum 校验、双库 `quick_check`、一致性备份和 `db status|backup|migrate|verify` 命令。
+- 新增 `/livez`、`/readyz`、`/api/v1/system/version` 和只读策略状态接口，并强制 Web 服务仅接受本机监听、Host、来源和连接。
+- 新增 Windows 本机单产物发布、数据库副本迁移演练、版本化 release 目录、部署收据和失败自动回滚流程。
+- 建立行情、新闻、市场证据、推荐、执行、组合和 legacy 的依赖边界；`backend/data` 进入 deprecated 阶段，Strategy 1.5.0 代码、配置和回放语义保持不变。
+
 ## 1.5.0 - 2026-08-05
 
 ### 策略重构
