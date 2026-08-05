@@ -72,7 +72,8 @@ func TestRunContextTimeline(t *testing.T) {
 func TestFixedStrategyV150ConfigHashIsStableAndSensitive(t *testing.T) {
 	first := FixedStrategyV150ConfigHash()
 	second := FixedStrategyV150Config().Hash()
-	if first == "" || first != second || len(first) != 64 {
+	const frozenHash = "aeac1a958017b9ee95cf1d4b1535b62dd45aa29e3df6b35406166fff40e073a4"
+	if first != frozenHash || first != second {
 		t.Fatalf("unexpected fixed config hash: %q / %q", first, second)
 	}
 	mutated := FixedStrategyV150Config()
