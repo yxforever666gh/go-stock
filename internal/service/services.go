@@ -11,6 +11,7 @@ type AppServices struct {
 	History   HistoryService
 	Recommend RecommendService
 	Notify    NotifyService
+	Execution ExecutionService
 }
 
 func NewAppServices() AppServices {
@@ -37,5 +38,6 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		History:   NewHistoryService(),
 		Recommend: NewRecommendService(),
 		Notify:    NewNotifyService(),
+		Execution: NewExecutionService(dependencies.ExecutionMonitor),
 	}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"go-stock/backend/execution"
 	"go-stock/backend/legacy"
 	"go-stock/backend/marketdata"
 	"go-stock/backend/marketintel"
@@ -44,9 +45,10 @@ type ProviderSet struct {
 }
 
 type Dependencies struct {
-	Clock       Clock
-	Initializer ApplicationInitializer
-	Providers   ProviderSet
+	Clock            Clock
+	Initializer      ApplicationInitializer
+	Providers        ProviderSet
+	ExecutionMonitor execution.Monitor
 }
 
 func (d Dependencies) Validate() error {

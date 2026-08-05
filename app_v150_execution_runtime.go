@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/db"
+	"go-stock/backend/execution"
 	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
@@ -16,7 +16,8 @@ import (
 
 const marketSummaryV150ExecutionCronKey = "MarketSummaryV150ExecutionMonitor"
 
-type marketSummaryV150ExecutionCallback func(time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error)
+type marketSummaryV150ExecutionCallback func(time.Time) (execution.MonitorResult, error)
+type marketSummaryV150ExecutionWindowResolver func(time.Time) (execution.MonitorWindow, bool)
 
 // marketSummaryV150ExecutionRuntime is a small process-local coordinator over
 // the durable, idempotent event replay. A new instance intentionally has no
@@ -30,17 +31,18 @@ type marketSummaryV150ExecutionRuntime struct {
 	doneGen  uint64
 	now      func() time.Time
 	execute  marketSummaryV150ExecutionCallback
+	resolve  marketSummaryV150ExecutionWindowResolver
 }
 
-func newMarketSummaryV150ExecutionRuntime(execute marketSummaryV150ExecutionCallback) *marketSummaryV150ExecutionRuntime {
-	return &marketSummaryV150ExecutionRuntime{now: time.Now, execute: execute}
+func newMarketSummaryV150ExecutionRuntime(execute marketSummaryV150ExecutionCallback, resolve marketSummaryV150ExecutionWindowResolver) *marketSummaryV150ExecutionRuntime {
+	return &marketSummaryV150ExecutionRuntime{now: time.Now, execute: execute, resolve: resolve}
 }
 
 // Tick returns true only when this call acquired and ran a new scheduler slot.
 // It is synchronous by design: robfig/cron may start overlapping callbacks,
 // and the busy guard turns those into no-ops while preserving serial replay.
 func (runtime *marketSummaryV150ExecutionRuntime) Tick(trigger string) bool {
-	if runtime == nil || runtime.execute == nil {
+	if runtime == nil || runtime.execute == nil || runtime.resolve == nil {
 		return false
 	}
 	nowFn := runtime.now
@@ -48,7 +50,7 @@ func (runtime *marketSummaryV150ExecutionRuntime) Tick(trigger string) bool {
 		nowFn = time.Now
 	}
 	now := nowFn()
-	window, ok := data.ResolveMarketSummaryV150ExecutionWindow(now)
+	window, ok := runtime.resolve(now)
 	if !ok || window.SlotAt.IsZero() {
 		return false
 	}
@@ -66,7 +68,7 @@ func (runtime *marketSummaryV150ExecutionRuntime) Tick(trigger string) bool {
 	startedWakeGen := runtime.wakeGen
 	runtime.mu.Unlock()
 
-	var result data.MarketSummaryV150ExecutionMonitorResult
+	var result execution.MonitorResult
 	var runErr error
 	func() {
 		defer func() {
@@ -149,8 +151,8 @@ func (a *App) registerMarketSummaryV150ExecutionRuntime() {
 		return
 	}
 	a.v150ExecutionOnce.Do(func() {
-		a.v150ExecutionTask = newMarketSummaryV150ExecutionRuntime(a.executeMarketSummaryV150ExecutionMonitor)
-		data.SetMarketSummaryV150ExecutionMonitorWakeup(func() {
+		a.v150ExecutionTask = newMarketSummaryV150ExecutionRuntime(a.executeMarketSummaryV150ExecutionMonitor, a.services.Execution.ResolveWindow)
+		a.services.Execution.SetWakeup(func() {
 			go a.v150ExecutionTask.Wake("recommendation_published")
 		})
 		a.registerCronTask(marketSummaryV150ExecutionCronKey, "@every 30s", func() {
@@ -161,9 +163,9 @@ func (a *App) registerMarketSummaryV150ExecutionRuntime() {
 	})
 }
 
-func (a *App) executeMarketSummaryV150ExecutionMonitor(now time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+func (a *App) executeMarketSummaryV150ExecutionMonitor(now time.Time) (execution.MonitorResult, error) {
 	if err := governance.RequireStrategyLive(a.ctx, db.Dao, v150.StrategyVersion); err != nil {
-		return data.MarketSummaryV150ExecutionMonitorResult{ObservedAt: now}, err
+		return execution.MonitorResult{ObservedAt: now}, err
 	}
 	taskRun := &models.CronTaskRun{
 		TaskName:    "strategy_v150_execution_monitor",
@@ -177,7 +179,7 @@ func (a *App) executeMarketSummaryV150ExecutionMonitor(now time.Time) (data.Mark
 		}
 	}
 
-	result, runErr := data.RunMarketSummaryV150ExecutionMonitor(now)
+	result, runErr := a.services.Execution.Run(a.ctx, now)
 	status := "success"
 	errorMessage := ""
 	if runErr != nil {

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/execution"
 )
 
 func TestMarketSummaryV150ExecutionRuntimeRunsWithoutUIAndDeduplicatesSlots(t *testing.T) {
@@ -17,10 +17,10 @@ func TestMarketSummaryV150ExecutionRuntimeRunsWithoutUIAndDeduplicatesSlots(t *t
 	}
 	now := time.Date(2026, 8, 5, 10, 1, 0, 0, loc)
 	calls := 0
-	runtime := newMarketSummaryV150ExecutionRuntime(func(observedAt time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+	runtime := newMarketSummaryV150ExecutionRuntime(func(observedAt time.Time) (execution.MonitorResult, error) {
 		calls++
-		return data.MarketSummaryV150ExecutionMonitorResult{ObservedAt: observedAt}, nil
-	})
+		return execution.MonitorResult{ObservedAt: observedAt}, nil
+	}, testExecutionWindowResolver)
 	runtime.now = func() time.Time { return now }
 
 	// This is the same method used by the startup hook; no page/query callback
@@ -48,17 +48,17 @@ func TestMarketSummaryV150ExecutionRuntimeRetriesFailureAndSurvivesPanic(t *test
 	}
 	now := time.Date(2026, 8, 5, 10, 1, 0, 0, loc)
 	calls := 0
-	runtime := newMarketSummaryV150ExecutionRuntime(func(time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+	runtime := newMarketSummaryV150ExecutionRuntime(func(time.Time) (execution.MonitorResult, error) {
 		calls++
 		switch calls {
 		case 1:
-			return data.MarketSummaryV150ExecutionMonitorResult{}, errors.New("temporary provider failure")
+			return execution.MonitorResult{}, errors.New("temporary provider failure")
 		case 2:
 			panic("temporary callback panic")
 		default:
-			return data.MarketSummaryV150ExecutionMonitorResult{}, nil
+			return execution.MonitorResult{}, nil
 		}
-	})
+	}, testExecutionWindowResolver)
 	runtime.now = func() time.Time { return now }
 
 	if !runtime.Tick("cron") || !runtime.Tick("cron") || !runtime.Tick("cron") {
@@ -81,12 +81,12 @@ func TestMarketSummaryV150ExecutionRuntimePreventsConcurrentReentry(t *testing.T
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
-	runtime := newMarketSummaryV150ExecutionRuntime(func(time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+	runtime := newMarketSummaryV150ExecutionRuntime(func(time.Time) (execution.MonitorResult, error) {
 		calls.Add(1)
 		close(started)
 		<-release
-		return data.MarketSummaryV150ExecutionMonitorResult{}, nil
-	})
+		return execution.MonitorResult{}, nil
+	}, testExecutionWindowResolver)
 	runtime.now = func() time.Time { return now }
 
 	var wait sync.WaitGroup
@@ -115,19 +115,19 @@ func TestMarketSummaryV150ExecutionRuntimeRestartReplaysLatestSlot(t *testing.T)
 	}
 	now := time.Date(2026, 8, 5, 14, 46, 0, 0, loc)
 	calls := 0
-	callback := func(time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+	callback := func(time.Time) (execution.MonitorResult, error) {
 		calls++
-		return data.MarketSummaryV150ExecutionMonitorResult{}, nil
+		return execution.MonitorResult{}, nil
 	}
 
-	firstProcess := newMarketSummaryV150ExecutionRuntime(callback)
+	firstProcess := newMarketSummaryV150ExecutionRuntime(callback, testExecutionWindowResolver)
 	firstProcess.now = func() time.Time { return now }
 	if !firstProcess.Tick("cron") {
 		t.Fatal("first process did not run")
 	}
 	// A fresh coordinator has no volatile checkpoint by design. The durable
 	// event writer supplies idempotency, so it must replay after restart.
-	restartedProcess := newMarketSummaryV150ExecutionRuntime(callback)
+	restartedProcess := newMarketSummaryV150ExecutionRuntime(callback, testExecutionWindowResolver)
 	restartedProcess.now = func() time.Time { return now }
 	if !restartedProcess.Tick("startup") {
 		t.Fatal("restart did not recover the latest completed slot")
@@ -144,10 +144,10 @@ func TestMarketSummaryV150ExecutionRuntimeWakeRunsNewIntrabarRuleInSameSlot(t *t
 	}
 	now := time.Date(2026, 8, 5, 9, 40, 0, 0, loc)
 	calls := 0
-	runtime := newMarketSummaryV150ExecutionRuntime(func(time.Time) (data.MarketSummaryV150ExecutionMonitorResult, error) {
+	runtime := newMarketSummaryV150ExecutionRuntime(func(time.Time) (execution.MonitorResult, error) {
 		calls++
-		return data.MarketSummaryV150ExecutionMonitorResult{}, nil
-	})
+		return execution.MonitorResult{}, nil
+	}, testExecutionWindowResolver)
 	runtime.now = func() time.Time { return now }
 	if !runtime.Tick("startup") {
 		t.Fatal("initial slot did not run")
@@ -161,4 +161,12 @@ func TestMarketSummaryV150ExecutionRuntimeWakeRunsNewIntrabarRuleInSameSlot(t *t
 	if runtime.Tick("cron") {
 		t.Fatal("publication generation was not consumed")
 	}
+}
+
+func testExecutionWindowResolver(now time.Time) (execution.MonitorWindow, bool) {
+	if now.IsZero() {
+		return execution.MonitorWindow{}, false
+	}
+	slot := now.Truncate(15 * time.Minute)
+	return execution.MonitorWindow{SlotAt: slot, EvaluationCutoff: slot}, true
 }

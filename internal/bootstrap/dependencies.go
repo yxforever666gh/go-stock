@@ -78,8 +78,9 @@ func productionRuntimeDependencies() RuntimeDependencies {
 	return RuntimeDependencies{
 		Storage: Storage{Main: db.Dao, Minute: db.MinuteDao},
 		Services: service.Dependencies{
-			Clock:       systemClock{},
-			Initializer: legacyApplicationInitializer{},
+			Clock:            systemClock{},
+			Initializer:      legacyApplicationInitializer{},
+			ExecutionMonitor: data.NewCompatibilityExecutionMonitor(),
 			Providers: service.ProviderSet{
 				DailyBars:  marketData,
 				MinuteBars: marketData,

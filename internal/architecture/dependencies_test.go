@@ -54,7 +54,6 @@ var deprecatedDataImportDebt = map[string]bool{
 	"app_stock_api.go":                    true,
 	"app_stock_runtime.go":                true,
 	"app_summary_runtime.go":              true,
-	"app_v150_execution_runtime.go":       true,
 	"backend/agent/agent.go":              true,
 	"backend/agent/agent_api.go":          true,
 	"backend/agent/tools/bk_dict_tool.go": true,
