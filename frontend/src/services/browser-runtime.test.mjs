@@ -36,6 +36,8 @@ test('browser URL and environment operations use native browser APIs', async () 
   })
 
   runtime.BrowserOpenURL('https://example.com/report')
+  runtime.BrowserOpenURL('javascript:alert(document.domain)')
+  runtime.BrowserOpenURL('data:text/html,blocked')
 
   assert.deepEqual(calls, [[
     'https://example.com/report',

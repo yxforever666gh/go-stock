@@ -16,9 +16,18 @@ export type ExportMode = NonNullable<ExportRequest['mode']>
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
-  const payload = await response.json() as T & { error?: string }
+  const payload = await response.json() as T & {
+    error?: string
+    reason?: string
+    readiness?: { error?: string }
+  }
   if (!response.ok) {
-    throw new Error(payload?.error || `Request failed: ${response.status}`)
+    throw new Error(
+      payload?.reason
+      || payload?.error
+      || payload?.readiness?.error
+      || `Request failed: ${response.status}`,
+    )
   }
   return payload
 }

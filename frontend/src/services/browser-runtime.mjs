@@ -251,7 +251,16 @@ export function createBrowserRuntimeAdapter({
     },
     BrowserOpenURL(url) {
       if (!url) return
-      const openedWindow = windowObject?.open?.(url, '_blank', 'noopener,noreferrer')
+      let parsedURL
+      try {
+        parsedURL = new URL(url, windowObject?.location?.href)
+      } catch (_) {
+        return
+      }
+      if (parsedURL.protocol !== 'http:' && parsedURL.protocol !== 'https:') {
+        return
+      }
+      const openedWindow = windowObject?.open?.(parsedURL.href, '_blank', 'noopener,noreferrer')
       if (openedWindow) {
         try {
           openedWindow.opener = null
