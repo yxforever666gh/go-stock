@@ -19,7 +19,7 @@ func TestComputeForwardValidationRequiresSamplesAndPerformance(t *testing.T) {
 		trades = append(trades, ForwardTradeSample{
 			StrategyVersion: "1.5.0", RuleID: fmt.Sprintf("rule-%03d", index),
 			RecommendationDay: fmt.Sprintf("2026-%02d-%02d", month, monthDay),
-			NetReturnPct:      1, BenchmarkReturnPct: 0.2, NetPnL: netPnL,
+			NetReturnPct:      1, BenchmarkReturnPct: float64Pointer(0.2), NetPnL: netPnL,
 		})
 	}
 	got, err := ComputeForwardValidation(ForwardValidationInput{StrategyVersion: "1.5.0", TradingDays: 60, Trades: trades})
@@ -29,7 +29,7 @@ func TestComputeForwardValidationRequiresSamplesAndPerformance(t *testing.T) {
 	if got.State != ForwardValidationValidated || !got.RequirementsMet || !got.PerformanceThresholdsMet {
 		t.Fatalf("expected validated metrics, got %+v", got)
 	}
-	if got.RecommendationDays != 40 || got.ClosedTrades != 100 || got.ProfitFactor == nil || *got.ProfitFactor != 15 {
+	if got.RecommendationDays != 40 || got.ClosedTrades != 100 || got.ComparableTrades != 100 || got.ProfitFactor == nil || *got.ProfitFactor != 15 {
 		t.Fatalf("unexpected aggregate metrics: %+v", got)
 	}
 
@@ -65,7 +65,7 @@ func TestComputeForwardValidationKeepsWeakPerformancePending(t *testing.T) {
 		trades = append(trades, ForwardTradeSample{
 			StrategyVersion: "1.5.0", RuleID: fmt.Sprintf("weak-%03d", index),
 			RecommendationDay: fmt.Sprintf("2026-%02d-%02d", 7+(index%40)/28, 1+(index%40)%28),
-			NetReturnPct:      0.1, BenchmarkReturnPct: 0.2, NetPnL: -1,
+			NetReturnPct:      0.1, BenchmarkReturnPct: float64Pointer(0.2), NetPnL: -1,
 		})
 	}
 	got, err := ComputeForwardValidation(ForwardValidationInput{StrategyVersion: "1.5.0", TradingDays: 60, Trades: trades})
@@ -76,3 +76,23 @@ func TestComputeForwardValidationKeepsWeakPerformancePending(t *testing.T) {
 		t.Fatalf("weak performance must remain pending: %+v", got)
 	}
 }
+
+func TestComputeForwardValidationRequiresOneHundredComparableTrades(t *testing.T) {
+	trades := make([]ForwardTradeSample, 0, 100)
+	for index := 0; index < 100; index++ {
+		trades = append(trades, ForwardTradeSample{
+			StrategyVersion: "1.5.0", RuleID: fmt.Sprintf("missing-benchmark-%03d", index),
+			RecommendationDay: fmt.Sprintf("2026-%02d-%02d", 7+(index%40)/28, 1+(index%40)%28),
+			NetReturnPct:      1, NetPnL: 10,
+		})
+	}
+	got, err := ComputeForwardValidation(ForwardValidationInput{StrategyVersion: "1.5.0", TradingDays: 60, Trades: trades})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != ForwardValidationPending || got.ComparableTrades != 0 || got.RequirementsMet {
+		t.Fatalf("missing benchmark samples must remain pending: %+v", got)
+	}
+}
+
+func float64Pointer(value float64) *float64 { return &value }

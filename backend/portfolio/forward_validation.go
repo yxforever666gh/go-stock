@@ -25,18 +25,19 @@ const (
 )
 
 type ForwardTradeSample struct {
-	StrategyVersion    string  `json:"strategyVersion"`
-	RuleID             string  `json:"ruleId"`
-	RecommendationDay  string  `json:"recommendationDay"`
-	NetReturnPct       float64 `json:"netReturnPct"`
-	BenchmarkReturnPct float64 `json:"benchmarkReturnPct"`
-	NetPnL             float64 `json:"netPnl"`
+	StrategyVersion    string   `json:"strategyVersion"`
+	RuleID             string   `json:"ruleId"`
+	RecommendationDay  string   `json:"recommendationDay"`
+	NetReturnPct       float64  `json:"netReturnPct"`
+	BenchmarkReturnPct *float64 `json:"benchmarkReturnPct,omitempty"`
+	NetPnL             float64  `json:"netPnl"`
 }
 
 type ForwardValidationInput struct {
-	StrategyVersion string               `json:"strategyVersion"`
-	TradingDays     int                  `json:"tradingDays"`
-	Trades          []ForwardTradeSample `json:"trades"`
+	StrategyVersion    string               `json:"strategyVersion"`
+	TradingDays        int                  `json:"tradingDays"`
+	RecommendationDays []string             `json:"recommendationDays"`
+	Trades             []ForwardTradeSample `json:"trades"`
 }
 
 type ForwardValidationMetrics struct {
@@ -44,6 +45,7 @@ type ForwardValidationMetrics struct {
 	State                            string   `json:"state"`
 	TradingDays                      int      `json:"tradingDays"`
 	ClosedTrades                     int      `json:"closedTrades"`
+	ComparableTrades                 int      `json:"comparableTrades"`
 	RecommendationDays               int      `json:"recommendationDays"`
 	NetMeanReturnPct                 float64  `json:"netMeanReturnPct"`
 	BenchmarkExcessMeanPct           float64  `json:"benchmarkExcessMeanPct"`
@@ -70,6 +72,10 @@ func ComputeForwardValidation(input ForwardValidationInput) (ForwardValidationMe
 	}
 	seenRules := make(map[string]bool, len(input.Trades))
 	dailyReturns := make(map[string][]float64)
+	recommendationDays, err := validateRecommendationDays(input.RecommendationDays)
+	if err != nil {
+		return ForwardValidationMetrics{}, err
+	}
 	grossProfits := 0.0
 	grossLosses := 0.0
 	for index, sample := range input.Trades {
@@ -78,7 +84,13 @@ func ComputeForwardValidation(input ForwardValidationInput) (ForwardValidationMe
 		}
 		seenRules[sample.RuleID] = true
 		result.NetMeanReturnPct += sample.NetReturnPct
-		result.BenchmarkExcessMeanPct += sample.NetReturnPct - sample.BenchmarkReturnPct
+		if len(input.RecommendationDays) == 0 {
+			recommendationDays[sample.RecommendationDay] = true
+		}
+		if sample.BenchmarkReturnPct != nil {
+			result.BenchmarkExcessMeanPct += sample.NetReturnPct - *sample.BenchmarkReturnPct
+			result.ComparableTrades++
+		}
 		dailyReturns[sample.RecommendationDay] = append(dailyReturns[sample.RecommendationDay], sample.NetReturnPct)
 		if sample.NetPnL > 0 {
 			grossProfits += sample.NetPnL
@@ -88,7 +100,9 @@ func ComputeForwardValidation(input ForwardValidationInput) (ForwardValidationMe
 	}
 	if result.ClosedTrades > 0 {
 		result.NetMeanReturnPct /= float64(result.ClosedTrades)
-		result.BenchmarkExcessMeanPct /= float64(result.ClosedTrades)
+	}
+	if result.ComparableTrades > 0 {
+		result.BenchmarkExcessMeanPct /= float64(result.ComparableTrades)
 	}
 	if grossLosses > 0 {
 		profitFactor := grossProfits / grossLosses
@@ -111,7 +125,7 @@ func ComputeForwardValidation(input ForwardValidationInput) (ForwardValidationMe
 		}
 		dayMeans = append(dayMeans, sum/float64(len(values)))
 	}
-	result.RecommendationDays = len(dayMeans)
+	result.RecommendationDays = len(recommendationDays)
 	result.RecommendationDayMeanPct, result.RecommendationDayLowerBound90Pct = oneSided90LowerBound(dayMeans)
 
 	if result.TradingDays < minimumForwardTradingDays {
@@ -119,6 +133,9 @@ func ComputeForwardValidation(input ForwardValidationInput) (ForwardValidationMe
 	}
 	if result.ClosedTrades < minimumForwardClosedTrades {
 		result.PendingReasons = append(result.PendingReasons, "requires_100_closed_trades")
+	}
+	if result.ComparableTrades < minimumForwardClosedTrades {
+		result.PendingReasons = append(result.PendingReasons, "requires_100_benchmark_comparable_trades")
 	}
 	if result.RecommendationDays < minimumForwardRecommendationDays {
 		result.PendingReasons = append(result.PendingReasons, "requires_40_recommendation_days")
@@ -156,12 +173,29 @@ func validateForwardTradeSample(version string, index int, sample ForwardTradeSa
 	if err != nil || parsedDay.Format(time.DateOnly) != strings.TrimSpace(sample.RecommendationDay) {
 		return fmt.Errorf("%w: trade %d has invalid recommendation day", ErrInvalidForwardSample, index)
 	}
-	for _, value := range []float64{sample.NetReturnPct, sample.BenchmarkReturnPct, sample.NetPnL} {
+	values := []float64{sample.NetReturnPct, sample.NetPnL}
+	if sample.BenchmarkReturnPct != nil {
+		values = append(values, *sample.BenchmarkReturnPct)
+	}
+	for _, value := range values {
 		if math.IsNaN(value) || math.IsInf(value, 0) {
 			return fmt.Errorf("%w: trade %d contains a non-finite metric", ErrInvalidForwardSample, index)
 		}
 	}
 	return nil
+}
+
+func validateRecommendationDays(days []string) (map[string]bool, error) {
+	result := make(map[string]bool, len(days))
+	for index, raw := range days {
+		day := strings.TrimSpace(raw)
+		parsed, err := time.Parse(time.DateOnly, day)
+		if err != nil || parsed.Format(time.DateOnly) != day || result[day] {
+			return nil, fmt.Errorf("%w: recommendation day %d is invalid or duplicated", ErrInvalidForwardSample, index)
+		}
+		result[day] = true
+	}
+	return result, nil
 }
 
 func oneSided90LowerBound(values []float64) (float64, float64) {
@@ -174,7 +208,7 @@ func oneSided90LowerBound(values []float64) (float64, float64) {
 	}
 	mean /= float64(len(values))
 	if len(values) == 1 {
-		return mean, mean
+		return mean, 0
 	}
 	variance := 0.0
 	for _, value := range values {
