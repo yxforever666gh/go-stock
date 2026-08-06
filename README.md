@@ -2,7 +2,7 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.5.1 / Strategy 1.5.0
+## 当前版本：App 1.5.2 / Strategy 1.5.0
 
 > Strategy 1.5.0 的代码、配置和回放 hash 已冻结；系统治理期间生产模式保持 `paused`。暂停期不生成或补写推荐，恢复后的首个正常定时窗口才开始前向验证。它不包含券商自动下单，也不会改写或重算 V1.4.2 及以前的历史数据。
 
@@ -11,7 +11,7 @@
 - LLM 只做结构化事件证据核验，候选评分、排序、交易计划与执行状态全部由确定性规则生成。
 - 15 分钟执行监控和公司行为处理均以不可变事件账本为准；缺失或不可解释的数据只拒绝对应股票并告警。
 - 可使用 `go run . strategy-backtest --version 1.5.0 --from YYYY-MM-DD --to YYYY-MM-DD` 对冻结快照做 cache-only 事件回放。
-- 详见 [App 1.5.1 发布说明](./RELEASE_NOTES_1.5.1.md)、[Strategy 1.5.0 发布说明](./RELEASE_NOTES_1.5.0.md)和[版本升级规范](./docs/VERSION_UPGRADE_POLICY.md)。
+- 详见 [App 1.5.2 发布说明](./RELEASE_NOTES_1.5.2.md)、[Strategy 1.5.0 发布说明](./RELEASE_NOTES_1.5.0.md)和[版本升级规范](./docs/VERSION_UPGRADE_POLICY.md)。
 
 - 旧版（截至 V1.4.2）市场总结仍保留其历史候选池诊断与补位展示；V1.5.0 不再发起第二轮模型生成，且不会借修复流程新增或复活候选。
 - 设置页面全部配置统一保存在本地 SQLite，包括 AI API Key、分钟线 Token 和 SMTP 授权码；完整导出包含明文密钥。

@@ -12,7 +12,7 @@ import (
 
 func TestManifestPinsAppSchemaAndFrozenStrategyIdentity(t *testing.T) {
 	manifest := Manifest()
-	if manifest.AppVersion != "1.5.1" || manifest.CurrentStrategyVersion != v150.StrategyVersion {
+	if manifest.AppVersion != "1.5.2" || manifest.CurrentStrategyVersion != v150.StrategyVersion {
 		t.Fatalf("unexpected release identity: %+v", manifest)
 	}
 	if manifest.MainSchemaVersion != 2 || manifest.MinuteSchemaVersion != 2 {

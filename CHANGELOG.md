@@ -1,5 +1,16 @@
 # 更新日志
 
+## 1.5.2 - 2026-08-06
+
+### 依赖边界治理
+
+- 将 `internal/bootstrap` 固定为唯一组合根，Web、Cron、CLI 和 Agent 通过 `internal/service` 用例与 consumer-owned ports 访问数据和外部能力，不再直接引用 `backend/data`。
+- 将 `backend/strategy/v150` 固定为仅依赖标准库的纯策略核心，并用架构测试禁止全局数据库、运行时 Clock、版本路由和可替换 `*Fn` 依赖。
+- 注入显式的主库、分钟库、Clock、行情、新闻、市场证据、账本、legacy 和执行监控适配器；`backend/data` 保持 deprecated compatibility 边界，巨大敏感词表改为嵌入资源。
+- 冻结历史 repair/backfill 能力，暂停期间禁止回测持久化；scheduler 仅在所有任务注册和校验成功后启动，即时任务不会早于 readiness 运行。
+- 加固本机发布门禁：失败回滚精确核对旧产物身份和完整 `/readyz`，直接查询真实 origin 分支，并自动校验 manifest、前端、OpenAPI、README、CHANGELOG 与发布说明版本一致。
+- Strategy 保持 `1.5.0`，固定配置、回放语义和 hash 不变；生产继续为 `paused`，本版本不恢复推荐，也不补写暂停期间数据。
+
 ## 1.5.1 - 2026-08-06
 
 ### 应用治理

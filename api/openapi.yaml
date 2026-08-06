@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.5.1
+  version: 1.5.2
   description: Local-only HTTP contract for the Windows Web product.
 servers:
   - url: http://127.0.0.1:34115
