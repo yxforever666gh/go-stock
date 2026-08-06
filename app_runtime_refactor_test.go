@@ -206,7 +206,7 @@ func TestMergeMarketSummarySaveResultAccountsForUpgrade(t *testing.T) {
 
 func TestSelectRuntimeRepairableVerifiedCandidatesRequiresSnapshot(t *testing.T) {
 	verified, repairable := selectRuntimeRepairableVerifiedCandidates(
-		[]data.MarketSummaryVerifiedCandidateSnapshot{{StockCode: "000001.SZ"}},
+		[]models.MarketSummaryVerifiedCandidateSnapshot{{StockCode: "000001.SZ"}},
 		[]models.MarketSummaryTradePlanRepairCandidate{{StockCode: "000001.SZ", RecommendID: 1}, {StockCode: "000002.SZ", RecommendID: 2}},
 	)
 	if len(verified) != 1 || len(repairable) != 1 || repairable[0].StockCode != "000001" {

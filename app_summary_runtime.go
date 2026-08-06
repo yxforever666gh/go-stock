@@ -19,13 +19,13 @@ type summaryRunResult struct {
 	finalQuestion string
 	errs          []string
 	routeLog      *data.MarketSummaryRouteLogSnapshot
-	verified      []data.MarketSummaryVerifiedCandidateSnapshot
+	verified      []models.MarketSummaryVerifiedCandidateSnapshot
 	v150Run       *data.MarketSummaryV150RunSnapshot
 }
 
 type marketSummaryRuntimeMeta struct {
 	routeLog *data.MarketSummaryRouteLogSnapshot
-	verified []data.MarketSummaryVerifiedCandidateSnapshot
+	verified []models.MarketSummaryVerifiedCandidateSnapshot
 	v150Run  *data.MarketSummaryV150RunSnapshot
 }
 
@@ -245,7 +245,7 @@ func applyMarketSummaryMetaMessage(target *marketSummaryRuntimeMeta, msg map[str
 	if raw, ok := msg["verifiedCandidates"]; ok {
 		b, err := json.Marshal(raw)
 		if err == nil {
-			var verified []data.MarketSummaryVerifiedCandidateSnapshot
+			var verified []models.MarketSummaryVerifiedCandidateSnapshot
 			if json.Unmarshal(b, &verified) == nil {
 				target.verified = verified
 			}
@@ -576,7 +576,7 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 		return firstResult
 	}
 
-	req := data.MarketSummarySupplementRequest{
+	req := models.MarketSummarySupplementRequest{
 		FailureSummary:     mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons),
 		RemainingVerified:  remaining,
 		ExcludedToday:      excludedToday,
@@ -609,7 +609,7 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 		modelName,
 		startedAt,
 		remaining,
-		data.MarketSummaryRecommendSaveOptions{
+		models.MarketSummaryRecommendSaveOptions{
 			NewRecordLimit:        remainingNewSlots,
 			ProductionLimit:       remainingProductionSlots,
 			RepairableFailures:    repairableFailures,
@@ -697,7 +697,7 @@ func buildMarketSummaryCandidateFunnel(routeLog *data.MarketSummaryRouteLogSnaps
 	return strings.Join(lines, "\n")
 }
 
-func filterRuntimeVerifiedCandidates(candidates []data.MarketSummaryVerifiedCandidateSnapshot, usedCodes []string) []data.MarketSummaryVerifiedCandidateSnapshot {
+func filterRuntimeVerifiedCandidates(candidates []models.MarketSummaryVerifiedCandidateSnapshot, usedCodes []string) []models.MarketSummaryVerifiedCandidateSnapshot {
 	used := make(map[string]struct{}, len(usedCodes))
 	for _, raw := range usedCodes {
 		code := normalizeRuntimeStockCode(raw)
@@ -705,7 +705,7 @@ func filterRuntimeVerifiedCandidates(candidates []data.MarketSummaryVerifiedCand
 			used[code] = struct{}{}
 		}
 	}
-	result := make([]data.MarketSummaryVerifiedCandidateSnapshot, 0, len(candidates))
+	result := make([]models.MarketSummaryVerifiedCandidateSnapshot, 0, len(candidates))
 	seen := map[string]struct{}{}
 	for _, item := range candidates {
 		code := normalizeRuntimeStockCode(item.StockCode)
@@ -725,7 +725,7 @@ func filterRuntimeVerifiedCandidates(candidates []data.MarketSummaryVerifiedCand
 	return result
 }
 
-func collectRuntimeVerifiedCandidateCodes(candidates []data.MarketSummaryVerifiedCandidateSnapshot) []string {
+func collectRuntimeVerifiedCandidateCodes(candidates []models.MarketSummaryVerifiedCandidateSnapshot) []string {
 	codes := make([]string, 0, len(candidates))
 	seen := map[string]struct{}{}
 	for _, item := range candidates {
@@ -742,7 +742,7 @@ func collectRuntimeVerifiedCandidateCodes(candidates []data.MarketSummaryVerifie
 	return codes
 }
 
-func collectRuntimeSupplementCandidateCodes(candidates []data.MarketSummaryVerifiedCandidateSnapshot, repairable []models.MarketSummaryTradePlanRepairCandidate) []string {
+func collectRuntimeSupplementCandidateCodes(candidates []models.MarketSummaryVerifiedCandidateSnapshot, repairable []models.MarketSummaryTradePlanRepairCandidate) []string {
 	codes := collectRuntimeVerifiedCandidateCodes(candidates)
 	repairCodes := make([]string, 0, len(repairable))
 	for _, item := range repairable {
@@ -759,8 +759,8 @@ func collectRuntimeRepairableCodes(items []models.MarketSummaryTradePlanRepairCa
 	return mergeRuntimeStringSet(codes, nil)
 }
 
-func selectRuntimeRepairableVerifiedCandidates(candidates []data.MarketSummaryVerifiedCandidateSnapshot, repairable []models.MarketSummaryTradePlanRepairCandidate) ([]data.MarketSummaryVerifiedCandidateSnapshot, []models.MarketSummaryTradePlanRepairCandidate) {
-	verifiedByCode := make(map[string]data.MarketSummaryVerifiedCandidateSnapshot, len(candidates))
+func selectRuntimeRepairableVerifiedCandidates(candidates []models.MarketSummaryVerifiedCandidateSnapshot, repairable []models.MarketSummaryTradePlanRepairCandidate) ([]models.MarketSummaryVerifiedCandidateSnapshot, []models.MarketSummaryTradePlanRepairCandidate) {
+	verifiedByCode := make(map[string]models.MarketSummaryVerifiedCandidateSnapshot, len(candidates))
 	for _, candidate := range candidates {
 		code := normalizeRuntimeStockCode(candidate.StockCode)
 		if code == "" {
@@ -769,7 +769,7 @@ func selectRuntimeRepairableVerifiedCandidates(candidates []data.MarketSummaryVe
 		candidate.StockCode = code
 		verifiedByCode[code] = candidate
 	}
-	verified := make([]data.MarketSummaryVerifiedCandidateSnapshot, 0, len(repairable))
+	verified := make([]models.MarketSummaryVerifiedCandidateSnapshot, 0, len(repairable))
 	allowedRepairs := make([]models.MarketSummaryTradePlanRepairCandidate, 0, len(repairable))
 	seen := map[string]struct{}{}
 	for _, repair := range repairable {
@@ -792,10 +792,10 @@ func selectRuntimeRepairableVerifiedCandidates(candidates []data.MarketSummaryVe
 	return verified, allowedRepairs
 }
 
-func mergeRuntimeVerifiedCandidates(left, right []data.MarketSummaryVerifiedCandidateSnapshot) []data.MarketSummaryVerifiedCandidateSnapshot {
-	result := make([]data.MarketSummaryVerifiedCandidateSnapshot, 0, len(left)+len(right))
+func mergeRuntimeVerifiedCandidates(left, right []models.MarketSummaryVerifiedCandidateSnapshot) []models.MarketSummaryVerifiedCandidateSnapshot {
+	result := make([]models.MarketSummaryVerifiedCandidateSnapshot, 0, len(left)+len(right))
 	seen := map[string]struct{}{}
-	for _, candidate := range append(append([]data.MarketSummaryVerifiedCandidateSnapshot(nil), left...), right...) {
+	for _, candidate := range append(append([]models.MarketSummaryVerifiedCandidateSnapshot(nil), left...), right...) {
 		code := normalizeRuntimeStockCode(candidate.StockCode)
 		if code == "" {
 			continue
@@ -887,11 +887,11 @@ func mergeRuntimeRepairableFailures(left, right []models.MarketSummaryTradePlanR
 	return result
 }
 
-func prioritizeRuntimeFeasibleCandidates(candidates []data.MarketSummaryVerifiedCandidateSnapshot) []data.MarketSummaryVerifiedCandidateSnapshot {
+func prioritizeRuntimeFeasibleCandidates(candidates []models.MarketSummaryVerifiedCandidateSnapshot) []models.MarketSummaryVerifiedCandidateSnapshot {
 	if len(candidates) <= 1 {
 		return candidates
 	}
-	result := append([]data.MarketSummaryVerifiedCandidateSnapshot(nil), candidates...)
+	result := append([]models.MarketSummaryVerifiedCandidateSnapshot(nil), candidates...)
 	for i := 0; i < len(result); i++ {
 		for j := i + 1; j < len(result); j++ {
 			if runtimeCandidateHasFeasiblePlan(result[j]) && !runtimeCandidateHasFeasiblePlan(result[i]) {
@@ -902,7 +902,7 @@ func prioritizeRuntimeFeasibleCandidates(candidates []data.MarketSummaryVerified
 	return result
 }
 
-func runtimeCandidateHasFeasiblePlan(candidate data.MarketSummaryVerifiedCandidateSnapshot) bool {
+func runtimeCandidateHasFeasiblePlan(candidate models.MarketSummaryVerifiedCandidateSnapshot) bool {
 	for _, plan := range candidate.FeasiblePlans {
 		if plan.PassHardGate {
 			return true
