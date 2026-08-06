@@ -7,9 +7,50 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/models"
 	cliports "go-stock/internal/cli/ports"
+	"go-stock/internal/service"
 
 	"github.com/coocood/freecache"
 )
+
+type legacyApplicationInitializer struct{}
+
+func (legacyApplicationInitializer) EnsureSettings(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return data.EnsureSettingsRecord()
+}
+
+func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	data.InitAnalyzeSentiment()
+	return nil
+}
+
+// newCompatibilityServiceDependencies is the only place where legacy data
+// constructors are assembled into application ports. Keeping this bridge in
+// the bootstrap compatibility adapter makes the composition root explicit
+// while the old package is being retired.
+func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
+	marketData := data.NewCompatibilityMarketDataReader(storage.Main, storage.Minute)
+	return service.Dependencies{
+		Clock:            systemClock{},
+		Initializer:      legacyApplicationInitializer{},
+		Operations:       newCompatibilityServiceOperations(storage.Main),
+		ExecutionMonitor: data.NewCompatibilityExecutionMonitor(),
+		Providers: service.ProviderSet{
+			DailyBars:  marketData,
+			MinuteBars: marketData,
+			Quotes:     marketData,
+			Securities: marketData,
+			News:       data.NewCompatibilityNewsReader(),
+			Ledger:     data.NewCompatibilityPortfolioLedger(storage.Main),
+			Legacy:     data.NewCompatibilityLegacyRepository(storage.Main),
+		},
+	}
+}
 
 // marketAuditCompatibilityAdapter is the one legacy bridge used by the CLI
 // network-audit command. The command depends on cliports contracts; this

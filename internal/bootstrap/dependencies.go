@@ -1,12 +1,9 @@
 package bootstrap
 
 import (
-	"context"
 	"errors"
 	"time"
 
-	"go-stock/backend/data"
-	"go-stock/backend/db"
 	appconfig "go-stock/internal/config"
 	"go-stock/internal/service"
 
@@ -55,42 +52,3 @@ func AssembleRuntime(cfg appconfig.AppConfig, dependencies RuntimeDependencies) 
 type systemClock struct{}
 
 func (systemClock) Now() time.Time { return time.Now() }
-
-type legacyApplicationInitializer struct{}
-
-func (legacyApplicationInitializer) EnsureSettings(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return data.EnsureSettingsRecord()
-}
-
-func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	data.InitAnalyzeSentiment()
-	return nil
-}
-
-func productionRuntimeDependencies() RuntimeDependencies {
-	marketData := data.NewCompatibilityMarketDataReader(db.Dao, db.MinuteDao)
-	return RuntimeDependencies{
-		Storage: Storage{Main: db.Dao, Minute: db.MinuteDao},
-		Services: service.Dependencies{
-			Clock:            systemClock{},
-			Initializer:      legacyApplicationInitializer{},
-			Operations:       newCompatibilityServiceOperations(db.Dao),
-			ExecutionMonitor: data.NewCompatibilityExecutionMonitor(),
-			Providers: service.ProviderSet{
-				DailyBars:  marketData,
-				MinuteBars: marketData,
-				Quotes:     marketData,
-				Securities: marketData,
-				News:       data.NewCompatibilityNewsReader(),
-				Ledger:     data.NewCompatibilityPortfolioLedger(db.Dao),
-				Legacy:     data.NewCompatibilityLegacyRepository(db.Dao),
-			},
-		},
-	}
-}

@@ -24,11 +24,12 @@ type AppRuntime struct {
 func InitApplication(cfg appconfig.AppConfig) (AppRuntime, error) {
 	EnsureRuntimeDirs(cfg)
 	db.Init(cfg.DB.Path)
-	if err := migrations.MigrateAll(db.Dao, db.MinuteDao); err != nil {
+	storage := Storage{Main: db.Dao, Minute: db.MinuteDao}
+	if err := migrations.MigrateAll(storage.Main, storage.Minute); err != nil {
 		releaseinfo.MarkNotReady(err)
 		return AppRuntime{}, err
 	}
-	runtime, err := AssembleRuntime(cfg, productionRuntimeDependencies())
+	runtime, err := AssembleRuntime(cfg, productionRuntimeDependencies(storage))
 	if err != nil {
 		releaseinfo.MarkNotReady(err)
 		return AppRuntime{}, err

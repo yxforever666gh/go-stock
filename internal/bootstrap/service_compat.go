@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"go-stock/backend/db"
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/internal/service"
@@ -90,8 +91,28 @@ func newCompatibilityServiceOperations(main *gorm.DB) service.ServiceOperations 
 	}
 }
 
+// productionRuntimeDependencies is the compatibility assembly used until all
+// callers consume the injected ports directly. Database handles are supplied
+// by the composition root instead of being discovered here.
+func productionRuntimeDependencies(storage Storage) RuntimeDependencies {
+	return RuntimeDependencies{
+		Storage:  storage,
+		Services: newCompatibilityServiceDependencies(storage),
+	}
+}
+
 // NewProductionServices assembles compatibility-backed services for legacy
 // entry points that have not yet moved behind AppRuntime.
 func NewProductionServices() (service.AppServices, error) {
-	return service.NewAppServicesWithDependencies(productionRuntimeDependencies().Services)
+	return NewProductionServicesWithStorage(Storage{Main: db.Dao, Minute: db.MinuteDao})
+}
+
+// NewProductionServicesWithStorage is the explicit-storage form used by new
+// composition-root code and tests. Legacy callers can keep using
+// NewProductionServices while they are migrated.
+func NewProductionServicesWithStorage(storage Storage) (service.AppServices, error) {
+	if err := storage.Validate(); err != nil {
+		return service.AppServices{}, err
+	}
+	return service.NewAppServicesWithDependencies(productionRuntimeDependencies(storage).Services)
 }
