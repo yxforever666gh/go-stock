@@ -54,7 +54,11 @@ func (a *App) SetStockAICron(cronText, stockCode string) {
 	if follow == nil {
 		return
 	}
-	id, _ := a.cron.AddFunc(cronText, a.AddCronTask(*follow))
+	id, err := a.cron.AddFunc(cronText, a.AddCronTask(*follow))
+	if err != nil {
+		a.recordSchedulerRegistrationError("FollowAnalysis:"+stockCode, cronText, err)
+		return
+	}
 	a.setCronEntry(stockCode, id)
 }
 

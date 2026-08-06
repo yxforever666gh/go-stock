@@ -18,9 +18,14 @@ func (a *App) UpdateConfig(settingConfig *data.SettingConfig) string {
 		if entryID, exists := a.getCronEntry("MonitorStockPrices"); exists {
 			a.cron.Remove(entryID)
 		}
-		id, _ := a.cron.AddFunc(fmt.Sprintf("@every %ds", settingConfig.RefreshInterval), func() {
+		spec := fmt.Sprintf("@every %ds", settingConfig.RefreshInterval)
+		id, err := a.cron.AddFunc(spec, func() {
 			MonitorStockPrices(a)
 		})
+		if err != nil {
+			a.recordSchedulerRegistrationError("MonitorStockPrices", spec, err)
+			return "刷新周期无效: " + err.Error()
+		}
 		a.setCronEntry("MonitorStockPrices", id)
 	}
 

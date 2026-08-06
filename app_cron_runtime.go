@@ -99,6 +99,7 @@ func (a *App) reloadSummaryStockNewsCron(settingConfig *data.SettingConfig) {
 			a.runScheduledSummaryStockNews()
 		})
 		if err != nil {
+			a.recordSchedulerRegistrationError("SummaryStockNews:"+hhmm, spec, err)
 			logger.SugaredLogger.Errorf("添加市场资讯AI总结定时任务失败:time=%s cron=%s", hhmm, spec)
 			continue
 		}
@@ -130,6 +131,7 @@ func (a *App) reloadYieldEmailCron(settingConfig *data.SettingConfig) {
 
 	times, err := data.NormalizeYieldEmailCronTimes(settingConfig.YieldEmailCronTimes)
 	if err != nil {
+		a.recordSchedulerRegistrationError("YieldEmail", settingConfig.YieldEmailCronTimes, err)
 		logger.SugaredLogger.Errorf("最新 AI 分析报告定时发送时间无效: %v", err)
 		return
 	}
@@ -147,6 +149,7 @@ func (a *App) reloadYieldEmailCron(settingConfig *data.SettingConfig) {
 			a.runScheduledLatestAIAnalysisReportEmail()
 		})
 		if addErr != nil {
+			a.recordSchedulerRegistrationError("YieldEmail:"+hhmm, spec, addErr)
 			logger.SugaredLogger.Errorf("添加最新 AI 分析报告定时任务失败: time=%s cron=%s err=%v", hhmm, spec, addErr)
 			continue
 		}
@@ -167,6 +170,7 @@ func (a *App) enableSummaryStockNewsTestCron() {
 		a.runSummaryStockNewsTestOnce()
 	})
 	if err != nil {
+		a.recordSchedulerRegistrationError(summaryStockNewsTestEntryKey, "@every 60s", err)
 		logger.SugaredLogger.Errorf("添加市场资讯AI总结1分钟测试任务失败: %v", err)
 		return
 	}

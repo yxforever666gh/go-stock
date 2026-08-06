@@ -31,6 +31,12 @@ func (a *App) domReady(ctx context.Context) {
 	a.registerMaintenanceRuntime(config)
 	a.registerConfiguredCronRuntimes(config)
 	a.registerFollowAnalysisCrons()
+	if err := a.schedulerRegistrationError(); err != nil {
+		releaseinfo.MarkSchedulerReady(false)
+		releaseinfo.MarkNotReady(err)
+		logger.SugaredLogger.Errorf("scheduler assembly failed: %v", err)
+		return
+	}
 	releaseinfo.MarkSchedulerReady(true)
 
 	logger.SugaredLogger.Infof("domReady-cronEntrys:%+v", a.cronEntrys)
@@ -39,6 +45,9 @@ func (a *App) domReady(ctx context.Context) {
 func (a *App) emitDomReadyDone() {
 	go func() {
 		time.Sleep(2 * time.Second)
+		if !releaseinfo.Readiness().Ready {
+			return
+		}
 		emitEvent(a.ctx, "loadingMsg", "done")
 	}()
 }
@@ -51,6 +60,7 @@ func (a *App) registerRealtimeRuntime(config *data.SettingConfig) {
 	if _, err := a.cron.AddFunc(fmt.Sprintf("@every %ds", interval+60), func() {
 		data.NewsAnalyze("", true)
 	}); err != nil {
+		a.recordSchedulerRegistrationError("NewsAnalyze", fmt.Sprintf("@every %ds", interval+60), err)
 		logger.SugaredLogger.Errorf("注册 NewsAnalyze 定时任务失败: %v", err)
 	}
 
@@ -116,6 +126,7 @@ func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
 		logger.SugaredLogger.Errorf("Checking for updates...")
 		a.CheckStockBaseInfo(a.ctx)
 	}); err != nil {
+		a.recordSchedulerRegistrationError("CheckStockBaseInfo", "0 0 2 * * *", err)
 		logger.SugaredLogger.Errorf("注册 CheckStockBaseInfo 定时任务失败: %v", err)
 	}
 }
@@ -133,6 +144,7 @@ func (a *App) registerFollowAnalysisCrons() {
 		}
 		entryID, err := a.cron.AddFunc(*follow.Cron, a.AddCronTask(follow))
 		if err != nil {
+			a.recordSchedulerRegistrationError("FollowAnalysis:"+follow.StockCode, *follow.Cron, err)
 			logger.SugaredLogger.Errorf("添加自动分析任务失败:%s cron=%s entryID:%v", follow.Name, *follow.Cron, entryID)
 			continue
 		}
@@ -143,6 +155,7 @@ func (a *App) registerFollowAnalysisCrons() {
 func (a *App) registerCronTask(key, spec string, task func()) {
 	entryID, err := a.cron.AddFunc(spec, task)
 	if err != nil {
+		a.recordSchedulerRegistrationError(key, spec, err)
 		logger.SugaredLogger.Errorf("AddFunc error:%s", err.Error())
 		return
 	}

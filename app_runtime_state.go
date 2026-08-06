@@ -1,10 +1,34 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"go-stock/backend/logger"
+	"go-stock/internal/releaseinfo"
 
 	"github.com/robfig/cron/v3"
 )
+
+func (a *App) recordSchedulerRegistrationError(task, spec string, err error) {
+	if a == nil || err == nil {
+		return
+	}
+	failure := fmt.Errorf("register scheduler task %q with %q: %w", task, spec, err)
+	a.schedulerErrorsMu.Lock()
+	a.schedulerErrors = append(a.schedulerErrors, failure)
+	a.schedulerErrorsMu.Unlock()
+	releaseinfo.MarkSchedulerReady(false)
+	releaseinfo.MarkNotReady(failure)
+}
+
+func (a *App) schedulerRegistrationError() error {
+	if a == nil {
+		return errors.New("application is unavailable")
+	}
+	a.schedulerErrorsMu.Lock()
+	defer a.schedulerErrorsMu.Unlock()
+	return errors.Join(a.schedulerErrors...)
+}
 
 func (a *App) setCronEntry(key string, entryID cron.EntryID) {
 	a.cronEntrysMu.Lock()

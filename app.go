@@ -39,6 +39,8 @@ type App struct {
 	v150ExecutionTask  *marketSummaryV150ExecutionRuntime
 	domReadyMu         sync.Mutex
 	domReadyDone       bool
+	schedulerErrorsMu  sync.Mutex
+	schedulerErrors    []error
 }
 
 const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
