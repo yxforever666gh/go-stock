@@ -3,18 +3,30 @@ package data
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
 	"go-stock/backend/strategy/v150"
 )
+
+type recordingMarketSummaryV150OrderEventStore struct {
+	calls int
+}
+
+func (s *recordingMarketSummaryV150OrderEventStore) AppendOrderEvents(context.Context, string, []models.OrderEvent) error {
+	s.calls++
+	return nil
+}
 
 func TestBuildMarketSummaryV150CompletedBarsSupportsStartAndEndLabels(t *testing.T) {
 	loc := cnLocation()
@@ -879,6 +891,115 @@ func TestMarketSummaryV150MissingSecurityStatusRejectsFailClosed(t *testing.T) {
 	_, _, info := resolveMarketSummaryV150Activation(rec, yieldBuildContext{Now: start.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: start, DisableMinuteFetch: true}, false)
 	if info.DataStatus != "已跳过" || info.V150Entry != nil || !strings.Contains(info.DataStatusReason, "security status unavailable") {
 		t.Fatalf("fail-closed result=%+v", info)
+	}
+}
+
+func TestAppendMarketSummaryV150OrderEventsInjectedStoreMatchesLegacyWrapper(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := decision.Add(30 * time.Minute)
+	cfg := v150.FixedStrategyV150Config()
+	cost := v150.CalculateTradeCost(v150.SideBuy, v150.ResolveMarket("600000.SH"), 10, 900, cfg.SlippageScenarios()[0], cfg)
+	source := []v150.OrderEvent{
+		{Type: v150.EventFill, At: validFrom.Add(30 * time.Minute), Symbol: "600000.SH", Price: cost.EffectivePrice, Quantity: cost.Quantity},
+		{Type: v150.EventSignal, At: validFrom.Add(15 * time.Minute), Symbol: "600000.SH", Reason: string(v150.PathBreakout)},
+		{Type: v150.EventOrder, At: validFrom.Add(30 * time.Minute), Symbol: "600000.SH", Reason: "next_bar_market_order"},
+	}
+	accounting := marketSummaryV150EventAccounting{Entry: &cost}
+
+	results := make(map[string][]models.OrderEvent, 2)
+	for _, test := range []struct {
+		name     string
+		injected bool
+	}{
+		{name: "legacy_wrapper"},
+		{name: "injected_store", injected: true},
+	} {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			rec := seedMarketSummaryV150ExecutionFixture(t, decision, marketSummaryV150TestBreakoutPlan(validFrom))
+			var run models.StrategyRunSnapshot
+			if err := db.Dao.Where("run_id = ?", rec.StrategyRunID).First(&run).Error; err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if test.injected {
+				err = appendMarketSummaryV150OrderEventsWithStore(
+					context.Background(), persistence.NewGORMOrderEventStore(db.Dao), rec, run, source, accounting,
+				)
+			} else {
+				err = appendMarketSummaryV150OrderEvents(rec, run, source, accounting)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var rows []models.OrderEvent
+			if err := db.Dao.Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
+				Order("sequence ASC, event_id ASC").Find(&rows).Error; err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 4 || marketSummaryV150TestEventTypes(rows) != "rule_issued,signal,order,fill" {
+				t.Fatalf("unexpected lifecycle rows: %s", marketSummaryV150TestEventTypes(rows))
+			}
+			if err := persistence.VerifyStrategyOrderEvents(rows); err != nil {
+				t.Fatalf("persisted lifecycle seal: %v", err)
+			}
+			for index := range rows {
+				rows[index].ID = 0
+				rows[index].CreatedAt = time.Time{}
+				rows[index].FrozenAt = nil
+				rows[index].SnapshotHash = ""
+			}
+			results[test.name] = rows
+
+			if test.injected {
+				if err := appendMarketSummaryV150OrderEventsWithStore(
+					context.Background(), persistence.NewGORMOrderEventStore(db.Dao), rec, run, source, accounting,
+				); err != nil {
+					t.Fatalf("idempotent retry: %v", err)
+				}
+				var count int64
+				if err := db.Dao.Model(&models.OrderEvent{}).
+					Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
+					Count(&count).Error; err != nil {
+					t.Fatal(err)
+				}
+				if count != int64(len(rows)) {
+					t.Fatalf("idempotent retry changed row count to %d", count)
+				}
+			}
+		})
+	}
+
+	if !reflect.DeepEqual(results["legacy_wrapper"], results["injected_store"]) {
+		legacyJSON, _ := json.Marshal(results["legacy_wrapper"])
+		injectedJSON, _ := json.Marshal(results["injected_store"])
+		t.Fatalf("injected store changed immutable business rows\nlegacy=%s\ninjected=%s", legacyJSON, injectedJSON)
+	}
+}
+
+func TestAppendMarketSummaryV150OrderEventsInjectedStoreHonorsPausedGate(t *testing.T) {
+	initMarketSummaryV150ExecutionTestDB(t)
+	if _, err := governance.SetStrategyRuntimeMode(
+		context.Background(), db.Dao, governance.StrategyModePaused, v150.StrategyVersion, "sink test", "test",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	store := &recordingMarketSummaryV150OrderEventStore{}
+	err := appendMarketSummaryV150OrderEventsWithStore(
+		context.Background(), store,
+		models.AiRecommendStocks{StockCode: "600000.SH", StrategyRunID: "paused-run", StrategyRuleID: "paused-rule"},
+		models.StrategyRunSnapshot{RunID: "paused-run"},
+		[]v150.OrderEvent{{Type: v150.EventSignal, At: time.Now().Add(-time.Minute), Symbol: "600000.SH"}},
+		marketSummaryV150EventAccounting{},
+	)
+	if !errors.Is(err, governance.ErrStrategyPaused) {
+		t.Fatalf("error = %v, want ErrStrategyPaused", err)
+	}
+	if store.calls != 0 {
+		t.Fatalf("paused gate called injected store %d times", store.calls)
 	}
 }
 
