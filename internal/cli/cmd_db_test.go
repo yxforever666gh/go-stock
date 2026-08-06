@@ -3,11 +3,15 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"go-stock/backend/db"
 	cliports "go-stock/internal/cli/ports"
+	"go-stock/internal/migrations"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -85,6 +89,47 @@ func TestDBVerifyQuickOnlyAcceptsPreMigrationDatabases(t *testing.T) {
 	if output := stdout.String(); !strings.Contains(output, "main quick_check=ok") || !strings.Contains(output, "minute quick_check=ok") {
 		t.Fatalf("unexpected quick-only output: %q", output)
 	}
+}
+
+func TestDBStatusDoesNotModifyMigratedDatabases(t *testing.T) {
+	directory := t.TempDir()
+	mainPath := filepath.Join(directory, "stock.db")
+	minutePath := filepath.Join(directory, "minute.db")
+	t.Setenv("GO_STOCK_MINUTE_DB_PATH", minutePath)
+	db.Init(mainPath)
+	if err := migrations.MigrateAll(db.Dao, db.MinuteDao); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db.Dao, db.MinuteDao = nil, nil
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.Dao, db.MinuteDao = nil, nil
+	})
+
+	beforeMain := databaseFileHash(t, mainPath)
+	beforeMinute := databaseFileHash(t, minutePath)
+	var stdout, stderr bytes.Buffer
+	if err := runDB([]string{"status"}, GlobalOptions{DBPath: mainPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("db status: %v stderr=%s", err, stderr.String())
+	}
+	if after := databaseFileHash(t, mainPath); after != beforeMain {
+		t.Fatal("db status modified the primary database")
+	}
+	if after := databaseFileHash(t, minutePath); after != beforeMinute {
+		t.Fatal("db status modified the minute database")
+	}
+}
+
+func databaseFileHash(t *testing.T, path string) [sha256.Size]byte {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sha256.Sum256(contents)
 }
 
 func createSchemaIndependentDB(t *testing.T, path, table string) {

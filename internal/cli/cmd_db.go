@@ -44,7 +44,7 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 	} else if len(args) > 1 && subcommand != "backup" {
 		return fmt.Errorf("db %s does not accept positional arguments: %s", subcommand, strings.Join(args[1:], " "))
 	}
-	admin, err := bootstrap.NewProductionCLIStorageAdmin(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath), false)
+	admin, err := bootstrap.NewProductionCLIStorageAdmin(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath), subcommand == "status")
 	if err != nil {
 		return err
 	}

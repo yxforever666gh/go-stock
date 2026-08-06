@@ -26,7 +26,14 @@ func runStrategy(args []string, opts GlobalOptions, stdout, stderr io.Writer) er
 		return fmt.Errorf("unknown strategy subcommand %q", subcommand)
 	}
 
-	controller, err := bootstrap.NewProductionStrategyRuntimeController(resolveStrategyDBPath(opts.DataDir, opts.DBPath))
+	dbPath := resolveStrategyDBPath(opts.DataDir, opts.DBPath)
+	var controller cliports.StrategyRuntimeController
+	var err error
+	if subcommand == "status" {
+		controller, err = bootstrap.NewProductionReadOnlyStrategyRuntimeController(dbPath)
+	} else {
+		controller, err = bootstrap.NewProductionStrategyRuntimeController(dbPath)
+	}
 	if err != nil {
 		return err
 	}

@@ -19,6 +19,19 @@ var _ cliports.StrategyRuntimeController = (*strategyRuntimeController)(nil)
 
 func NewProductionStrategyRuntimeController(dbPath string) (cliports.StrategyRuntimeController, error) {
 	db.Init(dbPath)
+	return newStrategyRuntimeController()
+}
+
+// NewProductionReadOnlyStrategyRuntimeController is for audit-only callers.
+// It must not initialize schema, change SQLite PRAGMAs, or create a database.
+func NewProductionReadOnlyStrategyRuntimeController(dbPath string) (cliports.StrategyRuntimeController, error) {
+	if _, err := db.InitReadOnly(dbPath); err != nil {
+		return nil, err
+	}
+	return newStrategyRuntimeController()
+}
+
+func newStrategyRuntimeController() (cliports.StrategyRuntimeController, error) {
 	if db.Dao == nil {
 		return nil, errors.New("main database is not initialized")
 	}
