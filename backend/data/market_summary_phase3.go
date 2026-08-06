@@ -92,7 +92,11 @@ func applyStrategyCohortFilter(q *gorm.DB, cohort string) *gorm.DB {
 	case strategyCohortCurrent:
 		return q.Where("summary_version = ?", marketSummaryCurrentVersion)
 	case strategyCohortLegacy:
-		return q.Where("(TRIM(COALESCE(summary_version, '')) = '' OR summary_version NOT IN ?)", marketSummaryKnownVersions())
+		// Legacy is the same frozen set enforced by
+		// isFrozenLegacyStrategyRecord: every row outside the current strategy
+		// cohort. The former NOT IN known-versions predicate accidentally hid
+		// every named historical release, including 1.4.1 and 1.4.2.
+		return q.Where("TRIM(COALESCE(summary_version, '')) <> ?", marketSummaryCurrentVersion)
 	case marketSummaryPhase3Version, marketSummaryPhase4Version, marketSummaryVersionV132, marketSummaryVersion136, marketSummaryVersion140, marketSummaryVersion141, marketSummaryVersion142, marketSummaryVersion150:
 		return q.Where("summary_version = ?", normalizeStrategyCohort(cohort, strategyCohortAll))
 	default:

@@ -66,3 +66,37 @@ func TestCompatibilityLegacyRepositoryExcludesCurrentStrategy(t *testing.T) {
 		t.Fatal("current strategy row was exposed through legacy repository")
 	}
 }
+
+func TestApplyStrategyCohortFilterIncludesEveryFrozenLegacyVersion(t *testing.T) {
+	database := compatibilityTestDB(t, "legacy-cohort-filter")
+	if err := database.AutoMigrate(&models.AiRecommendStocks{}); err != nil {
+		t.Fatal(err)
+	}
+	rows := []models.AiRecommendStocks{
+		{StockCode: "600001.SH", SummaryVersion: ""},
+		{StockCode: "600002.SH", SummaryVersion: marketSummaryPhase3Version},
+		{StockCode: "600003.SH", SummaryVersion: marketSummaryVersion141},
+		{StockCode: "600004.SH", SummaryVersion: marketSummaryVersion142},
+		{StockCode: "600005.SH", SummaryVersion: "legacy-import"},
+		{StockCode: "600006.SH", SummaryVersion: marketSummaryCurrentVersion},
+	}
+	if err := database.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	var got []models.AiRecommendStocks
+	if err := applyStrategyCohortFilter(
+		database.Model(&models.AiRecommendStocks{}),
+		strategyCohortLegacy,
+	).Order("stock_code ASC").Find(&got).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("legacy cohort rows=%+v, want every five non-current rows", got)
+	}
+	for _, row := range got {
+		if !isFrozenLegacyStrategyRecord(&row) {
+			t.Fatalf("legacy cohort exposed current row: %+v", row)
+		}
+	}
+}
