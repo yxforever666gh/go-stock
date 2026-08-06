@@ -33,7 +33,7 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		Recommend: NewRecommendService(dependencies.Operations.Recommend),
 		Scheduler: NewSchedulerService(dependencies.Operations.Scheduler),
 		Notify:    NewNotifyService(dependencies.Operations.Notify),
-		Execution: NewExecutionService(dependencies.ExecutionMonitor),
+		Execution: NewExecutionService(dependencies.ExecutionMonitor, dependencies.Operations.Scheduler, dependencies.Operations.System),
 		System:    NewSystemService(dependencies.Operations.System),
 	}, nil
 }

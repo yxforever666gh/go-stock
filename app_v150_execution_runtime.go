@@ -6,11 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"go-stock/backend/db"
 	"go-stock/backend/execution"
-	"go-stock/backend/governance"
 	"go-stock/backend/logger"
-	"go-stock/backend/models"
 	"go-stock/backend/strategy/v150"
 )
 
@@ -164,37 +161,5 @@ func (a *App) registerMarketSummaryV150ExecutionRuntime() {
 }
 
 func (a *App) executeMarketSummaryV150ExecutionMonitor(now time.Time) (execution.MonitorResult, error) {
-	if err := governance.RequireStrategyLive(a.ctx, db.Dao, v150.StrategyVersion); err != nil {
-		return execution.MonitorResult{ObservedAt: now}, err
-	}
-	taskRun := &models.CronTaskRun{
-		TaskName:    "strategy_v150_execution_monitor",
-		TriggeredAt: now,
-		Status:      "started",
-		Attempts:    1,
-	}
-	if db.Dao != nil && db.Dao.Migrator().HasTable(&models.CronTaskRun{}) {
-		if err := db.Dao.Create(taskRun).Error; err != nil {
-			logger.SugaredLogger.Warnf("record v1.5 execution monitor start failed: %v", err)
-		}
-	}
-
-	result, runErr := a.services.Execution.Run(a.ctx, now)
-	status := "success"
-	errorMessage := ""
-	if runErr != nil {
-		status = "failed"
-		errorMessage = runErr.Error()
-	} else if len(result.Warnings) > 0 {
-		errorMessage = strings.Join(result.Warnings, "; ")
-	}
-	if taskRun.ID != 0 {
-		if err := db.Dao.Model(&models.CronTaskRun{}).Where("id = ?", taskRun.ID).Updates(map[string]any{
-			"status":        status,
-			"error_message": errorMessage,
-		}).Error; err != nil {
-			logger.SugaredLogger.Warnf("record v1.5 execution monitor finish failed: %v", err)
-		}
-	}
-	return result, runErr
+	return a.services.Execution.RunStrategyMonitor(a.ctx, now, v150.StrategyVersion)
 }
