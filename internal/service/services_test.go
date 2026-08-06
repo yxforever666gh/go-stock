@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -51,6 +52,24 @@ type recordingRecommendationPublisher struct {
 	providerName string
 	modelName    string
 	result       *models.MarketSummaryRecommendSaveResult
+}
+
+type recordingMarketSummaryV150Producer struct {
+	calls   int
+	context context.Context
+	request MarketSummaryV150ProductionRequest
+	result  *MarketSummaryV150ProductionResult
+	err     error
+}
+
+func (p *recordingMarketSummaryV150Producer) Produce(
+	ctx context.Context,
+	request MarketSummaryV150ProductionRequest,
+) (*MarketSummaryV150ProductionResult, error) {
+	p.calls++
+	p.context = ctx
+	p.request = request
+	return p.result, p.err
 }
 
 func (o *recordingRecommendOperations) RequireStrategyLive(_ context.Context, version string) error {
@@ -251,3 +270,71 @@ func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
 		t.Fatalf("publication delegation mismatch: result=%p decision=%#v provider=%q model=%q", got, publisher.decision, publisher.providerName, publisher.modelName)
 	}
 }
+
+func TestRecommendServiceDelegatesTypedMarketSummaryV150Production(t *testing.T) {
+	t.Parallel()
+
+	type contextKey string
+	ctx := context.WithValue(context.Background(), contextKey("run"), "same-context")
+	sysPromptID := 19
+	request := MarketSummaryV150ProductionRequest{
+		AIConfigID:  7,
+		Question:    "market summary",
+		SysPromptID: &sysPromptID,
+		Think:       true,
+		StartedAt:   time.Date(2026, 8, 7, 9, 40, 0, 0, time.FixedZone("CST", 8*60*60)),
+	}
+	saveResult := &models.MarketSummaryRecommendSaveResult{SavedCount: 2}
+	wantResult := &MarketSummaryV150ProductionResult{
+		RunID:                  "v150-run",
+		StrategyVersion:        "1.5.0",
+		ReportText:             "typed report",
+		ProviderName:           "provider",
+		ModelName:              "model",
+		CandidateCount:         18,
+		VerifiedCandidateCount: 4,
+		ProductionCount:        2,
+		NoTradeReason:          "",
+		RouteLog:               &MarketSummaryRouteLog{RunSlot: "09:40", VerifiedCandidateCt: 4},
+		SaveResult:             saveResult,
+	}
+	wantErr := errors.New("producer returned result with error")
+	producer := &recordingMarketSummaryV150Producer{result: wantResult, err: wantErr}
+	service := NewRecommendService(nil, nil, nil, nil, "1.5.0", producer)
+
+	gotResult, gotErr := service.RunMarketSummaryV150(ctx, request)
+
+	if producer.calls != 1 {
+		t.Fatalf("Produce() calls = %d, want 1", producer.calls)
+	}
+	if producer.context != ctx {
+		t.Fatal("RecommendService replaced the caller context")
+	}
+	if producer.request != request {
+		t.Fatalf("production request = %#v, want %#v", producer.request, request)
+	}
+	if gotResult != wantResult {
+		t.Fatal("RecommendService copied or replaced the typed production result")
+	}
+	if gotErr != wantErr {
+		t.Fatal("RecommendService wrapped or replaced the producer error")
+	}
+}
+
+func TestRecommendServiceRejectsMissingMarketSummaryV150Producer(t *testing.T) {
+	t.Parallel()
+
+	var typedNil *recordingMarketSummaryV150Producer
+	services := []RecommendService{
+		NewRecommendService(nil, nil, nil, nil, "1.5.0"),
+		NewRecommendService(nil, nil, nil, nil, "1.5.0", typedNil),
+	}
+	for index, service := range services {
+		result, err := service.RunMarketSummaryV150(context.Background(), MarketSummaryV150ProductionRequest{})
+		if result != nil || !errors.Is(err, ErrMarketSummaryV150ProducerUnavailable) {
+			t.Fatalf("case %d result=%#v error=%v, want producer unavailable", index, result, err)
+		}
+	}
+}
+
+var _ MarketSummaryV150Producer = (*recordingMarketSummaryV150Producer)(nil)

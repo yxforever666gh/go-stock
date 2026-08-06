@@ -17,6 +17,7 @@ type MarketSummaryDecisionSnapshot = recommendation.FrozenDecision
 type RecommendService struct {
 	operations             RecommendOperations
 	production             recommendation.ProductionService[*models.MarketSummaryRecommendSaveResult]
+	v150Producer           MarketSummaryV150Producer
 	currentRecommendations portfolio.CurrentRecommendationReader
 	clock                  Clock
 	currentStrategyVersion string
@@ -28,14 +29,30 @@ func NewRecommendService(
 	currentRecommendations portfolio.CurrentRecommendationReader,
 	clock Clock,
 	currentStrategyVersion string,
+	v150Producer ...MarketSummaryV150Producer,
 ) RecommendService {
+	var producer MarketSummaryV150Producer
+	if len(v150Producer) > 0 && !isNilMarketSummaryV150Producer(v150Producer[0]) {
+		producer = v150Producer[0]
+	}
 	return RecommendService{
 		operations:             operations,
 		production:             recommendation.NewProductionService(publisher),
+		v150Producer:           producer,
 		currentRecommendations: currentRecommendations,
 		clock:                  clock,
 		currentStrategyVersion: strings.TrimSpace(currentStrategyVersion),
 	}
+}
+
+func (s RecommendService) RunMarketSummaryV150(
+	ctx context.Context,
+	request MarketSummaryV150ProductionRequest,
+) (*MarketSummaryV150ProductionResult, error) {
+	if isNilMarketSummaryV150Producer(s.v150Producer) {
+		return nil, ErrMarketSummaryV150ProducerUnavailable
+	}
+	return s.v150Producer.Produce(ctx, request)
 }
 
 func (s RecommendService) RequireStrategyLive(ctx context.Context, strategyVersion string) error {

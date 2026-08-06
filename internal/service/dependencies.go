@@ -53,6 +53,7 @@ type Dependencies struct {
 	Providers                   ProviderSet
 	Operations                  ServiceOperations
 	RecommendationPublisher     recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult]
+	MarketSummaryV150Producer   MarketSummaryV150Producer
 	ExecutionMonitor            execution.Monitor
 	PortfolioReader             PortfolioAccountReader
 	LegacyReader                LegacyRecommendationReader

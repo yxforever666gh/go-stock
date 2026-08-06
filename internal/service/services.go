@@ -38,6 +38,7 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 			dependencies.CurrentRecommendationReader,
 			dependencies.Clock,
 			dependencies.CurrentStrategyVersion,
+			dependencies.MarketSummaryV150Producer,
 		),
 		Scheduler: NewSchedulerService(dependencies.Operations.Scheduler),
 		Notify:    NewNotifyService(dependencies.Operations.Notify),
