@@ -52,6 +52,15 @@ func (s RecommendService) RunMarketSummaryV150(
 	if isNilMarketSummaryV150Producer(s.v150Producer) {
 		return nil, ErrMarketSummaryV150ProducerUnavailable
 	}
+	if s.operations == nil {
+		return nil, operationRequiredError("recommend")
+	}
+	// Keep the runtime-mode guard inside the use case as well as at delivery
+	// entry points. Cron, CLI, tests, and future Web handlers therefore cannot
+	// bypass paused mode by invoking the typed producer directly.
+	if err := s.operations.RequireStrategyLive(ctx, s.currentStrategyVersion); err != nil {
+		return nil, err
+	}
 	return s.v150Producer.Produce(ctx, request)
 }
 

@@ -43,6 +43,7 @@ type recordingAIOperations struct {
 type recordingRecommendOperations struct {
 	RecommendOperations
 	gateVersion string
+	gateErr     error
 	created     *models.AIResponseResult
 	persisted   *models.AIResponseResult
 }
@@ -74,7 +75,7 @@ func (p *recordingMarketSummaryV150Producer) Produce(
 
 func (o *recordingRecommendOperations) RequireStrategyLive(_ context.Context, version string) error {
 	o.gateVersion = version
-	return nil
+	return o.gateErr
 }
 
 func (o *recordingRecommendOperations) CreateAIResponseReport(_ context.Context, result *models.AIResponseResult) error {
@@ -300,12 +301,16 @@ func TestRecommendServiceDelegatesTypedMarketSummaryV150Production(t *testing.T)
 	}
 	wantErr := errors.New("producer returned result with error")
 	producer := &recordingMarketSummaryV150Producer{result: wantResult, err: wantErr}
-	service := NewRecommendService(nil, nil, nil, nil, "1.5.0", producer)
+	operations := &recordingRecommendOperations{}
+	service := NewRecommendService(operations, nil, nil, nil, "1.5.0", producer)
 
 	gotResult, gotErr := service.RunMarketSummaryV150(ctx, request)
 
 	if producer.calls != 1 {
 		t.Fatalf("Produce() calls = %d, want 1", producer.calls)
+	}
+	if operations.gateVersion != "1.5.0" {
+		t.Fatalf("runtime gate version = %q, want 1.5.0", operations.gateVersion)
 	}
 	if producer.context != ctx {
 		t.Fatal("RecommendService replaced the caller context")
@@ -318,6 +323,24 @@ func TestRecommendServiceDelegatesTypedMarketSummaryV150Production(t *testing.T)
 	}
 	if gotErr != wantErr {
 		t.Fatal("RecommendService wrapped or replaced the producer error")
+	}
+}
+
+func TestRecommendServiceBlocksTypedMarketSummaryV150ProductionWhilePaused(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("strategy is paused")
+	operations := &recordingRecommendOperations{gateErr: wantErr}
+	producer := &recordingMarketSummaryV150Producer{}
+	service := NewRecommendService(operations, nil, nil, nil, "1.5.0", producer)
+
+	result, err := service.RunMarketSummaryV150(context.Background(), MarketSummaryV150ProductionRequest{})
+
+	if result != nil || err != wantErr {
+		t.Fatalf("paused result/error = %#v/%v, want nil/%v", result, err, wantErr)
+	}
+	if producer.calls != 0 {
+		t.Fatalf("paused use case called producer %d time(s), want 0", producer.calls)
 	}
 }
 
