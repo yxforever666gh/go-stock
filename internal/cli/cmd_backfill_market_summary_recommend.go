@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -8,9 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/db"
-	"go-stock/backend/models"
 	"go-stock/internal/bootstrap"
+	cliports "go-stock/internal/cli/ports"
 )
 
 type marketSummaryRecommendBackfillRow struct {
@@ -23,6 +23,17 @@ type marketSummaryRecommendBackfillRow struct {
 }
 
 func runBackfillMarketSummaryRecommend(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+	backfill, err := bootstrap.NewProductionMarketSummaryRecommendationBackfill()
+	if err != nil {
+		return err
+	}
+	return runBackfillMarketSummaryRecommendWithPort(args, g, stdout, stderr, backfill)
+}
+
+func runBackfillMarketSummaryRecommendWithPort(args []string, g GlobalOptions, stdout, stderr io.Writer, backfill cliports.MarketSummaryRecommendationBackfill) error {
+	if backfill == nil {
+		return errors.New("market summary recommendation backfill port is required")
+	}
 	fs := flag.NewFlagSet("backfill-market-summary-recommend", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -46,22 +57,13 @@ func runBackfillMarketSummaryRecommend(args []string, g GlobalOptions, stdout, s
 		return err
 	}
 
-	reports := make([]models.AIResponseResult, 0, 8)
-	if err := db.Dao.Model(&models.AIResponseResult{}).
-		Where("created_at >= ? AND created_at < ?", start, end).
-		Where("(stock_code = ? OR stock_name = ?)", "市场资讯", "市场资讯").
-		Order("created_at ASC").
-		Find(&reports).Error; err != nil {
+	reports, err := backfill.ListReports(context.Background(), start, end)
+	if err != nil {
 		return err
 	}
 
 	rows := make([]marketSummaryRecommendBackfillRow, 0, len(reports))
 	totalSaved := 0
-	services, err := bootstrap.NewProductionServices()
-	if err != nil {
-		return err
-	}
-	aiService := services.AI
 	for _, report := range reports {
 		row := marketSummaryRecommendBackfillRow{
 			ID:           report.ID,
@@ -70,7 +72,7 @@ func runBackfillMarketSummaryRecommend(args []string, g GlobalOptions, stdout, s
 			ModelName:    strings.TrimSpace(report.ModelName),
 		}
 		if !dryRun {
-			saved, saveErr := aiService.EnsureMarketSummaryRecommendStocksSaved(report.Content, report.ProviderName, report.ModelName, report.CreatedAt)
+			saved, saveErr := backfill.SaveRecommendations(context.Background(), report)
 			row.Saved = saved
 			totalSaved += saved
 			if saveErr != nil {
