@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
 
@@ -26,6 +27,13 @@ func setupStrategyBacktestTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	if err := persistence.MigrateStrategyPersistence(database); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := governance.InitializeStrategyRuntimeControl(ctx, database, "1.5.0"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := governance.SetStrategyRuntimeMode(ctx, database, governance.StrategyModeLive, "1.5.0", "backtest persistence fixture", "test"); err != nil {
 		t.Fatal(err)
 	}
 	db.Dao = database

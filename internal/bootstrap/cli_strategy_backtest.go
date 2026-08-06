@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/persistence"
 	cliports "go-stock/internal/cli/ports"
 
@@ -32,6 +33,9 @@ func (r *frozenBacktestRepository) LoadFrozenStrategyInputs(ctx context.Context,
 }
 
 func (r *frozenBacktestRepository) PersistBacktestResult(ctx context.Context, result persistence.BacktestResult) error {
+	if err := governance.RequireStrategyLive(ctx, r.main, result.Run.StrategyVersion); err != nil {
+		return err
+	}
 	_, err := persistence.PersistBacktestResult(ctx, r.main, result)
 	return err
 }
