@@ -14,9 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/models"
+	"go-stock/internal/bootstrap"
+	cliports "go-stock/internal/cli/ports"
 
-	"github.com/coocood/freecache"
 	"github.com/go-resty/resty/v2"
 )
 
@@ -61,7 +62,8 @@ type networkAuditSummary struct {
 }
 
 type networkAuditRunner struct {
-	report *networkAuditReport
+	report   *networkAuditReport
+	provider cliports.MarketAuditProvider
 }
 
 type auditSkipError struct {
@@ -91,7 +93,15 @@ func runNetworkAudit(args []string, g GlobalOptions, stdout, stderr io.Writer) e
 	}
 
 	proxyEnv := forceNoProxyEnv()
-	cfg := data.GetSettingConfig()
+	provider := bootstrap.NewProductionMarketAuditProvider()
+	return runNetworkAuditWithProvider(provider, jsonOut, reportDir, g, stdout, stderr, proxyEnv)
+}
+
+func runNetworkAuditWithProvider(provider cliports.MarketAuditProvider, jsonOut bool, reportDir string, g GlobalOptions, stdout, stderr io.Writer, proxyEnv map[string]string) error {
+	if provider == nil {
+		return errors.New("network audit provider is required")
+	}
+	cfg := provider.Settings()
 	if cfg == nil || cfg.Settings == nil {
 		return errors.New("未找到 settings 配置，无法执行网络审计")
 	}
@@ -107,14 +117,14 @@ func runNetworkAudit(args []string, g GlobalOptions, stdout, stderr io.Writer) e
 		StartedAt:        startedAt.Format(time.DateTime),
 		DBPath:           g.DBPath,
 		ReportDir:        runDir,
-		Environment:      buildNetworkAuditEnvironment(),
-		Settings:         buildNetworkAuditSettings(cfg),
-		AIConfigs:        buildNetworkAuditAIConfigs(cfg),
+		Environment:      buildNetworkAuditEnvironment(cfg, provider),
+		Settings:         buildNetworkAuditSettings(cfg, provider),
+		AIConfigs:        buildNetworkAuditAIConfigs(cfg, provider),
 		MinuteWindows:    buildMinuteWindowMetadata(),
 		Probes:           make([]networkAuditProbe, 0, 96),
 		ProxyEnvironment: proxyEnv,
 	}
-	runner := &networkAuditRunner{report: report}
+	runner := &networkAuditRunner{report: report, provider: provider}
 	runner.runAll(cfg)
 	report.FinishedAt = time.Now().Format(time.DateTime)
 
@@ -145,19 +155,19 @@ func runNetworkAudit(args []string, g GlobalOptions, stdout, stderr io.Writer) e
 	return nil
 }
 
-func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
-	newsAPI := data.NewMarketNewsApi()
-	stockAPI := data.NewStockDataApi()
-	fundAPI := data.NewFundApi()
+func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
+	newsAPI := r.provider.News()
+	stockAPI := r.provider.Stock()
+	fundAPI := r.provider.Fund()
 	crawlTimeout := auditDurationSeconds(cfg.CrawlTimeOut, 20)
 
 	searchFingerprint, fpErr := ResolveFingerprint("")
 	if fpErr != nil {
 		r.report.Notes = append(r.report.Notes, "东财 fingerprint 未配置，部分搜索接口将跳过")
 	}
-	searchAPI := data.NewSearchStockApiWithFingerprint("机器人", searchFingerprint)
-	searchETFAPI := data.NewSearchStockApiWithFingerprint("芯片", searchFingerprint)
-	latestTradeDate, tushareErr := data.NewTushareApi(cfg).GetLatestTradeDate(cfg.CrawlTimeOut)
+	searchAPI := r.provider.Search("机器人", searchFingerprint)
+	searchETFAPI := r.provider.Search("芯片", searchFingerprint)
+	latestTradeDate, tushareErr := r.provider.Tushare(cfg).GetLatestTradeDate(cfg.CrawlTimeOut)
 	if tushareErr != nil {
 		r.report.Notes = append(r.report.Notes, "Tushare 最近交易日探测失败，将使用工作日回退窗口")
 	}
@@ -174,7 +184,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		}
 		first := (*items)[0]
 		meta := map[string]any{"count": len(*items), "source": first.Source}
-		for key, value := range data.GetMarketNewsFetchMeta("cls_telegraph_api") {
+		for key, value := range r.provider.MarketNewsFetchMeta("cls_telegraph_api") {
 			meta[key] = value
 		}
 		return meta, trimSample(first.Content), nil
@@ -186,7 +196,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		}
 		first := (*items)[0]
 		meta := map[string]any{"count": len(*items), "source": first.Source}
-		for key, value := range data.GetMarketNewsFetchMeta("cls_telegraph_web") {
+		for key, value := range r.provider.MarketNewsFetchMeta("cls_telegraph_web") {
 			meta[key] = value
 		}
 		return meta, trimSample(first.Content), nil
@@ -198,7 +208,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		}
 		first := (*items)[0]
 		meta := map[string]any{"count": len(*items)}
-		for key, value := range data.GetMarketNewsFetchMeta("sina_live_news") {
+		for key, value := range r.provider.MarketNewsFetchMeta("sina_live_news") {
 			meta[key] = value
 		}
 		return meta, trimSample(first.Content), nil
@@ -378,7 +388,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		return map[string]any{"count": len(items), "artCode": pickMapString(firstMap, "art_code", "artCode", "artcode")}, trimSample(stringifyAny(items[0])), nil
 	})
 	r.runProbe("market", "eastmoney_bk_dict", "https://reportapi.eastmoney.com/report/bk", false, func() (map[string]any, string, error) {
-		items := newsAPI.EMDictCode("016", freecache.NewCache(1024*1024))
+		items := newsAPI.EMDictCode("016")
 		if len(items) == 0 {
 			return nil, "", errors.New("板块字典接口返回空数据")
 		}
@@ -409,7 +419,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		return map[string]any{"count": len(res.List)}, trimSample(first.Title), nil
 	})
 	r.runProbe("market", "cls_home_top_news", "https://www.cls.cn", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.GetTopNewsList(15))
+		rows := derefStringSlice(r.provider.TopNewsList(15))
 		if len(rows) == 0 {
 			return nil, "", errors.New("财联社首页要闻返回空数据")
 		}
@@ -579,49 +589,49 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 	r.runProbe("stock", "eastmoney_quote_page", "https://quote.eastmoney.com/sh600519.html", false, func() (map[string]any, string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), crawlTimeout)
 		defer cancel()
-		price, priceTime := data.GetRealTimeStockPriceInfo(ctx, "sh600519")
+		price, priceTime := r.provider.RealTimeStockPriceInfo(ctx, "sh600519")
 		if strings.TrimSpace(price) == "" {
 			return nil, "", errors.New("东财行情页返回空数据")
 		}
 		return map[string]any{"code": "sh600519", "priceTime": priceTime}, trimSample(price), nil
 	})
 	r.runProbe("stock", "sina_quote_page_sh", "https://finance.sina.com.cn/realstock/company/sh600519/nc.shtml", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.SearchStockPriceInfo("贵州茅台", "sh600519", int64(crawlTimeout.Seconds())))
+		rows := derefStringSlice(r.provider.SearchStockPriceInfo("贵州茅台", "sh600519", int64(crawlTimeout.Seconds())))
 		if len(rows) == 0 {
 			return nil, "", errors.New("新浪 A 股行情页返回空数据")
 		}
 		return map[string]any{"count": len(rows), "code": "sh600519"}, trimSample(firstNonEmptyString(rows)), nil
 	})
 	r.runProbe("stock", "sina_quote_page_hk", "https://stock.finance.sina.com.cn/hkstock/quotes/00700.html", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.SearchStockPriceInfo("腾讯控股", "hk00700", int64(crawlTimeout.Seconds())))
+		rows := derefStringSlice(r.provider.SearchStockPriceInfo("腾讯控股", "hk00700", int64(crawlTimeout.Seconds())))
 		if len(rows) == 0 {
 			return nil, "", errors.New("新浪港股行情页返回空数据")
 		}
 		return map[string]any{"count": len(rows), "code": "hk00700"}, trimSample(firstNonEmptyString(rows)), nil
 	})
 	r.runProbe("stock", "sina_quote_page_us", "https://stock.finance.sina.com.cn/usstock/quotes/aapl.html", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.SearchStockPriceInfo("苹果公司", "gb_aapl", int64(crawlTimeout.Seconds())))
+		rows := derefStringSlice(r.provider.SearchStockPriceInfo("苹果公司", "gb_aapl", int64(crawlTimeout.Seconds())))
 		if len(rows) == 0 {
 			return nil, "", errors.New("新浪美股行情页返回空数据")
 		}
 		return map[string]any{"count": len(rows), "code": "gb_aapl"}, trimSample(firstNonEmptyString(rows)), nil
 	})
 	r.runProbe("stock", "baidu_gushitong_financial_page", "https://gushitong.baidu.com/stock/ab-600519", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.SearchGuShiTongStockInfo("sh600519", int64(crawlTimeout.Seconds())))
+		rows := derefStringSlice(r.provider.SearchGuShiTongStockInfo("sh600519", int64(crawlTimeout.Seconds())))
 		if len(rows) == 0 {
 			return nil, "", errors.New("百度股市通财务页返回空数据")
 		}
 		return map[string]any{"count": len(rows), "code": "sh600519"}, trimSample(firstNonEmptyString(rows)), nil
 	})
 	r.runProbe("stock", "xueqiu_financial_page", "https://xueqiu.com/snowman/S/600519/detail#/ZYCWZB", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.GetFinancialReportsByXUEQIU("sh600519", int64(crawlTimeout.Seconds())))
+		rows := derefStringSlice(r.provider.FinancialReportsByXueqiu("sh600519", int64(crawlTimeout.Seconds())))
 		if len(rows) == 0 {
 			return nil, "", errors.New("雪球财务页返回空数据")
 		}
 		return map[string]any{"count": len(rows), "code": "sh600519"}, trimSample(firstNonEmptyString(rows)), nil
 	})
 	r.runProbe("stock", "eastmoney_financial_page", "https://emweb.securities.eastmoney.com/pc_hsf10/pages/index.html?type=web&code=sh600519#/cwfx", false, func() (map[string]any, string, error) {
-		rows := derefStringSlice(data.GetFinancialReports("sh600519", int64(crawlTimeout.Seconds())))
+		rows := derefStringSlice(r.provider.FinancialReports("sh600519", int64(crawlTimeout.Seconds())))
 		if len(rows) == 0 {
 			return nil, "", errors.New("东财 F10 财务页返回空数据")
 		}
@@ -633,7 +643,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
 		now := time.Now().In(cnLocation())
-		openMap, err := data.NewTushareApi(cfg).GetTradeCalOpenMap("SSE", now.AddDate(0, 0, -10), now, cfg.CrawlTimeOut)
+		openMap, err := r.provider.Tushare(cfg).GetTradeCalOpenMap("SSE", now.AddDate(0, 0, -10), now, cfg.CrawlTimeOut)
 		if err != nil {
 			return nil, "", err
 		}
@@ -648,7 +658,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
 		now := time.Now().In(cnLocation())
-		text := data.NewTushareApi(cfg).GetDaily("600519.SH", now.AddDate(0, 0, -10).Format("20060102"), now.Format("20060102"), cfg.CrawlTimeOut)
+		text := r.provider.Tushare(cfg).GetDaily("600519.SH", now.AddDate(0, 0, -10).Format("20060102"), now.Format("20060102"), cfg.CrawlTimeOut)
 		if strings.TrimSpace(text) == "" {
 			return nil, "", errors.New("tushare daily 返回空数据")
 		}
@@ -659,7 +669,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if strings.TrimSpace(cfg.TushareToken) == "" {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
-		value, err := data.NewTushareApi(cfg).GetLatestTradeDate(cfg.CrawlTimeOut)
+		value, err := r.provider.Tushare(cfg).GetLatestTradeDate(cfg.CrawlTimeOut)
 		if err != nil {
 			return nil, "", err
 		}
@@ -669,7 +679,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if strings.TrimSpace(cfg.TushareToken) == "" {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
-		bars, err := data.NewTushareApi(cfg).GetStockMinuteBars("600519.SH", minuteWindow.Start, minuteWindow.End, cfg.CrawlTimeOut)
+		bars, err := r.provider.Tushare(cfg).GetStockMinuteBars("600519.SH", minuteWindow.Start, minuteWindow.End, cfg.CrawlTimeOut)
 		if err != nil {
 			return nil, "", err
 		}
@@ -683,12 +693,12 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if strings.TrimSpace(cfg.TushareToken) == "" {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
-		res := &data.TushareStockBasicResponse{}
+		res := &cliports.TushareTableResponse{}
 		client := resty.New().SetTimeout(crawlTimeout)
 		resp, err := client.R().
 			SetHeader("content-type", "application/json").
-			SetBody(&data.TushareRequest{
-				ApiName: "stock_basic",
+			SetBody(&cliports.TushareRequest{
+				APIName: "stock_basic",
 				Token:   cfg.TushareToken,
 				Fields:  "ts_code,symbol,name,market,list_date",
 			}).
@@ -706,12 +716,12 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if strings.TrimSpace(cfg.TushareToken) == "" {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
-		res := &data.TushareStockBasicResponse{}
+		res := &cliports.TushareTableResponse{}
 		client := resty.New().SetTimeout(crawlTimeout)
 		resp, err := client.R().
 			SetHeader("content-type", "application/json").
-			SetBody(&data.TushareRequest{
-				ApiName: "index_basic",
+			SetBody(&cliports.TushareRequest{
+				APIName: "index_basic",
 				Token:   cfg.TushareToken,
 				Fields:  "ts_code,name,market,list_date",
 			}).
@@ -727,7 +737,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 	})
 
 	r.runProbe("public_data", "github_raw_stock_basic", baseInfoEndpoint("stock_basic.json"), false, func() (map[string]any, string, error) {
-		res := &data.TushareStockBasicResponse{}
+		res := &cliports.TushareTableResponse{}
 		client := resty.New().SetTimeout(crawlTimeout)
 		resp, err := client.R().SetResult(res).Get(baseInfoEndpoint("stock_basic.json"))
 		if err != nil {
@@ -763,16 +773,16 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		return map[string]any{"count": len(rows)}, trimSample(stringifyAny(rows[0])), nil
 	})
 
-	r.runProbe("minute_provider", "diemeng_selfcheck", data.DiemengEffectiveBaseURLForDisplay(), false, func() (map[string]any, string, error) {
+	r.runProbe("minute_provider", "diemeng_selfcheck", r.provider.DiemengBaseURL(), false, func() (map[string]any, string, error) {
 		if !cfg.PrivateMinuteEnabled {
 			return nil, "", skipAudit("private_minute_enabled=0")
 		}
-		snap, err := data.WaitDiemengSelfCheck("network-audit", 60*time.Second)
+		snap, err := r.provider.WaitDiemengSelfCheck("network-audit", 60*time.Second)
 		meta := map[string]any{
 			"status":    snap.Status,
 			"summary":   snap.Summary,
 			"checkedAt": snap.CheckedAt.Format(time.DateTime),
-			"probes":    len(snap.Probes),
+			"probes":    snap.ProbeCount,
 		}
 		if err != nil {
 			return meta, "", err
@@ -782,11 +792,11 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		}
 		return meta, trimSample(snap.Summary), nil
 	})
-	r.runProbe("minute_provider", "diemeng_history", data.DiemengEffectiveBaseURLForDisplay(), false, func() (map[string]any, string, error) {
+	r.runProbe("minute_provider", "diemeng_history", r.provider.DiemengBaseURL(), false, func() (map[string]any, string, error) {
 		if !cfg.PrivateMinuteEnabled {
 			return nil, "", skipAudit("private_minute_enabled=0")
 		}
-		res, err := data.AuditDiemengMinuteBars("600519.SH", minuteWindow.Start, minuteWindow.End)
+		res, err := r.provider.AuditDiemengMinuteBars("600519.SH", minuteWindow.Start, minuteWindow.End)
 		if err != nil {
 			return nil, "", err
 		}
@@ -799,7 +809,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if !cfg.AkshareEnabled {
 			return nil, "", skipAudit("akshare_enabled=0")
 		}
-		res, err := data.AuditAkShareMinuteBars("600519.SH", minuteWindow.Start, minuteWindow.End)
+		res, err := r.provider.AuditAkShareMinuteBars("600519.SH", minuteWindow.Start, minuteWindow.End)
 		if err != nil {
 			return nil, "", err
 		}
@@ -815,7 +825,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if todayWindowErr != nil {
 			return nil, "", skipAudit("%s", todayWindowErr.Error())
 		}
-		res, err := data.AuditSinaMinuteBars("600519.SH", todayWindow.Start, todayWindow.End)
+		res, err := r.provider.AuditSinaMinuteBars("600519.SH", todayWindow.Start, todayWindow.End)
 		if err != nil {
 			return nil, "", err
 		}
@@ -831,7 +841,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if todayWindowErr != nil {
 			return nil, "", skipAudit("%s", todayWindowErr.Error())
 		}
-		res, err := data.AuditTencentMinuteBars("600519.SH", todayWindow.Start, todayWindow.End)
+		res, err := r.provider.AuditTencentMinuteBars("600519.SH", todayWindow.Start, todayWindow.End)
 		if err != nil {
 			return nil, "", err
 		}
@@ -890,7 +900,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if !cfg.YieldEmailEnable {
 			return nil, "", skipAudit("yield_email_enable=0")
 		}
-		err := data.SendYieldEmailTestMessage()
+		err := r.provider.SendYieldEmailTestMessage()
 		if err != nil {
 			return map[string]any{"recipients": splitCSV(cfg.YieldEmailTo)}, "", err
 		}
@@ -904,7 +914,7 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 		if strings.TrimSpace(cfg.DingRobot) == "" {
 			return nil, "", skipAudit("ding_robot 为空")
 		}
-		result := data.NewDingDingAPI().SendDingDingMessage(`{"msgtype":"text","text":{"content":"go-stock network audit"}}`)
+		result := r.provider.SendDingDingMessage(`{"msgtype":"text","text":{"content":"go-stock network audit"}}`)
 		if !strings.Contains(result, "成功") {
 			return map[string]any{"result": result}, "", errors.New(result)
 		}
@@ -1171,8 +1181,8 @@ func (r *networkAuditRunner) runAll(cfg *data.SettingConfig) {
 	})
 }
 
-func (r *networkAuditRunner) runSingleAIProbe(item *data.AIConfig) error {
-	cfg := &data.AIConfig{
+func (r *networkAuditRunner) runSingleAIProbe(item *models.AIConfig) error {
+	cfg := &models.AIConfig{
 		ID:               item.ID,
 		Name:             item.Name,
 		BaseUrl:          item.BaseUrl,
@@ -1190,8 +1200,7 @@ func (r *networkAuditRunner) runSingleAIProbe(item *data.AIConfig) error {
 	if cfg.TimeOut <= 0 {
 		cfg.TimeOut = 45
 	}
-	openAI := data.NewOpenAiWithConfig(context.Background(), cfg)
-	content, _, modelName, err := openAI.CompleteChat([]map[string]any{
+	content, _, modelName, err := r.provider.CompleteChat(context.Background(), cfg, []map[string]any{
 		{"role": "system", "content": "你是网络连通性探针。请只回答 OK。"},
 		{"role": "user", "content": "请只回复 OK"},
 	}, false)
@@ -1370,13 +1379,12 @@ func defaultNetworkAuditBaseDir(dbPath string) string {
 	return filepath.Join(dir, "network-audit")
 }
 
-func buildNetworkAuditEnvironment() map[string]any {
-	cfg := data.GetSettingConfig()
+func buildNetworkAuditEnvironment(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) map[string]any {
 	loc := cnLocation()
 	return map[string]any{
 		"now":      time.Now().In(loc).Format(time.DateTime),
 		"timezone": loc.String(),
-		"runtime":  data.GetSettingConfig() != nil,
+		"runtime":  cfg != nil,
 		"config": map[string]any{
 			"httpProxyEnabled":          cfg.HttpProxyEnabled,
 			"forceNoProxyForFetch":      cfg.ForceNoProxyForFetch,
@@ -1396,7 +1404,7 @@ func buildNetworkAuditEnvironment() map[string]any {
 			"dingRobotConfigured":       strings.TrimSpace(cfg.DingRobot) != "",
 			"shareUploadURLConfigured":  shareUploadEndpoint() != "",
 			"releaseCheckURL":           latestReleaseEndpoint(),
-			"privateMinuteBaseURL":      data.DiemengEffectiveBaseURLForDisplay(),
+			"privateMinuteBaseURL":      provider.DiemengBaseURL(),
 			"privateMinuteTimeoutSec":   cfg.PrivateMinuteTimeoutSec,
 			"akshareMinuteSourceMode":   cfg.AkshareMinuteSourceMode,
 			"browserPath":               cfg.BrowserPath,
@@ -1406,7 +1414,7 @@ func buildNetworkAuditEnvironment() map[string]any {
 	}
 }
 
-func buildNetworkAuditSettings(cfg *data.SettingConfig) map[string]any {
+func buildNetworkAuditSettings(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) map[string]any {
 	return map[string]any{
 		"yieldEmailEnable":         cfg.YieldEmailEnable,
 		"yieldEmailTo":             splitCSV(cfg.YieldEmailTo),
@@ -1420,7 +1428,7 @@ func buildNetworkAuditSettings(cfg *data.SettingConfig) map[string]any {
 		"marketSummaryCronTimes":   splitCSV(cfg.MarketSummaryCronTimes),
 		"minuteProviderMode":       cfg.MinuteProviderMode,
 		"privateMinuteEnabled":     cfg.PrivateMinuteEnabled,
-		"privateMinuteBaseURL":     data.DiemengEffectiveBaseURLForDisplay(),
+		"privateMinuteBaseURL":     provider.DiemengBaseURL(),
 		"privateMinuteTimeoutSec":  cfg.PrivateMinuteTimeoutSec,
 		"akshareEnabled":           cfg.AkshareEnabled,
 		"sinaMinuteEnabled":        cfg.SinaMinuteEnabled,
@@ -1433,7 +1441,7 @@ func buildNetworkAuditSettings(cfg *data.SettingConfig) map[string]any {
 	}
 }
 
-func buildNetworkAuditAIConfigs(cfg *data.SettingConfig) []map[string]any {
+func buildNetworkAuditAIConfigs(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) []map[string]any {
 	items := make([]map[string]any, 0, len(cfg.AiConfigs))
 	for _, item := range cfg.AiConfigs {
 		if item == nil {
@@ -1442,7 +1450,7 @@ func buildNetworkAuditAIConfigs(cfg *data.SettingConfig) []map[string]any {
 		items = append(items, map[string]any{
 			"id":               item.ID,
 			"name":             strings.TrimSpace(item.Name),
-			"provider":         strings.TrimSpace(data.DetectAIProviderName(item)),
+			"provider":         strings.TrimSpace(provider.DetectAIProviderName(item)),
 			"baseURL":          strings.TrimSpace(item.BaseUrl),
 			"model":            strings.TrimSpace(item.ModelName),
 			"timeoutSec":       item.TimeOut,
@@ -1631,7 +1639,7 @@ func minInt(value, fallback int) int {
 	return fallback
 }
 
-func minuteAuditMeta(res *data.MinuteProviderAuditResult) map[string]any {
+func minuteAuditMeta(res *cliports.MinuteProviderAuditResult) map[string]any {
 	if res == nil {
 		return nil
 	}

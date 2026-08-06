@@ -54,7 +54,6 @@ var deprecatedDataImportDebt = map[string]bool{
 	"backend/agent/tools/stock_news_tool.go":                 true,
 	"backend/agent/tools/stock_price_info_tool.go":           true,
 	"internal/bootstrap/dependencies.go":                     true,
-	"internal/cli/cmd_network_audit.go":                      true,
 	"internal/migrations/migrations.go":                      true,
 	"main.go":                                                true,
 	"runtime_bootstrap.go":                                   true,
