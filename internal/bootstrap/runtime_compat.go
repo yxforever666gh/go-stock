@@ -6,6 +6,7 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/internal/migrations"
 )
 
 type MinuteCacheMigrationSummary struct {
@@ -19,6 +20,12 @@ type MinuteCacheMigrationSummary struct {
 // composition root while Web and desktop event delivery are being separated.
 func ConfigureRuntimeEventEmitter(emitter func(context.Context, string, any)) {
 	data.SetRuntimeEventEmitter(emitter)
+}
+
+// MigrateCompatibilityStorage is retained only for package-level test hooks
+// that historically called AutoMigrate. Production startup uses InitApplication.
+func MigrateCompatibilityStorage() error {
+	return migrations.MigrateAll(db.Dao, db.MinuteDao)
 }
 
 // MigrateLegacyMinuteCache runs the explicit legacy maintenance command. It

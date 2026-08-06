@@ -59,7 +59,6 @@ var globalDBImportDebt = map[string]bool{
 	"internal/cli/cmd_backfill_market_summary_recommend.go": true,
 	"internal/cli/cmd_release.go":                           true,
 	"internal/cli/cmd_strategy_backtest.go":                 true,
-	"runtime_compat.go":                                     true,
 }
 
 func TestBoundaryPackagesHaveExplicitDependencyDirection(t *testing.T) {
