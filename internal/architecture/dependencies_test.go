@@ -58,9 +58,7 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 var globalDBImportDebt = map[string]bool{
 	"app_summary_runtime.go":                                true,
 	"app_v150_execution_runtime.go":                         true,
-	"internal/cli/bootstrap.go":                             true,
 	"internal/cli/cmd_backfill_market_summary_recommend.go": true,
-	"internal/cli/cmd_db.go":                                true,
 	"internal/cli/cmd_release.go":                           true,
 	"internal/cli/cmd_strategy_backtest.go":                 true,
 	"runtime_compat.go":                                     true,

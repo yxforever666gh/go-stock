@@ -1,23 +1,23 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	"go-stock/backend/db"
-	"go-stock/internal/migrations"
+	"go-stock/internal/bootstrap"
+	cliports "go-stock/internal/cli/ports"
 )
 
 type dbCommandResult struct {
-	Main    migrations.DatabaseStatus `json:"main"`
-	Minute  migrations.DatabaseStatus `json:"minute"`
-	Backups map[string]string         `json:"backups,omitempty"`
+	Main    cliports.DatabaseStatus `json:"main"`
+	Minute  cliports.DatabaseStatus `json:"minute"`
+	Backups map[string]string       `json:"backups,omitempty"`
 }
 
 func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
@@ -44,31 +44,33 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 	} else if len(args) > 1 && subcommand != "backup" {
 		return fmt.Errorf("db %s does not accept positional arguments: %s", subcommand, strings.Join(args[1:], " "))
 	}
-	db.Init(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath))
-	defer db.Close()
+	admin, err := bootstrap.NewProductionCLIStorageAdmin(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath), false)
+	if err != nil {
+		return err
+	}
+	defer admin.Close()
+	return runDBWithAdmin(subcommand, args[1:], opts, stdout, stderr, admin)
+}
 
+func runDBWithAdmin(subcommand string, args []string, opts GlobalOptions, stdout, stderr io.Writer, admin cliports.StorageAdmin) error {
+	if admin == nil {
+		return fmt.Errorf("database storage admin is required")
+	}
+	ctx := context.Background()
 	switch subcommand {
 	case "status":
-		mainStatus, err := migrations.StatusMain(db.Dao)
-		if err != nil {
-			return err
-		}
-		minuteStatus, err := migrations.StatusMinute(db.MinuteDao)
+		mainStatus, minuteStatus, err := admin.Status(ctx)
 		if err != nil {
 			return err
 		}
 		return writeDBResult(stdout, opts.JSON, dbCommandResult{Main: mainStatus, Minute: minuteStatus})
 	case "migrate":
-		if err := migrations.MigrateAll(db.Dao, db.MinuteDao); err != nil {
+		if err := admin.Migrate(ctx); err != nil {
 			return err
 		}
 		fallthrough
 	case "verify":
-		mainStatus, err := migrations.VerifyMain(db.Dao)
-		if err != nil {
-			return err
-		}
-		minuteStatus, err := migrations.VerifyMinute(db.MinuteDao)
+		mainStatus, minuteStatus, err := admin.Verify(ctx)
 		if err != nil {
 			return err
 		}
@@ -77,7 +79,7 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 		fs := flag.NewFlagSet("db backup", flag.ContinueOnError)
 		fs.SetOutput(stderr)
 		outputDir := fs.String("output", "", "backup output directory")
-		if err := fs.Parse(args[1:]); err != nil {
+		if err := fs.Parse(args); err != nil {
 			return err
 		}
 		if strings.TrimSpace(*outputDir) == "" {
@@ -85,15 +87,10 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 		}
 		mainBackup := filepath.Join(*outputDir, "stock.db")
 		minuteBackup := filepath.Join(*outputDir, "minute.db")
-		if err := migrations.Backup(db.Dao, mainBackup); err != nil {
-			return fmt.Errorf("backup main database: %w", err)
+		if err := admin.Backup(ctx, mainBackup, minuteBackup); err != nil {
+			return err
 		}
-		if err := migrations.Backup(db.MinuteDao, minuteBackup); err != nil {
-			_ = os.Remove(mainBackup)
-			return fmt.Errorf("backup minute database: %w", err)
-		}
-		mainStatus, _ := migrations.StatusMain(db.Dao)
-		minuteStatus, _ := migrations.StatusMinute(db.MinuteDao)
+		mainStatus, minuteStatus, _ := admin.Status(ctx)
 		return writeDBResult(stdout, opts.JSON, dbCommandResult{
 			Main: mainStatus, Minute: minuteStatus,
 			Backups: map[string]string{"main": mainBackup, "minute": minuteBackup},
@@ -103,17 +100,15 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 }
 
 func runDBQuickCheck(opts GlobalOptions, stdout io.Writer) error {
-	if _, err := db.InitReadOnly(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath)); err != nil {
+	admin, err := bootstrap.NewProductionCLIStorageAdmin(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath), true)
+	if err != nil {
 		return err
 	}
-	defer db.Close()
-	if err := migrations.VerifySQLiteIntegrity(db.Dao); err != nil {
-		return fmt.Errorf("main database: %w", err)
+	defer admin.Close()
+	if err := admin.QuickCheck(context.Background()); err != nil {
+		return err
 	}
-	if err := migrations.VerifySQLiteIntegrity(db.MinuteDao); err != nil {
-		return fmt.Errorf("minute database: %w", err)
-	}
-	_, err := fmt.Fprintln(stdout, "main quick_check=ok\nminute quick_check=ok")
+	_, err = fmt.Fprintln(stdout, "main quick_check=ok\nminute quick_check=ok")
 	return err
 }
 

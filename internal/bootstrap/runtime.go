@@ -60,6 +60,7 @@ func InitCLIStorage(dataDir, dbPath string) (string, error) {
 	if err := (legacyApplicationInitializer{}).EnsureSettings(context.Background()); err != nil {
 		return "", err
 	}
+	installSilentCLIStorageSessions()
 	return dbPath, nil
 }
 
