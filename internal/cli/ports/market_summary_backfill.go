@@ -2,8 +2,14 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// ErrHistoricalRecommendationBackfillDisabled prevents creating recommendations
+// for reports that may have fallen in a paused strategy window. Runtime mode
+// history is intentionally not inferred or reconstructed from current state.
+var ErrHistoricalRecommendationBackfillDisabled = errors.New("historical recommendation backfill is disabled; use --dry-run for audit only")
 
 // MarketSummaryReport is the narrow historical report view needed by the
 // explicit recommendation backfill command.

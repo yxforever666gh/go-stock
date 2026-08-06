@@ -56,6 +56,9 @@ func runBackfillMarketSummaryRecommendWithPort(args []string, g GlobalOptions, s
 	if err != nil {
 		return err
 	}
+	if !dryRun {
+		return cliports.ErrHistoricalRecommendationBackfillDisabled
+	}
 
 	reports, err := backfill.ListReports(context.Background(), start, end)
 	if err != nil {

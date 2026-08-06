@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -14,13 +15,30 @@ type recordingMarketSummaryBackfill struct {
 	reports   []cliports.MarketSummaryReport
 	listStart time.Time
 	listEnd   time.Time
+	listCalls int
 	saved     int
 	saveCalls int
 }
 
 func (b *recordingMarketSummaryBackfill) ListReports(_ context.Context, start, end time.Time) ([]cliports.MarketSummaryReport, error) {
+	b.listCalls++
 	b.listStart, b.listEnd = start, end
 	return b.reports, nil
+}
+
+func TestBackfillMarketSummaryRecommendRejectsHistoricalWritesBeforeQuerying(t *testing.T) {
+	backfill := &recordingMarketSummaryBackfill{}
+	var stdout, stderr bytes.Buffer
+	err := runBackfillMarketSummaryRecommendWithPort(
+		[]string{"--date", "2026-08-06"},
+		GlobalOptions{}, &stdout, &stderr, backfill,
+	)
+	if !errors.Is(err, cliports.ErrHistoricalRecommendationBackfillDisabled) {
+		t.Fatalf("backfill error = %v, want historical-write gate", err)
+	}
+	if backfill.listCalls != 0 || backfill.saveCalls != 0 {
+		t.Fatalf("historical write gate called list=%d save=%d, want 0/0", backfill.listCalls, backfill.saveCalls)
+	}
 }
 
 func (b *recordingMarketSummaryBackfill) SaveRecommendations(_ context.Context, _ cliports.MarketSummaryReport) (int, error) {

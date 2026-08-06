@@ -8,14 +8,12 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	cliports "go-stock/internal/cli/ports"
-	"go-stock/internal/service"
 
 	"gorm.io/gorm"
 )
 
 type marketSummaryRecommendationBackfillAdapter struct {
-	main     *gorm.DB
-	services service.AppServices
+	main *gorm.DB
 }
 
 var _ cliports.MarketSummaryRecommendationBackfill = (*marketSummaryRecommendationBackfillAdapter)(nil)
@@ -24,11 +22,7 @@ func NewProductionMarketSummaryRecommendationBackfill() (cliports.MarketSummaryR
 	if db.Dao == nil {
 		return nil, errors.New("main database is not initialized")
 	}
-	services, err := NewProductionServices()
-	if err != nil {
-		return nil, err
-	}
-	return &marketSummaryRecommendationBackfillAdapter{main: db.Dao, services: services}, nil
+	return &marketSummaryRecommendationBackfillAdapter{main: db.Dao}, nil
 }
 
 func (a *marketSummaryRecommendationBackfillAdapter) ListReports(ctx context.Context, start, end time.Time) ([]cliports.MarketSummaryReport, error) {
@@ -53,11 +47,6 @@ func (a *marketSummaryRecommendationBackfillAdapter) ListReports(ctx context.Con
 	return result, nil
 }
 
-func (a *marketSummaryRecommendationBackfillAdapter) SaveRecommendations(_ context.Context, report cliports.MarketSummaryReport) (int, error) {
-	return a.services.AI.EnsureMarketSummaryRecommendStocksSaved(
-		report.Content,
-		report.ProviderName,
-		report.ModelName,
-		report.CreatedAt,
-	)
+func (*marketSummaryRecommendationBackfillAdapter) SaveRecommendations(context.Context, cliports.MarketSummaryReport) (int, error) {
+	return 0, cliports.ErrHistoricalRecommendationBackfillDisabled
 }
