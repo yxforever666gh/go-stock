@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/mathutil"
@@ -54,7 +54,7 @@ func (a *App) SendDingDingMessageByType(message string, stockCode string, msgTyp
 	return a.services.Notify.SendDingDingMessage(message)
 }
 
-func GenNotificationMsg(stockInfo *data.StockInfo) string {
+func GenNotificationMsg(stockInfo *models.StockInfo) string {
 	price, err := convertor.ToFloat(stockInfo.Price)
 	if err != nil {
 		price = 0

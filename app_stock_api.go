@@ -3,10 +3,10 @@ package main
 import (
 	"strings"
 
-	"go-stock/backend/data"
+	"go-stock/backend/models"
 )
 
-func (a *App) Greet(stockCode string) *data.StockInfo {
+func (a *App) Greet(stockCode string) *models.StockInfo {
 	follow := a.services.Stock.GetFollowedStockDetail(stockCode)
 	stockInfo := getStockInfoWithService(a.services.Stock, *follow)
 	return stockInfo
@@ -20,11 +20,11 @@ func (a *App) UnFollow(stockCode string) string {
 	return a.services.Stock.UnFollow(stockCode)
 }
 
-func (a *App) GetFollowList(groupId int) *[]data.FollowedStock {
+func (a *App) GetFollowList(groupId int) *[]models.FollowedStock {
 	return a.services.Stock.GetFollowList(groupId)
 }
 
-func (a *App) GetStockList(key string) []data.StockBasic {
+func (a *App) GetStockList(key string) []models.StockBasic {
 	return a.services.Stock.GetStockList(key)
 }
 
@@ -62,7 +62,7 @@ func (a *App) SetStockAICron(cronText, stockCode string) {
 	a.setCronEntry(stockCode, id)
 }
 
-func (a *App) GetStockKLine(stockCode, stockName string, days int64) *[]data.KLineData {
+func (a *App) GetStockKLine(stockCode, stockName string, days int64) *[]models.KLineData {
 	return a.services.Stock.GetStockKLine(stockCode, days)
 }
 
@@ -70,6 +70,6 @@ func (a *App) GetStockMinutePriceLineData(stockCode, stockName string) map[strin
 	return a.services.Stock.GetStockMinutePriceLineData(stockCode, stockName)
 }
 
-func (a *App) GetStockCommonKLine(stockCode, stockName string, days int64) *[]data.KLineData {
+func (a *App) GetStockCommonKLine(stockCode, stockName string, days int64) *[]models.KLineData {
 	return a.services.Stock.GetStockCommonKLine(stockCode, days)
 }

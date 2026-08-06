@@ -1,8 +1,8 @@
 package main
 
-import "go-stock/backend/data"
+import "go-stock/backend/models"
 
-func (a *App) AddGroup(group data.Group) string {
+func (a *App) AddGroup(group models.Group) string {
 	ok := a.services.Group.AddGroup(group)
 	if ok {
 		return "添加成功"
@@ -10,7 +10,7 @@ func (a *App) AddGroup(group data.Group) string {
 	return "添加失败"
 }
 
-func (a *App) GetGroupList() []data.Group {
+func (a *App) GetGroupList() []models.Group {
 	return a.services.Group.GetGroupList()
 }
 
@@ -22,7 +22,7 @@ func (a *App) InitializeGroupSort() bool {
 	return a.services.Group.InitializeGroupSort()
 }
 
-func (a *App) GetGroupStockList(groupId int) []data.GroupStock {
+func (a *App) GetGroupStockList(groupId int) []models.GroupStock {
 	return a.services.Group.GetGroupStockList(groupId)
 }
 

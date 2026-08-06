@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"go-stock/backend/data"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/internal/bootstrap"
@@ -26,7 +24,7 @@ type App struct {
 	cron               *cron.Cron
 	cronEntrys         map[string]cron.EntryID
 	cronEntrysMu       sync.RWMutex
-	AiTools            []data.Tool
+	AiTools            []models.Tool
 	services           service.AppServices
 	agentSessions      map[string]*AgentSession
 	agentSessionsMu    sync.RWMutex
@@ -62,7 +60,7 @@ func NewAppWithServices(services service.AppServices) *App {
 	cache := freecache.NewCache(cacheSize)
 	c := cron.New(cron.WithSeconds())
 	c.Start()
-	var tools []data.Tool
+	var tools []models.Tool
 	tools = AddTools(tools)
 	return &App{
 		cache:         cache,
@@ -74,10 +72,10 @@ func NewAppWithServices(services service.AppServices) *App {
 	}
 }
 
-func AddTools(tools []data.Tool) []data.Tool {
-	tools = append(tools, data.Tool{
+func AddTools(tools []models.Tool) []models.Tool {
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name: "SearchStockByIndicators",
 			Description: "根据自然语言筛选股票，返回自然语言选股条件要求的股票所有相关数据。输入股票名称可以获取当前股票最新的股价交易数据和基础财务指标信息，多个股票名称使用,分隔。" +
 				"例如:分析强势方向：10点半之前涨停，非一字板，行业概念，按成交量从高到低排序。" +
@@ -100,7 +98,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 				"例6：沪深主板.流通市值小于100亿.市值大于10亿.60分钟dif大于dea.60分钟skdj指标k值大于d值.skdj指标k值小于90.换手率大于3%.成交额大于1亿元.量比大于2.涨幅大于2%小于7%.股价大于5小于50.创业板.10日均线大于20日均线;不要ST股及不要退市股;不要北交所;不要科创板;不要创业板。按成交量从高到低排序。" +
 				"例7：股价在20日线上，一月之内涨停次数>=1，量比大于1，换手率大于3%。按成交量从高到低排序。" +
 				"例8：基本条件：前期有爆量，回调到 10 日线，当日是缩量阴线，均线趋势向上。;优选条件：一月之内涨停次数>=1。按成交量从高到低排序。",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"words": map[string]any{
@@ -133,9 +131,9 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name: "SearchBk",
 			Description: "根据自然语言查询板块/概念/指数整体数据。" +
 				"例如:近3日涨停家数>5的概念板块。" +
@@ -155,7 +153,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 				"例如:查看板块板块/概念：今日成交量前15的行业板块。" +
 				"例如:通过市盈率查询板块：当前市盈率介于30-50的板块/概念。",
 
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"words": map[string]any{
@@ -184,9 +182,9 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name: "SearchETF",
 			Description: "根据自然语言查询etf数据。" +
 				"例如:创新药或者机器人，按涨幅排序，前50。" +
@@ -195,7 +193,7 @@ func AddTools(tools []data.Tool) []data.Tool {
 				"例如:3日跌幅前50的ETF。" +
 				"例如:今日涨幅前50的ETF。",
 
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"words": map[string]any{
@@ -213,12 +211,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "GetStockKLine",
 			Description: "获取股票日K线数据。",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"days": map[string]any{
@@ -235,12 +233,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "InteractiveAnswer",
 			Description: "获取投资者与上市公司互动问答的数据,反映当前投资者关注的热点问题",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"page": map[string]any{
@@ -287,12 +285,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 	//	},
 	//})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "GetStockResearchReport",
 			Description: "获取市场分析师的股票研究报告",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"stockCode": map[string]any{
@@ -305,20 +303,20 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "HotStrategyTable",
 			Description: "获取当前热门选股策略",
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "HotStockTable",
 			Description: "当前热门股票排名",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"pageSize": map[string]any{
@@ -331,12 +329,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "GetStockMoneyData",
 			Description: "今日股票资金流入排名",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"pageSize": map[string]any{
@@ -348,12 +346,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 			},
 		},
 	})
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "GetStockConceptInfo",
 			Description: "获取股票所属概念详细信息",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"code": map[string]any{
@@ -366,12 +364,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 		},
 	})
 
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "GetStockFinancialInfo",
 			Description: "获取股票财务报表信息",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"stockCode": map[string]any{
@@ -383,12 +381,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 			},
 		},
 	})
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "GetStockHolderNum",
 			Description: "获取股票股东人数信息(股东人数与股价比( 注:股票价格通常与股东人数成反比，股东人数越少代表筹码越集中，股价越有可能上涨))",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"stockCode": map[string]any{
@@ -402,12 +400,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 	})
 
 	//CreateAiRecommendStocks
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "CreateAiRecommendStocks",
 			Description: "创建/保存AI推荐股票记录。必须优先输出结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...”，失效条件需明确为“时间失效：...；价格失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。只有满足至少两类证据且至少一条高信任证据时，才允许进入等待激活计划；证据不足或存在冲突时应直接回避。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"modelName": map[string]any{
@@ -542,12 +540,12 @@ func AddTools(tools []data.Tool) []data.Tool {
 	})
 
 	//BatchCreateAiRecommendStocks
-	tools = append(tools, data.Tool{
+	tools = append(tools, models.Tool{
 		Type: "function",
-		Function: data.ToolFunction{
+		Function: models.ToolFunction{
 			Name:        "BatchCreateAiRecommendStocks",
 			Description: "批量创建/保存AI推荐股票记录。每条记录都必须包含结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...”，失效条件需明确为“时间失效：...；价格失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。证据不足或存在冲突时只能直接回避，不应混入观察标签；建议每次批量保存不超过5条。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
-			Parameters: &data.FunctionParameters{
+			Parameters: &models.FunctionParameters{
 				Type: "object",
 				Properties: map[string]any{
 					"stocks": map[string]any{
@@ -693,7 +691,7 @@ func (a *App) NewsPush(news *[]models.Telegraph) {
 	return
 }
 
-func (a *App) AddCronTask(follow data.FollowedStock) func() {
+func (a *App) AddCronTask(follow models.FollowedStock) func() {
 	return func() {
 		go emitEvent(a.ctx, "warnMsg", "开始自动分析"+follow.Name+"_"+follow.StockCode)
 		var res strings.Builder
@@ -870,9 +868,7 @@ func IsUSTradingTime(date time.Time) bool {
 	return false
 }
 func MonitorFundPrices(a *App) {
-	dest := &[]data.FollowedFund{}
-	db.Dao.Model(&data.FollowedFund{}).Find(dest)
-	for _, follow := range *dest {
+	for _, follow := range a.services.Fund.GetFollowedFund() {
 		_, err := a.services.Fund.CrawlFundBasic(follow.Code)
 		if err != nil {
 			logger.SugaredLogger.Errorf("获取基金基本信息失败，基金代码：%s，错误信息：%s", follow.Code, err.Error())
@@ -891,11 +887,11 @@ func (a *App) shutdown(ctx context.Context) {
 	logger.SugaredLogger.Infof("application shutdown Version:%s", Version)
 }
 
-func resolveChatTools(enableTools bool, tools []data.Tool) []data.Tool {
+func resolveChatTools(enableTools bool, tools []models.Tool) []models.Tool {
 	if enableTools {
 		return tools
 	}
-	return []data.Tool{}
+	return []models.Tool{}
 }
 
 func shouldChatFailover(msgs []map[string]any) bool {

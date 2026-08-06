@@ -39,20 +39,14 @@ var v150AllowedProductionImports = map[string]bool{
 // direct imports fail the test; removing one requires removing its entry here
 // in the same change, so the list can only shrink deliberately.
 var deprecatedDataImportDebt = map[string]bool{
-	"app.go":                              true,
 	"app_agent_api.go":                    true,
 	"app_ai_api.go":                       true,
 	"app_baseinfo_runtime.go":             true,
 	"app_config_api.go":                   true,
 	"app_cron_runtime.go":                 true,
 	"app_darwin.go":                       true,
-	"app_fund_api.go":                     true,
-	"app_group_api.go":                    true,
-	"app_notify_api.go":                   true,
 	"app_runtime_helpers.go":              true,
 	"app_startup_runtime.go":              true,
-	"app_stock_api.go":                    true,
-	"app_stock_runtime.go":                true,
 	"app_summary_runtime.go":              true,
 	"backend/agent/agent.go":              true,
 	"backend/agent/agent_api.go":          true,
@@ -83,14 +77,13 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 }
 
 var globalDBImportDebt = map[string]bool{
-	"app.go":                        true,
-	"app_baseinfo_runtime.go":       true,
-	"app_cron_runtime.go":           true,
-	"app_runtime_helpers.go":        true,
-	"app_summary_runtime.go":        true,
-	"app_update_runtime.go":         true,
-	"app_v150_execution_runtime.go": true,
-	"internal/cli/bootstrap.go":     true,
+	"app_baseinfo_runtime.go":                               true,
+	"app_cron_runtime.go":                                   true,
+	"app_runtime_helpers.go":                                true,
+	"app_summary_runtime.go":                                true,
+	"app_update_runtime.go":                                 true,
+	"app_v150_execution_runtime.go":                         true,
+	"internal/cli/bootstrap.go":                             true,
 	"internal/cli/cmd_backfill_market_summary_recommend.go": true,
 	"internal/cli/cmd_db.go":                                true,
 	"internal/cli/cmd_release.go":                           true,

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"go-stock/backend/data"
+	"go-stock/backend/models"
 	"go-stock/internal/bootstrap"
 	"go-stock/internal/service"
 	"strings"
@@ -14,7 +14,7 @@ import (
 )
 
 type monitoredStockSnapshot struct {
-	ChangedInfos []data.StockInfo
+	ChangedInfos []models.StockInfo
 	Total        float64
 }
 
@@ -35,7 +35,7 @@ func (a *App) collectMonitoredStockSnapshot() monitoredStockSnapshot {
 	follows := a.services.Stock.GetAllFollowedStocks()
 	stockInfos := collectStockInfos(a.services.Stock, follows...)
 	snapshot := monitoredStockSnapshot{
-		ChangedInfos: make([]data.StockInfo, 0, len(stockInfos)),
+		ChangedInfos: make([]models.StockInfo, 0, len(stockInfos)),
 	}
 	for _, stockInfo := range stockInfos {
 		snapshot.Total += stockInfo.ProfitAmountToday
@@ -47,17 +47,17 @@ func (a *App) collectMonitoredStockSnapshot() monitoredStockSnapshot {
 	return snapshot
 }
 
-func GetStockInfos(follows ...data.FollowedStock) *[]data.StockInfo {
+func GetStockInfos(follows ...models.FollowedStock) *[]models.StockInfo {
 	services, err := bootstrap.NewProductionServices()
 	if err != nil {
-		return &[]data.StockInfo{}
+		return &[]models.StockInfo{}
 	}
 	stockInfos := collectStockInfos(services.Stock, follows...)
 	return &stockInfos
 }
 
-func collectStockInfos(stockService service.StockService, follows ...data.FollowedStock) []data.StockInfo {
-	stockInfos := make([]data.StockInfo, 0)
+func collectStockInfos(stockService service.StockService, follows ...models.FollowedStock) []models.StockInfo {
+	stockInfos := make([]models.StockInfo, 0)
 	stockCodes := make([]string, 0, len(follows))
 	now := time.Now()
 	for _, follow := range follows {
@@ -74,7 +74,7 @@ func collectStockInfos(stockService service.StockService, follows ...data.Follow
 		return stockInfos
 	}
 	for _, info := range *stockData {
-		v, ok := slice.FindBy(follows, func(idx int, follow data.FollowedStock) bool {
+		v, ok := slice.FindBy(follows, func(idx int, follow models.FollowedStock) bool {
 			if strutil.HasPrefixAny(follow.StockCode, []string{"US", "us"}) {
 				return strings.ToLower(strings.Replace(follow.StockCode, "us", "gb_", 1)) == info.Code
 			}
@@ -88,25 +88,25 @@ func collectStockInfos(stockService service.StockService, follows ...data.Follow
 	return stockInfos
 }
 
-func getStockInfo(follow data.FollowedStock) *data.StockInfo {
+func getStockInfo(follow models.FollowedStock) *models.StockInfo {
 	services, err := bootstrap.NewProductionServices()
 	if err != nil {
-		return &data.StockInfo{}
+		return &models.StockInfo{}
 	}
 	return getStockInfoWithService(services.Stock, follow)
 }
 
-func getStockInfoWithService(stockService service.StockService, follow data.FollowedStock) *data.StockInfo {
+func getStockInfoWithService(stockService service.StockService, follow models.FollowedStock) *models.StockInfo {
 	stockDatas, err := stockService.GetStockCodeRealTimeData(follow.StockCode)
 	if err != nil || stockDatas == nil || len(*stockDatas) == 0 {
-		return &data.StockInfo{}
+		return &models.StockInfo{}
 	}
 	stockData := (*stockDatas)[0]
 	enrichFollowedStockData(stockService, follow, &stockData)
 	return &stockData
 }
 
-func enrichFollowedStockData(stockService service.StockService, follow data.FollowedStock, stockData *data.StockInfo) {
+func enrichFollowedStockData(stockService service.StockService, follow models.FollowedStock, stockData *models.StockInfo) {
 	stockData.PrePrice = follow.Price
 	stockData.Sort = follow.Sort
 	stockData.CostPrice = follow.CostPrice

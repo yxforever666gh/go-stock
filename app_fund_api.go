@@ -1,12 +1,12 @@
 package main
 
-import "go-stock/backend/data"
+import "go-stock/backend/models"
 
-func (a *App) GetfundList(key string) []data.FundBasic {
+func (a *App) GetfundList(key string) []models.FundBasic {
 	return a.services.Fund.GetFundList(key)
 }
 
-func (a *App) GetFollowedFund() []data.FollowedFund {
+func (a *App) GetFollowedFund() []models.FollowedFund {
 	return a.services.Fund.GetFollowedFund()
 }
 
