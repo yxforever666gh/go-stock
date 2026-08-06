@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"go-stock/backend/data"
 	log "go-stock/backend/logger"
 	"strings"
 
@@ -18,12 +17,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetIndustryResearchReportTool() tool.InvokableTool {
-	return &IndustryResearchReportTool{api: data.NewMarketNewsApi()}
+func GetIndustryResearchReportTool(provider IndustryResearchProvider) tool.InvokableTool {
+	return &IndustryResearchReportTool{provider: provider}
 }
 
 type IndustryResearchReportTool struct {
-	api *data.MarketNewsApi
+	provider IndustryResearchProvider
 }
 
 func (i IndustryResearchReportTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -47,6 +46,9 @@ func (i IndustryResearchReportTool) Info(ctx context.Context) (*schema.ToolInfo,
 
 func (i IndustryResearchReportTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	code := gjson.Get(argumentsInJSON, "code").String()
+	if i.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
 	code = strutil.ReplaceWithMap(code, map[string]string{
 		"-":   "",
 		"_":   "",
@@ -58,11 +60,11 @@ func (i IndustryResearchReportTool) InvokableRun(ctx context.Context, argumentsI
 
 	log.SugaredLogger.Debugf("code:%s", code)
 	codeStr := convertor.ToString(code)
-	resp := i.api.IndustryResearchReport(codeStr, 7)
+	resp := i.provider.IndustryResearchReports(codeStr, 7)
 	md := strings.Builder{}
 	for _, a := range resp {
 		data := a.(map[string]any)
-		md.WriteString(i.api.GetIndustryReportInfo(data["infoCode"].(string)))
+		md.WriteString(i.provider.IndustryReportInfo(data["infoCode"].(string)))
 	}
 	log.SugaredLogger.Debugf("codeNum:%s IndustryResearchReport:\n %s", code, md.String())
 	return md.String(), nil

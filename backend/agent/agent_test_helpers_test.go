@@ -17,3 +17,22 @@ func (fakeAgentToolDataProvider) MarketNews(string, int) []*models.Telegraph {
 }
 func (fakeAgentToolDataProvider) TradingViewNews() []models.Telegraph { return nil }
 func (fakeAgentToolDataProvider) ReutersNews() *models.ReutersNews    { return nil }
+func (fakeAgentToolDataProvider) SearchStocksByIndicators(string, int) map[string]any {
+	return nil
+}
+func (fakeAgentToolDataProvider) GDP() *models.GDPResp                      { return nil }
+func (fakeAgentToolDataProvider) CPI() *models.CPIResp                      { return nil }
+func (fakeAgentToolDataProvider) PPI() *models.PPIResp                      { return nil }
+func (fakeAgentToolDataProvider) PMI() *models.PMIResp                      { return nil }
+func (fakeAgentToolDataProvider) FinancialReports(string, int64) []string   { return nil }
+func (fakeAgentToolDataProvider) IndustryResearchReports(string, int) []any { return nil }
+func (fakeAgentToolDataProvider) IndustryReportInfo(string) string          { return "" }
+func (fakeAgentToolDataProvider) InteractiveAnswers(int, int, string) *models.InteractiveAnswer {
+	return nil
+}
+func (fakeAgentToolDataProvider) KLines(string, string, int64) []models.KLineData { return nil }
+func (fakeAgentToolDataProvider) OverseasKLines(string, string, int64) []models.KLineData {
+	return nil
+}
+func (fakeAgentToolDataProvider) StockNews(string) *models.CailianpressWeb     { return nil }
+func (fakeAgentToolDataProvider) Quotes(...string) ([]models.StockInfo, error) { return nil, nil }

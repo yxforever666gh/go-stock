@@ -6,7 +6,6 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/tidwall/gjson"
-	"go-stock/backend/data"
 	"go-stock/backend/util"
 )
 
@@ -15,11 +14,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetInteractiveAnswerDataTool() tool.InvokableTool {
-	return &InteractiveAnswerDataTool{}
+func GetInteractiveAnswerDataTool(provider InteractiveAnswerProvider) tool.InvokableTool {
+	return &InteractiveAnswerDataTool{provider: provider}
 }
 
 type InteractiveAnswerDataTool struct {
+	provider InteractiveAnswerProvider
 }
 
 func (i InteractiveAnswerDataTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -58,7 +58,13 @@ func (i InteractiveAnswerDataTool) InvokableRun(ctx context.Context, funcArgumen
 	if err != nil {
 		pageSizeNum = 50
 	}
-	datas := data.NewMarketNewsApi().InteractiveAnswer(int(pageNo), int(pageSizeNum), keyWord)
+	if i.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
+	datas := i.provider.InteractiveAnswers(int(pageNo), int(pageSizeNum), keyWord)
+	if datas == nil {
+		return "", nil
+	}
 	content := util.MarkdownTableWithTitle("投资互动数据", datas.Results)
 	return content, nil
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"go-stock/backend/data"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
@@ -17,11 +16,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetChoiceStockByIndicatorsTool() tool.InvokableTool {
-	return &ChoiceStockByIndicators{}
+func GetChoiceStockByIndicatorsTool(provider IndicatorSearchProvider) tool.InvokableTool {
+	return &ChoiceStockByIndicators{provider: provider}
 }
 
 type ChoiceStockByIndicators struct {
+	provider IndicatorSearchProvider
 }
 
 func (c ChoiceStockByIndicators) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -56,7 +56,10 @@ func (c ChoiceStockByIndicators) InvokableRun(ctx context.Context, argumentsInJS
 	}
 	content := "无符合条件的数据"
 	words := parms["words"].(string)
-	res := data.NewSearchStockApi(words).SearchStock(random.RandInt(5, 20))
+	if c.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
+	res := c.provider.SearchStocksByIndicators(words, random.RandInt(5, 20))
 	if convertor.ToString(res["code"]) == "100" {
 		resData := res["data"].(map[string]any)
 		result := resData["result"].(map[string]any)

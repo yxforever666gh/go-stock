@@ -9,7 +9,7 @@ import (
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/tidwall/gjson"
-	"go-stock/backend/data"
+	"go-stock/backend/models"
 )
 
 // @Author spark
@@ -17,11 +17,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetStockKLineTool() tool.InvokableTool {
-	return &QueryStockKLine{}
+func GetStockKLineTool(provider KLineProvider) tool.InvokableTool {
+	return &QueryStockKLine{provider: provider}
 }
 
 type QueryStockKLine struct {
+	provider KLineProvider
 }
 
 func (q QueryStockKLine) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -51,15 +52,18 @@ func (q QueryStockKLine) InvokableRun(ctx context.Context, argumentsInJSON strin
 		toIntDay = 90
 	}
 	if strutil.HasPrefixAny(stockCode, []string{"sz", "sh", "hk", "us", "gb_"}) {
-		K := &[]data.KLineData{}
+		if q.provider == nil {
+			return "", ErrToolDataProviderRequired
+		}
+		K := []models.KLineData{}
 		if strutil.HasPrefixAny(stockCode, []string{"sz", "sh"}) {
-			K = data.NewStockDataApi().GetKLineData(stockCode, "240", toIntDay)
+			K = q.provider.KLines(stockCode, "240", toIntDay)
 		}
 		if strutil.HasPrefixAny(stockCode, []string{"hk", "us", "gb_"}) {
-			K = data.NewStockDataApi().GetHK_KLineData(stockCode, "day", toIntDay)
+			K = q.provider.OverseasKLines(stockCode, "day", toIntDay)
 		}
 		Kmap := &[]map[string]any{}
-		for _, kline := range *K {
+		for _, kline := range K {
 			mapk := make(map[string]any, 6)
 			mapk["日期"] = kline.Day
 			mapk["开盘价"] = kline.Open

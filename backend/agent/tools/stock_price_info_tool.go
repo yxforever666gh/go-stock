@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"go-stock/backend/data"
 	"strings"
 )
 
@@ -14,11 +13,11 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetQueryStockPriceInfoTool() tool.InvokableTool {
-	return &ToolQueryStockPriceInfo{}
+func GetQueryStockPriceInfoTool(provider QuoteProvider) tool.InvokableTool {
+	return &ToolQueryStockPriceInfo{provider: provider}
 }
 
-type ToolQueryStockPriceInfo struct{}
+type ToolQueryStockPriceInfo struct{ provider QuoteProvider }
 
 func (t ToolQueryStockPriceInfo) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
@@ -45,7 +44,10 @@ func (t ToolQueryStockPriceInfo) InvokableRun(ctx context.Context, argumentsInJS
 	for _, code := range stockCodes {
 		codes = append(codes, GetStockCode(code))
 	}
-	realTimeData, err := data.NewStockDataApi().GetStockCodeRealTimeData(codes...)
+	if t.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
+	realTimeData, err := t.provider.Quotes(codes...)
 	if err != nil {
 		return "", err
 	}

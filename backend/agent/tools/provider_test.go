@@ -31,6 +31,16 @@ type fakeMarketNewsProvider struct {
 	global   []models.Telegraph
 }
 
+type fakeQuoteProvider struct {
+	codes []string
+	rows  []models.StockInfo
+}
+
+func (p *fakeQuoteProvider) Quotes(codes ...string) ([]models.StockInfo, error) {
+	p.codes = append([]string(nil), codes...)
+	return p.rows, nil
+}
+
 func (p fakeMarketNewsProvider) MarketCalendar() []any { return p.calendar }
 func (p fakeMarketNewsProvider) MarketNews(string, int) []*models.Telegraph {
 	return p.news
@@ -92,5 +102,16 @@ func TestBoardDictionaryToolUsesInjectedProvider(t *testing.T) {
 	}
 	if !strings.Contains(result, "016") {
 		t.Fatalf("board dictionary result = %s", result)
+	}
+}
+
+func TestQuoteToolUsesInjectedProvider(t *testing.T) {
+	provider := &fakeQuoteProvider{rows: []models.StockInfo{{Code: "sh600000", Name: "test"}}}
+	result, err := GetQueryStockPriceInfoTool(provider).InvokableRun(context.Background(), `{"stockCodes":"600000"}`)
+	if err != nil {
+		t.Fatalf("invoke quote tool: %v", err)
+	}
+	if len(provider.codes) != 1 || provider.codes[0] != "sh600000" || !strings.Contains(result, "sh600000") {
+		t.Fatalf("result=%q codes=%v", result, provider.codes)
 	}
 }

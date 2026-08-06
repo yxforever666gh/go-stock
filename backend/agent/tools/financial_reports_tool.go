@@ -6,7 +6,6 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/tidwall/gjson"
-	"go-stock/backend/data"
 	"strings"
 )
 
@@ -15,11 +14,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetFinancialReportTool() tool.InvokableTool {
-	return &FinancialReportTool{}
+func GetFinancialReportTool(provider FinancialReportProvider) tool.InvokableTool {
+	return &FinancialReportTool{provider: provider}
 }
 
 type FinancialReportTool struct {
+	provider FinancialReportProvider
 }
 
 func (f FinancialReportTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -38,12 +38,15 @@ func (f FinancialReportTool) Info(ctx context.Context) (*schema.ToolInfo, error)
 
 func (f FinancialReportTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	stockCode := gjson.Get(argumentsInJSON, "stockCode").String()
-	messages := data.GetFinancialReportsByXUEQIU(GetStockCode(stockCode), 30)
-	if messages == nil || len(*messages) == 0 {
+	if f.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
+	messages := f.provider.FinancialReports(GetStockCode(stockCode), 30)
+	if len(messages) == 0 {
 		return "", fmt.Errorf("没有找到%s的财务报告", stockCode)
 	}
 	md := strings.Builder{}
-	for _, s := range *messages {
+	for _, s := range messages {
 		md.WriteString(s)
 	}
 	return md.String(), nil

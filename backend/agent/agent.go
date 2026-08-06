@@ -3,8 +3,8 @@ package agent
 import (
 	"context"
 	"go-stock/backend/agent/tools"
-	"go-stock/backend/data"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 	"strings"
 	"time"
 
@@ -22,7 +22,7 @@ import (
 // @Date 2025/8/4 16:17
 // @Desc
 // -----------------------------------------------------------------------------------
-func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig, toolDataProvider tools.ToolDataProvider) *react.Agent {
+func GetStockAiAgent(ctx *context.Context, aiConfig models.AIConfig, toolDataProvider tools.ToolDataProvider) *react.Agent {
 	if toolDataProvider == nil {
 		logger.SugaredLogger.Error(tools.ErrToolDataProviderRequired)
 		return nil
@@ -73,16 +73,16 @@ func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig, toolDataProvi
 	// 初始化所需的 tools
 	aiTools := compose.ToolsNodeConfig{
 		Tools: []tool.BaseTool{
-			tools.GetQueryEconomicDataTool(),
-			tools.GetQueryStockPriceInfoTool(),
+			tools.GetQueryEconomicDataTool(toolDataProvider),
+			tools.GetQueryStockPriceInfoTool(toolDataProvider),
 			tools.GetQueryStockCodeInfoTool(toolDataProvider),
 			tools.GetQueryMarketNewsTool(toolDataProvider),
-			tools.GetChoiceStockByIndicatorsTool(),
-			tools.GetStockKLineTool(),
-			tools.GetInteractiveAnswerDataTool(),
-			tools.GetFinancialReportTool(),
-			tools.GetQueryStockNewsTool(),
-			tools.GetIndustryResearchReportTool(),
+			tools.GetChoiceStockByIndicatorsTool(toolDataProvider),
+			tools.GetStockKLineTool(toolDataProvider),
+			tools.GetInteractiveAnswerDataTool(toolDataProvider),
+			tools.GetFinancialReportTool(toolDataProvider),
+			tools.GetQueryStockNewsTool(toolDataProvider),
+			tools.GetIndustryResearchReportTool(toolDataProvider),
 			tools.GetQueryBKDictTool(toolDataProvider),
 		},
 	}

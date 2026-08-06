@@ -5,7 +5,6 @@ import (
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	"github.com/tidwall/gjson"
-	"go-stock/backend/data"
 	"go-stock/backend/util"
 )
 
@@ -14,11 +13,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetQueryStockNewsTool() tool.InvokableTool {
-	return &QueryStockNewsTool{}
+func GetQueryStockNewsTool(provider StockNewsProvider) tool.InvokableTool {
+	return &QueryStockNewsTool{provider: provider}
 }
 
 type QueryStockNewsTool struct {
+	provider StockNewsProvider
 }
 
 func (q QueryStockNewsTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -37,6 +37,12 @@ func (q QueryStockNewsTool) Info(ctx context.Context) (*schema.ToolInfo, error) 
 
 func (q QueryStockNewsTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	searchWords := gjson.Get(argumentsInJSON, "searchWords").String()
-	res := data.NewMarketNewsApi().CailianpressWeb(searchWords)
+	if q.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
+	res := q.provider.StockNews(searchWords)
+	if res == nil {
+		return "", nil
+	}
 	return util.MarkdownTableWithTitle(searchWords+"市场资讯/新闻", res.List), nil
 }
