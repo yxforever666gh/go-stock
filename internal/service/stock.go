@@ -78,6 +78,10 @@ func (s StockService) SearchStock(words string) map[string]any {
 	return s.operations.SearchStock(words)
 }
 
+func (s StockService) SearchStockWithFingerprint(words, fingerprint string, pageSize int) map[string]any {
+	return s.operations.SearchStockWithFingerprint(words, fingerprint, pageSize)
+}
+
 func (s StockService) GetHotStrategy() map[string]any {
 	return s.operations.GetHotStrategy()
 }

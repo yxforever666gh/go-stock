@@ -9,8 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
-	"go-stock/backend/db"
+	"go-stock/internal/bootstrap"
 )
 
 func runStrategyRuleReplay(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
@@ -33,7 +32,7 @@ func runStrategyRuleReplay(args []string, g GlobalOptions, stdout, stderr io.Wri
 	if err != nil {
 		return err
 	}
-	report, err := data.ReplayLegacyStructuredRulesCacheOnly(context.Background(), db.Dao, data.LegacyStructuredRuleReplayOptions{
+	report, err := bootstrap.ReplayLegacyStructuredRulesCacheOnly(context.Background(), bootstrap.LegacyReplayOptions{
 		From: from, To: to, ExpectedRuleCount: expectedCount,
 	})
 	if err != nil {

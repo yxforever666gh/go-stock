@@ -69,12 +69,7 @@ var deprecatedDataImportDebt = map[string]bool{
 	"backend/agent/tools/stock_price_info_tool.go":           true,
 	"internal/bootstrap/dependencies.go":                     true,
 	"internal/cli/cmd_network_audit.go":                      true,
-	"internal/cli/cmd_quote.go":                              true,
-	"internal/cli/cmd_release.go":                            true,
-	"internal/cli/cmd_search.go":                             true,
-	"internal/cli/cmd_strategy_rule_replay.go":               true,
 	"internal/cli/config_resolver.go":                        true,
-	"internal/cli/output.go":                                 true,
 	"internal/migrations/migrations.go":                      true,
 	"main.go":                                                true,
 	"runtime_bootstrap.go":                                   true,
@@ -84,6 +79,7 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 	"internal/bootstrap/service_compat_ai.go":     true,
 	"internal/bootstrap/service_compat_market.go": true,
 	"internal/bootstrap/service_compat_stock.go":  true,
+	"internal/bootstrap/legacy_replay.go":         true,
 }
 
 var globalDBImportDebt = map[string]bool{
@@ -100,7 +96,6 @@ var globalDBImportDebt = map[string]bool{
 	"internal/cli/cmd_release.go":                           true,
 	"internal/cli/cmd_strategy.go":                          true,
 	"internal/cli/cmd_strategy_backtest.go":                 true,
-	"internal/cli/cmd_strategy_rule_replay.go":              true,
 	"internal/cli/config_resolver.go":                       true,
 	"main.go":                                               true,
 	"runtime_compat.go":                                     true,

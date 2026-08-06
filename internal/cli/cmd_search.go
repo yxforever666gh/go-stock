@@ -7,7 +7,7 @@ import (
 	"io"
 	"strings"
 
-	"go-stock/backend/data"
+	"go-stock/internal/bootstrap"
 )
 
 func runSearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
@@ -42,7 +42,11 @@ func runSearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
 		return err
 	}
 
-	res := data.NewSearchStockApiWithFingerprint(words, resolvedFingerprint).SearchStock(pageSize)
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		return err
+	}
+	res := services.Stock.SearchStockWithFingerprint(words, resolvedFingerprint, pageSize)
 	if jsonOut {
 		body, err := marshalPrettyJSON(res)
 		if err != nil {

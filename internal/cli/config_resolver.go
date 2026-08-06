@@ -7,6 +7,7 @@ import (
 
 	"go-stock/backend/data"
 	"go-stock/backend/db"
+	"go-stock/internal/bootstrap"
 
 	"gorm.io/gorm"
 )
@@ -65,11 +66,12 @@ func ResolveFingerprint(flagValue string) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
 	}
-	settings := &data.Settings{}
-	if err := db.Dao.Model(&data.Settings{}).Order("id desc").First(settings).Error; err == nil {
-		if settings.QgqpBId != "" {
-			return settings.QgqpBId, nil
-		}
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		return "", err
+	}
+	if fingerprint, err := services.Config.ResolveFingerprint(); err == nil && fingerprint != "" {
+		return fingerprint, nil
 	}
 	return "", errors.New("缺少 qgqp_b_id，请通过 --qgqp-b-id 传入或先写入 settings.qgqp_b_id")
 }

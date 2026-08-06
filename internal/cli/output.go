@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go-stock/backend/data"
+	"go-stock/backend/models"
 )
 
 func marshalPrettyJSON(v any) ([]byte, error) {
@@ -16,7 +16,7 @@ func marshalJSONLine(v any) ([]byte, error) {
 	return json.Marshal(v)
 }
 
-func formatQuoteText(item *data.StockInfo) string {
+func formatQuoteText(item *models.StockInfo) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "[%s] %s\n", item.Name, item.Code)
 	fmt.Fprintf(&b, "最新价: %s\n", item.Price)

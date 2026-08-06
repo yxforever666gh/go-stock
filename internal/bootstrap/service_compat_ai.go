@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -153,6 +154,14 @@ func (*compatibilityServiceAdapter) ExportConfig() string {
 
 func (*compatibilityServiceAdapter) UpdateConfig(config *models.SettingConfig) string {
 	return data.UpdateConfig(config)
+}
+
+func (*compatibilityServiceAdapter) ResolveFingerprint() (string, error) {
+	settings := data.GetSettingConfig()
+	if settings != nil && settings.Settings != nil && strings.TrimSpace(settings.QgqpBId) != "" {
+		return strings.TrimSpace(settings.QgqpBId), nil
+	}
+	return "", errors.New("missing qgqp_b_id")
 }
 
 func (*compatibilityServiceAdapter) DeleteSession(sessionID string) error {

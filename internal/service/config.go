@@ -21,3 +21,7 @@ func (s ConfigService) ExportConfig() string {
 func (s ConfigService) UpdateConfig(settingConfig *models.SettingConfig) string {
 	return s.operations.UpdateConfig(settingConfig)
 }
+
+func (s ConfigService) ResolveFingerprint() (string, error) {
+	return s.operations.ResolveFingerprint()
+}

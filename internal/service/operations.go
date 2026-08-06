@@ -88,6 +88,7 @@ type ConfigOperations interface {
 	GetConfig() *models.SettingConfig
 	ExportConfig() string
 	UpdateConfig(*models.SettingConfig) string
+	ResolveFingerprint() (string, error)
 }
 
 type FundOperations interface {
@@ -193,6 +194,7 @@ type StockOperations interface {
 	GetStockCommonKLine(string, int64) *[]models.KLineData
 	GetStockMinutePriceLineData(string, string) map[string]any
 	SearchStock(string) map[string]any
+	SearchStockWithFingerprint(string, string, int) map[string]any
 	GetHotStrategy() map[string]any
 	GetStockCodeRealTimeData(...string) (*[]models.StockInfo, error)
 }

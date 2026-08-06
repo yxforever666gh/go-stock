@@ -124,6 +124,10 @@ func (*compatibilityServiceAdapter) SearchStock(words string) map[string]any {
 	return data.NewSearchStockApi(words).SearchStock(5000)
 }
 
+func (*compatibilityServiceAdapter) SearchStockWithFingerprint(words, fingerprint string, pageSize int) map[string]any {
+	return data.NewSearchStockApiWithFingerprint(words, fingerprint).SearchStock(pageSize)
+}
+
 func (*compatibilityServiceAdapter) GetHotStrategy() map[string]any {
 	return data.NewSearchStockApi("").HotStrategy()
 }

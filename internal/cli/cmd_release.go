@@ -13,10 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"go-stock/backend/strategy/v150"
+	"go-stock/internal/bootstrap"
 	"go-stock/internal/releaseinfo"
 
 	"gorm.io/gorm"
@@ -206,7 +206,7 @@ func verifyReplayBundle(bundlePath, manifestPath string) (replayBundleVerificati
 		return result, err
 	}
 
-	report, err := data.ReplayLegacyStructuredRulesCacheOnly(context.Background(), db.Dao, data.LegacyStructuredRuleReplayOptions{
+	report, err := bootstrap.ReplayLegacyStructuredRulesCacheOnly(context.Background(), bootstrap.LegacyReplayOptions{
 		To: to, ExpectedRuleCount: manifest.Replay.ExpectedRuleCount,
 	})
 	if err != nil {
