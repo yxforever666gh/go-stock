@@ -42,7 +42,6 @@ var v150AllowedProductionImports = map[string]bool{
 var deprecatedDataImportDebt = map[string]bool{
 	"app_summary_runtime.go":            true,
 	"internal/migrations/migrations.go": true,
-	"main.go":                           true,
 	"runtime_bootstrap.go":              true,
 }
 
@@ -53,6 +52,7 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 	"internal/bootstrap/service_compat_market.go":      true,
 	"internal/bootstrap/service_compat_stock.go":       true,
 	"internal/bootstrap/legacy_replay.go":              true,
+	"internal/bootstrap/runtime_compat.go":             true,
 }
 
 var globalDBImportDebt = map[string]bool{
@@ -63,7 +63,6 @@ var globalDBImportDebt = map[string]bool{
 	"internal/cli/cmd_db.go":                                true,
 	"internal/cli/cmd_release.go":                           true,
 	"internal/cli/cmd_strategy_backtest.go":                 true,
-	"main.go":                                               true,
 	"runtime_compat.go":                                     true,
 }
 

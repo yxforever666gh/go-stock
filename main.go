@@ -5,8 +5,6 @@ import (
 	"embed"
 	"flag"
 	"fmt"
-	"go-stock/backend/data"
-	"go-stock/backend/db"
 	log "go-stock/backend/logger"
 	"go-stock/internal/bootstrap"
 	"go-stock/internal/cli"
@@ -80,7 +78,7 @@ func main() {
 	if err != nil {
 		log.SugaredLogger.Fatalf("application initialization failed: %v", err)
 	}
-	data.SetRuntimeEventEmitter(emitEvent)
+	bootstrap.ConfigureRuntimeEventEmitter(emitEvent)
 
 	log.SugaredLogger.Info("starting...")
 	log.SugaredLogger.Info(startupBanner(cfg, *webMode))
@@ -111,13 +109,9 @@ func main() {
 
 func runMinuteDBMigration(cfg appconfig.AppConfig) {
 	bootstrap.EnsureRuntimeDirs(cfg)
-	db.Init(cfg.DB.Path)
-	summary, err := data.MigrateMinuteCacheToMinuteDB()
+	summary, err := bootstrap.MigrateLegacyMinuteCache(cfg.DB.Path)
 	if err != nil {
 		log.SugaredLogger.Fatalf("minute db migration failed: %v", err)
-	}
-	if err := data.OptimizeMinuteCacheDB(); err != nil {
-		log.SugaredLogger.Warnf("minute db optimize failed: %v", err)
 	}
 	log.SugaredLogger.Infof("minute db migration completed: legacyRows=%d minuteDBRows=%d migratedRows=%d stockCount=%d", summary.LegacyRows, summary.MinuteDBRows, summary.MigratedRows, summary.StockCount)
 }
