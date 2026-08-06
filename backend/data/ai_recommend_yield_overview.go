@@ -7,6 +7,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 	"sort"
 	"strings"
 	"sync"
@@ -18,6 +19,9 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 		query = &models.AiRecommendStocksQuery{}
 	}
 	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortAll)
+	if isV150YieldDailyOverviewCohort(query.StrategyCohort) {
+		return unavailableV150YieldDailyOverview(), nil
+	}
 
 	signature, err := buildYieldDailyOverviewSignature(query)
 	if err != nil {
@@ -38,6 +42,31 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 		storeYieldDailyOverviewCache(signature, result)
 	}
 	return cloneYieldDailyOverviewData(result), nil
+}
+
+const v150YieldDailyLedgerOnlyUnavailableHealthCode = "daily_ledger_only_view_unavailable"
+
+func isV150YieldDailyOverviewCohort(cohort string) bool {
+	normalized := normalizeStrategyCohort(cohort, strategyCohortAll)
+	return normalized == marketSummaryVersion150 ||
+		(normalized == strategyCohortCurrent && marketSummaryCurrentVersion == marketSummaryVersion150)
+}
+
+func unavailableV150YieldDailyOverview() *models.AiRecommendYieldDailyOverviewData {
+	cfg := v150.FixedStrategyV150Config()
+	return &models.AiRecommendYieldDailyOverviewData{
+		CalcMode:         aiRecommendYieldModeStrict,
+		BenchmarkCode:    defaultBenchmarkModelCode,
+		BenchmarkName:    defaultBenchmarkName,
+		StrategyCohort:   marketSummaryVersion150,
+		ValidationStatus: "forward_validation",
+		PortfolioCapital: cfg.PortfolioCash,
+		Warnings: []string{
+			"V1.5.0 日收益曲线暂不可用：尚未形成可验证的 ledger-only 日估值，已拒绝回退旧收益投影。",
+		},
+		V150HealthWarnings: []string{v150YieldDailyLedgerOnlyUnavailableHealthCode},
+		Points:             []models.AiRecommendYieldDailyOverviewPoint{},
+	}
 }
 
 func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecommendStocksQuery) (*models.AiRecommendYieldDailyOverviewData, error) {

@@ -11,6 +11,24 @@ import (
 	"go-stock/backend/strategy/v150"
 )
 
+func TestV150YieldDailyOverviewFailsClosedUntilLedgerOnlyViewExists(t *testing.T) {
+	for _, cohort := range []string{marketSummaryVersion150, strategyCohortCurrent} {
+		got, err := NewAiRecommendStocksService().GetAiRecommendYieldDailyOverview(&models.AiRecommendStocksQuery{
+			StrategyCohort: cohort,
+		})
+		if err != nil {
+			t.Fatalf("cohort %q: %v", cohort, err)
+		}
+		if got.StrategyCohort != marketSummaryVersion150 || got.CalcMode != aiRecommendYieldModeStrict ||
+			got.PortfolioCapital != v150.FixedStrategyV150Config().PortfolioCash || len(got.Points) != 0 {
+			t.Fatalf("cohort %q returned non-fail-closed overview: %+v", cohort, got)
+		}
+		if len(got.V150HealthWarnings) != 1 || got.V150HealthWarnings[0] != v150YieldDailyLedgerOnlyUnavailableHealthCode || len(got.Warnings) == 0 {
+			t.Fatalf("cohort %q missing explicit unavailable diagnostics: %+v", cohort, got)
+		}
+	}
+}
+
 func TestBuildYieldDailyOverviewBenchmarkSeriesDoesNotForwardFillStaleClose(t *testing.T) {
 	loc := cnLocation()
 	day1 := time.Date(2026, 7, 31, 0, 0, 0, 0, loc)
