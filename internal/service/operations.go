@@ -131,6 +131,9 @@ type HistoryOperations interface {
 type MarketOperations interface {
 	AnalyzeNews(string, bool)
 	EnsureMarketDataSelfCheck(string)
+	NormalizeYieldEmailCronTimes(string) ([]string, error)
+	IsCNOpenTradeDay(time.Time) bool
+	IsCNOpenTradeDayStrict(time.Time) (bool, error)
 	LongTigerRank(string) *[]models.LongTigerRankData
 	StockResearchReport(string, int) []any
 	StockNotice(string) []any

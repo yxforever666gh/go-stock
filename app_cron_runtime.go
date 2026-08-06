@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
@@ -72,7 +71,7 @@ func buildYieldEmailCronSpec(hhmm string) string {
 	return fmt.Sprintf("CRON_TZ=Asia/Shanghai 0 %s %s * * 1-5", parts[1], parts[0])
 }
 
-func (a *App) reloadSummaryStockNewsCron(settingConfig *data.SettingConfig) {
+func (a *App) reloadSummaryStockNewsCron(settingConfig *models.SettingConfig) {
 	for key, entryID := range a.snapshotCronEntries() {
 		if !strings.HasPrefix(key, summaryStockNewsEntryPrefix) {
 			continue
@@ -109,7 +108,7 @@ func (a *App) reloadSummaryStockNewsCron(settingConfig *data.SettingConfig) {
 	logger.SugaredLogger.Infof("市场资讯AI总结定时任务生效: %v", times)
 }
 
-func (a *App) reloadYieldEmailCron(settingConfig *data.SettingConfig) {
+func (a *App) reloadYieldEmailCron(settingConfig *models.SettingConfig) {
 	a.yieldEmailCronMu.Lock()
 	defer a.yieldEmailCronMu.Unlock()
 
@@ -129,7 +128,7 @@ func (a *App) reloadYieldEmailCron(settingConfig *data.SettingConfig) {
 		return
 	}
 
-	times, err := data.NormalizeYieldEmailCronTimes(settingConfig.YieldEmailCronTimes)
+	times, err := a.services.Market.NormalizeYieldEmailCronTimes(settingConfig.YieldEmailCronTimes)
 	if err != nil {
 		a.recordSchedulerRegistrationError("YieldEmail", settingConfig.YieldEmailCronTimes, err)
 		logger.SugaredLogger.Errorf("最新 AI 分析报告定时发送时间无效: %v", err)
@@ -276,7 +275,7 @@ func (a *App) runScheduledSummaryStockNews() {
 		loc = time.Local
 	}
 	now := time.Now().In(loc)
-	if !data.IsCNOpenTradeDay(now) {
+	if !a.services.Market.IsCNOpenTradeDay(now) {
 		db.Dao.Create(&models.CronTaskRun{
 			TaskName:     "market_summary",
 			TriggeredAt:  now,
@@ -394,7 +393,7 @@ func (a *App) runScheduledLatestAIAnalysisReportEmail() {
 		logger.SugaredLogger.Warn("跳过最新 AI 分析报告定时发送: 定时开关未启用")
 		return
 	}
-	open, tradeErr := data.IsCNOpenTradeDayStrict(now)
+	open, tradeErr := a.services.Market.IsCNOpenTradeDayStrict(now)
 	if tradeErr != nil {
 		msg := fmt.Sprintf("交易日历不可用，跳过发送 day=%s err=%v", now.Format("2006-01-02"), tradeErr)
 		updateTaskRun(taskRun, "skipped", msg)

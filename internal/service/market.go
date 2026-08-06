@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"go-stock/backend/models"
 
 	"github.com/coocood/freecache"
@@ -20,6 +22,18 @@ func (s MarketService) AnalyzeNews(text string, save bool) {
 
 func (s MarketService) EnsureMarketDataSelfCheck(reason string) {
 	s.operations.EnsureMarketDataSelfCheck(reason)
+}
+
+func (s MarketService) NormalizeYieldEmailCronTimes(input string) ([]string, error) {
+	return s.operations.NormalizeYieldEmailCronTimes(input)
+}
+
+func (s MarketService) IsCNOpenTradeDay(day time.Time) bool {
+	return s.operations.IsCNOpenTradeDay(day)
+}
+
+func (s MarketService) IsCNOpenTradeDayStrict(day time.Time) (bool, error) {
+	return s.operations.IsCNOpenTradeDayStrict(day)
 }
 
 func (s MarketService) LongTigerRank(date string) *[]models.LongTigerRankData {

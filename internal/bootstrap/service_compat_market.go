@@ -370,6 +370,18 @@ func (*compatibilityServiceAdapter) EnsureMarketDataSelfCheck(reason string) {
 	data.EnsureDiemengSelfCheckAsync(reason)
 }
 
+func (*compatibilityServiceAdapter) NormalizeYieldEmailCronTimes(input string) ([]string, error) {
+	return data.NormalizeYieldEmailCronTimes(input)
+}
+
+func (*compatibilityServiceAdapter) IsCNOpenTradeDay(day time.Time) bool {
+	return data.IsCNOpenTradeDay(day)
+}
+
+func (*compatibilityServiceAdapter) IsCNOpenTradeDayStrict(day time.Time) (bool, error) {
+	return data.IsCNOpenTradeDayStrict(day)
+}
+
 func (*compatibilityServiceAdapter) GetFundList(key string) []models.FundBasic {
 	return data.NewFundApi().GetFundList(key)
 }

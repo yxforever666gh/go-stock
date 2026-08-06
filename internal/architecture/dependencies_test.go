@@ -41,7 +41,6 @@ var v150AllowedProductionImports = map[string]bool{
 var deprecatedDataImportDebt = map[string]bool{
 	"app_ai_api.go":              true,
 	"app_config_api.go":          true,
-	"app_cron_runtime.go":        true,
 	"app_summary_runtime.go":     true,
 	"backend/agent/agent.go":     true,
 	"backend/agent/agent_api.go": true,
