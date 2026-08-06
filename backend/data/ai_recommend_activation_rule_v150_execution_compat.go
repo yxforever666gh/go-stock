@@ -19,6 +19,8 @@ import (
 
 type marketSummaryV150OrderEventStore = execution.ImmutableOrderEventStore[models.OrderEvent]
 
+var errMarketSummaryV150OrderEventStoreUnavailable = errors.New("strategy order event store is unavailable")
+
 type marketSummaryV150OrderEventSink struct {
 	ctx   context.Context
 	store marketSummaryV150OrderEventStore
@@ -42,13 +44,10 @@ func appendMarketSummaryV150OrderEventsWithSink(
 	source []v150.OrderEvent,
 	accounting marketSummaryV150EventAccounting,
 ) error {
-	if sink.injected() {
-		return appendMarketSummaryV150OrderEventsWithStore(sink.ctx, sink.store, rec, run, source, accounting)
+	if !sink.injected() {
+		return errMarketSummaryV150OrderEventStoreUnavailable
 	}
-	// TODO(app-1.5.3): yield recalculation still enters through the legacy
-	// compatibility wrapper. Remove this fallback when that producer receives
-	// the composition-root store in the next migration slice.
-	return appendMarketSummaryV150OrderEvents(rec, run, source, accounting)
+	return appendMarketSummaryV150OrderEventsWithStore(sink.ctx, sink.store, rec, run, source, accounting)
 }
 
 func (ctx yieldBuildContext) appendMarketSummaryV150OrderEvents(
@@ -81,7 +80,7 @@ func appendMarketSummaryV150OrderEventsWithStore(
 		return errors.New("strategy database is unavailable")
 	}
 	if store == nil {
-		return errors.New("strategy order event store is unavailable")
+		return errMarketSummaryV150OrderEventStoreUnavailable
 	}
 	runID := strings.TrimSpace(rec.StrategyRunID)
 	ruleID := strings.TrimSpace(rec.StrategyRuleID)

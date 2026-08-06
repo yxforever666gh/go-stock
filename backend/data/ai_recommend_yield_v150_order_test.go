@@ -1,14 +1,23 @@
 package data
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"go-stock/backend/persistence"
 	"gorm.io/gorm"
 )
+
+func withTestMarketSummaryV150OrderEventSink(ctx yieldBuildContext) yieldBuildContext {
+	eventContext := context.Background()
+	ctx.V150OrderEventSink = newMarketSummaryV150OrderEventSink(eventContext, persistence.NewGORMOrderEventStore(db.Dao))
+	return ctx
+}
 
 func TestOrderMarketSummaryV150ScheduledStepsUsesEventTimeThenRankRule(t *testing.T) {
 	loc := cnLocation()
@@ -73,6 +82,51 @@ func TestSplitAiRecommendYieldCalcTasksKeepsLegacyParallelPathSeparate(t *testin
 	}
 }
 
+func TestGenericYieldRecalcSkipsV150ExecutionAndMissingStoreFailsClosed(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	record := seedMarketSummaryV150ExecutionFixture(t, decision, marketSummaryV150TestBreakoutPlan(validFrom))
+	record.Model = gorm.Model{ID: 1}
+	seedMarketSummaryV150BreakoutBars(t, record, decision, validFrom)
+
+	var before int64
+	if err := db.Dao.Model(&models.OrderEvent{}).Where("rule_id = ?", record.StrategyRuleID).Count(&before).Error; err != nil {
+		t.Fatal(err)
+	}
+	targets := &aiRecommendYieldTargets{
+		aggrMap:        map[string]*aiRecommendYieldAggregate{},
+		existingMap:    map[string]*models.AiRecommendYieldState{},
+		existingRecord: map[uint]*models.AiRecommendYieldRecordState{},
+		targetCodes:    []string{record.StockCode},
+		targetRecords:  []models.AiRecommendStocks{record},
+	}
+	runtime := &aiRecommendYieldRecalcRuntime{ctx: yieldBuildContext{
+		Force: true, Now: validFrom.Add(45 * time.Minute), LatestTradeDate: decision,
+		InTradingSession: true, DisableMinuteFetch: true,
+	}}
+	writer := newAiRecommendYieldSnapshotWriter(0, 2)
+	if err := processAiRecommendYieldTargets(runtime, targets, writer); err != nil {
+		t.Fatalf("generic yield recalculation should skip V1.5 execution: %v", err)
+	}
+	if len(writer.recordStates) != 0 {
+		t.Fatalf("generic yield recalculation built %d mutable V1.5 record states", len(writer.recordStates))
+	}
+
+	direct := []*marketSummaryV150ScheduledRecord{{record: record, ruleID: record.StrategyRuleID}}
+	err := processMarketSummaryV150RecordsInEventOrder(direct, runtime.ctx, writer)
+	if !errors.Is(err, errMarketSummaryV150OrderEventStoreUnavailable) {
+		t.Fatalf("missing execution store error = %v", err)
+	}
+	var after int64
+	if err := db.Dao.Model(&models.OrderEvent{}).Where("rule_id = ?", record.StrategyRuleID).Count(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("non-execution recalculation changed V1.5 ledger: before=%d after=%d", before, after)
+	}
+}
+
 func TestProcessMarketSummaryV150RecordsObservesOnlyCurrentExecutionDay(t *testing.T) {
 	t.Run("online current day is observed before checkpoints", func(t *testing.T) {
 		loc := cnLocation()
@@ -99,7 +153,7 @@ func TestProcessMarketSummaryV150RecordsObservesOnlyCurrentExecutionDay(t *testi
 		})
 
 		records := []*marketSummaryV150ScheduledRecord{{record: rec, ruleID: rec.StrategyRuleID}}
-		ctx := yieldBuildContext{Now: wallClockNow, LatestTradeDate: wallClockNow, InTradingSession: false}
+		ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: wallClockNow, LatestTradeDate: wallClockNow, InTradingSession: false})
 		if err := processMarketSummaryV150RecordsInEventOrder(records, ctx, newAiRecommendYieldSnapshotWriter(0, 10)); err != nil {
 			t.Fatal(err)
 		}
@@ -135,7 +189,7 @@ func TestProcessMarketSummaryV150RecordsObservesOnlyCurrentExecutionDay(t *testi
 		})
 
 		records := []*marketSummaryV150ScheduledRecord{{record: rec, ruleID: rec.StrategyRuleID}}
-		ctx := yieldBuildContext{Now: historicalNow, LatestTradeDate: historicalNow, InTradingSession: false}
+		ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: historicalNow, LatestTradeDate: historicalNow, InTradingSession: false})
 		if err := processMarketSummaryV150RecordsInEventOrder(records, ctx, newAiRecommendYieldSnapshotWriter(0, 10)); err != nil {
 			t.Fatal(err)
 		}
@@ -185,13 +239,13 @@ func TestProcessMarketSummaryV150RecordsReplaysEarlierEventBeforeInverseSymbol(t
 		{record: later, rank: 1, ruleID: later.StrategyRuleID},
 		{record: earlier, rank: 1, ruleID: earlier.StrategyRuleID},
 	}
-	ctx := yieldBuildContext{
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 		Now:                validFrom.Add(time.Hour),
 		InTradingSession:   true,
 		LatestTradeDate:    decision,
 		DisableMinuteFetch: true,
 		Force:              true,
-	}
+	})
 	writer := newAiRecommendYieldSnapshotWriter(0, 100)
 	if err := processMarketSummaryV150RecordsInEventOrder(records, ctx, writer); err != nil {
 		t.Fatal(err)

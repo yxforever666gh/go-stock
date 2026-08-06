@@ -15,7 +15,6 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
-	"go-stock/backend/persistence"
 	"go-stock/backend/strategy/v150"
 
 	"gorm.io/gorm"
@@ -1165,7 +1164,7 @@ func marketSummaryV150PriceLimitRatio(security models.SecurityMasterHistory) flo
 func appendMarketSummaryV150OrderEvents(rec models.AiRecommendStocks, run models.StrategyRunSnapshot, source []v150.OrderEvent, accounting marketSummaryV150EventAccounting) error {
 	return appendMarketSummaryV150OrderEventsWithStore(
 		context.Background(),
-		persistence.NewGORMOrderEventStore(db.Dao),
+		nil,
 		rec,
 		run,
 		source,

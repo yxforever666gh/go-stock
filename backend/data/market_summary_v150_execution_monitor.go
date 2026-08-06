@@ -189,10 +189,11 @@ func marketSummaryV150CompletedBoundary(now, day time.Time, startHour, startMinu
 // record projections. A restart can safely call the same window again because
 // lifecycle event identities and immutable appends are idempotent.
 func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150ExecutionMonitorResult, error) {
-	// TODO(app-1.5.3): this exported compatibility entry is still used by the
-	// generic recalculation tests. Production uses the store-injected monitor
-	// below and must never reach the legacy order-event fallback.
-	return runMarketSummaryV150ExecutionMonitor(context.Background(), now, marketSummaryV150OrderEventSink{})
+	result := MarketSummaryV150ExecutionMonitorResult{ObservedAt: now.In(cnLocation())}
+	if err := requireStrategyProductionLive(context.Background(), db.Dao); err != nil {
+		return result, err
+	}
+	return result, errMarketSummaryV150OrderEventStoreUnavailable
 }
 
 func runMarketSummaryV150ExecutionMonitorWithStore(
@@ -293,9 +294,7 @@ func wrapMarketSummaryV150ExecutionMonitorError(operation string, err error) err
 }
 
 func loadMarketSummaryV150ActiveExecutionRecords(observedAt time.Time) ([]models.AiRecommendStocks, int, int, int, []string, error) {
-	// Compatibility-only fallback for direct recalculation tests. Production
-	// monitor enumeration always calls the injected form below.
-	return loadMarketSummaryV150ActiveExecutionRecordsWithSink(observedAt, marketSummaryV150OrderEventSink{})
+	return nil, 0, 0, 0, nil, errMarketSummaryV150OrderEventStoreUnavailable
 }
 
 func loadMarketSummaryV150ActiveExecutionRecordsWithSink(

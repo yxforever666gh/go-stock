@@ -938,15 +938,16 @@ func processAiRecommendYieldTargets(runtime *aiRecommendYieldRecalcRuntime, targ
 	if len(tasks) == 0 {
 		return nil
 	}
-	legacyTasks, v150Records := splitAiRecommendYieldCalcTasksByVersion(tasks)
+	legacyTasks, _ := splitAiRecommendYieldCalcTasksByVersion(tasks)
 	if len(legacyTasks) > 0 {
 		if err := processAiRecommendYieldCalcTasksConcurrently(legacyTasks, runtime.ctx, writer); err != nil {
 			return err
 		}
 	}
-	if len(v150Records) > 0 {
-		return processMarketSummaryV150RecordsInEventOrder(v150Records, runtime.ctx, writer)
-	}
+	// V1.5 lifecycle is owned exclusively by the injected ExecutionMonitor.
+	// Generic yield recalculation may refresh market-data caches, but it must
+	// never activate a rule, append an order event, or rebuild lifecycle from
+	// mutable record state. Current V1.5 views read the sealed ledger directly.
 	return nil
 }
 
@@ -965,10 +966,10 @@ type marketSummaryV150ScheduledStep struct {
 	record *marketSummaryV150ScheduledRecord
 }
 
-// Both the independent execution monitor and legacy yield-refresh entrypoints
-// reuse the same V1.5 event replay. Serialize the complete timeline (not only
-// individual fills) so concurrent UI refreshes can never interleave ranks or
-// observe a partially processed portfolio.
+// The independent execution monitor is the sole online caller of this V1.5
+// event replay. Serialize the complete timeline (not only individual fills)
+// so concurrent monitor wakeups can never interleave ranks or observe a
+// partially processed portfolio.
 var marketSummaryV150EventReplayMu sync.Mutex
 
 func splitAiRecommendYieldCalcTasksByVersion(tasks []aiRecommendYieldCalcTask) ([]aiRecommendYieldCalcTask, []*marketSummaryV150ScheduledRecord) {
@@ -1066,6 +1067,9 @@ func processAiRecommendYieldCalcTasksConcurrently(tasks []aiRecommendYieldCalcTa
 func processMarketSummaryV150RecordsInEventOrder(records []*marketSummaryV150ScheduledRecord, ctx yieldBuildContext, writer *aiRecommendYieldSnapshotWriter) error {
 	if len(records) == 0 {
 		return nil
+	}
+	if !ctx.V150OrderEventSink.injected() {
+		return errMarketSummaryV150OrderEventStoreUnavailable
 	}
 	marketSummaryV150EventReplayMu.Lock()
 	defer marketSummaryV150EventReplayMu.Unlock()

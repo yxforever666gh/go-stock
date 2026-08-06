@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -74,12 +73,12 @@ func TestMarketSummaryV150ExecutionTrueCrossingNextBarFillAndAppend(t *testing.T
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom.Add(15*time.Minute), 9.95, 10.10, 150, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom.Add(30*time.Minute), 10.05, 10.08, 100, false))
 
-	ctx := yieldBuildContext{
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 		Now:                validFrom.Add(45 * time.Minute),
 		InTradingSession:   true,
 		LatestTradeDate:    decision,
 		DisableMinuteFetch: true,
-	}
+	})
 	activationAt, rawPrice, info := resolveMarketSummaryV150Activation(rec, ctx, false)
 	if activationAt == nil || !activationAt.Equal(validFrom.Add(30*time.Minute)) {
 		t.Fatalf("activationAt=%v status=%s reason=%s", activationAt, info.DataStatus, info.DataStatusReason)
@@ -147,9 +146,9 @@ func TestMarketSummaryV150EntryRejectsSixthOpenUsingPointInTimeLedger(t *testing
 		}
 	}
 
-	activationAt, _, info := resolveMarketSummaryV150Activation(rec, yieldBuildContext{
+	activationAt, _, info := resolveMarketSummaryV150Activation(rec, withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 		Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true,
-	}, false)
+	}), false)
 	if activationAt != nil || info.V150Entry != nil || !strings.Contains(info.DataStatusReason, v150.RejectPortfolioCapacity) {
 		t.Fatalf("sixth position was not rejected: at=%v info=%+v", activationAt, info)
 	}
@@ -197,7 +196,7 @@ func TestMarketSummaryV150ConcurrentSameBarEntriesCannotPierceSectorLimit(t *tes
 		info  triggerEvalInfo
 	}
 	results := make(chan result, 2)
-	ctx := yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true}
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true})
 	for _, record := range []models.AiRecommendStocks{right, left} {
 		record := record
 		go func() {
@@ -268,7 +267,7 @@ func TestMarketSummaryV150ConcurrentSameBarEntriesCannotPierceDailyLimit(t *test
 		info  triggerEvalInfo
 	}
 	results := make(chan result, len(records))
-	ctx := yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true}
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true})
 	for _, record := range records {
 		record := record
 		go func() {
@@ -350,7 +349,7 @@ func TestMarketSummaryV150ConcurrentEntriesCannotPierceOpenPositionLimit(t *test
 		info  triggerEvalInfo
 	}
 	results := make(chan result, len(records))
-	ctx := yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true}
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true})
 	for _, record := range records {
 		record := record
 		go func() {
@@ -441,9 +440,9 @@ func TestMarketSummaryV150EntryRejectsOtherRuleWithSameSymbol(t *testing.T) {
 				t.Fatal("test fixture did not create a distinct rule")
 			}
 
-			activationAt, _, info := resolveMarketSummaryV150Activation(rec, yieldBuildContext{
+			activationAt, _, info := resolveMarketSummaryV150Activation(rec, withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 				Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true,
-			}, false)
+			}), false)
 			if activationAt != nil || info.V150Entry != nil || !strings.Contains(info.DataStatusReason, test.wantReason) {
 				t.Fatalf("same-symbol %s rule was not rejected: at=%v info=%+v", test.name, activationAt, info)
 			}
@@ -470,7 +469,7 @@ func TestMarketSummaryV150ExitHonorsT1AndGapStop(t *testing.T) {
 		entryBucket[index].Low = 9.30
 	}
 	seedMarketSummaryV150Minutes(t, rec.StockCode, entryBucket)
-	entryCtx := yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true}
+	entryCtx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true})
 	_, _, entryInfo := resolveMarketSummaryV150Activation(rec, entryCtx, false)
 	if entryInfo.V150Entry == nil {
 		t.Fatalf("entry failed: %s", entryInfo.DataStatusReason)
@@ -489,10 +488,10 @@ func TestMarketSummaryV150ExitHonorsT1AndGapStop(t *testing.T) {
 	// Event-order replay performs provider I/O up front, then evaluates each
 	// checkpoint cache-only while still requiring the dedicated daily execution
 	// observation seeded above.
-	exitCtx := yieldBuildContext{
+	exitCtx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 		Now: nextOpen.Add(15 * time.Minute), InTradingSession: true, LatestTradeDate: nextDay,
 		DisableMinuteFetch: true, RequireV150ExecutionObservation: true,
-	}
+	})
 	status, exitAt, rawExit, exitInfo := evaluateMarketSummaryV150Exit(rec, *entryInfo.V150Entry, exitCtx, false)
 	if status != "已止损" || !exitAt.Equal(nextOpen) || rawExit != 9.20 {
 		t.Fatalf("gap exit status=%q at=%v price=%.4f info=%+v", status, exitAt, rawExit, exitInfo)
@@ -521,7 +520,7 @@ func TestMarketSummaryV150ExitUsesDayTen1445TimeExit(t *testing.T) {
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom, 9.9, 9.95, 100, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom.Add(15*time.Minute), 9.95, 10.10, 150, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom.Add(30*time.Minute), 10.05, 10.08, 100, false))
-	entryCtx := yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true}
+	entryCtx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true})
 	_, _, entryInfo := resolveMarketSummaryV150Activation(rec, entryCtx, false)
 	if entryInfo.V150Entry == nil {
 		t.Fatalf("entry failed: %s", entryInfo.DataStatusReason)
@@ -536,7 +535,7 @@ func TestMarketSummaryV150ExitUsesDayTen1445TimeExit(t *testing.T) {
 	seedMarketSummaryV150DailyCloseRange(t, rec.StockCode, decision, previousMarketSummaryV150OpenTradeDay(exitDay), 10.10)
 	seedMarketSummaryV150FlatBuckets(t, rec.StockCode, validFrom.Add(45*time.Minute), exitStart, 10.20)
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(exitStart, 10.20, 10.20, 100, false))
-	exitCtx := yieldBuildContext{Now: exitStart.Add(15 * time.Minute), InTradingSession: true, LatestTradeDate: exitDay, DisableMinuteFetch: true}
+	exitCtx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: exitStart.Add(15 * time.Minute), InTradingSession: true, LatestTradeDate: exitDay, DisableMinuteFetch: true})
 	status, exitAt, price, info := evaluateMarketSummaryV150Exit(rec, *entryInfo.V150Entry, exitCtx, false)
 	if status != marketSummaryV150TimeExitStatus || !exitAt.Equal(exitStart) || price != 10.20 {
 		t.Fatalf("time exit status=%q at=%v price=%.4f info=%+v", status, exitAt, price, info)
@@ -555,7 +554,7 @@ func TestMarketSummaryV150PendingTimeExitUsesNextDayFirstTradableBar(t *testing.
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom, 9.9, 9.95, 100, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom.Add(15*time.Minute), 9.95, 10.10, 150, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(validFrom.Add(30*time.Minute), 10.05, 10.08, 100, false))
-	entryCtx := yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true}
+	entryCtx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: validFrom.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: decision, DisableMinuteFetch: true})
 	_, _, entryInfo := resolveMarketSummaryV150Activation(rec, entryCtx, false)
 	if entryInfo.V150Entry == nil {
 		t.Fatalf("entry failed: %s", entryInfo.DataStatusReason)
@@ -579,7 +578,7 @@ func TestMarketSummaryV150PendingTimeExitUsesNextDayFirstTradableBar(t *testing.
 	}
 	seedMarketSummaryV150Minutes(t, rec.StockCode, locked)
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(nextOpen, 10.10, 10.10, 100, false))
-	exitCtx := yieldBuildContext{Now: nextOpen.Add(15 * time.Minute), InTradingSession: true, LatestTradeDate: nextDay, DisableMinuteFetch: true}
+	exitCtx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: nextOpen.Add(15 * time.Minute), InTradingSession: true, LatestTradeDate: nextDay, DisableMinuteFetch: true})
 	status, exitAt, price, info := evaluateMarketSummaryV150Exit(rec, *entryInfo.V150Entry, exitCtx, false)
 	if status != marketSummaryV150TimeExitStatus || !exitAt.Equal(nextOpen) || price != 10.10 {
 		t.Fatalf("pending time exit status=%q at=%v price=%.4f info=%+v", status, exitAt, price, info)
@@ -896,13 +895,13 @@ func TestMarketSummaryV150MissingSecurityStatusRejectsFailClosed(t *testing.T) {
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(start, 9.9, 9.95, 100, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(start.Add(15*time.Minute), 9.95, 10.1, 150, false))
 	seedMarketSummaryV150Minutes(t, rec.StockCode, marketSummaryV150TestMinuteBucket(start.Add(30*time.Minute), 10.05, 10.08, 100, false))
-	_, _, info := resolveMarketSummaryV150Activation(rec, yieldBuildContext{Now: start.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: start, DisableMinuteFetch: true}, false)
+	_, _, info := resolveMarketSummaryV150Activation(rec, withTestMarketSummaryV150OrderEventSink(yieldBuildContext{Now: start.Add(45 * time.Minute), InTradingSession: true, LatestTradeDate: start, DisableMinuteFetch: true}), false)
 	if info.DataStatus != "已跳过" || info.V150Entry != nil || !strings.Contains(info.DataStatusReason, "security status unavailable") {
 		t.Fatalf("fail-closed result=%+v", info)
 	}
 }
 
-func TestAppendMarketSummaryV150OrderEventsInjectedStoreMatchesLegacyWrapper(t *testing.T) {
+func TestAppendMarketSummaryV150OrderEventsRequiresInjectedStoreAndIsIdempotent(t *testing.T) {
 	loc := cnLocation()
 	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
 	validFrom := decision.Add(30 * time.Minute)
@@ -914,76 +913,49 @@ func TestAppendMarketSummaryV150OrderEventsInjectedStoreMatchesLegacyWrapper(t *
 		{Type: v150.EventOrder, At: validFrom.Add(30 * time.Minute), Symbol: "600000.SH", Reason: "next_bar_market_order"},
 	}
 	accounting := marketSummaryV150EventAccounting{Entry: &cost}
-
-	results := make(map[string][]models.OrderEvent, 2)
-	for _, test := range []struct {
-		name     string
-		injected bool
-	}{
-		{name: "legacy_wrapper"},
-		{name: "injected_store", injected: true},
-	} {
-		test := test
-		t.Run(test.name, func(t *testing.T) {
-			rec := seedMarketSummaryV150ExecutionFixture(t, decision, marketSummaryV150TestBreakoutPlan(validFrom))
-			var run models.StrategyRunSnapshot
-			if err := db.Dao.Where("run_id = ?", rec.StrategyRunID).First(&run).Error; err != nil {
-				t.Fatal(err)
-			}
-			var err error
-			if test.injected {
-				err = appendMarketSummaryV150OrderEventsWithStore(
-					context.Background(), persistence.NewGORMOrderEventStore(db.Dao), rec, run, source, accounting,
-				)
-			} else {
-				err = appendMarketSummaryV150OrderEvents(rec, run, source, accounting)
-			}
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			var rows []models.OrderEvent
-			if err := db.Dao.Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
-				Order("sequence ASC, event_id ASC").Find(&rows).Error; err != nil {
-				t.Fatal(err)
-			}
-			if len(rows) != 4 || marketSummaryV150TestEventTypes(rows) != "rule_issued,signal,order,fill" {
-				t.Fatalf("unexpected lifecycle rows: %s", marketSummaryV150TestEventTypes(rows))
-			}
-			if err := persistence.VerifyStrategyOrderEvents(rows); err != nil {
-				t.Fatalf("persisted lifecycle seal: %v", err)
-			}
-			for index := range rows {
-				rows[index].ID = 0
-				rows[index].CreatedAt = time.Time{}
-				rows[index].FrozenAt = nil
-				rows[index].SnapshotHash = ""
-			}
-			results[test.name] = rows
-
-			if test.injected {
-				if err := appendMarketSummaryV150OrderEventsWithStore(
-					context.Background(), persistence.NewGORMOrderEventStore(db.Dao), rec, run, source, accounting,
-				); err != nil {
-					t.Fatalf("idempotent retry: %v", err)
-				}
-				var count int64
-				if err := db.Dao.Model(&models.OrderEvent{}).
-					Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
-					Count(&count).Error; err != nil {
-					t.Fatal(err)
-				}
-				if count != int64(len(rows)) {
-					t.Fatalf("idempotent retry changed row count to %d", count)
-				}
-			}
-		})
+	rec := seedMarketSummaryV150ExecutionFixture(t, decision, marketSummaryV150TestBreakoutPlan(validFrom))
+	var run models.StrategyRunSnapshot
+	if err := db.Dao.Where("run_id = ?", rec.StrategyRunID).First(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := appendMarketSummaryV150OrderEvents(rec, run, source, accounting); !errors.Is(err, errMarketSummaryV150OrderEventStoreUnavailable) {
+		t.Fatalf("compatibility producer error = %v", err)
+	}
+	var count int64
+	if err := db.Dao.Model(&models.OrderEvent{}).
+		Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
+		Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("missing store changed immutable ledger row count to %d", count)
 	}
 
-	if !reflect.DeepEqual(results["legacy_wrapper"], results["injected_store"]) {
-		legacyJSON, _ := json.Marshal(results["legacy_wrapper"])
-		injectedJSON, _ := json.Marshal(results["injected_store"])
-		t.Fatalf("injected store changed immutable business rows\nlegacy=%s\ninjected=%s", legacyJSON, injectedJSON)
+	store := persistence.NewGORMOrderEventStore(db.Dao)
+	if err := appendMarketSummaryV150OrderEventsWithStore(context.Background(), store, rec, run, source, accounting); err != nil {
+		t.Fatal(err)
+	}
+	var rows []models.OrderEvent
+	if err := db.Dao.Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
+		Order("sequence ASC, event_id ASC").Find(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 4 || marketSummaryV150TestEventTypes(rows) != "rule_issued,signal,order,fill" {
+		t.Fatalf("unexpected lifecycle rows: %s", marketSummaryV150TestEventTypes(rows))
+	}
+	if err := persistence.VerifyStrategyOrderEvents(rows); err != nil {
+		t.Fatalf("persisted lifecycle seal: %v", err)
+	}
+	if err := appendMarketSummaryV150OrderEventsWithStore(context.Background(), store, rec, run, source, accounting); err != nil {
+		t.Fatalf("idempotent retry: %v", err)
+	}
+	if err := db.Dao.Model(&models.OrderEvent{}).
+		Where("run_id = ? AND rule_id = ?", rec.StrategyRunID, rec.StrategyRuleID).
+		Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != int64(len(rows)) {
+		t.Fatalf("idempotent retry changed row count to %d", count)
 	}
 }
 
@@ -1022,7 +994,7 @@ func TestAppendMarketSummaryV150OrderEventsRejectsFutureEventWithoutFutureFreeze
 	}
 
 	futureAt := time.Now().Add(time.Minute)
-	err := appendMarketSummaryV150OrderEvents(rec, run, []v150.OrderEvent{{
+	err := appendMarketSummaryV150OrderEventsWithStore(context.Background(), persistence.NewGORMOrderEventStore(db.Dao), rec, run, []v150.OrderEvent{{
 		Type: v150.EventSignal, At: futureAt, Symbol: rec.StockCode, Reason: string(v150.PathBreakout),
 	}}, marketSummaryV150EventAccounting{})
 	if err == nil || !strings.Contains(err.Error(), "is in the future") {

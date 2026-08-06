@@ -15,6 +15,11 @@ import (
 
 type marketSummaryV150MonitorContextKey struct{}
 
+func loadMarketSummaryV150ActiveExecutionRecordsForTest(observedAt time.Time) ([]models.AiRecommendStocks, int, int, int, []string, error) {
+	sink := newMarketSummaryV150OrderEventSink(context.Background(), persistence.NewGORMOrderEventStore(db.Dao))
+	return loadMarketSummaryV150ActiveExecutionRecordsWithSink(observedAt, sink)
+}
+
 func TestCompatibilityExecutionMonitorCanceledContextDoesNotAppend(t *testing.T) {
 	store := &recordingMarketSummaryV150OrderEventStore{}
 	monitor := NewCompatibilityExecutionMonitor(store)
@@ -26,6 +31,24 @@ func TestCompatibilityExecutionMonitorCanceledContextDoesNotAppend(t *testing.T)
 	}
 	if store.calls != 0 {
 		t.Fatalf("canceled monitor appended %d event batches", store.calls)
+	}
+}
+
+func TestMarketSummaryV150CompatibilityProducersWithoutStoreFailClosed(t *testing.T) {
+	initMarketSummaryV150ExecutionTestDB(t)
+	now := time.Now().In(cnLocation())
+	if _, err := RunMarketSummaryV150ExecutionMonitor(now); !errors.Is(err, errMarketSummaryV150OrderEventStoreUnavailable) {
+		t.Fatalf("compatibility monitor error = %v", err)
+	}
+	if _, _, _, _, _, err := loadMarketSummaryV150ActiveExecutionRecords(now); !errors.Is(err, errMarketSummaryV150OrderEventStoreUnavailable) {
+		t.Fatalf("compatibility enumeration error = %v", err)
+	}
+	var count int64
+	if err := db.Dao.Model(&models.OrderEvent{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("missing store compatibility producers appended %d order events", count)
 	}
 }
 
@@ -173,11 +196,11 @@ func TestMarketSummaryV150ExecutionObservationFailureSkipsSymbolAndIsRetryable(t
 	})
 
 	previousDay := shiftToPrevCNOpenTradeDaySafe(normalizeDailyTradeDate(now).AddDate(0, 0, -1))
-	ctx := yieldBuildContext{
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 		Force: true, Reason: "v150_execution_monitor", Now: now,
 		LatestTradeDate: normalizeDailyTradeDate(previousDay), V150EvaluationCutoff: marketSummaryV150SessionTime(previousDay, 15, 0),
 		FailOnV150ObservationRefreshError: true,
-	}
+	})
 	records := []*marketSummaryV150ScheduledRecord{{record: rec, ruleID: rec.StrategyRuleID}}
 	err := processMarketSummaryV150RecordsInEventOrder(records, ctx, newAiRecommendYieldSnapshotWriter(0, 100))
 	var observationErr *MarketSummaryV150ExecutionObservationError
@@ -277,7 +300,7 @@ func TestLoadMarketSummaryV150ActiveExecutionRecordsIncludesPendingAndOpen(t *te
 		t.Fatal(err)
 	}
 
-	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(validFrom)
+	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecordsForTest(validFrom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +358,7 @@ func TestMarketSummaryV150ExecutionFrozenRuleWithoutProjectionStillFills(t *test
 		t.Fatal("fixture unexpectedly created the optional recommendation projection table")
 	}
 
-	active, pending, open, skipped, _, err := loadMarketSummaryV150ActiveExecutionRecords(validFrom.Add(45 * time.Minute))
+	active, pending, open, skipped, _, err := loadMarketSummaryV150ActiveExecutionRecordsForTest(validFrom.Add(45 * time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -346,10 +369,10 @@ func TestMarketSummaryV150ExecutionFrozenRuleWithoutProjectionStillFills(t *test
 		t.Fatalf("missing projection did not produce an executable compatibility record: %+v", active[0])
 	}
 
-	ctx := yieldBuildContext{
+	ctx := withTestMarketSummaryV150OrderEventSink(yieldBuildContext{
 		Now: validFrom.Add(45 * time.Minute), InTradingSession: true,
 		LatestTradeDate: decision, DisableMinuteFetch: true,
-	}
+	})
 	activationAt, _, info := resolveMarketSummaryV150Activation(active[0], ctx, false)
 	if activationAt == nil || !activationAt.Equal(validFrom.Add(30*time.Minute)) || info.V150Entry == nil {
 		t.Fatalf("frozen rule without display projection did not execute: at=%v info=%+v", activationAt, info)
@@ -383,7 +406,7 @@ func TestMarketSummaryV150ExecutionMonitorRejectsCorruptFrozenEntryPlan(t *testi
 	if err := db.Dao.Exec("CREATE TRIGGER immutable_strategy_rule_snapshot_update BEFORE UPDATE ON strategy_rule_snapshot BEGIN SELECT RAISE(ABORT, 'immutable table strategy_rule_snapshot'); END").Error; err != nil {
 		t.Fatal(err)
 	}
-	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(observedAt)
+	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecordsForTest(observedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +431,7 @@ func TestMarketSummaryV150ExecutionMonitorRejectsCorruptFrozenEntryPlan(t *testi
 
 	// The reject is terminal and idempotent: later scans neither re-enumerate
 	// the rule nor append another lifecycle event.
-	active, pending, open, skipped, _, err = loadMarketSummaryV150ActiveExecutionRecords(observedAt.Add(15 * time.Minute))
+	active, pending, open, skipped, _, err = loadMarketSummaryV150ActiveExecutionRecordsForTest(observedAt.Add(15 * time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,7 +465,7 @@ func TestMarketSummaryV150ExecutionMonitorPreservesOpenLedgerWhenPlanIsCorrupt(t
 		t.Fatal(err)
 	}
 
-	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(observedAt)
+	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecordsForTest(observedAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +536,9 @@ func seedMarketSummaryV150MonitorFrozenRule(t *testing.T, symbol, sector string,
 			v150.OrderEvent{Type: v150.EventExitFill, At: *exitAt, Symbol: symbol, Price: exitCost.EffectivePrice, Quantity: size.Quantity, Reason: string(v150.ExitTarget)},
 		)
 	}
-	if err := appendMarketSummaryV150OrderEvents(recommendation, run, events, accounting); err != nil {
+	if err := appendMarketSummaryV150OrderEventsWithStore(
+		context.Background(), persistence.NewGORMOrderEventStore(db.Dao), recommendation, run, events, accounting,
+	); err != nil {
 		t.Fatal(err)
 	}
 	return recommendation.StrategyRuleID

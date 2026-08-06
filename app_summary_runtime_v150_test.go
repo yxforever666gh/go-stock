@@ -83,7 +83,7 @@ func TestSummaryProductionUsesInjectedStrategyRuntimeGate(t *testing.T) {
 	app := &App{
 		ctx: context.Background(),
 		services: service.AppServices{
-			Recommend: service.NewRecommendService(operations, nil),
+			Recommend: service.NewRecommendService(operations, nil, nil, nil, ""),
 		},
 	}
 
