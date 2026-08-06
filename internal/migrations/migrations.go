@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
@@ -197,26 +196,26 @@ func schemaTypeIdentity(modelType reflect.Type) string {
 
 func mainModels() []any {
 	return []any{
-		&data.StockInfo{},
-		&data.StockBasic{},
-		&data.FollowedStock{},
-		&data.IndexBasic{},
-		&data.Settings{},
+		&models.StockInfo{},
+		&models.StockBasic{},
+		&models.FollowedStock{},
+		&IndexBasic{},
+		&models.Settings{},
 		&models.AIResponseResult{},
 		&models.AgentChatSession{},
 		&models.AgentChatMessage{},
 		&models.StockInfoHK{},
 		&models.StockInfoUS{},
-		&data.FollowedFund{},
-		&data.FundBasic{},
+		&models.FollowedFund{},
+		&models.FundBasic{},
 		&models.PromptTemplate{},
-		&data.Group{},
-		&data.GroupStock{},
+		&models.Group{},
+		&models.GroupStock{},
 		&models.Tags{},
 		&models.Telegraph{},
 		&models.TelegraphTags{},
 		&models.LongTigerRankData{},
-		&data.AIConfig{},
+		&models.AIConfig{},
 		&models.BKDict{},
 		&models.WordAnalyze{},
 		&models.SentimentResultAnalyze{},
