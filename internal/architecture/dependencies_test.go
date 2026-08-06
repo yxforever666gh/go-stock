@@ -40,7 +40,6 @@ var v150AllowedProductionImports = map[string]bool{
 // in the same change, so the list can only shrink deliberately.
 var deprecatedDataImportDebt = map[string]bool{
 	"app_ai_api.go":              true,
-	"app_config_api.go":          true,
 	"app_summary_runtime.go":     true,
 	"backend/agent/agent_api.go": true,
 	"internal/bootstrap/dependencies.go":                     true,

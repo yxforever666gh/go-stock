@@ -15,6 +15,10 @@ func NewAIService(operations AIOperations) AIService {
 	return AIService{operations: operations}
 }
 
+func (s AIService) TestAIConfig(ctx context.Context, aiConfigID int) *models.AIModelTestResult {
+	return s.operations.TestAIConfig(ctx, aiConfigID)
+}
+
 func (s AIService) AnalyzeSentiment(text string) models.SentimentResult {
 	return s.operations.AnalyzeSentiment(text)
 }

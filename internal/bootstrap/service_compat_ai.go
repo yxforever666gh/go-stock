@@ -72,6 +72,64 @@ func resolveCommandAIConfig(ctx context.Context, main *gorm.DB, opts cliports.Co
 	return cfg, nil
 }
 
+func (*compatibilityServiceAdapter) TestAIConfig(ctx context.Context, aiConfigID int) *models.AIModelTestResult {
+	startedAt := time.Now()
+	result := &models.AIModelTestResult{
+		Message:  "\u6d4b\u8bd5\u5931\u8d25",
+		Protocol: models.AIAPIProtocolChatCompletions,
+	}
+	if aiConfigID <= 0 {
+		result.Message = "\u8bf7\u5148\u4fdd\u5b58 AI \u914d\u7f6e\u540e\u518d\u6d4b\u8bd5"
+		return result
+	}
+	setting := data.GetSettingConfig()
+	if setting == nil || len(setting.AiConfigs) == 0 {
+		result.Message = "\u672a\u627e\u5230 AI \u914d\u7f6e"
+		return result
+	}
+	var aiConfig *models.AIConfig
+	for _, item := range setting.AiConfigs {
+		if item != nil && int(item.ID) == aiConfigID {
+			aiConfig = item
+			break
+		}
+	}
+	if aiConfig == nil {
+		result.Message = "\u672a\u627e\u5230\u6307\u5b9a AI \u914d\u7f6e\uff0c\u8bf7\u4fdd\u5b58\u540e\u91cd\u8bd5"
+		return result
+	}
+	result.Protocol = models.NormalizeAIAPIProtocol(aiConfig.ApiProtocol)
+	result.Model = strings.TrimSpace(aiConfig.ModelName)
+	if strings.TrimSpace(aiConfig.BaseUrl) == "" || strings.TrimSpace(aiConfig.ApiKey) == "" || result.Model == "" {
+		result.Message = "\u8bf7\u5b8c\u6574\u586b\u5199\u63a5\u53e3\u5730\u5740\u3001API Key \u548c\u6a21\u578b\u540d\u79f0"
+		return result
+	}
+
+	content, _, modelName, err := data.NewOpenAiWithConfig(ctx, aiConfig).CompleteChat([]map[string]any{
+		{"role": "user", "content": "\u8bf7\u53ea\u56de\u590d OK"},
+	}, false)
+	result.LatencyMs = time.Since(startedAt).Milliseconds()
+	if strings.TrimSpace(modelName) != "" {
+		result.Model = strings.TrimSpace(modelName)
+	}
+	if err != nil {
+		result.Message = err.Error()
+		return result
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		result.Message = "\u6a21\u578b\u8fd4\u56de\u5185\u5bb9\u4e3a\u7a7a"
+		return result
+	}
+	result.Success = true
+	result.Message = "\u6d4b\u8bd5\u6210\u529f"
+	if runes := []rune(content); len(runes) > 120 {
+		content = string(runes[:120])
+	}
+	result.ContentPreview = content
+	return result
+}
+
 func (*compatibilityServiceAdapter) AnalyzeSentiment(text string) models.SentimentResult {
 	return data.AnalyzeSentiment(text)
 }

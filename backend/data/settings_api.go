@@ -22,27 +22,19 @@ import (
 type Settings = models.Settings
 type AIConfig = models.AIConfig
 type SettingConfig = models.SettingConfig
+type AIModelTestResult = models.AIModelTestResult
 
 type SettingsApi struct {
 	Config *SettingConfig
-}
-
-type AIModelTestResult struct {
-	Success        bool   `json:"success"`
-	Message        string `json:"message"`
-	Protocol       string `json:"protocol"`
-	Model          string `json:"model"`
-	LatencyMs      int64  `json:"latencyMs"`
-	ContentPreview string `json:"contentPreview"`
 }
 
 var strictYieldEmailCronTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
 
 const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
 const (
-	AIAPIProtocolChatCompletions  = "chat_completions"
-	AIAPIProtocolOpenAIResponses  = "openai_responses"
-	AIAPIProtocolAnthropicMessage = "anthropic_messages"
+	AIAPIProtocolChatCompletions  = models.AIAPIProtocolChatCompletions
+	AIAPIProtocolOpenAIResponses  = models.AIAPIProtocolOpenAIResponses
+	AIAPIProtocolAnthropicMessage = models.AIAPIProtocolAnthropicMessage
 )
 
 func NewSettingsApi() *SettingsApi {
@@ -372,14 +364,7 @@ func GetSettingConfig() *SettingConfig {
 }
 
 func NormalizeAIAPIProtocol(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case AIAPIProtocolOpenAIResponses:
-		return AIAPIProtocolOpenAIResponses
-	case AIAPIProtocolAnthropicMessage:
-		return AIAPIProtocolAnthropicMessage
-	default:
-		return AIAPIProtocolChatCompletions
-	}
+	return models.NormalizeAIAPIProtocol(value)
 }
 
 func applySettingDefaults(settings *Settings) {

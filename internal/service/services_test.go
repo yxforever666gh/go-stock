@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 
 	"go-stock/backend/models"
@@ -19,6 +20,17 @@ func (o *recordingStockOperations) Follow(code string) string {
 type recordingConfigOperations struct {
 	ConfigOperations
 	config *models.SettingConfig
+}
+
+type recordingAIOperations struct {
+	AIOperations
+	configID int
+	result   *models.AIModelTestResult
+}
+
+func (o *recordingAIOperations) TestAIConfig(_ context.Context, configID int) *models.AIModelTestResult {
+	o.configID = configID
+	return o.result
 }
 
 func (o *recordingConfigOperations) GetConfig() *models.SettingConfig {
@@ -46,5 +58,16 @@ func TestServiceOperationsValidateNamesMissingPort(t *testing.T) {
 	err := (ServiceOperations{}).Validate()
 	if err == nil || err.Error() != "ai operations are required" {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestAIServiceTestsConfigurationThroughInjectedPort(t *testing.T) {
+	want := &models.AIModelTestResult{Success: true, Protocol: models.AIAPIProtocolOpenAIResponses}
+	operations := &recordingAIOperations{result: want}
+	if got := NewAIService(operations).TestAIConfig(context.Background(), 17); got != want {
+		t.Fatal("TestAIConfig() did not return the injected port result")
+	}
+	if operations.configID != 17 {
+		t.Fatalf("delegated AI config id = %d, want 17", operations.configID)
 	}
 }

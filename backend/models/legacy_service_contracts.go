@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -85,6 +86,36 @@ type AIConfig struct {
 }
 
 func (AIConfig) TableName() string { return "ai_config" }
+
+const (
+	AIAPIProtocolChatCompletions  = "chat_completions"
+	AIAPIProtocolOpenAIResponses  = "openai_responses"
+	AIAPIProtocolAnthropicMessage = "anthropic_messages"
+)
+
+// NormalizeAIAPIProtocol keeps the public configuration protocol bounded to
+// the provider contracts supported by the application.
+func NormalizeAIAPIProtocol(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case AIAPIProtocolOpenAIResponses:
+		return AIAPIProtocolOpenAIResponses
+	case AIAPIProtocolAnthropicMessage:
+		return AIAPIProtocolAnthropicMessage
+	default:
+		return AIAPIProtocolChatCompletions
+	}
+}
+
+// AIModelTestResult is the stable RPC response for a provider connectivity
+// check. It deliberately excludes configuration secrets.
+type AIModelTestResult struct {
+	Success        bool   `json:"success"`
+	Message        string `json:"message"`
+	Protocol       string `json:"protocol"`
+	Model          string `json:"model"`
+	LatencyMs      int64  `json:"latencyMs"`
+	ContentPreview string `json:"contentPreview"`
+}
 
 type SettingConfig struct {
 	*Settings
