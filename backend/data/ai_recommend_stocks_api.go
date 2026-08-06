@@ -552,8 +552,9 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		query = &models.AiRecommendStocksQuery{}
 	}
 	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortCurrent)
+	v150LedgerFirst := isV150YieldListCohort(query.StrategyCohort)
 	v150HealthWarnings := make([]string, 0)
-	if isV150CostVersion(query.StrategyCohort) {
+	if v150LedgerFirst {
 		if warnings, warningErr := loadV150ImmutableRunHealthWarnings(30); warningErr != nil {
 			logger.SugaredLogger.Warnf("load v1.5 yield health warnings failed: %v", warningErr)
 		} else {
@@ -573,6 +574,11 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		pageSize = 100
 	}
 	yieldMode := resolveAiRecommendYieldMode(query)
+	if v150LedgerFirst {
+		// V1.5 has no mutable/fast lifecycle view. Both the explicit release
+		// cohort and the current alias must use the frozen rule ledger.
+		yieldMode = aiRecommendYieldModeStrict
+	}
 
 	meta := models.AiRecommendYieldMeta{}
 	dataAsOf := ""
@@ -656,19 +662,40 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		recordCoverableStart = time.Time{}
 	}
 
-	records, err := listAiRecommendStocksForYield(query, recordCoverableStart)
-	if err != nil {
-		return nil, err
+	var err error
+	var records []models.AiRecommendStocks
+	var v150LedgerViews []v150YieldLedgerView
+	if v150LedgerFirst {
+		v150LedgerViews, err = loadV150YieldLedgerViews(query, now)
+		if err != nil {
+			// Fail closed: a broken frozen identity or sealed event prefix must
+			// never fall back to mutable activation/yield projections.
+			return nil, err
+		}
+		records = make([]models.AiRecommendStocks, 0, len(v150LedgerViews))
+		for _, view := range v150LedgerViews {
+			records = append(records, view.Record)
+		}
+	} else {
+		records, err = listAiRecommendStocksForYield(query, recordCoverableStart)
+		if err != nil {
+			return nil, err
+		}
 	}
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
-	records = collapseRecommendRecordsSameDayByCode(records)
-	dirtyScope, err := loadDirtyAiRecommendYieldScope(aiRecommendYieldModeStrict)
-	if err != nil {
-		return nil, err
+	if !v150LedgerFirst {
+		records = collapseRecommendRecordsSameDayByCode(records)
+	}
+	dirtyScope := aiRecommendYieldDirtyScope{}
+	if !v150LedgerFirst {
+		dirtyScope, err = loadDirtyAiRecommendYieldScope(aiRecommendYieldModeStrict)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(records) == 0 {
-		if yieldMode == aiRecommendYieldModeStrict {
+		if yieldMode == aiRecommendYieldModeStrict && !v150LedgerFirst {
 			fallbackPage, fallbackErr := s.buildYieldFallbackPage(
 				query,
 				page,
@@ -740,8 +767,8 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			DiemengHealthSummary:      diemengHealthSummary,
 			DiemengHealthCheckedAt:    diemengHealthCheckedAt,
 		}
-		if isV150CostVersion(query.StrategyCohort) {
-			emptyPage.V150Validation, _ = loadV150ForwardValidation()
+		if v150LedgerFirst {
+			emptyPage.V150Validation = calculateV150ForwardValidation(nil)
 			emptyPage.V150HealthWarnings = dedupeNonEmptyStrings(v150HealthWarnings, 0)
 		}
 		return emptyPage, nil
@@ -767,19 +794,26 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		)
 	}
 
-	recordStateMap, err := loadYieldRecordStateMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
+	var items []models.AiRecommendStocksYieldItem
+	if v150LedgerFirst {
+		var ledgerWarnings []string
+		items, ledgerWarnings = buildV150YieldLedgerFirstItems(v150LedgerViews, now)
+		v150HealthWarnings = append(v150HealthWarnings, ledgerWarnings...)
+	} else {
+		recordStateMap, stateErr := loadYieldRecordStateMapByRecommendRecords(records)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		stateMap, stateErr := loadYieldStateMapByRecommendRecords(records)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		overrideMap, stateErr := loadYieldOverrideMapByRecommendRecords(records)
+		if stateErr != nil {
+			return nil, stateErr
+		}
+		items = buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, coverageIssues)
 	}
-	stateMap, err := loadYieldStateMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
-	}
-	overrideMap, err := loadYieldOverrideMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
-	}
-	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, dirtyScope, coverageIssues)
 	// Strict mode is a read-only view of persisted snapshots. Do not make the
 	// database query depend on a live quote provider; background recalculation
 	// is responsible for refreshing CurrentPrice and CurrentPriceTime.
@@ -787,20 +821,26 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	diagnostics := calculateYieldDiagnosticSummary(records, items)
 
 	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
-	benchmarkSummary := calculateBenchmarkSummaryByItems(items)
-	if isV150CostVersion(query.StrategyCohort) {
+	benchmarkSummary := defaultBenchmarkSummaryResult()
+	if v150LedgerFirst && v150YieldHasActivatedRuleWithoutProjection(items) {
+		// Legacy benchmark/cashflow maps are keyed by RecommendID. Multiple
+		// projection-less frozen rules would all collide on zero, so refuse the
+		// comparison until those maps are migrated to RuleID identity.
+		benchmarkSummary.Warnings = []string{v150BenchmarkPartialHealthCode}
+	} else {
+		benchmarkSummary = calculateBenchmarkSummaryByItems(items)
+	}
+	if v150LedgerFirst {
 		v150HealthWarnings = dedupeNonEmptyStrings(append(
 			append(v150HealthWarnings, collectV150YieldValuationHealthWarnings(items)...),
 			benchmarkSummary.Warnings...,
 		), 0)
 	}
 	var v150Validation *models.StrategyValidationStatus
-	if isV150CostVersion(query.StrategyCohort) {
-		v150Validation, err = loadV150ForwardValidation()
-		if err != nil {
-			logger.SugaredLogger.Warnf("load v1.5 forward validation failed: %v", err)
-			v150Validation = calculateV150ForwardValidation(items)
-		}
+	if v150LedgerFirst {
+		// Reuse the same ledger-first slice. Calling the legacy loader here
+		// would reintroduce mutable record-state lifecycle data into the page.
+		v150Validation = calculateV150ForwardValidation(items)
 	}
 	total := int64(len(items))
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
