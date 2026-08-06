@@ -2,10 +2,11 @@ package main
 
 import (
 	"encoding/json"
-	"go-stock/backend/data"
 	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
+	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 	"strconv"
 	"strings"
@@ -19,21 +20,25 @@ type summaryRunResult struct {
 	modelName     string
 	finalQuestion string
 	errs          []string
-	routeLog      *data.MarketSummaryRouteLogSnapshot
+	routeLog      *service.MarketSummaryRouteLog
 	verified      []models.MarketSummaryVerifiedCandidateSnapshot
-	v150Run       *data.MarketSummaryV150RunSnapshot
+	v150Run       *service.MarketSummaryV150DecisionEnvelope
 }
 
 type marketSummaryRuntimeMeta struct {
-	routeLog *data.MarketSummaryRouteLogSnapshot
+	routeLog *service.MarketSummaryRouteLog
 	verified []models.MarketSummaryVerifiedCandidateSnapshot
-	v150Run  *data.MarketSummaryV150RunSnapshot
+	v150Run  *service.MarketSummaryV150DecisionEnvelope
 }
 
 const marketSummaryV150BackendMissingReason = "V1.5 后端冻结决策缺失；已禁止回退旧版 Markdown 解析"
 
 func marketSummaryRequiresV150Backend() bool {
-	return strings.TrimSpace(data.MarketSummaryCurrentVersion()) == "1.5.0"
+	return currentMarketSummaryStrategyVersion() == v150.StrategyVersion
+}
+
+func currentMarketSummaryStrategyVersion() string {
+	return strings.TrimSpace(releaseinfo.Manifest().CurrentStrategyVersion)
 }
 
 func usableMarketSummaryRunResult(res summaryRunResult) bool {
@@ -42,8 +47,8 @@ func usableMarketSummaryRunResult(res summaryRunResult) bool {
 		// empty (notably on risk_off/no_trade) and must never prevent the
 		// structured no_trade result from being persisted.
 		return res.v150Run != nil &&
-			strings.TrimSpace(res.v150Run.RunContext.RunID) != "" &&
-			strings.TrimSpace(res.v150Run.RunContext.StrategyVersion) == data.MarketSummaryCurrentVersion()
+			strings.TrimSpace(res.v150Run.RunID) != "" &&
+			res.v150Run.MarketSummaryDecisionVersion() == currentMarketSummaryStrategyVersion()
 	}
 	return strings.TrimSpace(res.text) != ""
 }
@@ -66,7 +71,7 @@ func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int
 }
 
 func (a *App) runSummaryStockNewsTask(question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) summaryRunResult {
-	if err := a.services.Recommend.RequireStrategyLive(a.ctx, data.MarketSummaryCurrentVersion()); err != nil {
+	if err := a.services.Recommend.RequireStrategyLive(a.ctx, currentMarketSummaryStrategyVersion()); err != nil {
 		logger.SugaredLogger.Warnf("market summary production blocked: %v", err)
 		emitEvent(a.ctx, "summaryStockNewsToolStatus", map[string]any{
 			"event":  "summaryStockNewsToolStatus",
@@ -237,9 +242,8 @@ func applyMarketSummaryMetaMessage(target *marketSummaryRuntimeMeta, msg map[str
 	if raw, ok := msg["routeLog"]; ok {
 		b, err := json.Marshal(raw)
 		if err == nil {
-			var route data.MarketSummaryRouteLogSnapshot
-			if json.Unmarshal(b, &route) == nil {
-				target.routeLog = &route
+			if route, err := service.DecodeMarketSummaryRouteLog(json.RawMessage(b)); err == nil {
+				target.routeLog = route
 			}
 		}
 	}
@@ -255,9 +259,8 @@ func applyMarketSummaryMetaMessage(target *marketSummaryRuntimeMeta, msg map[str
 	if raw, ok := msg["v150Run"]; ok {
 		b, err := json.Marshal(raw)
 		if err == nil {
-			var run data.MarketSummaryV150RunSnapshot
-			if json.Unmarshal(b, &run) == nil && strings.TrimSpace(run.RunContext.RunID) != "" {
-				target.v150Run = &run
+			if run, err := service.DecodeMarketSummaryV150DecisionEnvelope(json.RawMessage(b)); err == nil {
+				target.v150Run = run
 			}
 		}
 	}
@@ -514,9 +517,9 @@ func (a *App) persistMarketSummaryV150RunResult(res summaryRunResult, startedAt 
 	} else if saveResult != nil {
 		logger.SugaredLogger.Infof(
 			"V1.5 后端决策持久化完成: run=%s candidates=%d production=%d saved=%d noTrade=%s",
-			res.v150Run.RunContext.RunID,
-			len(res.v150Run.Candidates),
-			len(res.v150Run.Production),
+			res.v150Run.RunID,
+			res.v150Run.CandidateCount,
+			res.v150Run.ProductionCount,
 			saveResult.SavedCount,
 			res.v150Run.NoTradeReason,
 		)
@@ -541,7 +544,7 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 		return firstResult
 	}
 	countPolicy := a.services.AI.ResolveMarketSummaryRecommendationCountPolicy(res.finalQuestion)
-	if !shouldRunMarketSummaryModelSupplement(data.MarketSummaryCurrentVersion()) {
+	if !shouldRunMarketSummaryModelSupplement(currentMarketSummaryStrategyVersion()) {
 		firstResult.SupplementTriggered = false
 		firstResult.SupplementText = "V1.5.0 已禁用为凑数量而发起的第二轮模型生成；结构字段仅在首次持久化前逐条规范化，单条失败不会影响同批记录。"
 		reportText, _ = a.services.AI.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
@@ -636,10 +639,10 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 }
 
 func shouldRunMarketSummaryModelSupplement(version string) bool {
-	return strings.TrimSpace(version) != "1.5.0"
+	return strings.TrimSpace(version) != v150.StrategyVersion
 }
 
-func (a *App) updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy service.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {
+func (a *App) updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *service.MarketSummaryRouteLog, countPolicy service.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {
 	if report == nil {
 		return
 	}
@@ -654,7 +657,7 @@ func (a *App) updateMarketSummaryReportRuntimeResult(report *models.AIResponseRe
 	}
 }
 
-func buildMarketSummaryCandidateFunnel(routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy service.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, visibleCount, outputRowsOmitted int) string {
+func buildMarketSummaryCandidateFunnel(routeLog *service.MarketSummaryRouteLog, countPolicy service.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, visibleCount, outputRowsOmitted int) string {
 	indicatorCandidates := 0
 	indicatorAIInput := 0
 	discoveryCandidates := 0
@@ -992,7 +995,7 @@ func marketSummaryBlockedReasonText(items []models.MarketSummaryBlockedReasonIte
 func (a *App) persistMarketSummaryDiagnostic(res summaryRunResult, startedAt, finishedAt time.Time, saveResult *models.MarketSummaryRecommendSaveResult) {
 	item := &models.MarketSummaryRunDiagnostic{
 		RunID:          "market-summary-" + startedAt.Format("20060102150405.000000000"),
-		SummaryVersion: data.MarketSummaryCurrentVersion(),
+		SummaryVersion: currentMarketSummaryStrategyVersion(),
 		StartedAt:      startedAt,
 		FinishedAt:     finishedAt,
 	}

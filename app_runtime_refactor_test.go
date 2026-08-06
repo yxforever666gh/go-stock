@@ -223,7 +223,7 @@ func TestBuildMarketSummaryCandidateFunnelExplainsHardLimits(t *testing.T) {
 		Custom: legacyPolicy.Custom, Clamped: legacyPolicy.Clamped,
 	}
 	text := buildMarketSummaryCandidateFunnel(
-		&data.MarketSummaryRouteLogSnapshot{IndicatorCandidateCt: 120, IndicatorAIInputCt: 50, DiscoveryCandidateCt: 36, VerifiedCandidateCt: 8},
+		&service.MarketSummaryRouteLog{IndicatorCandidateCt: 120, IndicatorAIInputCt: 50, DiscoveryCandidateCt: 36, VerifiedCandidateCt: 8},
 		policy,
 		&models.MarketSummaryRecommendSaveResult{AIOutputCount: 20, SavedCount: 8, ProductionCount: 4, AnalysisOnlyCount: 4, BlockedCount: 12},
 		8,

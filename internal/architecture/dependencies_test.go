@@ -39,9 +39,7 @@ var v150AllowedProductionImports = map[string]bool{
 // This is an explicit migration debt ledger, not a permanent exemption. New
 // direct imports fail the test; removing one requires removing its entry here
 // in the same change, so the list can only shrink deliberately.
-var deprecatedDataImportDebt = map[string]bool{
-	"app_summary_runtime.go": true,
-}
+var deprecatedDataImportDebt = map[string]bool{}
 
 var deprecatedDataCompatibilityAdapters = map[string]bool{
 	"internal/bootstrap/agent_tools_compat.go":         true,

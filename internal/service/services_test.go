@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -172,6 +173,38 @@ func TestAIServiceDelegatesMarketSummaryPresentationThroughInjectedPort(t *testi
 	merged, mergeStats := service.MergeMarketSummarySupplementReport("base", "supplement", []string{"000001"}, 12)
 	if merged != "merged" || len(mergeStats.VisibleCodes) != 1 || mergeStats.VisibleCodes[0] != "000001" {
 		t.Fatalf("merged=%q stats=%#v", merged, mergeStats)
+	}
+}
+
+func TestDecodeMarketSummaryRuntimeEnvelopes(t *testing.T) {
+	route, err := DecodeMarketSummaryRouteLog(map[string]any{
+		"runSlot": "close", "indicatorCandidateCount": 18, "indicatorAIInputCount": 12,
+		"discoveryCandidateCount": 9, "verifiedCandidateCount": 3, "notes": []string{"fresh"},
+	})
+	if err != nil || route.RunSlot != "close" || route.VerifiedCandidateCt != 3 || len(route.Notes) != 1 {
+		t.Fatalf("route=%#v err=%v", route, err)
+	}
+
+	decision, err := DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
+		"runContext": map[string]any{"runId": "run-1", "strategyVersion": "1.5.0"},
+		"candidates": []map[string]any{{"symbol": "000001.SZ"}, {"symbol": "600000.SH"}},
+		"production": []map[string]any{{"symbol": "000001.SZ"}}, "noTradeReason": "",
+	})
+	if err != nil || decision.RunID != "run-1" || decision.MarketSummaryDecisionVersion() != "1.5.0" || decision.CandidateCount != 2 || decision.ProductionCount != 1 || len(decision.RawJSON) == 0 {
+		t.Fatalf("decision=%#v err=%v", decision, err)
+	}
+}
+
+func TestDecodeMarketSummaryV150DecisionEnvelopeRejectsMalformedOrIncompletePayload(t *testing.T) {
+	for _, raw := range []any{
+		nil,
+		map[string]any{"runContext": map[string]any{"strategyVersion": "1.5.0"}},
+		map[string]any{"runContext": map[string]any{"runId": "run-1"}},
+		json.RawMessage(`{`),
+	} {
+		if decision, err := DecodeMarketSummaryV150DecisionEnvelope(raw); err == nil || decision != nil {
+			t.Fatalf("raw=%#v decision=%#v err=%v, want rejection", raw, decision, err)
+		}
 	}
 }
 

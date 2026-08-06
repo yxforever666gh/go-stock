@@ -66,3 +66,35 @@ func TestRecommendationCompatibilityAdapterRejectsUnknownDecisionType(t *testing
 		t.Fatalf("unsupported decision error = %v", err)
 	}
 }
+
+func TestMarketSummaryV150SnapshotFromEnvelopeRestoresFrozenJSON(t *testing.T) {
+	envelope, err := service.DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
+		"runContext":    map[string]any{"runId": "run-restore", "strategyVersion": "1.5.0"},
+		"candidates":    []map[string]any{{"candidate": map[string]any{"symbol": "000001.SZ"}}},
+		"production":    []map[string]any{{"symbol": "000001.SZ"}},
+		"noTradeReason": "",
+	})
+	if err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	run, err := marketSummaryV150SnapshotFromEnvelope(envelope)
+	if err != nil {
+		t.Fatalf("restore envelope: %v", err)
+	}
+	if run.RunContext.RunID != envelope.RunID || run.RunContext.StrategyVersion != envelope.StrategyVersion || len(run.Candidates) != envelope.CandidateCount || len(run.Production) != envelope.ProductionCount {
+		t.Fatalf("restored snapshot does not preserve envelope identity: %#v", run)
+	}
+}
+
+func TestMarketSummaryV150SnapshotFromEnvelopeRejectsPayloadMismatch(t *testing.T) {
+	envelope, err := service.DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
+		"runContext": map[string]any{"runId": "run-mismatch", "strategyVersion": "1.5.0"},
+	})
+	if err != nil {
+		t.Fatalf("decode envelope: %v", err)
+	}
+	envelope.ProductionCount = 1
+	if run, err := marketSummaryV150SnapshotFromEnvelope(envelope); err == nil || run != nil {
+		t.Fatalf("run=%#v err=%v, want envelope mismatch", run, err)
+	}
+}

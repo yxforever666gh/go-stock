@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"go-stock/backend/data"
 	"go-stock/backend/strategy/v150"
+	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 )
 
@@ -23,7 +23,7 @@ func (o *blockingSummaryRecommendOperations) RequireStrategyLive(_ context.Conte
 
 func TestV150SummaryResultRequiresFrozenBackendDecision(t *testing.T) {
 	if !marketSummaryRequiresV150Backend() {
-		t.Fatalf("current summary version = %s, want 1.5.0 backend enforcement", data.MarketSummaryCurrentVersion())
+		t.Fatalf("current summary version = %s, want 1.5.0 backend enforcement", releaseinfo.Manifest().CurrentStrategyVersion)
 	}
 	plain := summaryRunResult{text: "legacy markdown"}
 	if usableMarketSummaryRunResult(plain) {
@@ -35,11 +35,8 @@ func TestV150SummaryResultRequiresFrozenBackendDecision(t *testing.T) {
 	}
 
 	valid := summaryRunResult{
-		text: "presentation",
-		v150Run: &data.MarketSummaryV150RunSnapshot{RunContext: v150.RunContext{
-			RunID:           "v150-run",
-			StrategyVersion: v150.StrategyVersion,
-		}},
+		text:    "presentation",
+		v150Run: mustDecodeV150DecisionEnvelope(t, "v150-run", v150.StrategyVersion),
 	}
 	if !usableMarketSummaryRunResult(valid) {
 		t.Fatal("frozen V1.5 backend decision was rejected")
@@ -50,10 +47,7 @@ func TestV150SummaryResultRequiresFrozenBackendDecision(t *testing.T) {
 	}
 
 	wrongVersion := valid
-	wrongVersion.v150Run = &data.MarketSummaryV150RunSnapshot{RunContext: v150.RunContext{
-		RunID:           "wrong-version",
-		StrategyVersion: "1.4.2",
-	}}
+	wrongVersion.v150Run = mustDecodeV150DecisionEnvelope(t, "wrong-version", "1.4.2")
 	if usableMarketSummaryRunResult(wrongVersion) {
 		t.Fatal("wrong-version backend decision was accepted")
 	}
@@ -64,15 +58,23 @@ func TestV150SummaryFailoverDoesNotStopAtPlainText(t *testing.T) {
 		t.Fatal("V1.5 failover stopped at a plain-text result without a frozen run")
 	}
 	complete := summaryRunResult{
-		text: "presentation",
-		v150Run: &data.MarketSummaryV150RunSnapshot{RunContext: v150.RunContext{
-			RunID:           "v150-run",
-			StrategyVersion: v150.StrategyVersion,
-		}},
+		text:    "presentation",
+		v150Run: mustDecodeV150DecisionEnvelope(t, "v150-run", v150.StrategyVersion),
 	}
 	if shouldSummaryFailover(complete) {
 		t.Fatal("complete V1.5 result unexpectedly requested failover")
 	}
+}
+
+func mustDecodeV150DecisionEnvelope(t *testing.T, runID, version string) *service.MarketSummaryV150DecisionEnvelope {
+	t.Helper()
+	decision, err := service.DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
+		"runContext": map[string]any{"runId": runID, "strategyVersion": version},
+	})
+	if err != nil {
+		t.Fatalf("decode test V1.5 decision: %v", err)
+	}
+	return decision
 }
 
 func TestSummaryProductionUsesInjectedStrategyRuntimeGate(t *testing.T) {
