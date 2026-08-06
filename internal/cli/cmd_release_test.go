@@ -1,12 +1,15 @@
 package cli
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -154,4 +157,150 @@ func TestVerifyReplayBundlePassesManifestIdentityToRepository(t *testing.T) {
 	if !repository.request.RecommendationTo.Equal(wantTo) || repository.request.ExpectedRuleCount != manifest.Replay.ExpectedRuleCount {
 		t.Fatalf("repository request = %+v, want cutoff %s count %d", repository.request, wantTo, manifest.Replay.ExpectedRuleCount)
 	}
+}
+
+func TestRunVerifyZoneinfoAcceptsGOROOTZoneinfo(t *testing.T) {
+	zoneinfoPath := filepath.Join(runtime.GOROOT(), "lib", "time", "zoneinfo.zip")
+	expectedSHA256 := testFileSHA256(t, zoneinfoPath)
+	var stdout strings.Builder
+
+	err := runReleaseWithRepository([]string{
+		"verify-zoneinfo",
+		"--path", zoneinfoPath,
+		"--expect-sha256", expectedSHA256,
+	}, &stdout, nil)
+	if err != nil {
+		t.Fatalf("verify GOROOT zoneinfo: %v", err)
+	}
+	if !strings.Contains(stdout.String(), expectedSHA256) || !strings.Contains(stdout.String(), "Asia/Shanghai=+08:00") {
+		t.Fatalf("unexpected verification output: %q", stdout.String())
+	}
+}
+
+func TestVerifyZoneinfoRejectsMissingFile(t *testing.T) {
+	_, err := verifyZoneinfo(filepath.Join(t.TempDir(), "missing-zoneinfo.zip"), strings.Repeat("0", sha256.Size*2))
+	if err == nil || !strings.Contains(err.Error(), "read zoneinfo ZIP") {
+		t.Fatalf("expected missing file error, got %v", err)
+	}
+}
+
+func TestVerifyZoneinfoRejectsHashMismatch(t *testing.T) {
+	path := writeTestZoneinfoZIP(t, []testZoneinfoEntry{{name: "Asia/Shanghai", data: []byte("not inspected before hash matches")}})
+	_, err := verifyZoneinfo(path, strings.Repeat("0", sha256.Size*2))
+	if err == nil || !strings.Contains(err.Error(), "zoneinfo ZIP SHA256 mismatch") {
+		t.Fatalf("expected hash mismatch, got %v", err)
+	}
+}
+
+func TestVerifyZoneinfoRejectsCorruptZIP(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "zoneinfo.zip")
+	if err := os.WriteFile(path, []byte("not a ZIP archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := verifyZoneinfo(path, testFileSHA256(t, path))
+	if err == nil || !strings.Contains(err.Error(), "open zoneinfo ZIP") {
+		t.Fatalf("expected corrupt ZIP error, got %v", err)
+	}
+}
+
+func TestVerifyZoneinfoRejectsMissingShanghaiEntry(t *testing.T) {
+	path := writeTestZoneinfoZIP(t, []testZoneinfoEntry{{name: "Asia/Chongqing", data: []byte("not relevant")}})
+	_, err := verifyZoneinfo(path, testFileSHA256(t, path))
+	if err == nil || !strings.Contains(err.Error(), "exactly one Asia/Shanghai entry: found 0") {
+		t.Fatalf("expected missing Asia/Shanghai error, got %v", err)
+	}
+}
+
+func TestVerifyZoneinfoRejectsInvalidShanghaiEntry(t *testing.T) {
+	path := writeTestZoneinfoZIP(t, []testZoneinfoEntry{{name: "Asia/Shanghai", data: []byte("not TZif data")}})
+	_, err := verifyZoneinfo(path, testFileSHA256(t, path))
+	if err == nil || !strings.Contains(err.Error(), "validate zoneinfo ZIP Asia/Shanghai entry") {
+		t.Fatalf("expected invalid TZif error, got %v", err)
+	}
+}
+
+func TestVerifyZoneinfoRequiresExactlyOneNonEmptyShanghaiEntry(t *testing.T) {
+	t.Run("duplicate", func(t *testing.T) {
+		path := writeTestZoneinfoZIP(t, []testZoneinfoEntry{
+			{name: "Asia/Shanghai", data: []byte("first")},
+			{name: "Asia/Shanghai", data: []byte("second")},
+		})
+		_, err := verifyZoneinfo(path, testFileSHA256(t, path))
+		if err == nil || !strings.Contains(err.Error(), "exactly one Asia/Shanghai entry: found 2") {
+			t.Fatalf("expected duplicate entry error, got %v", err)
+		}
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		path := writeTestZoneinfoZIP(t, []testZoneinfoEntry{{name: "Asia/Shanghai"}})
+		_, err := verifyZoneinfo(path, testFileSHA256(t, path))
+		if err == nil || !strings.Contains(err.Error(), "Asia/Shanghai entry is empty") {
+			t.Fatalf("expected empty entry error, got %v", err)
+		}
+	})
+}
+
+func TestRunVerifyZoneinfoRequiresFlagsAndLowercaseSHA256(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "path", args: []string{"verify-zoneinfo"}, want: "--path is required"},
+		{name: "hash", args: []string{"verify-zoneinfo", "--path", "zoneinfo.zip"}, want: "--expect-sha256 is required"},
+		{name: "lowercase hash", args: []string{"verify-zoneinfo", "--path", "zoneinfo.zip", "--expect-sha256", strings.Repeat("A", sha256.Size*2)}, want: "lowercase SHA256"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout strings.Builder
+			err := runReleaseWithRepository(tt.args, &stdout, nil)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("expected error containing %q, got %v", tt.want, err)
+			}
+		})
+	}
+
+	var stdout strings.Builder
+	err := runReleaseWithRepository(nil, &stdout, nil)
+	if err == nil || !strings.Contains(err.Error(), "verify-zoneinfo") {
+		t.Fatalf("release usage does not include verify-zoneinfo: %v", err)
+	}
+}
+
+type testZoneinfoEntry struct {
+	name string
+	data []byte
+}
+
+func writeTestZoneinfoZIP(t *testing.T, entries []testZoneinfoEntry) string {
+	t.Helper()
+	var payload bytes.Buffer
+	archive := zip.NewWriter(&payload)
+	for _, entry := range entries {
+		writer, err := archive.Create(entry.name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(entry.data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "zoneinfo.zip")
+	if err := os.WriteFile(path, payload.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func testFileSHA256(t *testing.T, path string) string {
+	t.Helper()
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", digest)
 }

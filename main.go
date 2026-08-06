@@ -12,6 +12,7 @@ import (
 	"go-stock/internal/releaseinfo"
 	"os"
 	"runtime/debug"
+	_ "time/tzdata"
 )
 
 //go:embed all:frontend/dist

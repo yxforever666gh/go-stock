@@ -48,6 +48,41 @@ function Invoke-Checked {
     }
 }
 
+function Get-BuildZoneInfoSource {
+    $goRootOutput = @()
+    $goExitCode = 1
+    try {
+        $goRootOutput = @(& go env GOROOT 2>&1)
+        $goExitCode = $LASTEXITCODE
+    } catch {
+        if ($LASTEXITCODE) { $goExitCode = $LASTEXITCODE }
+    }
+    if ($goExitCode -ne 0) { throw "Cannot resolve build timezone data" }
+    $goRoot = (($goRootOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine).Trim()
+    $source = Join-Path $goRoot "lib\time\zoneinfo.zip"
+    if (-not (Test-Path -LiteralPath $source)) { throw "Build timezone data is unavailable" }
+    return (Resolve-Path -LiteralPath $source).Path
+}
+
+function Assert-ZoneInfoIdentity {
+    param([string]$Path, [string]$ExpectedSHA256)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { throw "Release timezone sidecar is missing" }
+    $expected = $ExpectedSHA256.Trim().ToLowerInvariant()
+    if ($expected -notmatch '^[a-f0-9]{64}$') { throw "Release timezone sidecar SHA256 is invalid" }
+    $actual = (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actual -ne $expected) { throw "Release timezone sidecar SHA256 mismatch" }
+}
+
+function Assert-ZoneInfoArchive {
+    param([string]$ValidatorBinary, [string]$Path, [string]$ExpectedSHA256)
+    Assert-ZoneInfoIdentity $Path $ExpectedSHA256
+    Invoke-Checked $ValidatorBinary @(
+        "release", "verify-zoneinfo",
+        "--path", (Resolve-Path -LiteralPath $Path).Path,
+        "--expect-sha256", $ExpectedSHA256
+    ) "Release timezone sidecar verification failed"
+}
+
 function Test-SamePath {
     param([string]$Left, [string]$Right)
     return [System.IO.Path]::GetFullPath($Left).TrimEnd('\') -eq [System.IO.Path]::GetFullPath($Right).TrimEnd('\')
@@ -319,12 +354,13 @@ function Build-Candidate {
     param($Context)
     Invoke-Preflight $Context
     $buildInfoPath = Join-Path $Context.ReleaseDir "build_info.json"
-    if ((Test-Path -LiteralPath $Context.Binary) -or (Test-Path -LiteralPath $buildInfoPath)) {
-        if (-not (Test-Path -LiteralPath $Context.Binary) -or -not (Test-Path -LiteralPath $buildInfoPath)) {
+    $zoneInfoPath = Join-Path $Context.ReleaseDir "zoneinfo.zip"
+    if ((Test-Path -LiteralPath $Context.Binary) -or (Test-Path -LiteralPath $buildInfoPath) -or (Test-Path -LiteralPath $zoneInfoPath)) {
+        if (-not (Test-Path -LiteralPath $Context.Binary) -or -not (Test-Path -LiteralPath $buildInfoPath) -or -not (Test-Path -LiteralPath $zoneInfoPath)) {
             throw "Incomplete candidate already exists for this commit: $($Context.ReleaseDir)"
         }
-        $existingHash = Assert-CandidateMetadata $Context
-        return $existingHash
+        $existing = Assert-CandidateMetadata $Context
+        return $existing.ArtifactSHA256
     }
     New-Item -ItemType Directory -Force -Path $Context.ReleaseDir | Out-Null
     $buildTime = (Get-Date).ToUniversalTime().ToString("o")
@@ -334,25 +370,31 @@ function Build-Candidate {
     try {
         Invoke-Checked "go" @("build", "-tags", "webonly", "-trimpath", "-ldflags", $ldflags, "-o", $Context.Binary, ".") "Windows Web build failed"
     } finally { Pop-Location }
+    Copy-Item -LiteralPath (Get-BuildZoneInfoSource) -Destination $zoneInfoPath
     Copy-Item -LiteralPath $ManifestSource -Destination (Join-Path $Context.ReleaseDir "release_manifest.json") -Force
     Copy-Item -LiteralPath $ReplayBundleManifestFullPath -Destination (Join-Path $Context.ReleaseDir "replay_bundle_manifest.json") -Force
     $hash = (Get-FileHash -LiteralPath $Context.Binary -Algorithm SHA256).Hash.ToLowerInvariant()
-    [pscustomobject]@{ artifactSHA256 = $hash; buildTime = $buildTime; commit = $Context.Commit; dirty = $Context.Dirty } |
+    $zoneInfoHash = (Get-FileHash -LiteralPath $zoneInfoPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    [pscustomobject]@{ artifactSHA256 = $hash; zoneInfoSHA256 = $zoneInfoHash; buildTime = $buildTime; commit = $Context.Commit; dirty = $Context.Dirty } |
         ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Context.ReleaseDir "build_info.json") -Encoding UTF8
-    return $hash
+    $metadata = Assert-CandidateMetadata $Context
+    return $metadata.ArtifactSHA256
 }
 
 function Assert-CandidateMetadata {
     param($Context)
     $buildInfoPath = Join-Path $Context.ReleaseDir "build_info.json"
-    if (-not (Test-Path -LiteralPath $Context.Binary) -or -not (Test-Path -LiteralPath $buildInfoPath)) {
-        throw "Candidate artifact or build_info.json is missing"
+    $zoneInfoPath = Join-Path $Context.ReleaseDir "zoneinfo.zip"
+    if (-not (Test-Path -LiteralPath $Context.Binary) -or -not (Test-Path -LiteralPath $buildInfoPath) -or -not (Test-Path -LiteralPath $zoneInfoPath)) {
+        throw "Candidate artifact, timezone sidecar, or build_info.json is missing"
     }
     $buildInfo = Get-Content -LiteralPath $buildInfoPath -Raw | ConvertFrom-Json
     $actualHash = (Get-FileHash -LiteralPath $Context.Binary -Algorithm SHA256).Hash.ToLowerInvariant()
+    $zoneInfoHash = ([string]$buildInfo.zoneInfoSHA256).ToLowerInvariant()
     if ($buildInfo.commit -ne $Context.Commit -or [bool]$buildInfo.dirty -or $buildInfo.artifactSHA256 -ne $actualHash) {
         throw "Candidate metadata does not match the clean main artifact"
     }
+    Assert-ZoneInfoArchive $Context.Binary $zoneInfoPath $zoneInfoHash
     $inspectOutput = @(& $Context.Binary "release" "inspect" 2>&1)
     $inspectExitCode = $LASTEXITCODE
     if ($inspectExitCode -ne 0) {
@@ -389,7 +431,11 @@ function Assert-CandidateMetadata {
     if ((Get-FileHash -LiteralPath $candidateReplayManifestPath -Algorithm SHA256).Hash -ne (Get-FileHash -LiteralPath $ReplayBundleManifestFullPath -Algorithm SHA256).Hash) {
         throw "Candidate replay manifest does not match the source manifest"
     }
-    return $actualHash
+    return [pscustomobject]@{
+        ArtifactSHA256 = $actualHash
+        ZoneInfo = (Resolve-Path -LiteralPath $zoneInfoPath).Path
+        ZoneInfoSHA256 = $zoneInfoHash
+    }
 }
 
 function Stop-WebService {
@@ -424,24 +470,50 @@ function Stop-WebService {
 }
 
 function Start-Candidate {
-    param([string]$Binary)
+    param([string]$Binary, [string]$ZoneInfo, [string]$ZoneInfoSHA256)
+    Assert-ZoneInfoIdentity $ZoneInfo $ZoneInfoSHA256
     $oldMainDB = $env:GO_STOCK_DB_PATH
     $oldMinuteDB = $env:GO_STOCK_MINUTE_DB_PATH
     $oldWebAddr = $env:GO_STOCK_WEB_ADDR
+    $oldZoneInfo = $env:ZONEINFO
     $outLog = Join-Path $RuntimeRoot "web.out.log"
     $errLog = Join-Path $RuntimeRoot "web.err.log"
     try {
         $env:GO_STOCK_DB_PATH = (Resolve-Path -LiteralPath $MainDB).Path
         $env:GO_STOCK_MINUTE_DB_PATH = (Resolve-Path -LiteralPath $MinuteDB).Path
         $env:GO_STOCK_WEB_ADDR = $WebAddr
+        $env:ZONEINFO = (Resolve-Path -LiteralPath $ZoneInfo).Path
         $process = Start-Process -FilePath $Binary -ArgumentList "--web" -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     } finally {
         $env:GO_STOCK_DB_PATH = $oldMainDB
         $env:GO_STOCK_MINUTE_DB_PATH = $oldMinuteDB
         $env:GO_STOCK_WEB_ADDR = $oldWebAddr
+        $env:ZONEINFO = $oldZoneInfo
     }
     $process.Id | Set-Content -LiteralPath $PidFile
     return $process
+}
+
+function Set-ReleasePointerZoneInfo {
+    param($Pointer, [string]$ZoneInfo, [string]$ZoneInfoSHA256)
+    Assert-PathHasNoLinks $ReleasesRoot $ZoneInfo "Release timezone sidecar"
+    Assert-ZoneInfoIdentity $ZoneInfo $ZoneInfoSHA256
+    $properties = [ordered]@{}
+    foreach ($property in $Pointer.PSObject.Properties) {
+        $properties[$property.Name] = $property.Value
+    }
+    $properties["zoneInfo"] = (Resolve-Path -LiteralPath $ZoneInfo).Path
+    $properties["zoneInfoSHA256"] = $ZoneInfoSHA256.Trim().ToLowerInvariant()
+    return [pscustomobject]$properties
+}
+
+function Assert-ReleasePointerZoneInfo {
+    param($Pointer)
+    if (-not $Pointer.zoneInfo -or -not $Pointer.zoneInfoSHA256) {
+        throw "Release pointer has no timezone sidecar identity"
+    }
+    Assert-PathHasNoLinks $ReleasesRoot ([string]$Pointer.zoneInfo) "Release timezone sidecar"
+    Assert-ZoneInfoIdentity ([string]$Pointer.zoneInfo) ([string]$Pointer.zoneInfoSHA256)
 }
 
 function Assert-SingleListener {
@@ -463,6 +535,9 @@ function Get-PreviousReleasePointer {
         $actualHash = (Get-FileHash -LiteralPath $pointer.binary -Algorithm SHA256).Hash.ToLowerInvariant()
         if ($actualHash -ne ([string]$pointer.artifactSHA256).ToLowerInvariant()) {
             throw "Current release pointer artifact hash does not match its binary"
+        }
+        if ($pointer.zoneInfo -or $pointer.zoneInfoSHA256) {
+            Assert-ReleasePointerZoneInfo $pointer
         }
         return $pointer
     }
@@ -491,6 +566,8 @@ function Get-PreviousReadinessExpectation {
     if (-not (Test-Path -LiteralPath $Previous.binary)) {
         throw "Previous release binary is missing: $($Previous.binary)"
     }
+    Assert-PathHasNoLinks $ReleasesRoot ([string]$Previous.binary) "Release binary"
+    Assert-ReleasePointerZoneInfo $Previous
 
     $actualHash = (Get-FileHash -LiteralPath $Previous.binary -Algorithm SHA256).Hash.ToLowerInvariant()
     $pointerHash = ([string]$Previous.artifactSHA256).ToLowerInvariant()
@@ -605,6 +682,22 @@ function Restore-Backup {
     Restore-DatabaseFile (Join-Path $BackupDir "minute.db") $MinuteDB
 }
 
+function Get-RollbackListenerExpectation {
+    param($Current, $Previous)
+    $port = Get-WebPort
+    $ids = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($ids.Count -eq 0) { return [string]$Current.binary }
+    if ($ids.Count -ne 1) { throw "Cannot roll back with $($ids.Count) listeners on $WebAddr" }
+    $listener = Get-CimInstance Win32_Process -Filter "ProcessId = $($ids[0])" -ErrorAction Stop
+    $listenerBinary = [string]$listener.ExecutablePath
+    if (-not $listenerBinary -or
+        (-not (Test-SamePath $listenerBinary ([string]$Current.binary)) -and
+         -not (Test-SamePath $listenerBinary ([string]$Previous.binary)))) {
+        throw "Refusing rollback because PID $($ids[0]) is not a release recorded by the receipt"
+    }
+    return $listenerBinary
+}
+
 function Restore-DatabaseFile {
     param([string]$Source, [string]$Destination)
     if (-not (Test-Path -LiteralPath $Source)) { throw "Restore source is missing: $Source" }
@@ -633,11 +726,17 @@ function Deploy-Candidate {
     if ($Context.Dirty) { throw "Deployments require a clean main commit" }
     Assert-UniqueMainBranch
     if (-not (Test-Path -LiteralPath $Context.Binary)) {
-        [void](Build-Candidate $Context)
-    } else {
-        Assert-CandidateFrozenReplay $Context.Binary
+        throw "Deployments require a prebuilt candidate; run release.ps1 build first"
     }
-    $artifactHash = Assert-CandidateMetadata $Context
+    Assert-CandidateFrozenReplay $Context.Binary
+    $candidateMetadata = Assert-CandidateMetadata $Context
+    $artifactHash = $candidateMetadata.ArtifactSHA256
+    $candidatePointer = Set-ReleasePointerZoneInfo ([pscustomobject]@{
+        appVersion = $Context.Manifest.appVersion
+        commit = $Context.Commit
+        binary = $Context.Binary
+        artifactSHA256 = $artifactHash
+    }) $candidateMetadata.ZoneInfo $candidateMetadata.ZoneInfoSHA256
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $rehearsalDir = Join-Path $BackupsRoot "$timestamp-rehearsal"
     $rehearsalMainDB = Join-Path $rehearsalDir "stock.db"
@@ -647,8 +746,14 @@ function Deploy-Candidate {
     Invoke-DatabaseCommand $Context.Binary $rehearsalMainDB $rehearsalMinuteDB @("db", "verify")
 
     $previous = Get-PreviousReleasePointer
+    if ($previous) {
+        if (-not $previous.zoneInfo -and -not $previous.zoneInfoSHA256) {
+            $previous = Set-ReleasePointerZoneInfo $previous $candidateMetadata.ZoneInfo $candidateMetadata.ZoneInfoSHA256
+        }
+        Assert-ZoneInfoArchive $Context.Binary ([string]$previous.zoneInfo) ([string]$previous.zoneInfoSHA256)
+    }
     $previousReadiness = if ($previous) { Get-PreviousReadinessExpectation $previous } else { $null }
-    if ($previous -and -not (Test-Path -LiteralPath $CurrentPointer)) {
+    if ($previous) {
         Write-ReleasePointer $previous
     }
     $backupDir = Join-Path $BackupsRoot $timestamp
@@ -663,14 +768,13 @@ function Deploy-Candidate {
         $liveMutationStarted = $true
         Invoke-DatabaseCommand $Context.Binary $MainDB $MinuteDB @("db", "migrate")
         Invoke-DatabaseCommand $Context.Binary $MainDB $MinuteDB @("db", "verify")
-        $process = Start-Candidate $Context.Binary
+        $process = Start-Candidate $Context.Binary $candidateMetadata.ZoneInfo $candidateMetadata.ZoneInfoSHA256
         $expectedHash = if ($SimulateReadinessFailure) { "0" * 64 } else { $artifactHash }
         $ready = Wait-ExactReadiness $Context $expectedHash $process.Id
         Assert-SingleListener $process.Id
-        $pointer = [pscustomobject]@{ appVersion = $Context.Manifest.appVersion; commit = $Context.Commit; binary = $Context.Binary; artifactSHA256 = $artifactHash }
-        Write-ReleasePointer $pointer
+        Write-ReleasePointer $candidatePointer
         New-Item -ItemType Directory -Force -Path $DeploymentsRoot | Out-Null
-        [pscustomobject]@{ deployedAt = (Get-Date).ToUniversalTime().ToString("o"); previous = $previous; current = $pointer; backupDir = $backupDir; readiness = $ready } |
+        [pscustomobject]@{ deployedAt = (Get-Date).ToUniversalTime().ToString("o"); previous = $previous; current = $candidatePointer; backupDir = $backupDir; readiness = $ready } |
             ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $DeploymentsRoot "$timestamp.json") -Encoding UTF8
     } catch {
         $deploymentError = $_.Exception.Message
@@ -690,7 +794,7 @@ function Deploy-Candidate {
             if (-not $previous -or -not $previousReadiness) { throw "No verifiable previous release is available to restart" }
             Write-ReleasePointer $previous
             if ($oldServiceStopped) {
-                $previousProcess = Start-Candidate $previous.binary
+                $previousProcess = Start-Candidate $previous.binary $previous.zoneInfo $previous.zoneInfoSHA256
                 Wait-ExactPreviousReadiness $previousReadiness $previousProcess.Id | Out-Null
                 Assert-SingleListener $previousProcess.Id
             } else {
@@ -703,7 +807,7 @@ function Deploy-Candidate {
         $receiptError = $null
         try {
             New-Item -ItemType Directory -Force -Path $DeploymentsRoot | Out-Null
-            [pscustomobject]@{ failedAt = (Get-Date).ToUniversalTime().ToString("o"); previous = $previous; candidate = $Context.Binary; backupDir = $backupDir; error = $deploymentError; rollbackReady = $rollbackReady; rollbackError = $rollbackError } |
+            [pscustomobject]@{ failedAt = (Get-Date).ToUniversalTime().ToString("o"); previous = $previous; candidate = $candidatePointer; backupDir = $backupDir; error = $deploymentError; rollbackReady = $rollbackReady; rollbackError = $rollbackError } |
                 ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $DeploymentsRoot "$timestamp.failed.json") -Encoding UTF8
         } catch {
             $receiptError = $_.Exception.Message
@@ -719,7 +823,11 @@ function Deploy-Candidate {
         Sort-Object LastWriteTime -Descending |
         ForEach-Object { $_.Directory.FullName } | Select-Object -Unique)
     $keepDirectories = @{}
-    foreach ($protectedDirectory in @($Context.ReleaseDir, $(if ($previous) { Split-Path -Parent $previous.binary } else { $null }))) {
+    foreach ($protectedDirectory in @(
+        $Context.ReleaseDir,
+        $(if ($previous) { Split-Path -Parent $previous.binary } else { $null }),
+        $(if ($previous -and $previous.zoneInfo) { Split-Path -Parent $previous.zoneInfo } else { $null })
+    )) {
         if ($protectedDirectory) {
             $resolvedProtected = [System.IO.Path]::GetFullPath($protectedDirectory)
             if ($resolvedProtected.StartsWith($releaseRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -749,11 +857,22 @@ function Invoke-Rollback {
     if (-not $RollbackReceipt) { throw "-RollbackReceipt is required" }
     $receipt = Get-Content -LiteralPath $RollbackReceipt -Raw | ConvertFrom-Json
     if (-not $receipt.previous) { throw "Deployment receipt has no previous release pointer" }
+    $current = if ($receipt.current) {
+        $receipt.current
+    } elseif ($receipt.failedAt -and $receipt.candidate) {
+        $receipt.candidate
+    } else {
+        throw "Deployment receipt has no current or failed candidate release pointer"
+    }
+    [void](Get-PreviousReadinessExpectation $current)
+    Assert-ZoneInfoArchive $current.binary $current.zoneInfo $current.zoneInfoSHA256
+    Assert-ZoneInfoArchive $current.binary $receipt.previous.zoneInfo $receipt.previous.zoneInfoSHA256
     $previousReadiness = Get-PreviousReadinessExpectation $receipt.previous
-    Restore-Backup $receipt.backupDir $receipt.current.binary
-    Invoke-DatabaseCommand $receipt.current.binary $MainDB $MinuteDB @("db", "verify", "--quick-only")
+    $listenerExpectation = Get-RollbackListenerExpectation $current $receipt.previous
+    Restore-Backup $receipt.backupDir $listenerExpectation
+    Invoke-DatabaseCommand $current.binary $MainDB $MinuteDB @("db", "verify", "--quick-only")
     Write-ReleasePointer $receipt.previous
-    $process = Start-Candidate $receipt.previous.binary
+    $process = Start-Candidate $receipt.previous.binary $receipt.previous.zoneInfo $receipt.previous.zoneInfoSHA256
     Wait-ExactPreviousReadiness $previousReadiness $process.Id | Out-Null
     Assert-SingleListener $process.Id
 }

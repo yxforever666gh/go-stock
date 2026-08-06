@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -25,13 +27,19 @@ type releaseInspectResult struct {
 	ConfigHash string                      `json:"configHash"`
 }
 
+const (
+	releaseUsage               = "usage: release inspect|verify-replay-bundle|verify-zoneinfo"
+	verifyZoneinfoUsage        = "usage: release verify-zoneinfo --path <zoneinfo.zip> --expect-sha256 <lowercase-sha256>"
+	maxZoneinfoEntrySize int64 = 1 << 20
+)
+
 func runRelease(args []string, _ GlobalOptions, stdout io.Writer) error {
 	return runReleaseWithRepository(args, stdout, bootstrap.NewProductionReleaseInspectionRepository())
 }
 
 func runReleaseWithRepository(args []string, stdout io.Writer, repository cliports.ReleaseInspectionRepository) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: release inspect|verify-replay-bundle")
+		return fmt.Errorf("%s", releaseUsage)
 	}
 	switch strings.ToLower(strings.TrimSpace(args[0])) {
 	case "inspect":
@@ -41,8 +49,10 @@ func runReleaseWithRepository(args []string, stdout io.Writer, repository clipor
 		return runReleaseInspect(stdout)
 	case "verify-replay-bundle":
 		return runVerifyReplayBundle(args[1:], stdout, repository)
+	case "verify-zoneinfo":
+		return runVerifyZoneinfo(args[1:], stdout)
 	default:
-		return fmt.Errorf("usage: release inspect|verify-replay-bundle")
+		return fmt.Errorf("%s", releaseUsage)
 	}
 }
 
@@ -58,6 +68,128 @@ func runReleaseInspect(stdout io.Writer) error {
 	}
 	_, err = fmt.Fprintln(stdout, string(payload))
 	return err
+}
+
+type zoneinfoVerification struct {
+	Path          string
+	SHA256        string
+	OffsetSeconds int
+}
+
+func runVerifyZoneinfo(args []string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("release verify-zoneinfo", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	path := fs.String("path", "", "path to the exact zoneinfo ZIP artifact")
+	expectedSHA256 := fs.String("expect-sha256", "", "expected lowercase SHA256 of the exact ZIP")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("verify-zoneinfo does not accept positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	if strings.TrimSpace(*path) == "" {
+		return fmt.Errorf("%s: --path is required", verifyZoneinfoUsage)
+	}
+	if *expectedSHA256 == "" {
+		return fmt.Errorf("%s: --expect-sha256 is required", verifyZoneinfoUsage)
+	}
+
+	result, err := verifyZoneinfo(*path, *expectedSHA256)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "Zoneinfo ZIP verified: path=%s sha256=%s Asia/Shanghai=+08:00\n", result.Path, result.SHA256)
+	return err
+}
+
+func verifyZoneinfo(path, expectedSHA256 string) (zoneinfoVerification, error) {
+	var result zoneinfoVerification
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
+		return result, fmt.Errorf("zoneinfo ZIP path is required")
+	}
+	if err := validateLowercaseSHA256(expectedSHA256); err != nil {
+		return result, fmt.Errorf("expected zoneinfo ZIP SHA256: %w", err)
+	}
+
+	absolutePath, err := filepath.Abs(trimmedPath)
+	if err != nil {
+		return result, fmt.Errorf("resolve zoneinfo ZIP path: %w", err)
+	}
+	zipData, err := os.ReadFile(absolutePath)
+	if err != nil {
+		return result, fmt.Errorf("read zoneinfo ZIP %q: %w", absolutePath, err)
+	}
+	digest := sha256.Sum256(zipData)
+	actualSHA256 := hex.EncodeToString(digest[:])
+	if actualSHA256 != expectedSHA256 {
+		return result, fmt.Errorf("zoneinfo ZIP SHA256 mismatch: got %s want %s", actualSHA256, expectedSHA256)
+	}
+
+	archive, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return result, fmt.Errorf("open zoneinfo ZIP %q: %w", absolutePath, err)
+	}
+	var shanghaiEntries []*zip.File
+	for _, entry := range archive.File {
+		if entry.Name == "Asia/Shanghai" {
+			shanghaiEntries = append(shanghaiEntries, entry)
+		}
+	}
+	if len(shanghaiEntries) != 1 {
+		return result, fmt.Errorf("zoneinfo ZIP must contain exactly one Asia/Shanghai entry: found %d", len(shanghaiEntries))
+	}
+
+	entry := shanghaiEntries[0]
+	if entry.UncompressedSize64 == 0 {
+		return result, fmt.Errorf("zoneinfo ZIP Asia/Shanghai entry is empty")
+	}
+	if entry.UncompressedSize64 > uint64(maxZoneinfoEntrySize) {
+		return result, fmt.Errorf("zoneinfo ZIP Asia/Shanghai entry is too large: %d bytes", entry.UncompressedSize64)
+	}
+	entryReader, err := entry.Open()
+	if err != nil {
+		return result, fmt.Errorf("open zoneinfo ZIP Asia/Shanghai entry: %w", err)
+	}
+	zoneData, readErr := io.ReadAll(io.LimitReader(entryReader, maxZoneinfoEntrySize+1))
+	closeErr := entryReader.Close()
+	if readErr != nil {
+		return result, fmt.Errorf("read zoneinfo ZIP Asia/Shanghai entry: %w", readErr)
+	}
+	if closeErr != nil {
+		return result, fmt.Errorf("close zoneinfo ZIP Asia/Shanghai entry: %w", closeErr)
+	}
+	if len(zoneData) == 0 {
+		return result, fmt.Errorf("zoneinfo ZIP Asia/Shanghai entry is empty")
+	}
+	if int64(len(zoneData)) > maxZoneinfoEntrySize {
+		return result, fmt.Errorf("zoneinfo ZIP Asia/Shanghai entry exceeds %d bytes", maxZoneinfoEntrySize)
+	}
+
+	location, err := time.LoadLocationFromTZData("Asia/Shanghai", zoneData)
+	if err != nil {
+		return result, fmt.Errorf("validate zoneinfo ZIP Asia/Shanghai entry: %w", err)
+	}
+	_, offsetSeconds := time.Date(2024, time.January, 1, 12, 0, 0, 0, location).Zone()
+	if offsetSeconds != 8*60*60 {
+		return result, fmt.Errorf("zoneinfo ZIP Asia/Shanghai offset mismatch: got %d seconds want %d", offsetSeconds, 8*60*60)
+	}
+
+	return zoneinfoVerification{
+		Path:          absolutePath,
+		SHA256:        actualSHA256,
+		OffsetSeconds: offsetSeconds,
+	}, nil
+}
+
+func validateLowercaseSHA256(value string) error {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) || value != strings.TrimSpace(value) {
+		return fmt.Errorf("must be a 64-character lowercase SHA256")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return fmt.Errorf("must be a 64-character lowercase SHA256: %w", err)
+	}
+	return nil
 }
 
 type replayBundleManifest struct {

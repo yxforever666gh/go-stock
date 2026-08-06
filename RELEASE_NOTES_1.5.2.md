@@ -41,6 +41,11 @@ recalculate Strategy 1.4.2 or earlier records.
   rejected persistent backtests while Strategy production is paused.
 - Delayed scheduler start and all immediate startup work until task assembly
   succeeds and readiness can be established.
+- Embedded IANA timezone data in the Windows Web binary so scheduler readiness
+  does not depend on host timezone files. Each release also carries a
+  versioned, hash-verified timezone sidecar for explicit startup and rollback,
+  including recovery of the previous 1.5.1 binary; deploy and rollback never
+  discover timezone data from an installed Go toolchain.
 - Strengthened automatic and manual rollback to verify the previous binary's
   App, commit, SHA256, schema, Strategy, config hash, paused mode, scheduler,
   and complete `/readyz` state before accepting recovery.
