@@ -3,15 +3,74 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"go-stock/backend/data"
+	"go-stock/backend/db"
 	"go-stock/backend/models"
+	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/service"
 
 	"github.com/cloudwego/eino/schema"
+	"gorm.io/gorm"
 )
+
+func NewProductionCommandAIResolver() (cliports.CommandAIResolver, error) {
+	if db.Dao == nil {
+		return nil, errors.New("main database is not initialized")
+	}
+	return &compatibilityServiceAdapter{main: db.Dao}, nil
+}
+
+func (a *compatibilityServiceAdapter) ResolveCommandAI(ctx context.Context, opts cliports.CommandAIOptions) (cliports.CommandAIClient, error) {
+	cfg, err := resolveCommandAIConfig(ctx, a.main, opts)
+	if err != nil {
+		return nil, err
+	}
+	return data.NewOpenAiWithConfig(ctx, cfg), nil
+}
+
+func resolveCommandAIConfig(ctx context.Context, main *gorm.DB, opts cliports.CommandAIOptions) (*models.AIConfig, error) {
+	allFromFlags := opts.BaseURL != "" && opts.APIKey != "" && opts.Model != ""
+	anyFromFlags := opts.BaseURL != "" || opts.APIKey != "" || opts.Model != ""
+	if anyFromFlags && !allFromFlags {
+		return nil, errors.New("参数模式下必须同时提供 --base-url、--api-key、--model")
+	}
+	if allFromFlags {
+		return &models.AIConfig{
+			BaseUrl:     opts.BaseURL,
+			ApiKey:      opts.APIKey,
+			ModelName:   opts.Model,
+			MaxTokens:   opts.MaxTokens,
+			Temperature: opts.Temperature,
+			TimeOut:     opts.Timeout,
+		}, nil
+	}
+	if main == nil {
+		return nil, errors.New("main database is not initialized")
+	}
+
+	cfg := &models.AIConfig{}
+	tx := main.WithContext(ctx).Model(&models.AIConfig{})
+	var err error
+	if opts.AIConfigID > 0 {
+		err = tx.Where("id = ?", opts.AIConfigID).First(cfg).Error
+	} else {
+		err = tx.Order("id asc").First(cfg).Error
+	}
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New("未找到可用 AI 配置，请使用参数模式或先写入 ai_config 表")
+		}
+		return nil, fmt.Errorf("读取 AI 配置失败: %w", err)
+	}
+	if cfg.BaseUrl == "" || cfg.ApiKey == "" || cfg.ModelName == "" {
+		return nil, errors.New("数据库 AI 配置不完整，请检查 base_url/api_key/model_name")
+	}
+	return cfg, nil
+}
 
 func (*compatibilityServiceAdapter) AnalyzeSentiment(text string) models.SentimentResult {
 	return data.AnalyzeSentiment(text)

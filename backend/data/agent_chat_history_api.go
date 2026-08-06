@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	DefaultAgentSessionLimit = 20
-	DefaultAgentMessageLimit = 20
+	DefaultAgentSessionLimit = models.DefaultAgentSessionLimit
+	DefaultAgentMessageLimit = models.DefaultAgentMessageLimit
 )
 
 type AgentChatHistoryService struct{}

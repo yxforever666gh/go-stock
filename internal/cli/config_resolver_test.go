@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -21,70 +22,63 @@ func initTestDB(t *testing.T) {
 	_ = db.Dao.Exec("DELETE FROM ai_config").Error
 }
 
-func TestResolveAIForCommand_ParameterPriority(t *testing.T) {
-	initTestDB(t)
+type fakeCommandAIClient struct{}
 
-	// Database config should be ignored when full parameter mode is provided.
-	if err := db.Dao.Create(&data.AIConfig{
-		BaseUrl:   "https://db.example.com",
-		ApiKey:    "db-key",
-		ModelName: "db-model",
-	}).Error; err != nil {
-		t.Fatalf("seed ai config failed: %v", err)
-	}
+func (*fakeCommandAIClient) NewChatStreamLite(string, string, string, bool) <-chan map[string]any {
+	return nil
+}
 
-	o, err := ResolveAIForCommand(context.Background(), AIOptions{
+type recordingCommandAIResolver struct {
+	client  CommandAIClient
+	err     error
+	options AIOptions
+	calls   int
+}
+
+func (r *recordingCommandAIResolver) ResolveCommandAI(_ context.Context, options AIOptions) (CommandAIClient, error) {
+	r.calls++
+	r.options = options
+	return r.client, r.err
+}
+
+func TestResolveAIForCommandDelegatesToResolver(t *testing.T) {
+	client := &fakeCommandAIClient{}
+	resolver := &recordingCommandAIResolver{client: client}
+	opts := AIOptions{
+		AIConfigID:  17,
 		BaseURL:     "https://param.example.com",
 		APIKey:      "param-key",
 		Model:       "param-model",
 		MaxTokens:   2048,
 		Temperature: 0.5,
 		Timeout:     120,
-	})
+	}
+
+	got, err := ResolveAIForCommand(context.Background(), resolver, opts)
 	if err != nil {
 		t.Fatalf("resolve failed: %v", err)
 	}
-	if o.BaseUrl != "https://param.example.com" || o.ApiKey != "param-key" || o.Model != "param-model" {
-		t.Fatalf("parameter mode not applied: %+v", o)
+	if got != client {
+		t.Fatal("resolver client was not returned")
+	}
+	if resolver.calls != 1 || resolver.options != opts {
+		t.Fatalf("resolver call = %d options = %+v, want 1 and %+v", resolver.calls, resolver.options, opts)
 	}
 }
 
-func TestResolveAIForCommand_DBFallbackByID(t *testing.T) {
-	initTestDB(t)
-
-	first := &data.AIConfig{
-		BaseUrl:   "https://first.example.com",
-		ApiKey:    "first-key",
-		ModelName: "first-model",
-	}
-	second := &data.AIConfig{
-		BaseUrl:   "https://second.example.com",
-		ApiKey:    "second-key",
-		ModelName: "second-model",
-	}
-	if err := db.Dao.Create(first).Error; err != nil {
-		t.Fatalf("seed first failed: %v", err)
-	}
-	if err := db.Dao.Create(second).Error; err != nil {
-		t.Fatalf("seed second failed: %v", err)
-	}
-
-	o, err := ResolveAIForCommand(context.Background(), AIOptions{
-		AIConfigID: int(second.ID),
-	})
-	if err != nil {
-		t.Fatalf("resolve failed: %v", err)
-	}
-	if o.BaseUrl != second.BaseUrl || o.ApiKey != second.ApiKey || o.Model != second.ModelName {
-		t.Fatalf("db fallback mismatch: got=%+v expect=%+v", o, second)
+func TestResolveAIForCommandPropagatesResolverError(t *testing.T) {
+	want := errors.New("resolve failed")
+	resolver := &recordingCommandAIResolver{err: want}
+	_, err := ResolveAIForCommand(context.Background(), resolver, AIOptions{AIConfigID: 9})
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
 	}
 }
 
-func TestResolveAIForCommand_NoConfig(t *testing.T) {
-	initTestDB(t)
-	_, err := ResolveAIForCommand(context.Background(), AIOptions{})
+func TestResolveAIForCommandRejectsMissingResolver(t *testing.T) {
+	_, err := ResolveAIForCommand(context.Background(), nil, AIOptions{})
 	if err == nil {
-		t.Fatal("expected error when no ai config exists")
+		t.Fatal("expected missing resolver error")
 	}
 }
 

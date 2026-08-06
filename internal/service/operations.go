@@ -177,6 +177,7 @@ type RecommendOperations interface {
 }
 
 type StockOperations interface {
+	ReplaceStockBaseInfo(context.Context, []models.StockBasic, []models.StockInfoHK, []models.StockInfoUS) error
 	Follow(string) string
 	UnFollow(string) string
 	GetFollowList(int) *[]models.FollowedStock

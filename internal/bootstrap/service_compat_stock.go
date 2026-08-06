@@ -1,9 +1,41 @@
 package bootstrap
 
 import (
+	"context"
+
 	"go-stock/backend/data"
 	"go-stock/backend/models"
+
+	"gorm.io/gorm"
 )
+
+func (a *compatibilityServiceAdapter) ReplaceStockBaseInfo(
+	ctx context.Context,
+	domestic []models.StockBasic,
+	hongKong []models.StockInfoHK,
+	unitedStates []models.StockInfoUS,
+) error {
+	return a.main.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := replaceAllRows(tx, domestic); err != nil {
+			return err
+		}
+		if err := replaceAllRows(tx, hongKong); err != nil {
+			return err
+		}
+		return replaceAllRows(tx, unitedStates)
+	})
+}
+
+func replaceAllRows[T any](tx *gorm.DB, rows []T) error {
+	var model T
+	if err := tx.Unscoped().Where("1 = 1").Delete(&model).Error; err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	return tx.CreateInBatches(&rows, 400).Error
+}
 
 func (a *compatibilityServiceAdapter) AddGroup(group models.Group) bool {
 	return data.NewStockGroupApi(a.main).AddGroup(group)

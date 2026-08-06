@@ -1,6 +1,10 @@
 package service
 
-import "go-stock/backend/models"
+import (
+	"context"
+
+	"go-stock/backend/models"
+)
 
 type StockService struct {
 	operations StockOperations
@@ -8,6 +12,15 @@ type StockService struct {
 
 func NewStockService(operations StockOperations) StockService {
 	return StockService{operations: operations}
+}
+
+func (s StockService) ReplaceStockBaseInfo(
+	ctx context.Context,
+	domestic []models.StockBasic,
+	hongKong []models.StockInfoHK,
+	unitedStates []models.StockInfoUS,
+) error {
+	return s.operations.ReplaceStockBaseInfo(ctx, domestic, hongKong, unitedStates)
 }
 
 func (s StockService) Follow(stockCode string) string {

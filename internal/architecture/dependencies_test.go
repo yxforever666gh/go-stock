@@ -39,12 +39,9 @@ var v150AllowedProductionImports = map[string]bool{
 // direct imports fail the test; removing one requires removing its entry here
 // in the same change, so the list can only shrink deliberately.
 var deprecatedDataImportDebt = map[string]bool{
-	"app_agent_api.go":                    true,
 	"app_ai_api.go":                       true,
-	"app_baseinfo_runtime.go":             true,
 	"app_config_api.go":                   true,
 	"app_cron_runtime.go":                 true,
-	"app_darwin.go":                       true,
 	"app_runtime_helpers.go":              true,
 	"app_startup_runtime.go":              true,
 	"app_summary_runtime.go":              true,
@@ -63,7 +60,6 @@ var deprecatedDataImportDebt = map[string]bool{
 	"backend/agent/tools/stock_price_info_tool.go":           true,
 	"internal/bootstrap/dependencies.go":                     true,
 	"internal/cli/cmd_network_audit.go":                      true,
-	"internal/cli/config_resolver.go":                        true,
 	"internal/migrations/migrations.go":                      true,
 	"main.go":                                                true,
 	"runtime_bootstrap.go":                                   true,
@@ -77,7 +73,6 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 }
 
 var globalDBImportDebt = map[string]bool{
-	"app_baseinfo_runtime.go":                               true,
 	"app_cron_runtime.go":                                   true,
 	"app_runtime_helpers.go":                                true,
 	"app_summary_runtime.go":                                true,
@@ -89,7 +84,6 @@ var globalDBImportDebt = map[string]bool{
 	"internal/cli/cmd_release.go":                           true,
 	"internal/cli/cmd_strategy.go":                          true,
 	"internal/cli/cmd_strategy_backtest.go":                 true,
-	"internal/cli/config_resolver.go":                       true,
 	"main.go":                                               true,
 	"runtime_compat.go":                                     true,
 }

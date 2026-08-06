@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"go-stock/backend/agent"
-	"go-stock/backend/data"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 
@@ -112,7 +111,7 @@ func (a *App) CreateAgentSession(aiConfigId int) map[string]any {
 			"modelName":  modelName,
 		}
 	}
-	_ = a.services.History.TrimSessions(data.DefaultAgentSessionLimit)
+	_ = a.services.History.TrimSessions(models.DefaultAgentSessionLimit)
 	return map[string]any{
 		"sessionId":     session.SessionId,
 		"title":         session.Title,
@@ -124,7 +123,7 @@ func (a *App) CreateAgentSession(aiConfigId int) map[string]any {
 }
 
 func (a *App) GetAgentSessionList() []models.AgentChatSession {
-	list, err := a.services.History.ListRecentSessions(data.DefaultAgentSessionLimit)
+	list, err := a.services.History.ListRecentSessions(models.DefaultAgentSessionLimit)
 	if err != nil {
 		return []models.AgentChatSession{}
 	}
@@ -132,7 +131,7 @@ func (a *App) GetAgentSessionList() []models.AgentChatSession {
 }
 
 func (a *App) GetAgentSessionMessages(sessionId string) []models.AgentChatMessage {
-	list, err := a.services.History.ListSessionMessages(sessionId, data.DefaultAgentMessageLimit)
+	list, err := a.services.History.ListSessionMessages(sessionId, models.DefaultAgentMessageLimit)
 	if err != nil {
 		return []models.AgentChatMessage{}
 	}
@@ -183,9 +182,9 @@ func (a *App) ChatWithAgent(question string, aiConfigId int, sysPromptId *int, s
 	modelName := a.resolveAiModelName(aiConfigId)
 
 	session, _ := a.services.History.EnsureSession(sessionId, "新对话", aiConfigId, modelName)
-	_ = a.services.History.TrimSessions(data.DefaultAgentSessionLimit)
+	_ = a.services.History.TrimSessions(models.DefaultAgentSessionLimit)
 
-	history, err := a.services.History.ListSessionMessagesForAgent(sessionId, data.DefaultAgentMessageLimit)
+	history, err := a.services.History.ListSessionMessagesForAgent(sessionId, models.DefaultAgentMessageLimit)
 	if err != nil {
 		history = nil
 	}
@@ -224,8 +223,8 @@ func (a *App) ChatWithAgent(question string, aiConfigId int, sysPromptId *int, s
 	_ = a.services.History.UpdateSessionModel(sessionId, aiConfigId, modelName)
 	_ = a.services.History.AppendMessage(sessionId, "user", question, "")
 	_ = a.services.History.AppendMessage(sessionId, "assistant", answer, assistantReasoning.String())
-	_ = a.services.History.TrimSessionMessages(sessionId, data.DefaultAgentMessageLimit)
-	_ = a.services.History.TrimSessions(data.DefaultAgentSessionLimit)
+	_ = a.services.History.TrimSessionMessages(sessionId, models.DefaultAgentMessageLimit)
+	_ = a.services.History.TrimSessions(models.DefaultAgentSessionLimit)
 
 	if session != nil && strings.TrimSpace(session.Title) == "新对话" {
 		go func() {

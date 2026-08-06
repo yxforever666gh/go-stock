@@ -9,7 +9,6 @@ import (
 	"github.com/gen2brain/beeep"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"go-stock/backend/data"
 	"go-stock/backend/logger"
 	"log"
 	"time"
