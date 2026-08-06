@@ -188,7 +188,6 @@ type RecommendOperations interface {
 	GetMarketSummaryBlockedReasonTop(models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error)
 	GetMarketSummaryProductionDowngradeReasonTop(models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error)
 	DeleteAiRecommendStocks(uint) error
-	RepairHistoricalMarketSummaryActivationIssues(time.Time) (MarketSummaryActivationRepairResult, error)
 }
 
 type SchedulerOperations interface {

@@ -445,16 +445,3 @@ func (*compatibilityServiceAdapter) GetMarketSummaryProductionDowngradeReasonTop
 func (*compatibilityServiceAdapter) DeleteAiRecommendStocks(id uint) error {
 	return data.NewAiRecommendStocksService().DeleteAiRecommendStocks(id)
 }
-
-func (*compatibilityServiceAdapter) RepairHistoricalMarketSummaryActivationIssues(now time.Time) (service.MarketSummaryActivationRepairResult, error) {
-	result, err := data.RepairHistoricalMarketSummaryActivationIssues(now)
-	if err != nil {
-		return service.MarketSummaryActivationRepairResult{}, err
-	}
-	return service.MarketSummaryActivationRepairResult{
-		Scanned:      result.Scanned,
-		Downgraded:   result.Downgraded,
-		RuleUpgraded: result.RuleUpgraded,
-		SkippedNoRef: result.SkippedNoRef,
-	}, nil
-}

@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"time"
 
 	"go-stock/backend/models"
 )
@@ -12,13 +11,6 @@ import (
 // snapshot type, but the use-case layer does not depend on backend/data.
 type MarketSummaryDecisionSnapshot interface {
 	MarketSummaryDecisionVersion() string
-}
-
-type MarketSummaryActivationRepairResult struct {
-	Scanned      int `json:"scanned"`
-	Downgraded   int `json:"downgraded"`
-	RuleUpgraded int `json:"ruleUpgraded"`
-	SkippedNoRef int `json:"skippedNoRef"`
 }
 
 type RecommendService struct {
@@ -115,8 +107,4 @@ func (s RecommendService) GetMarketSummaryProductionDowngradeReasonTop(query mod
 
 func (s RecommendService) DeleteAiRecommendStocks(id uint) error {
 	return s.operations.DeleteAiRecommendStocks(id)
-}
-
-func (s RecommendService) RepairHistoricalMarketSummaryActivationIssues(now time.Time) (MarketSummaryActivationRepairResult, error) {
-	return s.operations.RepairHistoricalMarketSummaryActivationIssues(now)
 }
