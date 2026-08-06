@@ -30,7 +30,7 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		Group:     NewGroupService(dependencies.Operations.Group),
 		Fund:      NewFundService(dependencies.Operations.Fund),
 		History:   NewHistoryService(dependencies.Operations.History),
-		Recommend: NewRecommendService(dependencies.Operations.Recommend),
+		Recommend: NewRecommendService(dependencies.Operations.Recommend, dependencies.RecommendationPublisher),
 		Scheduler: NewSchedulerService(dependencies.Operations.Scheduler),
 		Notify:    NewNotifyService(dependencies.Operations.Notify),
 		Execution: NewExecutionService(dependencies.ExecutionMonitor, dependencies.Operations.Scheduler, dependencies.Operations.System),

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go-stock/backend/models"
+	"go-stock/backend/recommendation"
 )
 
 type recordingStockOperations struct {
@@ -40,13 +41,16 @@ type recordingAIOperations struct {
 
 type recordingRecommendOperations struct {
 	RecommendOperations
-	gateVersion       string
-	created           *models.AIResponseResult
-	persisted         *models.AIResponseResult
-	decision          MarketSummaryDecisionSnapshot
-	providerName      string
-	modelName         string
-	publicationResult *models.MarketSummaryRecommendSaveResult
+	gateVersion string
+	created     *models.AIResponseResult
+	persisted   *models.AIResponseResult
+}
+
+type recordingRecommendationPublisher struct {
+	decision     recommendation.FrozenDecision
+	providerName string
+	modelName    string
+	result       *models.MarketSummaryRecommendSaveResult
 }
 
 func (o *recordingRecommendOperations) RequireStrategyLive(_ context.Context, version string) error {
@@ -64,11 +68,15 @@ func (o *recordingRecommendOperations) PersistAIResponseReport(_ context.Context
 	return nil
 }
 
-func (o *recordingRecommendOperations) PersistMarketSummaryV150Decision(_ context.Context, decision MarketSummaryDecisionSnapshot, providerName, modelName string) (*models.MarketSummaryRecommendSaveResult, error) {
-	o.decision = decision
-	o.providerName = providerName
-	o.modelName = modelName
-	return o.publicationResult, nil
+func (p *recordingRecommendationPublisher) PublishDecision(
+	_ context.Context,
+	decision recommendation.FrozenDecision,
+	providerName, modelName string,
+) (*models.MarketSummaryRecommendSaveResult, error) {
+	p.decision = decision
+	p.providerName = providerName
+	p.modelName = modelName
+	return p.result, nil
 }
 
 type recordingDecisionSnapshot struct{ version string }
@@ -211,8 +219,9 @@ func TestDecodeMarketSummaryV150DecisionEnvelopeRejectsMalformedOrIncompletePayl
 func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
 	result := &models.AIResponseResult{}
 	publication := &models.MarketSummaryRecommendSaveResult{SavedCount: 2}
-	operations := &recordingRecommendOperations{publicationResult: publication}
-	service := NewRecommendService(operations)
+	operations := &recordingRecommendOperations{}
+	publisher := &recordingRecommendationPublisher{result: publication}
+	service := NewRecommendService(operations, publisher)
 	ctx := context.WithValue(context.Background(), struct{}{}, "summary")
 	decision := recordingDecisionSnapshot{version: "1.5.0"}
 
@@ -238,7 +247,7 @@ func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PersistMarketSummaryV150Decision: %v", err)
 	}
-	if got != publication || operations.decision != decision || operations.providerName != "provider" || operations.modelName != "model" {
-		t.Fatalf("publication delegation mismatch: result=%p decision=%#v provider=%q model=%q", got, operations.decision, operations.providerName, operations.modelName)
+	if got != publication || publisher.decision != decision || publisher.providerName != "provider" || publisher.modelName != "model" {
+		t.Fatalf("publication delegation mismatch: result=%p decision=%#v provider=%q model=%q", got, publisher.decision, publisher.providerName, publisher.modelName)
 	}
 }

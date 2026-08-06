@@ -61,7 +61,7 @@ func TestRecommendationCompatibilityAdapterUsesPersistedStrategyGate(t *testing.
 
 func TestRecommendationCompatibilityAdapterRejectsUnknownDecisionType(t *testing.T) {
 	adapter := compatibilityServiceAdapter{main: openSchedulerCompatibilityTestDB(t)}
-	_, err := adapter.PersistMarketSummaryV150Decision(context.Background(), unsupportedMarketSummaryDecision{}, "provider", "model")
+	_, err := adapter.PublishDecision(context.Background(), unsupportedMarketSummaryDecision{}, "provider", "model")
 	if err == nil || !strings.Contains(err.Error(), "unsupported market summary decision snapshot") {
 		t.Fatalf("unsupported decision error = %v", err)
 	}

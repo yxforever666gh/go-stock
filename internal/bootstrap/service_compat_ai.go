@@ -12,6 +12,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
+	"go-stock/backend/recommendation"
 	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/service"
 
@@ -20,6 +21,7 @@ import (
 )
 
 var _ service.MarketSummaryDecisionSnapshot = (*service.MarketSummaryV150DecisionEnvelope)(nil)
+var _ recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult] = (*compatibilityServiceAdapter)(nil)
 
 func NewProductionCommandAIResolver() (cliports.CommandAIResolver, error) {
 	if db.Dao == nil {
@@ -407,7 +409,7 @@ func (a *compatibilityServiceAdapter) PersistAIResponseReport(ctx context.Contex
 	return a.main.WithContext(ctx).Save(result).Error
 }
 
-func (a *compatibilityServiceAdapter) PersistMarketSummaryV150Decision(
+func (a *compatibilityServiceAdapter) PublishDecision(
 	ctx context.Context,
 	decision service.MarketSummaryDecisionSnapshot,
 	providerName, modelName string,

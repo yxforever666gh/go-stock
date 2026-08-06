@@ -9,6 +9,7 @@ import (
 	"go-stock/backend/legacy"
 	"go-stock/backend/marketdata"
 	"go-stock/backend/marketintel"
+	"go-stock/backend/models"
 	"go-stock/backend/news"
 	"go-stock/backend/portfolio"
 	"go-stock/backend/recommendation"
@@ -45,11 +46,12 @@ type ProviderSet struct {
 }
 
 type Dependencies struct {
-	Clock            Clock
-	Initializer      ApplicationInitializer
-	Providers        ProviderSet
-	Operations       ServiceOperations
-	ExecutionMonitor execution.Monitor
+	Clock                   Clock
+	Initializer             ApplicationInitializer
+	Providers               ProviderSet
+	Operations              ServiceOperations
+	RecommendationPublisher recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult]
+	ExecutionMonitor        execution.Monitor
 }
 
 func (d Dependencies) Validate() error {
@@ -61,6 +63,9 @@ func (d Dependencies) Validate() error {
 	}
 	if err := d.Operations.Validate(); err != nil {
 		return errors.Join(ErrInvalidDependencies, err)
+	}
+	if d.RecommendationPublisher == nil {
+		return errors.Join(ErrInvalidDependencies, errors.New("recommendation publisher is required"))
 	}
 	return nil
 }

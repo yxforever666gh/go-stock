@@ -39,10 +39,11 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 	marketData := data.NewCompatibilityMarketDataReader(storage.Main, storage.Minute)
 	newsReader := data.NewCompatibilityNewsReader()
 	return service.Dependencies{
-		Clock:            systemClock{},
-		Initializer:      legacyApplicationInitializer{},
-		Operations:       newCompatibilityServiceOperations(storage.Main),
-		ExecutionMonitor: data.NewCompatibilityExecutionMonitor(),
+		Clock:                   systemClock{},
+		Initializer:             legacyApplicationInitializer{},
+		Operations:              newCompatibilityServiceOperations(storage.Main),
+		RecommendationPublisher: &compatibilityServiceAdapter{main: storage.Main},
+		ExecutionMonitor:        data.NewCompatibilityExecutionMonitor(),
 		Providers: service.ProviderSet{
 			DailyBars:   marketData,
 			MinuteBars:  marketData,

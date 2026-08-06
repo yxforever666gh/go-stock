@@ -176,7 +176,6 @@ type RecommendOperations interface {
 	SaveMarketSummaryRunDiagnostic(*models.MarketSummaryRunDiagnostic) error
 	CreateAIResponseReport(context.Context, *models.AIResponseResult) error
 	PersistAIResponseReport(context.Context, *models.AIResponseResult) error
-	PersistMarketSummaryV150Decision(context.Context, MarketSummaryDecisionSnapshot, string, string) (*models.MarketSummaryRecommendSaveResult, error)
 	GetAIResponseResultList(models.AIResponseResultQuery) (*models.AIResponseResultPageData, error)
 	GetEmailSendLogList(models.EmailSendLogQuery) (*models.EmailSendLogPageData, error)
 	DeleteAIResponseResult(uint) error

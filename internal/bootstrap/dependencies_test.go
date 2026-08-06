@@ -40,9 +40,10 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 	runtime, err := AssembleRuntime(appconfig.AppConfig{}, RuntimeDependencies{
 		Storage: Storage{Main: mainDB, Minute: minuteDB},
 		Services: service.Dependencies{
-			Clock:       fixedClock{now: now},
-			Initializer: initializer,
-			Operations:  newCompatibilityServiceOperations(mainDB),
+			Clock:                   fixedClock{now: now},
+			Initializer:             initializer,
+			Operations:              newCompatibilityServiceOperations(mainDB),
+			RecommendationPublisher: &compatibilityServiceAdapter{main: mainDB},
 		},
 	})
 	if err != nil {
@@ -98,6 +99,17 @@ func TestAssembleRuntimeRejectsMissingRequiredDependencies(t *testing.T) {
 				},
 			},
 		},
+		{
+			name: "recommendation publisher",
+			deps: RuntimeDependencies{
+				Storage: Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
+				Services: service.Dependencies{
+					Clock:       fixedClock{},
+					Initializer: &recordingInitializer{},
+					Operations:  newCompatibilityServiceOperations(&gorm.DB{}),
+				},
+			},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -113,7 +125,8 @@ func TestCompatibilityDependenciesInjectAllProviderNeutralPorts(t *testing.T) {
 	deps := newCompatibilityServiceDependencies(Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}})
 	providers := deps.Providers
 	if providers.DailyBars == nil || providers.MinuteBars == nil || providers.Quotes == nil || providers.Securities == nil ||
-		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil {
+		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil ||
+		deps.RecommendationPublisher == nil {
 		t.Fatalf("compatibility provider set has an unconfigured port: %+v", providers)
 	}
 }
