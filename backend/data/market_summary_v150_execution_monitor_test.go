@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -8,8 +9,116 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"go-stock/backend/persistence"
 	"go-stock/backend/strategy/v150"
 )
+
+type marketSummaryV150MonitorContextKey struct{}
+
+func TestCompatibilityExecutionMonitorCanceledContextDoesNotAppend(t *testing.T) {
+	store := &recordingMarketSummaryV150OrderEventStore{}
+	monitor := NewCompatibilityExecutionMonitor(store)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if _, err := monitor.Run(ctx, time.Now()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if store.calls != 0 {
+		t.Fatalf("canceled monitor appended %d event batches", store.calls)
+	}
+}
+
+func TestCompatibilityExecutionMonitorFillUsesInjectedStoreAndContext(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	observedAt := time.Date(2026, 8, 4, 10, 15, 46, 0, loc)
+	initMarketSummaryV150ExecutionTestDB(t)
+	if err := db.Dao.AutoMigrate(&models.AiRecommendYieldMeta{}, &models.AiRecommendYieldRecordState{}); err != nil {
+		t.Fatal(err)
+	}
+	recommendation := appendMarketSummaryV150ExecutionFixtureWithSecurity(t, decision, marketSummaryV150TestBreakoutPlan(validFrom), true)
+	seedMarketSummaryV150BreakoutBars(t, recommendation, decision, validFrom)
+
+	previousNow := marketSummaryV150ExecutionSecurityNow
+	previousCorporateActionNow := marketSummaryV150CorporateActionNow
+	previousFetch := fetchMarketSummaryV150ExecutionSecurityFactFn
+	securityNow := validFrom.Add(-time.Minute)
+	marketSummaryV150ExecutionSecurityNow = func() time.Time { return securityNow }
+	marketSummaryV150CorporateActionNow = func() time.Time { return observedAt }
+	fetchMarketSummaryV150ExecutionSecurityFactFn = func(symbol string, at time.Time) (marketSummaryV150ExecutionSecurityFact, error) {
+		return marketSummaryV150ExecutionSecurityFact{
+			Symbol: symbol, Name: "test", Market: "SH", Board: "MAIN", Currency: "CNY",
+			Status: "L", ListStatus: "L", Source: "test_realtime_quote", SourceAt: at.Add(-time.Minute),
+		}, nil
+	}
+	t.Cleanup(func() {
+		marketSummaryV150ExecutionSecurityNow = previousNow
+		marketSummaryV150CorporateActionNow = previousCorporateActionNow
+		fetchMarketSummaryV150ExecutionSecurityFactFn = previousFetch
+	})
+	if _, err := refreshMarketSummaryV150ExecutionSecurityObservation(recommendation.StrategyRunID, recommendation.StockCode, true); err != nil {
+		t.Fatalf("seed causal pre-open security observation: %v", err)
+	}
+	securityNow = observedAt
+
+	store := &recordingMarketSummaryV150OrderEventStore{delegate: persistence.NewGORMOrderEventStore(db.Dao)}
+	monitor := NewCompatibilityExecutionMonitor(store)
+	ctx := context.WithValue(context.Background(), marketSummaryV150MonitorContextKey{}, "monitor-fill")
+	result, err := monitor.Run(ctx, observedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ProcessedCount != 1 || store.calls != 1 || len(store.batches) != 1 {
+		t.Fatalf("result=%+v store calls=%d batches=%d", result, store.calls, len(store.batches))
+	}
+	if got := marketSummaryV150TestEventTypes(store.batches[0]); got != "signal,order,fill" {
+		t.Fatalf("injected batch=%s", got)
+	}
+	if len(store.contexts) != 1 || store.contexts[0].Value(marketSummaryV150MonitorContextKey{}) != "monitor-fill" {
+		t.Fatal("monitor append did not preserve the caller context")
+	}
+	var events []models.OrderEvent
+	if err := db.Dao.Where("rule_id = ?", recommendation.StrategyRuleID).Order("sequence ASC").Find(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := marketSummaryV150TestEventTypes(events); got != "rule_issued,signal,order,fill" {
+		t.Fatalf("persisted events=%s", got)
+	}
+}
+
+func TestCompatibilityExecutionMonitorCorruptPlanRejectUsesInjectedStoreAndContext(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	observedAt := time.Date(2026, 8, 4, 10, 15, 46, 0, loc)
+	initMarketSummaryV150ExecutionTestDB(t)
+	recommendation := appendMarketSummaryV150ExecutionFixtureWithSecurity(t, decision, marketSummaryV150TestBreakoutPlan(validFrom), false)
+	if err := db.Dao.Exec("DROP TRIGGER immutable_strategy_rule_snapshot_update").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Exec("UPDATE strategy_rule_snapshot SET payload_json = ? WHERE rule_id = ?", `{}`, recommendation.StrategyRuleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Exec("CREATE TRIGGER immutable_strategy_rule_snapshot_update BEFORE UPDATE ON strategy_rule_snapshot BEGIN SELECT RAISE(ABORT, 'immutable table strategy_rule_snapshot'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	store := &recordingMarketSummaryV150OrderEventStore{delegate: persistence.NewGORMOrderEventStore(db.Dao)}
+	monitor := NewCompatibilityExecutionMonitor(store)
+	ctx := context.WithValue(context.Background(), marketSummaryV150MonitorContextKey{}, "monitor-reject")
+	result, err := monitor.Run(ctx, observedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.SkippedCount != 1 || store.calls != 1 || len(store.batches) != 1 || len(store.batches[0]) != 1 || store.batches[0][0].EventType != string(v150.EventReject) {
+		t.Fatalf("result=%+v calls=%d batches=%+v", result, store.calls, store.batches)
+	}
+	if len(store.contexts) != 1 || store.contexts[0].Value(marketSummaryV150MonitorContextKey{}) != "monitor-reject" {
+		t.Fatal("corrupt-plan reject did not preserve the caller context")
+	}
+}
 
 func TestMarketSummaryV150ExecutionUsesExplicitCompletedCutoffDuringGrace(t *testing.T) {
 	loc := cnLocation()

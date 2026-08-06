@@ -70,7 +70,7 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 	info := triggerEvalInfo{DataStatus: "正常"}
 	frozen, err := loadMarketSummaryV150FrozenExecutionPlan(rec)
 	if err != nil {
-		return rejectMarketSummaryV150Activation(rec, nil, nil, ctx.Now, marketSummaryV150DataHealthReject+": "+err.Error(), info)
+		return rejectMarketSummaryV150Activation(ctx, rec, nil, nil, ctx.Now, marketSummaryV150DataHealthReject+": "+err.Error(), info)
 	}
 
 	evaluatedThrough := marketSummaryV150ExecutionEvaluatedThrough(ctx)
@@ -110,12 +110,12 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 	bars, gaps := buildMarketSummaryV150CompletedBars(raw, evaluatedThrough, frozen.Plan.ValidFromAt)
 	if len(gaps) > 0 {
 		reason := marketSummaryV150DataHealthReject + ": incomplete 15-minute data: " + strings.Join(gaps, "; ")
-		return rejectMarketSummaryV150Activation(rec, &frozen, nil, evaluatedThrough, reason, info)
+		return rejectMarketSummaryV150Activation(ctx, rec, &frozen, nil, evaluatedThrough, reason, info)
 	}
 	if len(bars) == 0 {
 		if syncInfo.SyncErr != nil {
 			reason := marketSummaryV150DataHealthReject + ": minute data unavailable: " + strings.TrimSpace(syncInfo.SyncErr.Error())
-			return rejectMarketSummaryV150Activation(rec, &frozen, nil, evaluatedThrough, reason, info)
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, nil, evaluatedThrough, reason, info)
 		}
 		info.DataStatus = "待激活"
 		info.DataStatusReason = "v1.5 is waiting for a complete 15-minute bar after validFrom"
@@ -137,13 +137,13 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 			actions, actionErr := loadMarketSummaryV150CorporateActions(code, bar.Start, bar.Start)
 			if actionErr != nil {
 				reason := marketSummaryV150DataHealthReject + ": corporate action coverage unavailable before activation: " + actionErr.Error()
-				return rejectMarketSummaryV150Activation(rec, &frozen, nil, bar.Start, reason, info)
+				return rejectMarketSummaryV150Activation(ctx, rec, &frozen, nil, bar.Start, reason, info)
 			}
 			if len(actions) > 0 {
 				adjusted, adjustErr := v150.ApplyCorporateActionsToPlan(executionPlan, actions, bar.Start)
 				if adjustErr != nil {
 					reason := marketSummaryV150DataHealthReject + ": corporate action plan adjustment rejected: " + adjustErr.Error()
-					return rejectMarketSummaryV150Activation(rec, &frozen, nil, bar.Start, reason, info)
+					return rejectMarketSummaryV150Activation(ctx, rec, &frozen, nil, bar.Start, reason, info)
 				}
 				factor := marketSummaryV150CorporateActionCombinedFactor(actions)
 				previous = adjustMarketSummaryV150BarPriceBasis(previous, factor)
@@ -155,7 +155,7 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 		state = nextState
 		if signal.Reason == v150.RejectActivationExpired {
 			at := bar.Start
-			if err := appendMarketSummaryV150OrderEvents(rec, frozen.Run, []v150.OrderEvent{{
+			if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, []v150.OrderEvent{{
 				Type: v150.OrderEventType("activation_expired"), At: at, Symbol: code, Reason: v150.RejectActivationExpired,
 			}}, marketSummaryV150EventAccounting{}); err != nil {
 				info.DataStatus = "无法判定"
@@ -174,11 +174,11 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 		security, securityErr := loadSecurityState(frozen.Run.RunID, code, signal.At)
 		if securityErr != nil {
 			reason := marketSummaryV150DataHealthReject + ": signal security status unavailable: " + marketSummaryV150SecurityRefreshFailure(securityErr, securityRefreshErr)
-			return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextMarketSummaryV150TradingBucketStart(bar.Start), reason, info)
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextMarketSummaryV150TradingBucketStart(bar.Start), reason, info)
 		}
 		if !security.Tradable || security.Row.IsST {
 			reason := marketSummaryV150DataHealthReject + ": security is not entry-tradable"
-			return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextMarketSummaryV150TradingBucketStart(bar.Start), reason, info)
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextMarketSummaryV150TradingBucketStart(bar.Start), reason, info)
 		}
 
 		nextBar, exists := firstMarketSummaryV150BarAfter(bars, index)
@@ -187,7 +187,7 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 			expectedEnd := expectedStart.Add(15 * time.Minute)
 			if !expectedStart.IsZero() && !evaluatedThrough.Before(expectedEnd) {
 				reason := marketSummaryV150DataHealthReject + ": next complete 15-minute execution bar is missing"
-				return rejectMarketSummaryV150Activation(rec, &frozen, &signal, expectedStart, reason, info)
+				return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, expectedStart, reason, info)
 			}
 			info.DataStatus = "待激活"
 			info.DataStatusReason = "v1.5 signal confirmed; waiting for the next complete 15-minute bar"
@@ -198,13 +198,13 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 			actions, actionErr := loadMarketSummaryV150CorporateActions(code, nextBar.Start, nextBar.Start)
 			if actionErr != nil {
 				reason := marketSummaryV150DataHealthReject + ": corporate action coverage unavailable before fill: " + actionErr.Error()
-				return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextBar.Start, reason, info)
+				return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextBar.Start, reason, info)
 			}
 			if len(actions) > 0 {
 				adjusted, adjustErr := v150.ApplyCorporateActionsToPlan(executionPlan, actions, nextBar.Start)
 				if adjustErr != nil {
 					reason := marketSummaryV150DataHealthReject + ": corporate action fill-plan adjustment rejected: " + adjustErr.Error()
-					return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextBar.Start, reason, info)
+					return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextBar.Start, reason, info)
 				}
 				factor := marketSummaryV150CorporateActionCombinedFactor(actions)
 				signal.SignalClose *= factor
@@ -216,12 +216,12 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 		fillSecurity, securityErr := loadSecurityState(frozen.Run.RunID, code, nextBar.Start)
 		if securityErr != nil {
 			reason := marketSummaryV150DataHealthReject + ": fill security status unavailable: " + marketSummaryV150SecurityRefreshFailure(securityErr, securityRefreshErr)
-			return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextBar.Start, reason, info)
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextBar.Start, reason, info)
 		}
 		previousClose, priceErr := loadMarketSummaryV150PreviousClose(code, nextBar.Start, !ctx.DisableMinuteFetch)
 		if priceErr != nil {
 			reason := marketSummaryV150DataHealthReject + ": previous close unavailable: " + priceErr.Error()
-			return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextBar.Start, reason, info)
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextBar.Start, reason, info)
 		}
 		decorateMarketSummaryV150Tradability(&nextBar, fillSecurity, previousClose)
 		if !fillSecurity.Tradable || fillSecurity.Row.IsST {
@@ -241,7 +241,7 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 		if portfolioErr != nil {
 			marketSummaryV150ExecutionMu.Unlock()
 			reason := marketSummaryV150DataHealthReject + ": point-in-time portfolio unavailable: " + portfolioErr.Error()
-			return rejectMarketSummaryV150Activation(rec, &frozen, &signal, nextBar.Start, reason, info)
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextBar.Start, reason, info)
 		}
 		dailyCap := marketSummaryV150ExecutionDailyCap(frozen, cfg)
 		portfolio.ExecutionDailyCap = &dailyCap
@@ -252,7 +252,7 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 				{Type: v150.EventOrder, At: nextBar.Start, Symbol: code, Reason: "next_bar_market_order"},
 			}
 			events = append(events, fill.Events...)
-			if err := appendMarketSummaryV150OrderEvents(rec, frozen.Run, events, marketSummaryV150EventAccounting{}); err != nil {
+			if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, events, marketSummaryV150EventAccounting{}); err != nil {
 				fill.Reason = firstNonEmptyText(fill.Reason, "entry rejected") + "; append ledger: " + err.Error()
 			}
 			marketSummaryV150ExecutionMu.Unlock()
@@ -260,7 +260,7 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 			info.DataStatusReason = firstNonEmptyText(fill.Reason, "v1.5 entry rejected")
 			return nil, 0, info
 		}
-		if err := appendMarketSummaryV150OrderEvents(rec, frozen.Run, fill.Events, marketSummaryV150EventAccounting{Entry: &fill.Cost}); err != nil {
+		if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, fill.Events, marketSummaryV150EventAccounting{Entry: &fill.Cost}); err != nil {
 			marketSummaryV150ExecutionMu.Unlock()
 			info.DataStatus = "已跳过"
 			info.DataStatusReason = marketSummaryV150DataHealthReject + ": append entry lifecycle: " + err.Error()
@@ -392,7 +392,7 @@ func evaluateMarketSummaryV150Exit(rec models.AiRecommendStocks, entry marketSum
 					info.DataStatusReason = marketSummaryV150DataHealthReject + ": corporate action position adjustment rejected: " + applyErr.Error()
 					return "", time.Time{}, 0, info
 				}
-				if err := appendMarketSummaryV150OrderEvents(rec, frozen.Run, application.Events, marketSummaryV150EventAccounting{}); err != nil {
+				if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, application.Events, marketSummaryV150EventAccounting{}); err != nil {
 					info.DataStatus = "鏃犳硶鍒ゅ畾"
 					info.DataStatusReason = marketSummaryV150DataHealthReject + ": append corporate action lifecycle: " + err.Error()
 					return "", time.Time{}, 0, info
@@ -425,7 +425,7 @@ func evaluateMarketSummaryV150Exit(rec models.AiRecommendStocks, entry marketSum
 		decorateMarketSummaryV150Tradability(&bar, security, previousClose)
 		result := v150.EvaluateExit(position, bar, cfg.SlippageScenarios()[0], cfg)
 		if result.Triggered {
-			if err := appendMarketSummaryV150OrderEvents(rec, frozen.Run, result.Events, marketSummaryV150EventAccounting{Exit: &result.Cost}); err != nil {
+			if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, result.Events, marketSummaryV150EventAccounting{Exit: &result.Cost}); err != nil {
 				info.DataStatus = "无法判定"
 				info.DataStatusReason = marketSummaryV150DataHealthReject + ": append exit lifecycle: " + err.Error()
 				return "", time.Time{}, 0, info
@@ -1200,7 +1200,7 @@ func marketSummaryV150EventTypeOrder(kind v150.OrderEventType) int {
 	}
 }
 
-func rejectMarketSummaryV150Activation(rec models.AiRecommendStocks, frozen *marketSummaryV150FrozenExecutionPlan, signal *v150.ActivationSignal, at time.Time, reason string, info triggerEvalInfo) (*time.Time, float64, triggerEvalInfo) {
+func rejectMarketSummaryV150Activation(ctx yieldBuildContext, rec models.AiRecommendStocks, frozen *marketSummaryV150FrozenExecutionPlan, signal *v150.ActivationSignal, at time.Time, reason string, info triggerEvalInfo) (*time.Time, float64, triggerEvalInfo) {
 	info.DataStatus = "已跳过"
 	info.DataStatusReason = strings.TrimSpace(reason)
 	if frozen == nil {
@@ -1217,7 +1217,7 @@ func rejectMarketSummaryV150Activation(rec models.AiRecommendStocks, frozen *mar
 		}
 	}
 	events = append(events, v150.OrderEvent{Type: v150.EventReject, At: at, Symbol: normalizeRecommendStockCode(rec.StockCode), Reason: strings.TrimSpace(reason)})
-	if err := appendMarketSummaryV150OrderEvents(rec, frozen.Run, events, marketSummaryV150EventAccounting{}); err != nil {
+	if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, events, marketSummaryV150EventAccounting{}); err != nil {
 		info.DataStatusReason += "; append reject lifecycle: " + err.Error()
 	}
 	return nil, 0, info

@@ -20,11 +20,19 @@ import (
 )
 
 type recordingMarketSummaryV150OrderEventStore struct {
-	calls int
+	calls    int
+	delegate marketSummaryV150OrderEventStore
+	contexts []context.Context
+	batches  [][]models.OrderEvent
 }
 
-func (s *recordingMarketSummaryV150OrderEventStore) AppendOrderEvents(context.Context, string, []models.OrderEvent) error {
+func (s *recordingMarketSummaryV150OrderEventStore) AppendOrderEvents(ctx context.Context, runID string, events []models.OrderEvent) error {
 	s.calls++
+	s.contexts = append(s.contexts, ctx)
+	s.batches = append(s.batches, append([]models.OrderEvent(nil), events...))
+	if s.delegate != nil {
+		return s.delegate.AppendOrderEvents(ctx, runID, events)
+	}
 	return nil
 }
 

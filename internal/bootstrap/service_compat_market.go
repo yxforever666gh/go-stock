@@ -8,6 +8,7 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/legacy"
 	"go-stock/backend/models"
+	"go-stock/backend/persistence"
 	"go-stock/backend/portfolio"
 	"go-stock/backend/strategy/v150"
 	cliports "go-stock/internal/cli/ports"
@@ -44,13 +45,14 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 	newsReader := data.NewCompatibilityNewsReader()
 	ledger := data.NewCompatibilityPortfolioLedger(storage.Main)
 	legacyRepository := data.NewCompatibilityLegacyRepository(storage.Main)
+	orderEvents := persistence.NewGORMOrderEventStore(storage.Main)
 	strategyConfig := v150.FixedStrategyV150Config()
 	return service.Dependencies{
 		Clock:                   systemClock{},
 		Initializer:             legacyApplicationInitializer{},
 		Operations:              newCompatibilityServiceOperations(storage.Main),
 		RecommendationPublisher: &compatibilityServiceAdapter{main: storage.Main},
-		ExecutionMonitor:        data.NewCompatibilityExecutionMonitor(),
+		ExecutionMonitor:        data.NewCompatibilityExecutionMonitor(orderEvents),
 		PortfolioReader:         portfolio.NewReader(ledger),
 		LegacyReader:            legacy.NewService(legacyRepository, marketData),
 		CurrentStrategyVersion:  releaseinfo.Manifest().CurrentStrategyVersion,

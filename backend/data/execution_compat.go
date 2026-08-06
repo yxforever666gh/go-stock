@@ -9,10 +9,12 @@ import (
 
 // CompatibilityExecutionMonitor keeps the existing V1.5.0 engine intact
 // while removing delivery-layer knowledge of backend/data.
-type CompatibilityExecutionMonitor struct{}
+type CompatibilityExecutionMonitor struct {
+	orderEvents marketSummaryV150OrderEventStore
+}
 
-func NewCompatibilityExecutionMonitor() CompatibilityExecutionMonitor {
-	return CompatibilityExecutionMonitor{}
+func NewCompatibilityExecutionMonitor(orderEvents marketSummaryV150OrderEventStore) CompatibilityExecutionMonitor {
+	return CompatibilityExecutionMonitor{orderEvents: orderEvents}
 }
 
 func (CompatibilityExecutionMonitor) ResolveWindow(now time.Time) (execution.MonitorWindow, bool) {
@@ -20,11 +22,17 @@ func (CompatibilityExecutionMonitor) ResolveWindow(now time.Time) (execution.Mon
 	return execution.MonitorWindow{SlotAt: window.SlotAt, EvaluationCutoff: window.EvaluationCutoff}, ok
 }
 
-func (CompatibilityExecutionMonitor) Run(ctx context.Context, now time.Time) (execution.MonitorResult, error) {
+func (m CompatibilityExecutionMonitor) Run(ctx context.Context, now time.Time) (execution.MonitorResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := ctx.Err(); err != nil {
 		return execution.MonitorResult{ObservedAt: now}, err
 	}
-	result, err := RunMarketSummaryV150ExecutionMonitor(now)
+	if m.orderEvents == nil {
+		return execution.MonitorResult{ObservedAt: now}, execution.ErrMonitorUnavailable
+	}
+	result, err := runMarketSummaryV150ExecutionMonitorWithStore(ctx, now, m.orderEvents)
 	return execution.MonitorResult{
 		ObservedAt: result.ObservedAt, EvaluationCutoff: result.EvaluationCutoff,
 		PendingCount: result.PendingCount, OpenCount: result.OpenCount,

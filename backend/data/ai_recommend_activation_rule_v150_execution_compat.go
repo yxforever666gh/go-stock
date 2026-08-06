@@ -17,6 +17,49 @@ import (
 	"go-stock/backend/strategy/v150"
 )
 
+type marketSummaryV150OrderEventStore = execution.ImmutableOrderEventStore[models.OrderEvent]
+
+type marketSummaryV150OrderEventSink struct {
+	ctx   context.Context
+	store marketSummaryV150OrderEventStore
+}
+
+func newMarketSummaryV150OrderEventSink(ctx context.Context, store marketSummaryV150OrderEventStore) marketSummaryV150OrderEventSink {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return marketSummaryV150OrderEventSink{ctx: ctx, store: store}
+}
+
+func (sink marketSummaryV150OrderEventSink) injected() bool {
+	return sink.store != nil
+}
+
+func appendMarketSummaryV150OrderEventsWithSink(
+	sink marketSummaryV150OrderEventSink,
+	rec models.AiRecommendStocks,
+	run models.StrategyRunSnapshot,
+	source []v150.OrderEvent,
+	accounting marketSummaryV150EventAccounting,
+) error {
+	if sink.injected() {
+		return appendMarketSummaryV150OrderEventsWithStore(sink.ctx, sink.store, rec, run, source, accounting)
+	}
+	// TODO(app-1.5.3): yield recalculation still enters through the legacy
+	// compatibility wrapper. Remove this fallback when that producer receives
+	// the composition-root store in the next migration slice.
+	return appendMarketSummaryV150OrderEvents(rec, run, source, accounting)
+}
+
+func (ctx yieldBuildContext) appendMarketSummaryV150OrderEvents(
+	rec models.AiRecommendStocks,
+	run models.StrategyRunSnapshot,
+	source []v150.OrderEvent,
+	accounting marketSummaryV150EventAccounting,
+) error {
+	return appendMarketSummaryV150OrderEventsWithSink(ctx.V150OrderEventSink, rec, run, source, accounting)
+}
+
 func appendMarketSummaryV150OrderEventsWithStore(
 	ctx context.Context,
 	store execution.ImmutableOrderEventStore[models.OrderEvent],

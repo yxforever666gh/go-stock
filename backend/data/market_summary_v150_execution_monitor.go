@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,8 +189,36 @@ func marketSummaryV150CompletedBoundary(now, day time.Time, startHour, startMinu
 // record projections. A restart can safely call the same window again because
 // lifecycle event identities and immutable appends are idempotent.
 func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150ExecutionMonitorResult, error) {
+	// TODO(app-1.5.3): this exported compatibility entry is still used by the
+	// generic recalculation tests. Production uses the store-injected monitor
+	// below and must never reach the legacy order-event fallback.
+	return runMarketSummaryV150ExecutionMonitor(context.Background(), now, marketSummaryV150OrderEventSink{})
+}
+
+func runMarketSummaryV150ExecutionMonitorWithStore(
+	ctx context.Context,
+	now time.Time,
+	store marketSummaryV150OrderEventStore,
+) (MarketSummaryV150ExecutionMonitorResult, error) {
+	if store == nil {
+		return MarketSummaryV150ExecutionMonitorResult{ObservedAt: now.In(cnLocation())}, errors.New("v1.5 execution monitor order event store is unavailable")
+	}
+	return runMarketSummaryV150ExecutionMonitor(ctx, now, newMarketSummaryV150OrderEventSink(ctx, store))
+}
+
+func runMarketSummaryV150ExecutionMonitor(
+	ctx context.Context,
+	now time.Time,
+	eventSink marketSummaryV150OrderEventSink,
+) (MarketSummaryV150ExecutionMonitorResult, error) {
 	result := MarketSummaryV150ExecutionMonitorResult{ObservedAt: now.In(cnLocation())}
-	if err := requireStrategyProductionLive(nil, db.Dao); err != nil {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if err := requireStrategyProductionLive(ctx, db.Dao); err != nil {
 		return result, err
 	}
 	window, ok := ResolveMarketSummaryV150ExecutionWindow(now)
@@ -201,7 +230,7 @@ func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150Execu
 		return result, errors.New("v1.5 execution monitor database is unavailable")
 	}
 
-	records, pendingCount, openCount, skippedCount, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(window.EvaluationCutoff)
+	records, pendingCount, openCount, skippedCount, warnings, err := loadMarketSummaryV150ActiveExecutionRecordsWithSink(window.EvaluationCutoff, eventSink)
 	result.PendingCount = pendingCount
 	result.OpenCount = openCount
 	result.SkippedCount = skippedCount
@@ -231,7 +260,7 @@ func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150Execu
 		crawlTimeout = setting.CrawlTimeOut
 	}
 	localNow := now.In(cnLocation())
-	ctx := yieldBuildContext{
+	buildCtx := yieldBuildContext{
 		Force:                             true,
 		Reason:                            "v150_execution_monitor",
 		Now:                               localNow,
@@ -241,9 +270,10 @@ func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150Execu
 		DisableMinuteFetch:                false,
 		V150EvaluationCutoff:              window.EvaluationCutoff,
 		FailOnV150ObservationRefreshError: true,
+		V150OrderEventSink:                eventSink,
 	}
 	writer := newAiRecommendYieldSnapshotWriter(meta.ID, len(scheduled)+1)
-	replayErr := processMarketSummaryV150RecordsInEventOrder(scheduled, ctx, writer)
+	replayErr := processMarketSummaryV150RecordsInEventOrder(scheduled, buildCtx, writer)
 	flushErr := writer.Flush()
 	if replayErr != nil || flushErr != nil {
 		return result, errors.Join(
@@ -263,6 +293,15 @@ func wrapMarketSummaryV150ExecutionMonitorError(operation string, err error) err
 }
 
 func loadMarketSummaryV150ActiveExecutionRecords(observedAt time.Time) ([]models.AiRecommendStocks, int, int, int, []string, error) {
+	// Compatibility-only fallback for direct recalculation tests. Production
+	// monitor enumeration always calls the injected form below.
+	return loadMarketSummaryV150ActiveExecutionRecordsWithSink(observedAt, marketSummaryV150OrderEventSink{})
+}
+
+func loadMarketSummaryV150ActiveExecutionRecordsWithSink(
+	observedAt time.Time,
+	eventSink marketSummaryV150OrderEventSink,
+) ([]models.AiRecommendStocks, int, int, int, []string, error) {
 	if db.Dao == nil {
 		return nil, 0, 0, 0, nil, errors.New("strategy database is unavailable")
 	}
@@ -427,7 +466,7 @@ func loadMarketSummaryV150ActiveExecutionRecords(observedAt time.Time) ([]models
 			}
 			reason := marketSummaryV150DataHealthReject + ": invalid frozen entry plan: " + planErr.Error()
 			rejectAt := marketSummaryV150InvalidPlanRejectAt(observedAt, run, eventsByRule[ruleID])
-			appendErr := appendMarketSummaryV150OrderEvents(record, run, []v150.OrderEvent{{
+			appendErr := appendMarketSummaryV150OrderEventsWithSink(eventSink, record, run, []v150.OrderEvent{{
 				Type: v150.EventReject, At: rejectAt, Symbol: record.StockCode, Reason: reason,
 			}}, marketSummaryV150EventAccounting{})
 			warning := "rejected invalid frozen entry plan " + ruleID + ": " + planErr.Error()
