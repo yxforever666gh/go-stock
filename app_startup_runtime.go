@@ -11,35 +11,35 @@ import (
 
 func (a *App) domReady(ctx context.Context) {
 	defer PanicHandler()
-	defer a.emitDomReadyDone()
-	// Web mode invokes domReady directly without the desktop startup hook. The
-	// once-guard makes this a fallback only; desktop execution starts earlier.
-	a.registerMarketSummaryV150ExecutionRuntime()
-
 	if !a.tryMarkDomReadyDone() {
 		logger.SugaredLogger.Warn("跳过重复 domReady 初始化: runtime 已完成注册")
 		return
 	}
 
-	a.updateBasicInfo()
-
+	// Web mode invokes domReady directly without the desktop startup hook. The
+	// once-guard makes this a fallback only; desktop execution starts earlier.
+	a.registerMarketSummaryV150ExecutionRuntime()
 	config := a.services.Config.GetConfig()
 	a.registerRealtimeRuntime(config)
 	a.registerFundRuntime(config)
 	a.registerTelegraphRuntime(config)
-	a.startImmediateRuntimeTasks(config)
-	a.registerMaintenanceRuntime(config)
+	a.registerMaintenanceRuntime()
 	a.registerConfiguredCronRuntimes(config)
 	a.registerFollowAnalysisCrons()
-	if err := a.schedulerRegistrationError(); err != nil {
+	if err := a.startSchedulerAfterAssembly(); err != nil {
 		releaseinfo.MarkSchedulerReady(false)
 		releaseinfo.MarkNotReady(err)
 		logger.SugaredLogger.Errorf("scheduler assembly failed: %v", err)
 		return
 	}
 	releaseinfo.MarkSchedulerReady(true)
+	a.startMarketSummaryV150ExecutionRuntime()
+	a.updateBasicInfo()
+	a.startImmediateRuntimeTasks(config)
+	a.startMaintenanceRuntime(config)
 
 	logger.SugaredLogger.Infof("domReady-cronEntrys:%+v", a.cronEntrys)
+	a.emitDomReadyDone()
 }
 
 func (a *App) emitDomReadyDone() {
@@ -117,17 +117,19 @@ func (a *App) startImmediateRuntimeTasks(config *models.SettingConfig) {
 	}
 }
 
-func (a *App) registerMaintenanceRuntime(config *models.SettingConfig) {
-	if config.UpdateBasicInfoOnStart {
-		go a.CheckStockBaseInfo(a.ctx)
-	}
-
+func (a *App) registerMaintenanceRuntime() {
 	if _, err := a.cron.AddFunc("0 0 2 * * *", func() {
 		logger.SugaredLogger.Errorf("Checking for updates...")
 		a.CheckStockBaseInfo(a.ctx)
 	}); err != nil {
 		a.recordSchedulerRegistrationError("CheckStockBaseInfo", "0 0 2 * * *", err)
 		logger.SugaredLogger.Errorf("注册 CheckStockBaseInfo 定时任务失败: %v", err)
+	}
+}
+
+func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
+	if config.UpdateBasicInfoOnStart {
+		go a.CheckStockBaseInfo(a.ctx)
 	}
 }
 

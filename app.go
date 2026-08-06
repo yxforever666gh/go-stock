@@ -69,7 +69,6 @@ func NewAppWithServices(services service.AppServices, agentToolData agenttools.T
 	cacheSize := 512 * 1024
 	cache := freecache.NewCache(cacheSize)
 	c := cron.New(cron.WithSeconds())
-	c.Start()
 	var tools []models.Tool
 	tools = AddTools(tools)
 	return &App{

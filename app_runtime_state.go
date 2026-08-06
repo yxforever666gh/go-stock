@@ -30,6 +30,17 @@ func (a *App) schedulerRegistrationError() error {
 	return errors.Join(a.schedulerErrors...)
 }
 
+func (a *App) startSchedulerAfterAssembly() error {
+	if err := a.schedulerRegistrationError(); err != nil {
+		return err
+	}
+	if a.cron == nil {
+		return errors.New("scheduler is unavailable")
+	}
+	a.cron.Start()
+	return nil
+}
+
 func (a *App) setCronEntry(key string, entryID cron.EntryID) {
 	a.cronEntrysMu.Lock()
 	defer a.cronEntrysMu.Unlock()

@@ -155,9 +155,16 @@ func (a *App) registerMarketSummaryV150ExecutionRuntime() {
 		a.registerCronTask(marketSummaryV150ExecutionCronKey, "@every 30s", func() {
 			a.v150ExecutionTask.Tick("cron")
 		})
-		// Recovery is not gated on any page query or front-end action.
-		go a.v150ExecutionTask.Tick("startup")
 	})
+}
+
+func (a *App) startMarketSummaryV150ExecutionRuntime() {
+	if a == nil || a.v150ExecutionTask == nil {
+		return
+	}
+	// Recovery is not gated on any page query or front-end action, but it must
+	// not run until the complete scheduler assembly has passed readiness.
+	go a.v150ExecutionTask.Tick("startup")
 }
 
 func (a *App) executeMarketSummaryV150ExecutionMonitor(now time.Time) (execution.MonitorResult, error) {
