@@ -9,16 +9,7 @@ import (
 )
 
 func TestReleaseRollbackRequiresExactPreviousReadiness(t *testing.T) {
-	_, filename, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve test source path")
-	}
-	scriptPath := filepath.Join(filepath.Dir(filename), "..", "..", "scripts", "release.ps1")
-	content, err := os.ReadFile(scriptPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	script := strings.ReplaceAll(string(content), "\r\n", "\n")
+	script := readReleaseScript(t)
 
 	for _, forbidden := range []string{"function Wait-WebHealth", "Wait-WebHealth $"} {
 		if strings.Contains(script, forbidden) {
@@ -60,4 +51,35 @@ func TestReleaseRollbackRequiresExactPreviousReadiness(t *testing.T) {
 	if !strings.Contains(script[manualRollback:], `Assert-SingleListener $process.Id`) {
 		t.Fatal("manual rollback must enforce a single listener after exact readiness")
 	}
+}
+
+func TestReleaseBranchGateQueriesActualOriginHeads(t *testing.T) {
+	script := readReleaseScript(t)
+	if strings.Contains(script, "refs/remotes/origin") {
+		t.Fatal("release branch gate must not trust cached refs/remotes/origin")
+	}
+	for _, fragment := range []string{
+		`& git -C $ProjectRoot ls-remote --heads origin`,
+		`$remoteExitCode = $LASTEXITCODE`,
+		`$remoteBranches.Count -ne 1`,
+		`$remoteBranches[0] -ne "refs/heads/main"`,
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Errorf("release branch gate is missing %q", fragment)
+		}
+	}
+}
+
+func readReleaseScript(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve test source path")
+	}
+	scriptPath := filepath.Join(filepath.Dir(filename), "..", "..", "scripts", "release.ps1")
+	content, err := os.ReadFile(scriptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.ReplaceAll(string(content), "\r\n", "\n")
 }

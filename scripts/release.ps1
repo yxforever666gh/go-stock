@@ -165,12 +165,25 @@ function Assert-UniqueMainBranch {
     if ($localBranches.Count -ne 1 -or $localBranches[0] -ne "main") {
         throw "Release workspace must contain only the local main branch (found: $($localBranches -join ', '))"
     }
-    $remoteBranches = @(@(& git -C $ProjectRoot for-each-ref --format="%(refname)" refs/remotes/origin) |
-        ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -and $_ -ne "refs/remotes/origin/HEAD" })
-    if ($LASTEXITCODE -ne 0) { throw "Cannot enumerate origin branches" }
-    if ($remoteBranches.Count -ne 1 -or $remoteBranches[0] -ne "refs/remotes/origin/main") {
-        throw "Release workspace must contain only origin/main (found: $($remoteBranches -join ', '))"
+    $remoteHeadOutput = @(& git -C $ProjectRoot ls-remote --heads origin 2>&1)
+    $remoteExitCode = $LASTEXITCODE
+    if ($remoteExitCode -ne 0) {
+        $details = ($remoteHeadOutput | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        if ($details) { throw "Cannot query origin branch heads (exit $remoteExitCode)`n$details" }
+        throw "Cannot query origin branch heads (exit $remoteExitCode)"
+    }
+    $remoteBranches = @($remoteHeadOutput | ForEach-Object {
+        $line = ([string]$_).Trim()
+        if ($line) {
+            $fields = @($line -split '\s+', 2)
+            if ($fields.Count -ne 2 -or -not $fields[1].StartsWith("refs/heads/")) {
+                throw "Cannot parse origin branch head: $line"
+            }
+            $fields[1]
+        }
+    })
+    if ($remoteBranches.Count -ne 1 -or $remoteBranches[0] -ne "refs/heads/main") {
+        throw "Release remote must contain only refs/heads/main (found: $($remoteBranches -join ', '))"
     }
 }
 
