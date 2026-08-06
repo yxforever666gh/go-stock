@@ -14,9 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
+	"go-stock/internal/bootstrap"
+	cliports "go-stock/internal/cli/ports"
 )
 
 var strategyVersionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$`)
@@ -45,6 +46,17 @@ type strategyBacktestSummary struct {
 }
 
 func runStrategyBacktest(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+	repository, err := bootstrap.NewProductionFrozenBacktestRepository()
+	if err != nil {
+		return err
+	}
+	return runStrategyBacktestWithRepository(args, g, stdout, stderr, repository)
+}
+
+func runStrategyBacktestWithRepository(args []string, g GlobalOptions, stdout, stderr io.Writer, repository cliports.FrozenBacktestRepository) error {
+	if repository == nil {
+		return errors.New("frozen backtest repository is required")
+	}
 	fs := flag.NewFlagSet("strategy-backtest", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	var versionText string
@@ -80,7 +92,7 @@ func runStrategyBacktest(args []string, g GlobalOptions, stdout, stderr io.Write
 		return err
 	}
 
-	inputs, err := persistence.LoadFrozenStrategyInputs(context.Background(), db.Dao, version, start, end)
+	inputs, err := repository.LoadFrozenStrategyInputs(context.Background(), version, start, end)
 	if err != nil {
 		if errors.Is(err, persistence.ErrNoFrozenSnapshots) || errors.Is(err, persistence.ErrIncompleteSnapshots) {
 			return fmt.Errorf("本地冻结快照不可用；cache-only 回放拒绝联网补数: %w", err)
@@ -120,7 +132,7 @@ func runStrategyBacktest(args []string, g GlobalOptions, stdout, stderr io.Write
 			CompletedAt:            frozenAt,
 			FrozenAt:               &frozenAt,
 		}
-		if _, err := persistence.PersistBacktestResult(context.Background(), db.Dao, persistence.BacktestResult{Run: run, Trades: trades, Metrics: metrics}); err != nil {
+		if err := repository.PersistBacktestResult(context.Background(), persistence.BacktestResult{Run: run, Trades: trades, Metrics: metrics}); err != nil {
 			return err
 		}
 		summary.Persisted = true
