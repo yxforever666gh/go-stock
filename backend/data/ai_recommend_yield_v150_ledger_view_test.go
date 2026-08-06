@@ -73,8 +73,8 @@ func TestGetAiRecommendStocksYieldListV150UsesFrozenRulesAndLedgerLifecycle(t *t
 			page.ExcessYieldRateText != "--" || page.ExcessXirrText != "--" {
 			t.Fatalf("RecommendID=0 collision published benchmark comparison: %+v", page)
 		}
-		if !containsV150YieldLedgerViewWarning(page.V150HealthWarnings, "", v150BenchmarkPartialHealthCode) {
-			t.Fatalf("projection-less activated rule did not add partial benchmark warning: %v", page.V150HealthWarnings)
+		if !containsV150YieldLedgerViewWarning(page.V150HealthWarnings, "", v150ForwardValidationCohortHealthCode) {
+			t.Fatalf("policy-invalid complete cohort did not fail the aggregate closed: %v", page.V150HealthWarnings)
 		}
 		if !containsV150YieldLedgerViewWarning(page.V150HealthWarnings, holding.symbol, v150YieldValuationHealthCode) {
 			t.Fatalf("missing quote health warning: %v", page.V150HealthWarnings)
@@ -190,7 +190,7 @@ func appendV150YieldLedgerViewRule(
 			DataCutoffAt: decisionAt.Add(-5 * time.Minute), DecisionAt: decisionAt,
 			GeneratedAt: decisionAt.Add(time.Minute), ValidFromAt: &validFromAt, Mode: "neutral",
 			ConfigHash: v150.FixedStrategyV150ConfigHash(), InputHash: "input-" + suffix,
-			PayloadJSON: `{}`, FrozenAt: &frozenAt,
+			PayloadJSON: `{"run":{"regime":{"dailyCap":1}}}`, FrozenAt: &frozenAt,
 		},
 		Candidates: []models.CandidateSnapshot{{
 			CandidateID: candidateID, RunID: runID, StrategyVersion: v150.StrategyVersion,

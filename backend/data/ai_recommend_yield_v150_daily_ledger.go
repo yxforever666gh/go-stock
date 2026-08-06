@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -15,9 +16,11 @@ import (
 )
 
 const (
-	v150YieldDailyLedgerMissingHealthCode  = "daily_order_ledger_missing_or_invalid"
-	v150YieldDailyLedgerAsOfHealthCode     = "daily_order_ledger_not_causally_visible"
-	v150YieldDailyRawMinutePriceHealthCode = "holding_daily_raw_minute_close_missing"
+	v150YieldDailyLedgerMissingHealthCode       = "daily_order_ledger_missing_or_invalid"
+	v150YieldDailyLedgerAsOfHealthCode          = "daily_order_ledger_not_causally_visible"
+	v150YieldDailyRawMinutePriceHealthCode      = "holding_daily_raw_minute_close_missing"
+	v150YieldDailyRawMinuteProvenanceHealthCode = "holding_daily_raw_minute_provenance_invalid"
+	v150YieldDailyCohortReplayID                = "yield-daily-cohort|1.5.0"
 )
 
 // v150YieldDailyOrderLedger is a read-only view of one recommendation's
@@ -46,69 +49,113 @@ type v150YieldDailyLedgerValue struct {
 	DailyCostEligible   bool
 }
 
-func loadV150YieldDailyOrderLedgers(
-	records []models.AiRecommendStocks,
+type v150YieldDailyLedgerRequest struct {
+	Key         string
+	RunID       string
+	RuleID      string
+	Symbol      string
+	WarningKey  string
+	RequireFill bool
+}
+
+// loadV150YieldDailyOrderLedgersByRule is the only loader used by the V1.5
+// daily API. Frozen rules are the enumeration source, so an optional mutable
+// display projection (and its numeric RecommendID) cannot hide or alias a
+// ledger.
+func loadV150YieldDailyOrderLedgersByRule(
+	views []v150YieldLedgerView,
 	reportAsOf time.Time,
-) (map[uint]v150YieldDailyOrderLedger, []string) {
-	result := make(map[uint]v150YieldDailyOrderLedger)
+) (map[string]v150YieldDailyOrderLedger, []string) {
+	requests := make([]v150YieldDailyLedgerRequest, 0, len(views))
+	seen := make(map[string]struct{}, len(views))
+	warnings := make([]string, 0)
+	for _, view := range views {
+		frozen := view.Current.Frozen
+		ruleID := strings.TrimSpace(frozen.RuleID)
+		runID := strings.TrimSpace(frozen.RunID)
+		symbol := normalizeRecommendStockCode(frozen.Symbol)
+		warningKey := ruleID
+		if warningKey == "" {
+			warningKey = symbol
+		}
+		if ruleID == "" || runID == "" || symbol == "" || frozen.StrategyVersion != v150.StrategyVersion {
+			warnings = append(warnings, strings.TrimSpace(warningKey)+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		if _, duplicate := seen[ruleID]; duplicate {
+			warnings = append(warnings, ruleID+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		seen[ruleID] = struct{}{}
+		status := strings.ToLower(strings.TrimSpace(string(view.Current.Lifecycle.Status)))
+		requests = append(requests, v150YieldDailyLedgerRequest{
+			Key: ruleID, RunID: runID, RuleID: ruleID, Symbol: symbol, WarningKey: ruleID,
+			RequireFill: status == "holding" || status == "closed",
+		})
+	}
+	loaded, loadWarnings := loadV150YieldDailyOrderLedgersForRequests(requests, reportAsOf)
+	return loaded, dedupeNonEmptyStrings(append(warnings, loadWarnings...), 0)
+}
+
+func loadV150YieldDailyOrderLedgersForRequests(
+	requests []v150YieldDailyLedgerRequest,
+	reportAsOf time.Time,
+) (map[string]v150YieldDailyOrderLedger, []string) {
+	result := make(map[string]v150YieldDailyOrderLedger, len(requests))
+	if len(requests) == 0 {
+		return result, nil
+	}
 	if reportAsOf.IsZero() {
 		reportAsOf = timeNow().In(cnLocation())
 	}
-
-	v150Records := make([]models.AiRecommendStocks, 0, len(records))
-	runSet := make(map[string]struct{})
-	for _, record := range records {
-		if !isV150CostVersion(record.SummaryVersion) {
-			continue
-		}
-		v150Records = append(v150Records, record)
-		if runID := strings.TrimSpace(record.StrategyRunID); runID != "" {
-			runSet[runID] = struct{}{}
-		}
-	}
-	if len(v150Records) == 0 {
-		return result, nil
-	}
 	warnings := make([]string, 0)
+	warn := func(request v150YieldDailyLedgerRequest) {
+		key := strings.TrimSpace(request.WarningKey)
+		if key == "" {
+			key = strings.TrimSpace(request.Key)
+		}
+		warnings = append(warnings, key+":"+v150YieldDailyLedgerMissingHealthCode)
+	}
 	if db.Dao == nil || !db.Dao.Migrator().HasTable(&models.OrderEvent{}) {
-		for _, record := range v150Records {
-			warnings = append(warnings, v150YieldDailyLedgerWarning(record, v150YieldDailyLedgerMissingHealthCode))
+		for _, request := range requests {
+			warn(request)
+		}
+		return result, dedupeNonEmptyStrings(warnings, 0)
+	}
+	if !validateV150YieldDailyCohort(reportAsOf) {
+		for _, request := range requests {
+			warn(request)
 		}
 		return result, dedupeNonEmptyStrings(warnings, 0)
 	}
 
+	runSet := make(map[string]struct{}, len(requests))
+	for _, request := range requests {
+		runSet[request.RunID] = struct{}{}
+	}
 	runIDs := make([]string, 0, len(runSet))
 	for runID := range runSet {
 		runIDs = append(runIDs, runID)
 	}
 	sort.Strings(runIDs)
 	rows := make([]models.OrderEvent, 0)
-	if len(runIDs) > 0 {
-		if err := db.Dao.Model(&models.OrderEvent{}).
-			Where("strategy_version = ? AND run_id IN ?", v150.StrategyVersion, runIDs).
-			Order("run_id ASC, rule_id ASC, sequence ASC, event_id ASC").
-			Find(&rows).Error; err != nil {
-			for _, record := range v150Records {
-				warnings = append(warnings, v150YieldDailyLedgerWarning(record, v150YieldDailyLedgerMissingHealthCode))
-			}
-			return result, dedupeNonEmptyStrings(warnings, 0)
+	if err := db.Dao.Model(&models.OrderEvent{}).
+		Where("strategy_version = ? AND run_id IN ?", v150.StrategyVersion, runIDs).
+		Order("run_id ASC, rule_id ASC, sequence ASC, event_id ASC").
+		Find(&rows).Error; err != nil {
+		for _, request := range requests {
+			warn(request)
 		}
+		return result, dedupeNonEmptyStrings(warnings, 0)
 	}
-
 	rowsByIdentity := make(map[string][]models.OrderEvent)
 	for _, row := range rows {
 		key := v150YieldDailyLedgerIdentity(row.RunID, row.RuleID, row.Symbol)
 		rowsByIdentity[key] = append(rowsByIdentity[key], row)
 	}
-	for _, record := range v150Records {
-		runID := strings.TrimSpace(record.StrategyRunID)
-		ruleID := strings.TrimSpace(record.StrategyRuleID)
-		symbol := normalizeRecommendStockCode(record.StockCode)
-		if record.ID == 0 || runID == "" || ruleID == "" || symbol == "" {
-			warnings = append(warnings, v150YieldDailyLedgerWarning(record, v150YieldDailyLedgerMissingHealthCode))
-			continue
-		}
-		allRows := rowsByIdentity[v150YieldDailyLedgerIdentity(runID, ruleID, symbol)]
+
+	for _, request := range requests {
+		allRows := rowsByIdentity[v150YieldDailyLedgerIdentity(request.RunID, request.RuleID, request.Symbol)]
 		visible := make([]models.OrderEvent, 0, len(allRows))
 		for _, row := range allRows {
 			if row.EventAt.After(reportAsOf) || row.FrozenAt == nil || row.FrozenAt.After(reportAsOf) {
@@ -117,25 +164,157 @@ func loadV150YieldDailyOrderLedgers(
 			visible = append(visible, row)
 		}
 		if len(visible) == 0 {
-			warnings = append(warnings, v150YieldDailyLedgerWarning(record, v150YieldDailyLedgerMissingHealthCode))
+			warn(request)
 			continue
 		}
-		if _, _, _, err := persistence.ReplayFrozenOrderEvents(
-			"yield-daily-ledger|"+runID+"|"+ruleID,
+		trades, _, _, err := persistence.ReplayFrozenOrderEvents(
+			"yield-daily-ledger|"+request.RunID+"|"+request.RuleID,
 			v150.StrategyVersion,
 			visible,
 			reportAsOf,
-		); err != nil {
-			warnings = append(warnings, v150YieldDailyLedgerWarning(record, v150YieldDailyLedgerMissingHealthCode))
+		)
+		if err != nil || (request.RequireFill && len(trades) != 1) {
+			warn(request)
 			continue
 		}
-		result[record.ID] = v150YieldDailyOrderLedger{
-			RunID: runID, RuleID: ruleID, Symbol: symbol, ReportAsOf: reportAsOf,
-			Events:    append([]models.OrderEvent(nil), visible...),
-			AllEvents: append([]models.OrderEvent(nil), allRows...),
+		result[request.Key] = v150YieldDailyOrderLedger{
+			RunID: request.RunID, RuleID: request.RuleID, Symbol: request.Symbol, ReportAsOf: reportAsOf,
+			Events: append([]models.OrderEvent(nil), visible...), AllEvents: append([]models.OrderEvent(nil), allRows...),
 		}
 	}
 	return result, dedupeNonEmptyStrings(warnings, 0)
+}
+
+// validateV150YieldDailyCohort replays every frozen V1.5.0 run from the
+// cohort's first trading day through reportAsOf. The query being rendered is
+// deliberately not an input: a hidden rule must still be able to invalidate
+// the portfolio when it violates a global entry, concentration or cooldown
+// constraint. Missing policy metadata is also unsafe even when accounting
+// replay itself succeeds.
+func validateV150YieldDailyCohort(reportAsOf time.Time) bool {
+	if db.Dao == nil || reportAsOf.IsZero() || !db.Dao.Migrator().HasTable(&models.StrategyRunSnapshot{}) {
+		return false
+	}
+	cutoffDay := reportAsOf.In(cnLocation()).Format(time.DateOnly)
+	var earliest models.StrategyRunSnapshot
+	if err := db.Dao.Model(&models.StrategyRunSnapshot{}).
+		Select("trade_date").
+		Where("strategy_version = ? AND frozen_at IS NOT NULL AND frozen_at <= ? AND trade_date <= ?", v150.StrategyVersion, reportAsOf, cutoffDay).
+		Order("trade_date ASC, run_id ASC").
+		Take(&earliest).Error; err != nil {
+		return false
+	}
+	cohortStart, err := time.ParseInLocation(time.DateOnly, strings.TrimSpace(earliest.TradeDate), cnLocation())
+	if err != nil {
+		return false
+	}
+	inputs, err := persistence.LoadFrozenStrategyInputsAsOf(
+		context.Background(),
+		db.Dao,
+		v150.StrategyVersion,
+		cohortStart,
+		reportAsOf.In(cnLocation()),
+		reportAsOf,
+	)
+	if err != nil {
+		return false
+	}
+	inputs = v150YieldDailyDecisionCohortInputs(inputs)
+	if len(inputs.Runs) == 0 {
+		return false
+	}
+	_, stats, _, err := persistence.ReplayFrozenStrategyInputs(
+		v150YieldDailyCohortReplayID,
+		v150.StrategyVersion,
+		inputs,
+		reportAsOf,
+	)
+	return err == nil && stats.PolicyValidated
+}
+
+// Auxiliary security/corporate-action observation envelopes share the
+// strategy persistence tables and version, but they are market-data facts,
+// not recommendation decisions. Their payload intentionally has no daily-cap
+// policy, so including them in the policy cohort would make every otherwise
+// valid production replay report PolicyValidated=false.
+func v150YieldDailyDecisionCohortInputs(inputs persistence.FrozenStrategyInputs) persistence.FrozenStrategyInputs {
+	excluded := make(map[string]struct{})
+	result := persistence.FrozenStrategyInputs{
+		Runs: make([]models.StrategyRunSnapshot, 0, len(inputs.Runs)),
+	}
+	for _, run := range inputs.Runs {
+		mode := strings.TrimSpace(run.Mode)
+		if strings.EqualFold(mode, persistence.StrategyRunModeExecutionSecurityObservation) ||
+			strings.EqualFold(mode, persistence.StrategyRunModeExecutionCorporateActionObservation) {
+			excluded[run.RunID] = struct{}{}
+			continue
+		}
+		result.Runs = append(result.Runs, run)
+	}
+	if len(excluded) == 0 {
+		return inputs
+	}
+	for _, row := range inputs.Candidates {
+		if _, skip := excluded[row.RunID]; !skip {
+			result.Candidates = append(result.Candidates, row)
+		}
+	}
+	for _, row := range inputs.Rules {
+		if _, skip := excluded[row.RunID]; !skip {
+			result.Rules = append(result.Rules, row)
+		}
+	}
+	for _, row := range inputs.OrderEvents {
+		if _, skip := excluded[row.RunID]; !skip {
+			result.OrderEvents = append(result.OrderEvents, row)
+		}
+	}
+	for _, row := range inputs.SecurityMaster {
+		if _, skip := excluded[row.RunID]; !skip {
+			result.SecurityMaster = append(result.SecurityMaster, row)
+		}
+	}
+	for _, row := range inputs.CorporateActions {
+		if _, skip := excluded[row.RunID]; !skip {
+			result.CorporateActions = append(result.CorporateActions, row)
+		}
+	}
+	return result
+}
+
+func loadV150YieldDailyOrderLedgers(
+	records []models.AiRecommendStocks,
+	reportAsOf time.Time,
+) (map[uint]v150YieldDailyOrderLedger, []string) {
+	result := make(map[uint]v150YieldDailyOrderLedger)
+	requests := make([]v150YieldDailyLedgerRequest, 0, len(records))
+	idByKey := make(map[string]uint, len(records))
+	warnings := make([]string, 0)
+	for _, record := range records {
+		if !isV150CostVersion(record.SummaryVersion) {
+			continue
+		}
+		runID := strings.TrimSpace(record.StrategyRunID)
+		ruleID := strings.TrimSpace(record.StrategyRuleID)
+		symbol := normalizeRecommendStockCode(record.StockCode)
+		if record.ID == 0 || runID == "" || ruleID == "" || symbol == "" {
+			warnings = append(warnings, v150YieldDailyLedgerWarning(record, v150YieldDailyLedgerMissingHealthCode))
+			continue
+		}
+		key := fmt.Sprintf("recommend:%d", record.ID)
+		idByKey[key] = record.ID
+		requests = append(requests, v150YieldDailyLedgerRequest{
+			Key: key, RunID: runID, RuleID: ruleID, Symbol: symbol,
+			WarningKey: normalizeRecommendStockCode(record.StockCode),
+		})
+	}
+	loaded, loadWarnings := loadV150YieldDailyOrderLedgersForRequests(requests, reportAsOf)
+	for key, ledger := range loaded {
+		if id := idByKey[key]; id != 0 {
+			result[id] = ledger
+		}
+	}
+	return result, dedupeNonEmptyStrings(append(warnings, loadWarnings...), 0)
 }
 
 func reconcileV150YieldDailyOverviewEntriesWithLedger(
@@ -152,60 +331,103 @@ func reconcileV150YieldDailyOverviewEntriesWithLedger(
 		if !ok {
 			continue
 		}
-		var fill *models.OrderEvent
-		var exit *models.OrderEvent
-		corporateCash := 0.0
-		ledgerQuantity := 0.0
-		for eventIndex := range ledger.Events {
-			event := &ledger.Events[eventIndex]
-			switch strings.ToLower(strings.TrimSpace(event.EventType)) {
-			case string(v150.EventFill):
-				if fill == nil {
-					fill = event
-					ledgerQuantity = event.Quantity
-				}
-			case string(v150.EventCorporateAction):
-				corporateCash += event.CashAmount
-				ledgerQuantity = event.Quantity
-			case string(v150.EventExitFill):
-				exit = event
-				ledgerQuantity = event.Quantity
-			}
-		}
-		if fill == nil || fill.Price <= 0 || fill.Quantity <= 0 || fill.Fees < 0 {
-			continue
-		}
-		entry.BuyTime = fill.EventAt.In(cnLocation())
-		entry.BuyDay = normalizeYieldOverviewTradeDay(entry.BuyTime)
-		entry.BuyAmount = fill.Price
-		entry.BuyCostNet = round2(fill.Price*fill.Quantity + fill.Fees)
-		entry.V150LedgerAccountingReady = true
-		entry.V150LedgerClosed = false
-		entry.V150LedgerQuantity = ledgerQuantity
-		entry.V150LedgerCorporateCash = corporateCash
-		entry.HasSellAmount = false
-		entry.SellDay = time.Time{}
-		entry.SellTime = ""
-		entry.RealizedValueNet = 0
-		if exit == nil || exit.Price <= 0 || exit.Quantity <= 0 || exit.Fees < 0 {
-			continue
-		}
-		entry.HasSellAmount = true
-		entry.V150LedgerClosed = true
-		entry.V150LedgerQuantity = exit.Quantity
-		entry.SellAmount = exit.Price
-		entry.SellDay = normalizeYieldOverviewTradeDay(exit.EventAt)
-		entry.SellTime = exit.EventAt.In(cnLocation()).Format(time.DateTime)
-		entry.RealizedValueNet = round2(exit.Price*exit.Quantity - exit.Fees + corporateCash)
+		applyV150YieldDailyLedgerToEntry(entry, ledger)
 	}
 	return result
+}
+
+func applyV150YieldDailyLedgerToEntry(entry *yieldDailyOverviewEntry, ledger v150YieldDailyOrderLedger) bool {
+	if entry == nil || strings.TrimSpace(ledger.RuleID) == "" {
+		return false
+	}
+	var fill *models.OrderEvent
+	var exit *models.OrderEvent
+	corporateCash := 0.0
+	ledgerQuantity := 0.0
+	for eventIndex := range ledger.Events {
+		event := &ledger.Events[eventIndex]
+		switch strings.ToLower(strings.TrimSpace(event.EventType)) {
+		case string(v150.EventFill):
+			if fill == nil {
+				fill = event
+				ledgerQuantity = event.Quantity
+			}
+		case string(v150.EventCorporateAction):
+			corporateCash += event.CashAmount
+			ledgerQuantity = event.Quantity
+		case string(v150.EventExitFill):
+			exit = event
+			ledgerQuantity = event.Quantity
+		}
+	}
+	if fill == nil || fill.EventAt.IsZero() || fill.Price <= 0 || fill.Quantity <= 0 || fill.Fees < 0 {
+		return false
+	}
+	entry.V150RuleID = strings.TrimSpace(ledger.RuleID)
+	entry.BuyTime = fill.EventAt.In(cnLocation())
+	entry.BuyDay = normalizeYieldOverviewTradeDay(entry.BuyTime)
+	entry.BuyAmount = fill.Price
+	entry.BuyCostNet = round2(fill.Price*fill.Quantity + fill.Fees)
+	entry.V150LedgerAccountingReady = true
+	entry.V150LedgerClosed = false
+	entry.V150LedgerQuantity = ledgerQuantity
+	entry.V150LedgerCorporateCash = corporateCash
+	entry.HasSellAmount = false
+	entry.SellDay = time.Time{}
+	entry.SellTime = ""
+	entry.RealizedValueNet = 0
+	if exit == nil {
+		return true
+	}
+	if exit.EventAt.IsZero() || exit.Price <= 0 || exit.Quantity <= 0 || exit.Fees < 0 {
+		return false
+	}
+	entry.HasSellAmount = true
+	entry.V150LedgerClosed = true
+	entry.V150LedgerQuantity = exit.Quantity
+	entry.SellAmount = exit.Price
+	entry.SellDay = normalizeYieldOverviewTradeDay(exit.EventAt)
+	entry.SellTime = exit.EventAt.In(cnLocation()).Format(time.DateTime)
+	entry.RealizedValueNet = round2(exit.Price*exit.Quantity - exit.Fees + corporateCash)
+	return !entry.SellDay.Before(entry.BuyDay)
+}
+
+func buildV150YieldDailyOverviewEntryFromView(
+	view v150YieldLedgerView,
+	ledger v150YieldDailyOrderLedger,
+	valuationDay time.Time,
+) (yieldDailyOverviewEntry, bool) {
+	frozen := view.Current.Frozen
+	status := strings.ToLower(strings.TrimSpace(string(view.Current.Lifecycle.Status)))
+	if status != "holding" && status != "closed" {
+		return yieldDailyOverviewEntry{}, false
+	}
+	if strings.TrimSpace(frozen.RuleID) == "" || frozen.RuleID != ledger.RuleID || frozen.RunID != ledger.RunID ||
+		normalizeRecommendStockCode(frozen.Symbol) != normalizeRecommendStockCode(ledger.Symbol) {
+		return yieldDailyOverviewEntry{}, false
+	}
+	if valuationDay.IsZero() {
+		valuationDay = normalizeYieldOverviewTradeDay(ledger.ReportAsOf)
+	}
+	entry := yieldDailyOverviewEntry{
+		RecommendID: view.Record.ID, V150RuleID: frozen.RuleID,
+		SummaryVersion: v150.StrategyVersion, StockCode: normalizeRecommendStockCode(frozen.Symbol),
+		StockName: strings.TrimSpace(frozen.Name), CurrentDay: normalizeYieldOverviewTradeDay(valuationDay),
+	}
+	if !applyV150YieldDailyLedgerToEntry(&entry, ledger) || entry.StockCode == "" || entry.CurrentDay.Before(entry.BuyDay) {
+		return yieldDailyOverviewEntry{}, false
+	}
+	if (status == "closed") != entry.V150LedgerClosed {
+		return yieldDailyOverviewEntry{}, false
+	}
+	return entry, true
 }
 
 func buildV150YieldDailyOverviewEntryFromLedger(
 	item models.AiRecommendStocksYieldItem,
 	ledger v150YieldDailyOrderLedger,
 ) (yieldDailyOverviewEntry, bool) {
-	if !isV150CostVersion(item.SummaryVersion) || strings.TrimSpace(item.ActivationStatus) != "activated" ||
+	if !isV150CostVersion(item.SummaryVersion) ||
 		(strings.TrimSpace(item.BacktestEligibility) != "" && strings.TrimSpace(item.BacktestEligibility) != recommendBacktestEligible) {
 		return yieldDailyOverviewEntry{}, false
 	}
@@ -233,10 +455,10 @@ func buildV150YieldDailyOverviewEntryFromLedger(
 	if entry.CurrentDay.IsZero() {
 		entry.CurrentDay = normalizeYieldOverviewTradeDay(ledger.ReportAsOf)
 	}
-	return reconcileV150YieldDailyOverviewEntriesWithLedger(
-		[]yieldDailyOverviewEntry{entry},
-		map[uint]v150YieldDailyOrderLedger{entry.RecommendID: ledger},
-	)[0], true
+	if !applyV150YieldDailyLedgerToEntry(&entry, ledger) {
+		return yieldDailyOverviewEntry{}, false
+	}
+	return entry, true
 }
 
 // loadV150YieldDailyRawMinutePriceSeries values each historical holding day
@@ -247,7 +469,7 @@ func buildV150YieldDailyOverviewEntryFromLedger(
 func loadV150YieldDailyRawMinutePriceSeries(
 	entries []yieldDailyOverviewEntry,
 	tradingDays []time.Time,
-) (map[string]*yieldDailyOverviewPriceSeries, []string, error) {
+) (map[string]*yieldDailyOverviewPriceSeries, []string, []string, error) {
 	result := make(map[string]*yieldDailyOverviewPriceSeries)
 	codeSet := make(map[string]struct{})
 	for _, entry := range entries {
@@ -265,6 +487,7 @@ func loadV150YieldDailyRawMinutePriceSeries(
 	}
 	sort.Strings(codes)
 	missingCodes := make([]string, 0)
+	provenanceWarnings := make([]string, 0)
 	for _, code := range codes {
 		series := &yieldDailyOverviewPriceSeries{Code: code, CloseByDay: make(map[string]float64)}
 		for _, day := range tradingDays {
@@ -273,7 +496,21 @@ func loadV150YieldDailyRawMinutePriceSeries(
 			marketClose := time.Date(localDay.Year(), localDay.Month(), localDay.Day(), 15, 0, 0, 0, cnLocation())
 			raw, err := listMinuteBarsFromCache(code, bucketStart, marketClose)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, nil, err
+			}
+			provenanceOK := true
+			for _, bar := range raw {
+				if !minuteBarSourceProvesUnadjusted(bar.Source) {
+					provenanceOK = false
+					break
+				}
+			}
+			if !provenanceOK {
+				provenanceWarnings = append(
+					provenanceWarnings,
+					code+":"+v150YieldDailyRawMinuteProvenanceHealthCode+":"+localDay.Format(time.DateOnly),
+				)
+				continue
 			}
 			completed, _ := buildMarketSummaryV150CompletedBars(raw, marketClose, bucketStart)
 			for _, bar := range completed {
@@ -297,7 +534,7 @@ func loadV150YieldDailyRawMinutePriceSeries(
 		}
 		result[code] = series
 	}
-	return result, missingCodes, nil
+	return result, missingCodes, dedupeNonEmptyStrings(provenanceWarnings, 0), nil
 }
 
 func resolveV150YieldDailyLedgerValue(
@@ -463,8 +700,8 @@ func calculateV150StrategyMaxDrawdownByEntries(entries []yieldDailyOverviewEntry
 	if err != nil || len(tradingDays) == 0 {
 		return 0, false
 	}
-	priceSeries, _, err := loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
-	if err != nil {
+	priceSeries, _, provenanceWarnings, err := loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
+	if err != nil || len(provenanceWarnings) > 0 {
 		return 0, false
 	}
 	points, pointWarnings := buildYieldDailyOverviewPointsWithV150Ledgers(entries, tradingDays, priceSeries, nil, ledgers)

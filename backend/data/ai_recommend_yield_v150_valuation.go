@@ -14,14 +14,15 @@ import (
 )
 
 const (
-	v150YieldValuationUnavailableStatus = "不可估值"
-	v150YieldValuationUnavailableReason = "V1.5 持仓现价缺失或陈旧，当前收益不可估值"
-	v150YieldValuationHealthCode        = "holding_current_price_missing_or_stale"
-	v150YieldDailyPriceHealthCode       = "holding_daily_price_missing"
-	v150BenchmarkBuyQuoteHealthCode     = "benchmark_510300_buy_quote_missing_or_unmatched"
-	v150BenchmarkExitQuoteHealthCode    = "benchmark_510300_exit_quote_missing_or_unmatched"
-	v150BenchmarkDailySeriesHealthCode  = "benchmark_510300_daily_series_missing"
-	v150BenchmarkPartialHealthCode      = "benchmark_510300_partial_portfolio_rejected"
+	v150YieldValuationUnavailableStatus     = "不可估值"
+	v150YieldValuationUnavailableReason     = "V1.5 持仓现价缺失或陈旧，当前收益不可估值"
+	v150YieldValuationHealthCode            = "holding_current_price_missing_or_stale"
+	v150YieldDailyPriceHealthCode           = "holding_daily_price_missing"
+	v150BenchmarkBuyQuoteHealthCode         = "benchmark_510300_buy_quote_missing_or_unmatched"
+	v150BenchmarkExitQuoteHealthCode        = "benchmark_510300_exit_quote_missing_or_unmatched"
+	v150BenchmarkMinuteProvenanceHealthCode = "benchmark_510300_raw_minute_provenance_invalid"
+	v150BenchmarkDailySeriesHealthCode      = "benchmark_510300_daily_series_missing"
+	v150BenchmarkPartialHealthCode          = "benchmark_510300_partial_portfolio_rejected"
 )
 
 // applyV150YieldValuationAvailability prevents a persisted price from being
@@ -279,15 +280,20 @@ func collectV150YieldValuationHealthWarnings(items []models.AiRecommendStocksYie
 }
 
 func resolveV150BenchmarkMinutePriceAt(eventAt time.Time, atBarOpen bool) (float64, bool) {
+	price, _ := resolveV150BenchmarkMinutePriceAtWithHealth(eventAt, atBarOpen)
+	return price, price > 0
+}
+
+func resolveV150BenchmarkMinutePriceAtWithHealth(eventAt time.Time, atBarOpen bool) (float64, string) {
 	if eventAt.IsZero() || !marketSummaryV150QuoteTimestampIsInTradingSession(eventAt) {
-		return 0, false
+		return 0, ""
 	}
 	eventAt = eventAt.In(cnLocation())
 	minuteAt := normalizeMinuteTime(eventAt)
 	day := normalizeYieldOverviewTradeDay(eventAt)
 	sessionStart := day.Add(9*time.Hour + 30*time.Minute)
 	if minuteAt.Before(sessionStart) {
-		return 0, false
+		return 0, ""
 	}
 	// Providers disagree on whether a one-minute bar is labelled by its start
 	// or end. Load the session anchor and reuse the execution engine's detector:
@@ -297,7 +303,7 @@ func resolveV150BenchmarkMinutePriceAt(eventAt time.Time, atBarOpen bool) (float
 	queryEnd := minuteAt.Add(time.Minute)
 	bars, err := listMinuteBarsFromCache(defaultBenchmarkModelCode, sessionStart, queryEnd)
 	if err != nil {
-		return 0, false
+		return 0, ""
 	}
 	endLabeled := detectMarketSummaryV150EndLabeledDays(bars, minuteAt)[day.Format(time.DateOnly)]
 	targetAt := minuteAt
@@ -311,21 +317,27 @@ func resolveV150BenchmarkMinutePriceAt(eventAt time.Time, atBarOpen bool) (float
 		if !barAt.Equal(targetAt) {
 			continue
 		}
+		if !minuteBarSourceProvesUnadjusted(bar.Source) {
+			return 0, v150BenchmarkMinuteProvenanceHealthCode
+		}
 		price := bar.Close
 		if atBarOpen {
 			price = bar.Open
 		}
 		if price > 0 {
-			return price, true
+			return price, ""
 		}
 	}
-	return 0, false
+	return 0, ""
 }
 
 func resolveV150BenchmarkMatchedPrices(entry yieldDailyOverviewEntry) (float64, float64, time.Time, string) {
 	buyTime := entry.BuyTime.In(cnLocation())
-	buyPrice, ok := resolveV150BenchmarkMinutePriceAt(buyTime, true)
-	if !ok {
+	buyPrice, buyHealth := resolveV150BenchmarkMinutePriceAtWithHealth(buyTime, true)
+	if buyPrice <= 0 {
+		if buyHealth != "" {
+			return 0, 0, time.Time{}, buyHealth
+		}
 		return 0, 0, time.Time{}, v150BenchmarkBuyQuoteHealthCode
 	}
 
@@ -346,8 +358,11 @@ func resolveV150BenchmarkMatchedPrices(entry yieldDailyOverviewEntry) (float64, 
 	if endTime.Before(buyTime) {
 		return 0, 0, time.Time{}, v150BenchmarkExitQuoteHealthCode
 	}
-	endPrice, ok := resolveV150BenchmarkMinutePriceAt(endTime, entry.HasSellAmount)
-	if !ok {
+	endPrice, endHealth := resolveV150BenchmarkMinutePriceAtWithHealth(endTime, entry.HasSellAmount)
+	if endPrice <= 0 {
+		if endHealth != "" {
+			return 0, 0, time.Time{}, endHealth
+		}
 		return 0, 0, time.Time{}, v150BenchmarkExitQuoteHealthCode
 	}
 	return buyPrice, endPrice, endTime, ""

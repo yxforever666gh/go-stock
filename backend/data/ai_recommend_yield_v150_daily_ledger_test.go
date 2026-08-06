@@ -159,12 +159,15 @@ func TestLoadV150DailyRawMinutePriceIgnoresRetroactivelyRewrittenQFQ(t *testing.
 	seedMarketSummaryV150Minutes(t, symbol, marketSummaryV150TestMinuteBucket(day1.Add(14*time.Hour+45*time.Minute), 10, 10, 100, false))
 	seedMarketSummaryV150Minutes(t, symbol, marketSummaryV150TestMinuteBucket(day2.Add(14*time.Hour+45*time.Minute), 8, 8, 100, true))
 
-	seriesMap, missing, err := loadV150YieldDailyRawMinutePriceSeries(
+	seriesMap, missing, provenanceWarnings, err := loadV150YieldDailyRawMinutePriceSeries(
 		[]yieldDailyOverviewEntry{{RecommendID: 9, SummaryVersion: v150.StrategyVersion, StockCode: symbol, BuyDay: day1, CurrentDay: day2}},
 		[]time.Time{day1, day2},
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(provenanceWarnings) != 0 {
+		t.Fatalf("unexpected raw-minute provenance warnings: %v", provenanceWarnings)
 	}
 	series := seriesMap[symbol]
 	if len(missing) != 0 || series == nil {
@@ -175,6 +178,51 @@ func TestLoadV150DailyRawMinutePriceIgnoresRetroactivelyRewrittenQFQ(t *testing.
 	}
 	if got := series.CloseByDay[day2.Format(time.DateOnly)]; got != 8 {
 		t.Fatalf("end-labelled ex-date raw close=%.2f want 8.00", got)
+	}
+}
+
+func TestLoadV150DailyRawMinutePriceRejectsAdjustedOrAmbiguousProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		source     string
+		wantHealth bool
+	}{
+		{name: "explicit raw", source: "akshare:sina:adjustment=none", wantHealth: false},
+		{name: "qfq", source: "akshare:sina:adjustment=qfq", wantHealth: true},
+		{name: "hfq", source: "akshare:sina:adjustment=hfq", wantHealth: true},
+		{name: "legacy ambiguous akshare sina", source: "akshare:sina", wantHealth: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			initMarketSummaryV150ExecutionTestDB(t)
+			loc := cnLocation()
+			day := time.Date(2026, 8, 3, 0, 0, 0, 0, loc)
+			symbol := "000001.SZ"
+			bars := marketSummaryV150TestMinuteBucket(day.Add(14*time.Hour+45*time.Minute), 10, 10, 100, false)
+			if _, err := upsertMinuteBarsToCache(symbol, bars, test.source); err != nil {
+				t.Fatal(err)
+			}
+
+			seriesMap, _, provenanceWarnings, err := loadV150YieldDailyRawMinutePriceSeries(
+				[]yieldDailyOverviewEntry{{SummaryVersion: v150.StrategyVersion, StockCode: symbol, BuyDay: day, CurrentDay: day}},
+				[]time.Time{day},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !test.wantHealth {
+				if len(provenanceWarnings) != 0 || seriesMap[symbol] == nil || seriesMap[symbol].CloseByDay[day.Format(time.DateOnly)] != 10 {
+					t.Fatalf("proved-raw minute was rejected: series=%+v warnings=%v", seriesMap, provenanceWarnings)
+				}
+				return
+			}
+			want := symbol + ":" + v150YieldDailyRawMinuteProvenanceHealthCode + ":" + day.Format(time.DateOnly)
+			if len(provenanceWarnings) != 1 || provenanceWarnings[0] != want {
+				t.Fatalf("provenance warnings=%v want %q", provenanceWarnings, want)
+			}
+			if series := seriesMap[symbol]; series != nil && series.CloseByDay[day.Format(time.DateOnly)] > 0 {
+				t.Fatalf("adjusted/ambiguous minute entered raw NAV series: %+v", series)
+			}
+		})
 	}
 }
 
@@ -191,15 +239,15 @@ func TestCalculateV150MaxDrawdownUsesLedgerAndRawMinuteCurveAcrossExDate(t *test
 	timeNow = func() time.Time { return reportNow }
 	t.Cleanup(func() { timeNow = originalNow })
 
-	events := buildV150DailyCorporateActionTestEvents(t, day1, day2, 1125, 0, .8, day2.Add(9*time.Hour+31*time.Minute))
+	request := appendV150DailyCohortReplayCorporateActionFixture(
+		t, "drawdown-corporate-action", "000001.SZ", "bank",
+		day1, day2, 1125, 0, .8, day2.Add(9*time.Hour+31*time.Minute),
+	)
 	record := models.AiRecommendStocks{
-		SummaryVersion: v150.StrategyVersion, StockCode: "000001.SZ",
-		StrategyRunID: events[0].RunID, StrategyRuleID: events[0].RuleID,
+		SummaryVersion: v150.StrategyVersion, StockCode: request.Symbol,
+		StrategyRunID: request.RunID, StrategyRuleID: request.RuleID,
 	}
 	if err := db.Dao.Create(&record).Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Dao.Create(&events).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Dao.Create([]models.AiRecommendDailyBar{
@@ -228,7 +276,7 @@ func TestCalculateV150MaxDrawdownUsesLedgerAndRawMinuteCurveAcrossExDate(t *test
 	}
 }
 
-func TestLoadV150DailyOrderLedgerHonorsReportFrozenAt(t *testing.T) {
+func TestLoadV150DailyOrderLedgerRejectsOrphanEventsWithoutFrozenCohort(t *testing.T) {
 	initMarketSummaryV150ExecutionTestDB(t)
 	loc := cnLocation()
 	day := time.Date(2026, 8, 4, 0, 0, 0, 0, loc)
@@ -241,12 +289,12 @@ func TestLoadV150DailyOrderLedgerHonorsReportFrozenAt(t *testing.T) {
 		StrategyRunID: events[0].RunID, StrategyRuleID: events[0].RuleID,
 	}
 	ledgers, warnings := loadV150YieldDailyOrderLedgers([]models.AiRecommendStocks{record}, day.Add(15*time.Hour))
-	if len(warnings) != 0 {
-		t.Fatalf("visible prefix should remain usable: %v", warnings)
+	if len(ledgers) != 0 {
+		t.Fatalf("orphan order events published without frozen cohort metadata: %+v", ledgers)
 	}
-	ledger := ledgers[record.ID]
-	if len(ledger.Events) != 1 || ledger.Events[0].EventType != string(v150.EventFill) {
-		t.Fatalf("late-frozen event became report-visible: %+v", ledger.Events)
+	wantWarning := record.StockCode + ":" + v150YieldDailyLedgerMissingHealthCode
+	if len(warnings) != 1 || warnings[0] != wantWarning {
+		t.Fatalf("orphan ledger warning=%v want %q", warnings, wantWarning)
 	}
 }
 

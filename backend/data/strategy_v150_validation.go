@@ -9,6 +9,7 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 )
 
 const (
@@ -19,9 +20,16 @@ const (
 	v150ValidationMinimumNetExcessMeanPct   = 0.50
 	v150ValidationMinimumProfitFactor       = 1.25
 	v150OneSided90Z                         = 1.2815515655446004
+	v150ForwardValidationCohortHealthCode   = "forward_validation_cohort_unavailable"
 )
 
+// calculateV150ForwardValidation preserves the compatibility call surface.
+// Point-in-time cohort readers must call the explicit-asOf core below.
 func calculateV150ForwardValidation(items []models.AiRecommendStocksYieldItem) *models.StrategyValidationStatus {
+	return calculateV150ForwardValidationAsOf(items, timeNow().In(cnLocation()))
+}
+
+func calculateV150ForwardValidationAsOf(items []models.AiRecommendStocksYieldItem, asOf time.Time) *models.StrategyValidationStatus {
 	result := &models.StrategyValidationStatus{
 		Status:          "forward_validation",
 		Label:           "前向验证中",
@@ -81,7 +89,7 @@ func calculateV150ForwardValidation(items []models.AiRecommendStocksYieldItem) *
 	// Elapsed forward time runs from the first 1.5.0 recommendation through
 	// the latest cached benchmark session. It must not stop merely because a
 	// later session produced an explicit no_trade run.
-	result.TradingDayCount = countCachedV150BenchmarkTradingDays(earliest, time.Now())
+	result.TradingDayCount = countCachedV150BenchmarkTradingDays(earliest, asOf)
 	result.NetMeanPct = round4(meanFloat64(closedReturns))
 	result.NetExcessMeanPct = round4(meanFloat64(closedExcess))
 	if grossLoss > 0 {
@@ -107,7 +115,8 @@ func calculateV150ForwardValidation(items []models.AiRecommendStocksYieldItem) *
 	}{
 		{result.TradingDayCount >= v150ValidationMinimumTradingDays, fmt.Sprintf("交易日 %d/%d", result.TradingDayCount, v150ValidationMinimumTradingDays)},
 		{result.ClosedTradeCount >= v150ValidationMinimumClosedTrades, fmt.Sprintf("平仓 %d/%d", result.ClosedTradeCount, v150ValidationMinimumClosedTrades)},
-		{result.ComparableTradeCount >= v150ValidationMinimumClosedTrades, fmt.Sprintf("基准可比平仓 %d/%d", result.ComparableTradeCount, v150ValidationMinimumClosedTrades)},
+		{result.ComparableTradeCount >= v150ValidationMinimumClosedTrades && result.ComparableTradeCount == result.ClosedTradeCount,
+			fmt.Sprintf("基准可比平仓 %d/%d（全部平仓 %d）", result.ComparableTradeCount, v150ValidationMinimumClosedTrades, result.ClosedTradeCount)},
 		{result.RecommendationDayCount >= v150ValidationMinimumRecommendationDays, fmt.Sprintf("独立推荐日 %d/%d", result.RecommendationDayCount, v150ValidationMinimumRecommendationDays)},
 		{result.NetMeanPct >= v150ValidationMinimumNetMeanPct, fmt.Sprintf("净均值 %.4f%% < %.2f%%", result.NetMeanPct, v150ValidationMinimumNetMeanPct)},
 		{result.NetExcessMeanPct >= v150ValidationMinimumNetExcessMeanPct, fmt.Sprintf("净超额 %.4f%% < %.2f%%", result.NetExcessMeanPct, v150ValidationMinimumNetExcessMeanPct)},
@@ -131,46 +140,116 @@ func calculateV150ForwardValidation(items []models.AiRecommendStocksYieldItem) *
 // picker; forward-validation evidence belongs to the frozen strategy version,
 // not to the current UI slice.
 func loadV150ForwardValidation() (*models.StrategyValidationStatus, error) {
-	if db.Dao == nil || !db.Dao.Migrator().HasTable(&models.AiRecommendStocks{}) {
-		return calculateV150ForwardValidation(nil), nil
+	validation, _, err := loadV150ForwardValidationWithHealth()
+	return validation, err
+}
+
+func loadV150ForwardValidationWithHealth() (*models.StrategyValidationStatus, []string, error) {
+	return loadV150ForwardValidationWithHealthAsOf(timeNow().In(cnLocation()))
+}
+
+func loadV150ForwardValidationWithHealthAsOf(now time.Time) (*models.StrategyValidationStatus, []string, error) {
+	if now.IsZero() {
+		return nil, nil, fmt.Errorf("V1.5 forward-validation asOf is required")
 	}
-	records, err := listAiRecommendStocksForYield(&models.AiRecommendStocksQuery{StrategyCohort: marketSummaryVersion150}, time.Time{})
+	now = now.In(cnLocation())
+	views, err := loadV150YieldLedgerViews(nil, now)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	records = collapseRecommendRecordsSameDayByCode(records)
-	recordStateMap, err := loadYieldRecordStateMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
+	items, warnings := buildV150YieldLedgerFirstItems(views, now)
+	ledgers, ledgerWarnings := loadV150YieldDailyOrderLedgersByRule(views, now)
+	warnings = append(warnings, ledgerWarnings...)
+	if len(ledgerWarnings) > 0 {
+		return nil, dedupeNonEmptyStrings(warnings, 0), fmt.Errorf("complete V1.5 order ledger is unavailable")
 	}
-	stateMap, err := loadYieldStateMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
+	warnings = append(warnings, applyV150ForwardBenchmarkComparisonsByRule(items, views, ledgers, now)...)
+	return calculateV150ForwardValidationAsOf(items, now), dedupeNonEmptyStrings(warnings, 0), nil
+}
+
+// applyV150ForwardBenchmarkComparisonsByRule matches every closed strategy
+// trade to 510300 at the exact frozen fill and exit timestamps. RuleID is the
+// identity: the optional ai_recommend_stocks projection and its numeric ID are
+// deliberately absent, so a missing or forged display row cannot add, remove,
+// collide, or alter a forward-validation sample.
+func applyV150ForwardBenchmarkComparisonsByRule(
+	items []models.AiRecommendStocksYieldItem,
+	views []v150YieldLedgerView,
+	ledgers map[string]v150YieldDailyOrderLedger,
+	asOf time.Time,
+) []string {
+	entries := make(map[string]yieldDailyOverviewEntry, len(views))
+	warnings := make([]string, 0)
+	valuationDay := resolveV150YieldDailyLatestCompleteDay(asOf)
+	for _, view := range views {
+		if view.Current.Lifecycle.Status != "closed" {
+			continue
+		}
+		ruleID := strings.TrimSpace(view.Current.Frozen.RuleID)
+		ledger, ok := ledgers[ruleID]
+		if !ok {
+			warnings = append(warnings, ruleID+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		entry, ok := buildV150YieldDailyOverviewEntryFromView(view, ledger, valuationDay)
+		if !ok || !entry.V150LedgerClosed {
+			warnings = append(warnings, ruleID+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		entries[ruleID] = entry
 	}
-	overrideMap, err := loadYieldOverrideMapByRecommendRecords(records)
-	if err != nil {
-		return nil, err
+
+	for index := range items {
+		item := &items[index]
+		item.BenchmarkYieldRate = 0
+		item.BenchmarkYieldRateText = "--"
+		item.ExcessYieldRate = 0
+		item.ExcessYieldRateText = "--"
+		if item.ActivationStatus != "activated" || !item.V150LedgerAccountingReady || !item.V150LedgerClosed {
+			continue
+		}
+		ruleID := strings.TrimSpace(item.RowKey)
+		entry, ok := entries[ruleID]
+		if !ok {
+			warnings = append(warnings, ruleID+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		buyPrice, exitPrice, _, reason := resolveV150BenchmarkMatchedPrices(entry)
+		if reason != "" {
+			warnings = append(warnings, ruleID+":"+reason)
+			continue
+		}
+		buy := calcBenchmarkETFBuyTradeForVersion(v150.StrategyVersion, entry.BuyCostNet, buyPrice)
+		sell := calcBenchmarkETFSellTradeForVersion(v150.StrategyVersion, buy.Shares, exitPrice)
+		if !buy.Valid || buy.Shares <= 0 || !sell.Valid || sell.NetAmount <= 0 || entry.BuyCostNet <= 0 {
+			warnings = append(warnings, ruleID+":"+v150BenchmarkDailySeriesHealthCode)
+			continue
+		}
+		rate := round2((sell.NetAmount + buy.UnusedCash - entry.BuyCostNet) / entry.BuyCostNet * 100)
+		item.BenchmarkYieldRate = rate
+		item.BenchmarkYieldRateText = formatSignedPercent(rate)
+		item.ExcessYieldRate = round2(item.YieldRate - rate)
+		item.ExcessYieldRateText = formatSignedPercent(item.ExcessYieldRate)
 	}
-	items := buildStrictYieldRecordItems(records, recordStateMap, stateMap, overrideMap, aiRecommendYieldDirtyScope{}, nil)
-	// buildStrictYieldRecordItems reconstructs the strategy-side net return but
-	// deliberately leaves benchmark fields empty. Populate per-trade 510300
-	// returns from exact cached 510300 minute quotes (with cached daily sessions
-	// defining the replay calendar) before evaluating the frozen excess-return
-	// gate. Missing quotes keep the whole comparison unavailable; this path never
-	// fetches history from the network.
-	_ = calculateBenchmarkSummaryByItems(items)
-	return calculateV150ForwardValidation(items), nil
+	return dedupeNonEmptyStrings(warnings, 0)
 }
 
 func countCachedV150BenchmarkTradingDays(from, to time.Time) int {
 	if db.Dao == nil || from.IsZero() || to.IsZero() || to.Before(from) {
 		return 0
 	}
+	latestCompleteDay := resolveV150YieldDailyLatestCompleteDay(to)
+	if latestCompleteDay.IsZero() || latestCompleteDay.Before(normalizeYieldOverviewTradeDay(from)) {
+		return 0
+	}
 	var count int64
 	start := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, from.Location())
-	end := time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 999999999, to.Location())
+	end := time.Date(
+		latestCompleteDay.Year(), latestCompleteDay.Month(), latestCompleteDay.Day(),
+		23, 59, 59, 999999999, latestCompleteDay.Location(),
+	)
 	err := db.Dao.Model(&models.AiRecommendDailyBar{}).
-		Where("stock_code IN ? AND trade_date >= ? AND trade_date <= ?", []string{"510300", "510300.SH"}, start, end).
+		Where("stock_code IN ? AND trade_date >= ? AND trade_date <= ? AND close > 0", []string{"510300", "510300.SH"}, start, end).
 		Distinct("trade_date").
 		Count(&count).Error
 	if err != nil {

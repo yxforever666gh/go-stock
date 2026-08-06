@@ -39,6 +39,7 @@ type yieldDailyOverviewCacheState struct {
 
 type yieldDailyOverviewEntry struct {
 	RecommendID               uint
+	V150RuleID                string
 	SummaryVersion            string
 	StockCode                 string
 	StockName                 string
@@ -86,6 +87,14 @@ type benchmarkSummaryResult struct {
 	MedianExcessYieldRateText string
 	ItemRateByRecommendID     map[uint]float64
 	Warnings                  []string
+}
+
+type v150YieldPageAggregate struct {
+	TotalYieldRate     float64
+	TotalYieldRateText string
+	Benchmark          benchmarkSummaryResult
+	DataAsOf           string
+	HealthWarnings     []string
 }
 
 type strategySummaryResult struct {
@@ -682,6 +691,27 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			return nil, err
 		}
 	}
+	var v150Validation *models.StrategyValidationStatus
+	v150Aggregate := v150YieldPageAggregate{Benchmark: defaultBenchmarkSummaryResult(), TotalYieldRateText: "--"}
+	if v150LedgerFirst {
+		validation, validationWarnings, validationErr := loadV150ForwardValidationWithHealthAsOf(now)
+		v150HealthWarnings = append(v150HealthWarnings, validationWarnings...)
+		if validationErr != nil {
+			// The page slice may still be readable when an older frozen run in the
+			// complete cohort is broken. Keep serving that slice, but never use it
+			// as a substitute for the unavailable forward-validation population.
+			logger.SugaredLogger.Warnf("load complete V1.5 forward-validation cohort failed: %v", validationErr)
+			v150Validation = calculateV150ForwardValidation(nil)
+			v150HealthWarnings = append(v150HealthWarnings, v150ForwardValidationCohortHealthCode)
+		} else {
+			v150Validation = validation
+		}
+		v150Aggregate = s.loadV150YieldPageAggregateAt(now)
+		v150HealthWarnings = append(v150HealthWarnings, v150Aggregate.HealthWarnings...)
+		if v150Aggregate.DataAsOf != "" {
+			dataAsOf = v150Aggregate.DataAsOf
+		}
+	}
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
 	if !v150LedgerFirst {
 		records = collapseRecommendRecordsSameDayByCode(records)
@@ -768,8 +798,18 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			DiemengHealthCheckedAt:    diemengHealthCheckedAt,
 		}
 		if v150LedgerFirst {
-			emptyPage.V150Validation = calculateV150ForwardValidation(nil)
+			emptyPage.V150Validation = v150Validation
 			emptyPage.V150HealthWarnings = dedupeNonEmptyStrings(v150HealthWarnings, 0)
+			emptyPage.TotalYieldRate = v150Aggregate.TotalYieldRate
+			emptyPage.TotalYieldRateText = v150Aggregate.TotalYieldRateText
+			emptyPage.BenchmarkCode = v150Aggregate.Benchmark.Code
+			emptyPage.BenchmarkName = v150Aggregate.Benchmark.Name
+			emptyPage.BenchmarkRate = v150Aggregate.Benchmark.Rate
+			emptyPage.BenchmarkRateText = v150Aggregate.Benchmark.RateText
+			emptyPage.ExcessYieldRate = v150Aggregate.Benchmark.ExcessYieldRate
+			emptyPage.ExcessYieldRateText = v150Aggregate.Benchmark.ExcessYieldRateText
+			emptyPage.MaxDrawdown = v150Aggregate.Benchmark.MaxDrawdown
+			emptyPage.MaxDrawdownText = v150Aggregate.Benchmark.MaxDrawdownText
 		}
 		return emptyPage, nil
 	}
@@ -799,6 +839,14 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		var ledgerWarnings []string
 		items, ledgerWarnings = buildV150YieldLedgerFirstItems(v150LedgerViews, now)
 		v150HealthWarnings = append(v150HealthWarnings, ledgerWarnings...)
+		rowLedgers, rowLedgerWarnings := loadV150YieldDailyOrderLedgersByRule(v150LedgerViews, now)
+		v150HealthWarnings = append(v150HealthWarnings, rowLedgerWarnings...)
+		if len(rowLedgerWarnings) == 0 {
+			v150HealthWarnings = append(
+				v150HealthWarnings,
+				applyV150ForwardBenchmarkComparisonsByRule(items, v150LedgerViews, rowLedgers, now)...,
+			)
+		}
 	} else {
 		recordStateMap, stateErr := loadYieldRecordStateMapByRecommendRecords(records)
 		if stateErr != nil {
@@ -820,14 +868,14 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	applyRecommendRepeatCountByCodeMap(items, rawRepeatCountMap)
 	diagnostics := calculateYieldDiagnosticSummary(records, items)
 
-	totalYieldRate, totalYieldRateText := calculateYieldTotalByItems(items)
+	totalYieldRate, totalYieldRateText := 0.0, "--"
 	benchmarkSummary := defaultBenchmarkSummaryResult()
-	if v150LedgerFirst && v150YieldHasActivatedRuleWithoutProjection(items) {
-		// Legacy benchmark/cashflow maps are keyed by RecommendID. Multiple
-		// projection-less frozen rules would all collide on zero, so refuse the
-		// comparison until those maps are migrated to RuleID identity.
-		benchmarkSummary.Warnings = []string{v150BenchmarkPartialHealthCode}
+	if v150LedgerFirst {
+		totalYieldRate = v150Aggregate.TotalYieldRate
+		totalYieldRateText = v150Aggregate.TotalYieldRateText
+		benchmarkSummary = v150Aggregate.Benchmark
 	} else {
+		totalYieldRate, totalYieldRateText = calculateYieldTotalByItems(items)
 		benchmarkSummary = calculateBenchmarkSummaryByItems(items)
 	}
 	if v150LedgerFirst {
@@ -835,12 +883,6 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 			append(v150HealthWarnings, collectV150YieldValuationHealthWarnings(items)...),
 			benchmarkSummary.Warnings...,
 		), 0)
-	}
-	var v150Validation *models.StrategyValidationStatus
-	if v150LedgerFirst {
-		// Reuse the same ledger-first slice. Calling the legacy loader here
-		// would reintroduce mutable record-state lifecycle data into the page.
-		v150Validation = calculateV150ForwardValidation(items)
 	}
 	total := int64(len(items))
 	totalPages := int((total + int64(pageSize) - 1) / int64(pageSize))
@@ -3061,6 +3103,73 @@ func yieldRowKeyFromRecommend(rec models.AiRecommendStocks, normalizedCode strin
 		code = strings.TrimSpace(rec.StockCode)
 	}
 	return fmt.Sprintf("%s-%d", code, rec.ID)
+}
+
+// loadV150YieldPageAggregateAt keeps list filters out of portfolio metrics.
+// The list itself may be narrowed for browsing, but every headline value comes
+// from the complete RuleID ledger cohort and the same cache-only daily NAV used
+// by the portfolio chart. Metrics without a ledger-only implementation remain
+// unavailable instead of falling back to RecommendID-indexed projections.
+func (s *AiRecommendStocksService) loadV150YieldPageAggregateAt(asOf time.Time) v150YieldPageAggregate {
+	result := v150YieldPageAggregate{
+		TotalYieldRateText: "--",
+		Benchmark:          defaultBenchmarkSummaryResult(),
+		HealthWarnings:     []string{},
+	}
+	daily, err := s.buildV150YieldDailyOverviewAt(
+		&models.AiRecommendStocksQuery{StrategyCohort: marketSummaryVersion150},
+		asOf,
+	)
+	if err != nil {
+		result.HealthWarnings = []string{v150YieldDailyLedgerMissingHealthCode}
+		return result
+	}
+	result.DataAsOf = strings.TrimSpace(daily.DataAsOf)
+	result.HealthWarnings = dedupeNonEmptyStrings(daily.V150HealthWarnings, 0)
+	if len(daily.Points) == 0 {
+		return result
+	}
+	last := daily.Points[len(daily.Points)-1]
+	if last.PortfolioEquity <= 0 || last.BenchmarkNav <= 0 {
+		result.HealthWarnings = dedupeNonEmptyStrings(append(
+			result.HealthWarnings,
+			v150YieldDailyLedgerMissingHealthCode,
+		), 0)
+		return result
+	}
+	result.TotalYieldRate = round2(last.CumulativeYieldRate)
+	result.TotalYieldRateText = formatSignedPercent(result.TotalYieldRate)
+	result.Benchmark.Rate = round2(last.BenchmarkCumulativeRate)
+	result.Benchmark.RateText = formatSignedPercent(result.Benchmark.Rate)
+	result.Benchmark.ExcessYieldRate = round2(last.ExcessCumulativeRate)
+	result.Benchmark.ExcessYieldRateText = formatSignedPercent(result.Benchmark.ExcessYieldRate)
+	if drawdown, ok := calculateV150YieldPageMaxDrawdown(daily.Points); ok {
+		result.Benchmark.MaxDrawdown = drawdown
+		result.Benchmark.MaxDrawdownText = formatSignedPercent(drawdown)
+	}
+	return result
+}
+
+func calculateV150YieldPageMaxDrawdown(points []models.AiRecommendYieldDailyOverviewPoint) (float64, bool) {
+	peak := v150.FixedStrategyV150Config().PortfolioCash
+	if peak <= 0 || len(points) == 0 {
+		return 0, false
+	}
+	maxDrawdown := 0.0
+	for _, point := range points {
+		equity := point.PortfolioEquity
+		if equity <= 0 || math.IsNaN(equity) || math.IsInf(equity, 0) {
+			return 0, false
+		}
+		if equity > peak {
+			peak = equity
+		}
+		drawdown := (equity - peak) / peak * 100
+		if drawdown < maxDrawdown {
+			maxDrawdown = drawdown
+		}
+	}
+	return round2(maxDrawdown), true
 }
 
 func calculateYieldTotalByItems(items []models.AiRecommendStocksYieldItem) (float64, string) {

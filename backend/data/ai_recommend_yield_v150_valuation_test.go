@@ -253,6 +253,45 @@ func TestResolveV150BenchmarkMinutePriceAtSupportsEndLabeledBars(t *testing.T) {
 	}
 }
 
+func TestResolveV150BenchmarkMinutePriceAtRejectsAdjustedOrAmbiguousProvenance(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		source     string
+		wantHealth bool
+	}{
+		{name: "explicit raw", source: "akshare:sina:adjustment=none"},
+		{name: "qfq", source: "akshare:sina:adjustment=qfq", wantHealth: true},
+		{name: "hfq", source: "akshare:sina:adjustment=hfq", wantHealth: true},
+		{name: "legacy ambiguous akshare sina", source: "akshare:sina", wantHealth: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			initV150YieldBenchmarkTestDB(t)
+			day := time.Date(2026, 8, 3, 0, 0, 0, 0, cnLocation())
+			fillAt := day.Add(10 * time.Hour)
+			bars := []minuteBar{
+				{TradeTime: day.Add(9*time.Hour + 30*time.Minute), Open: 3.9, High: 4, Low: 3.9, Close: 4},
+				{TradeTime: fillAt, Open: 4.25, High: 4.3, Low: 4.2, Close: 4.28},
+			}
+			if _, err := upsertMinuteBarsToCache(defaultBenchmarkModelCode, bars, test.source); err != nil {
+				t.Fatal(err)
+			}
+			price, health := resolveV150BenchmarkMinutePriceAtWithHealth(fillAt, true)
+			if !test.wantHealth {
+				if price != 4.25 || health != "" {
+					t.Fatalf("proved-raw benchmark minute price=%.2f health=%q", price, health)
+				}
+				return
+			}
+			if price != 0 || health != v150BenchmarkMinuteProvenanceHealthCode {
+				t.Fatalf("adjusted/ambiguous benchmark price=%.2f health=%q", price, health)
+			}
+			if _, ok := resolveV150BenchmarkMinutePriceAt(fillAt, true); ok {
+				t.Fatal("compatibility resolver accepted adjusted/ambiguous benchmark minute")
+			}
+		})
+	}
+}
+
 func TestCalculateCashflowMatchedBenchmarkV150NewPositionDoesNotJumpNAV(t *testing.T) {
 	initV150YieldBenchmarkTestDB(t)
 	loc := cnLocation()

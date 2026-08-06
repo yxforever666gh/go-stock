@@ -1,6 +1,7 @@
 package data
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -11,22 +12,31 @@ import (
 	"go-stock/backend/strategy/v150"
 )
 
-func TestV150YieldDailyOverviewFailsClosedUntilLedgerOnlyViewExists(t *testing.T) {
-	for _, cohort := range []string{marketSummaryVersion150, strategyCohortCurrent} {
-		got, err := NewAiRecommendStocksService().GetAiRecommendYieldDailyOverview(&models.AiRecommendStocksQuery{
-			StrategyCohort: cohort,
-		})
-		if err != nil {
-			t.Fatalf("cohort %q: %v", cohort, err)
+func TestApplyV150YieldDailyValidationPropagatesStatusAndFailsPending(t *testing.T) {
+	t.Run("validated", func(t *testing.T) {
+		result := newV150YieldDailyOverview()
+		applyV150YieldDailyValidation(
+			result,
+			&models.StrategyValidationStatus{Status: "validated"},
+			[]string{"validation_health"},
+			nil,
+		)
+		if result.ValidationStatus != "validated" ||
+			!v150YieldDailyOverviewContainsWarning(result.V150HealthWarnings, "validation_health") {
+			t.Fatalf("validated status or health did not propagate: %+v", result)
 		}
-		if got.StrategyCohort != marketSummaryVersion150 || got.CalcMode != aiRecommendYieldModeStrict ||
-			got.PortfolioCapital != v150.FixedStrategyV150Config().PortfolioCash || len(got.Points) != 0 {
-			t.Fatalf("cohort %q returned non-fail-closed overview: %+v", cohort, got)
+	})
+
+	t.Run("loader error", func(t *testing.T) {
+		result := newV150YieldDailyOverview()
+		result.V150HealthWarnings = []string{"existing_health"}
+		applyV150YieldDailyValidation(result, nil, nil, errors.New("cohort unavailable"))
+		if result.ValidationStatus != "forward_validation" || len(result.Warnings) == 0 ||
+			!v150YieldDailyOverviewContainsWarning(result.V150HealthWarnings, "existing_health") ||
+			!v150YieldDailyOverviewContainsWarning(result.V150HealthWarnings, v150ForwardValidationCohortHealthCode) {
+			t.Fatalf("validation loader error did not remain pending with additive health: %+v", result)
 		}
-		if len(got.V150HealthWarnings) != 1 || got.V150HealthWarnings[0] != v150YieldDailyLedgerOnlyUnavailableHealthCode || len(got.Warnings) == 0 {
-			t.Fatalf("cohort %q missing explicit unavailable diagnostics: %+v", cohort, got)
-		}
-	}
+	})
 }
 
 func TestBuildYieldDailyOverviewBenchmarkSeriesDoesNotForwardFillStaleClose(t *testing.T) {

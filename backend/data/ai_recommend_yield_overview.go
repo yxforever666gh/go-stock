@@ -20,7 +20,7 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 	}
 	query.StrategyCohort = normalizeStrategyCohort(query.StrategyCohort, strategyCohortAll)
 	if isV150YieldDailyOverviewCohort(query.StrategyCohort) {
-		return unavailableV150YieldDailyOverview(), nil
+		return s.buildV150YieldDailyOverview(query)
 	}
 
 	signature, err := buildYieldDailyOverviewSignature(query)
@@ -44,29 +44,262 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 	return cloneYieldDailyOverviewData(result), nil
 }
 
-const v150YieldDailyLedgerOnlyUnavailableHealthCode = "daily_ledger_only_view_unavailable"
-
 func isV150YieldDailyOverviewCohort(cohort string) bool {
 	normalized := normalizeStrategyCohort(cohort, strategyCohortAll)
 	return normalized == marketSummaryVersion150 ||
 		(normalized == strategyCohortCurrent && marketSummaryCurrentVersion == marketSummaryVersion150)
 }
 
-func unavailableV150YieldDailyOverview() *models.AiRecommendYieldDailyOverviewData {
+func newV150YieldDailyOverview() *models.AiRecommendYieldDailyOverviewData {
 	cfg := v150.FixedStrategyV150Config()
 	return &models.AiRecommendYieldDailyOverviewData{
-		CalcMode:         aiRecommendYieldModeStrict,
-		BenchmarkCode:    defaultBenchmarkModelCode,
-		BenchmarkName:    defaultBenchmarkName,
-		StrategyCohort:   marketSummaryVersion150,
-		ValidationStatus: "forward_validation",
-		PortfolioCapital: cfg.PortfolioCash,
-		Warnings: []string{
-			"V1.5.0 日收益曲线暂不可用：尚未形成可验证的 ledger-only 日估值，已拒绝回退旧收益投影。",
-		},
-		V150HealthWarnings: []string{v150YieldDailyLedgerOnlyUnavailableHealthCode},
+		CalcMode:           aiRecommendYieldModeStrict,
+		BenchmarkCode:      defaultBenchmarkModelCode,
+		BenchmarkName:      defaultBenchmarkName,
+		StrategyCohort:     marketSummaryVersion150,
+		ValidationStatus:   "forward_validation",
+		PortfolioCapital:   cfg.PortfolioCash,
+		Warnings:           []string{},
+		V150HealthWarnings: []string{},
 		Points:             []models.AiRecommendYieldDailyOverviewPoint{},
 	}
+}
+
+const (
+	v150YieldDailyRawBenchmarkPriceHealthCode = "benchmark_510300_raw_minute_close_missing"
+	// The current schema has no authoritative exchange calendar. The daily
+	// curve uses the union of cached qfq dates, raw 510300 observations and
+	// mandatory fill/exit/valuation dates; a day absent from every cache cannot
+	// be proven closed or missing. Keep that limitation observable even when all
+	// inferred dates are complete.
+	v150YieldDailyCalendarCoverageHealthCode = "trading_calendar_coverage_unverified"
+)
+
+func (s *AiRecommendStocksService) buildV150YieldDailyOverview(
+	query *models.AiRecommendStocksQuery,
+) (*models.AiRecommendYieldDailyOverviewData, error) {
+	return s.buildV150YieldDailyOverviewAt(query, timeNow().In(cnLocation()))
+}
+
+func (s *AiRecommendStocksService) buildV150YieldDailyOverviewAt(
+	query *models.AiRecommendStocksQuery,
+	now time.Time,
+) (*models.AiRecommendYieldDailyOverviewData, error) {
+	if err := validateV150YieldDailyOverviewQuery(query); err != nil {
+		return nil, err
+	}
+	if now.IsZero() {
+		return nil, errors.New("V1.5 daily portfolio asOf is required")
+	}
+	now = now.In(cnLocation())
+	result := newV150YieldDailyOverview()
+	if runWarnings, runWarningErr := loadV150ImmutableRunHealthWarnings(30); runWarningErr != nil {
+		logger.SugaredLogger.Warnf("load v1.5 immutable run health warnings failed: %v", runWarningErr)
+	} else {
+		appendV150YieldDailyHealthWarnings(result, runWarnings...)
+	}
+	validation, validationWarnings, validationErr := loadV150ForwardValidationWithHealthAsOf(now)
+	applyV150YieldDailyValidation(result, validation, validationWarnings, validationErr)
+	// A fixed-capital portfolio is meaningful only for the complete immutable
+	// cohort. Row/date filters are rejected above and can never shrink the
+	// population used to construct the 100,000-yuan account.
+	views, err := loadV150YieldLedgerViews(nil, now)
+	if err != nil {
+		result.Warnings = append(result.Warnings, "V1.5 frozen rule/order ledger is unavailable; daily curve was not published")
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, v150YieldDailyLedgerMissingHealthCode), 0)
+		return result, nil
+	}
+	result.TotalRecordCount = len(views)
+	if len(views) == 0 {
+		result.Warnings = append(result.Warnings, "No frozen V1.5 entry rules are available for the requested window")
+		return result, nil
+	}
+
+	ledgers, ledgerWarnings := loadV150YieldDailyOrderLedgersByRule(views, now)
+	if len(ledgerWarnings) > 0 {
+		result.SkippedRecordCount = result.TotalRecordCount
+		result.Warnings = append(result.Warnings, "At least one frozen V1.5 rule ledger is missing or invalid; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, ledgerWarnings...)
+		return result, nil
+	}
+
+	valuationDay := resolveV150YieldDailyLatestCompleteDay(now)
+	entries := make([]yieldDailyOverviewEntry, 0, len(views))
+	entryWarnings := make([]string, 0)
+	for _, view := range views {
+		status := strings.ToLower(strings.TrimSpace(string(view.Current.Lifecycle.Status)))
+		if status != "holding" && status != "closed" {
+			continue
+		}
+		ruleID := strings.TrimSpace(view.Current.Frozen.RuleID)
+		ledger, ok := ledgers[ruleID]
+		if !ok {
+			entryWarnings = append(entryWarnings, ruleID+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		entry, ok := buildV150YieldDailyOverviewEntryFromView(view, ledger, valuationDay)
+		if !ok {
+			entryWarnings = append(entryWarnings, ruleID+":"+v150YieldDailyLedgerMissingHealthCode)
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	if len(entryWarnings) > 0 {
+		result.SkippedRecordCount = result.TotalRecordCount
+		result.Warnings = append(result.Warnings, "At least one filled V1.5 rule could not be reconstructed from its ledger; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, entryWarnings...)
+		return result, nil
+	}
+	result.IncludedRecordCount = len(entries)
+	result.SkippedRecordCount = result.TotalRecordCount - result.IncludedRecordCount
+	if len(entries) == 0 {
+		result.Warnings = append(result.Warnings, "No V1.5 rule has a legal sealed fill in the requested window")
+		return result, nil
+	}
+
+	startDay, endDay, ok := resolveYieldDailyOverviewWindow(entries)
+	if !ok {
+		result.Warnings = append(result.Warnings, "The sealed V1.5 ledger does not define a valid daily valuation window")
+		appendV150YieldDailyHealthWarnings(result, v150YieldDailyLedgerMissingHealthCode)
+		return result, nil
+	}
+	if valuationDay.After(endDay) {
+		endDay = valuationDay
+	}
+	dailyCalendarDays, _, dailyCalendarErr := loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay)
+	rawObservedDays, rawObservedErr := loadV150YieldDailyBenchmarkObservedDays(startDay, endDay)
+	if dailyCalendarErr != nil && rawObservedErr != nil {
+		result.Warnings = append(result.Warnings, "The cache-only 510300 trading-day sources are unavailable; daily curve was not published")
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, v150BenchmarkDailySeriesHealthCode), 0)
+		return result, nil
+	}
+	tradingDays := mergeV150YieldDailyTradeDays(
+		dailyCalendarDays,
+		rawObservedDays,
+		collectV150YieldDailyRequiredDays(entries, valuationDay),
+	)
+	if len(tradingDays) == 0 {
+		result.Warnings = append(result.Warnings, "No cache-only 510300 trading day is available for the V1.5 valuation window")
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, v150BenchmarkDailySeriesHealthCode), 0)
+		return result, nil
+	}
+	benchmarkSeries, benchmarkCoverageWarnings, err := loadV150YieldDailyRawBenchmarkSeries(tradingDays)
+	if err != nil {
+		result.Warnings = append(result.Warnings, "Raw 510300 closing minutes are unavailable; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, v150YieldDailyRawBenchmarkPriceHealthCode)
+		return result, nil
+	}
+	if len(benchmarkCoverageWarnings) > 0 {
+		result.Warnings = append(result.Warnings, "The raw 510300 14:45-15:00 series has a required-date gap; daily curve was not published")
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, benchmarkCoverageWarnings...), 0)
+		return result, nil
+	}
+
+	priceSeriesMap, missingCodes, provenanceWarnings, err := loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
+	if err != nil {
+		result.Warnings = append(result.Warnings, "Raw 15-minute holding marks are unavailable; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, v150YieldDailyRawMinutePriceHealthCode)
+		return result, nil
+	}
+	if len(provenanceWarnings) > 0 {
+		result.Warnings = append(result.Warnings, "At least one V1.5 holding minute has ambiguous or adjusted provenance; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, provenanceWarnings...)
+		return result, nil
+	}
+	priceWarnings := collectV150YieldDailyPriceGapWarnings(entries, tradingDays, priceSeriesMap)
+	for _, code := range missingCodes {
+		priceWarnings = append(priceWarnings, normalizeRecommendStockCode(code)+":"+v150YieldDailyRawMinutePriceHealthCode)
+	}
+	priceWarnings = dedupeNonEmptyStrings(priceWarnings, 0)
+	if len(priceWarnings) > 0 {
+		result.Warnings = append(result.Warnings, "At least one required raw 14:45-15:00 holding bar is missing; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, priceWarnings...)
+		return result, nil
+	}
+	if !applyV150YieldDailyClosingMarks(entries, priceSeriesMap) {
+		result.Warnings = append(result.Warnings, "At least one current V1.5 holding has no complete raw closing mark; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, v150YieldDailyRawMinutePriceHealthCode)
+		return result, nil
+	}
+
+	benchmarkMatchedSeries, benchmarkWarnings := buildV150YieldDailyBenchmarkSeries(entries, tradingDays, benchmarkSeries)
+	if len(benchmarkWarnings) > 0 || benchmarkMatchedSeries == nil {
+		result.Warnings = append(result.Warnings, "The cache-only 510300 comparison account is incomplete; daily curve was not published")
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, benchmarkWarnings...), 0)
+		return result, nil
+	}
+	points, pointWarnings := buildYieldDailyOverviewPointsWithV150RuleLedgers(
+		entries,
+		tradingDays,
+		priceSeriesMap,
+		benchmarkSeries,
+		ledgers,
+		benchmarkMatchedSeries,
+	)
+	if len(pointWarnings) > 0 || len(points) != len(tradingDays) {
+		result.Warnings = append(result.Warnings, "The sealed-ledger daily portfolio could not be valued completely; daily curve was not published")
+		appendV150YieldDailyHealthWarnings(result, append(pointWarnings, v150YieldDailyLedgerAsOfHealthCode)...)
+		return result, nil
+	}
+
+	result.RangeStart = points[0].TradeDate
+	result.RangeEnd = points[len(points)-1].TradeDate
+	result.DataAsOf = resolveV150YieldDailyOverviewDataAsOf(entries, result.RangeEnd)
+	result.Points = points
+	appendV150YieldDailyHealthWarnings(result, v150YieldDailyCalendarCoverageHealthCode)
+	appendV150RollingReturnWarning(result)
+	return result, nil
+}
+
+func applyV150YieldDailyValidation(
+	result *models.AiRecommendYieldDailyOverviewData,
+	validation *models.StrategyValidationStatus,
+	warnings []string,
+	err error,
+) {
+	if result == nil {
+		return
+	}
+	if err != nil {
+		result.Warnings = append(result.Warnings, "The complete V1.5 forward-validation cohort is unavailable; validation remains pending")
+		appendV150YieldDailyHealthWarnings(result, v150ForwardValidationCohortHealthCode)
+		return
+	}
+	if validation != nil && strings.TrimSpace(validation.Status) != "" {
+		result.ValidationStatus = strings.TrimSpace(validation.Status)
+	}
+	appendV150YieldDailyHealthWarnings(result, warnings...)
+}
+
+func appendV150YieldDailyHealthWarnings(result *models.AiRecommendYieldDailyOverviewData, warnings ...string) {
+	if result == nil {
+		return
+	}
+	result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, warnings...), 0)
+}
+
+func validateV150YieldDailyOverviewQuery(query *models.AiRecommendStocksQuery) error {
+	if query == nil {
+		return nil
+	}
+	if strings.TrimSpace(query.ModelName) != "" || strings.TrimSpace(query.StockCode) != "" ||
+		strings.TrimSpace(query.StockName) != "" || strings.TrimSpace(query.BkCode) != "" ||
+		strings.TrimSpace(query.BkName) != "" || strings.TrimSpace(query.StartDate) != "" ||
+		strings.TrimSpace(query.EndDate) != "" {
+		return errors.New("V1.5 daily portfolio requires the complete immutable cohort; row and date filters are not supported")
+	}
+	return nil
+}
+
+func resolveV150YieldDailyLatestCompleteDay(now time.Time) time.Time {
+	loc := cnLocation()
+	local := now.In(loc)
+	day := normalizeYieldOverviewTradeDay(resolveYieldReadTradeDate(local, nil))
+	marketClose := time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc)
+	if local.Before(marketClose) {
+		day = shiftToPrevWeekday(day.AddDate(0, 0, -1))
+	}
+	return normalizeYieldOverviewTradeDay(day)
 }
 
 func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecommendStocksQuery) (*models.AiRecommendYieldDailyOverviewData, error) {
@@ -207,13 +440,20 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 
 	var priceSeriesMap map[string]*yieldDailyOverviewPriceSeries
 	var missingCodes []string
+	var provenanceWarnings []string
 	if isV150CostVersion(query.StrategyCohort) {
-		priceSeriesMap, missingCodes, err = loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
+		priceSeriesMap, missingCodes, provenanceWarnings, err = loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
 	} else {
 		priceSeriesMap, missingCodes, err = loadYieldDailyOverviewPriceSeriesFromCache(entries, tradingDays)
 	}
 	if err != nil {
 		return nil, err
+	}
+	if len(provenanceWarnings) > 0 {
+		result.SkippedRecordCount = result.TotalRecordCount
+		result.Warnings = append(result.Warnings, "V1.5 minute provenance is ambiguous or adjusted; portfolio NAV was not published")
+		result.V150HealthWarnings = dedupeNonEmptyStrings(append(result.V150HealthWarnings, provenanceWarnings...), 0)
+		return result, nil
 	}
 
 	filteredEntries := make([]yieldDailyOverviewEntry, 0, len(entries))
@@ -767,6 +1007,285 @@ func collectV150YieldDailyPriceGapWarnings(
 	return dedupeNonEmptyStrings(warnings, 0)
 }
 
+func loadV150YieldDailyBenchmarkObservedDays(startDay, endDay time.Time) ([]time.Time, error) {
+	startDay = normalizeYieldOverviewTradeDay(startDay)
+	endDay = normalizeYieldOverviewTradeDay(endDay)
+	if startDay.IsZero() || endDay.IsZero() || endDay.Before(startDay) {
+		return nil, errors.New("invalid V1.5 benchmark observation window")
+	}
+	queryStart := startDay.Add(9*time.Hour + 30*time.Minute)
+	queryEnd := endDay.Add(15 * time.Hour)
+	bars, err := listMinuteBarsFromCache(defaultBenchmarkModelCode, queryStart, queryEnd)
+	if err != nil {
+		return nil, err
+	}
+	byDate := make(map[string]time.Time)
+	for _, bar := range bars {
+		if bar.TradeTime.IsZero() || !marketSummaryV150QuoteTimestampIsInTradingSession(bar.TradeTime) {
+			continue
+		}
+		day := normalizeYieldOverviewTradeDay(bar.TradeTime)
+		if day.Before(startDay) || day.After(endDay) {
+			continue
+		}
+		byDate[day.Format(time.DateOnly)] = day
+	}
+	result := make([]time.Time, 0, len(byDate))
+	for _, day := range byDate {
+		result = append(result, day)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Before(result[j]) })
+	return result, nil
+}
+
+func collectV150YieldDailyRequiredDays(entries []yieldDailyOverviewEntry, valuationDay time.Time) []time.Time {
+	result := make([]time.Time, 0, len(entries)*2+1)
+	if !valuationDay.IsZero() {
+		result = append(result, normalizeYieldOverviewTradeDay(valuationDay))
+	}
+	for _, entry := range entries {
+		if !entry.BuyDay.IsZero() {
+			result = append(result, normalizeYieldOverviewTradeDay(entry.BuyDay))
+		}
+		if entry.HasSellAmount && !entry.SellDay.IsZero() {
+			result = append(result, normalizeYieldOverviewTradeDay(entry.SellDay))
+		}
+	}
+	return result
+}
+
+func mergeV150YieldDailyTradeDays(sources ...[]time.Time) []time.Time {
+	byDate := make(map[string]time.Time)
+	for _, source := range sources {
+		for _, raw := range source {
+			day := normalizeYieldOverviewTradeDay(raw)
+			if day.IsZero() {
+				continue
+			}
+			byDate[day.Format(time.DateOnly)] = day
+		}
+	}
+	result := make([]time.Time, 0, len(byDate))
+	for _, day := range byDate {
+		result = append(result, day)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Before(result[j]) })
+	return result
+}
+
+func loadV150YieldDailyRawBenchmarkSeries(
+	tradingDays []time.Time,
+) (*yieldDailyOverviewPriceSeries, []string, error) {
+	if len(tradingDays) == 0 {
+		return nil, []string{v150YieldDailyRawBenchmarkPriceHealthCode}, nil
+	}
+	entries := []yieldDailyOverviewEntry{{
+		SummaryVersion: v150.StrategyVersion,
+		StockCode:      defaultBenchmarkModelCode,
+	}}
+	seriesByCode, missingCodes, provenanceWarnings, err := loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
+	if err != nil {
+		return nil, nil, err
+	}
+	series := seriesByCode[defaultBenchmarkModelCode]
+	warnings := make([]string, 0)
+	for _, code := range missingCodes {
+		warnings = append(warnings, normalizeRecommendStockCode(code)+":"+v150YieldDailyRawBenchmarkPriceHealthCode)
+	}
+	for _, warning := range provenanceWarnings {
+		warnings = append(warnings, strings.Replace(
+			warning,
+			v150YieldDailyRawMinuteProvenanceHealthCode,
+			v150BenchmarkMinuteProvenanceHealthCode,
+			1,
+		))
+	}
+	for _, day := range tradingDays {
+		date := normalizeYieldOverviewTradeDay(day).Format(time.DateOnly)
+		if series != nil && series.CloseByDay[date] > 0 {
+			continue
+		}
+		warnings = append(warnings, defaultBenchmarkModelCode+":"+v150YieldDailyRawBenchmarkPriceHealthCode+":"+date)
+	}
+	return series, dedupeNonEmptyStrings(warnings, 0), nil
+}
+
+func applyV150YieldDailyClosingMarks(
+	entries []yieldDailyOverviewEntry,
+	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
+) bool {
+	for index := range entries {
+		entry := &entries[index]
+		if entry.HasSellAmount {
+			continue
+		}
+		date := entry.CurrentDay.Format(time.DateOnly)
+		series := priceSeriesMap[entry.StockCode]
+		if series == nil || series.CloseByDay[date] <= 0 {
+			return false
+		}
+		entry.CurrentPrice = series.CloseByDay[date]
+		entry.CurrentPriceTime = date + " 15:00:00"
+	}
+	return true
+}
+
+type v150YieldDailyBenchmarkPosition struct {
+	RuleID        string
+	BuyDay        time.Time
+	EndDay        time.Time
+	InvestedNet   float64
+	Shares        float64
+	CashRemainder float64
+	EndPrice      float64
+}
+
+// buildV150YieldDailyBenchmarkSeries sizes each matched account from the exact
+// cached fill/exit minute and marks open benchmark positions from complete raw
+// closing minutes. It deliberately avoids both qfq daily prices and the legacy
+// RecommendID-indexed path, so rules without a display row remain deterministic.
+func buildV150YieldDailyBenchmarkSeries(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	priceSeries *yieldDailyOverviewPriceSeries,
+) (*benchmarkDailySeries, []string) {
+	if len(entries) == 0 || len(tradingDays) == 0 || priceSeries == nil {
+		return nil, []string{v150BenchmarkDailySeriesHealthCode}
+	}
+	warnings := make([]string, 0)
+	positions := make([]v150YieldDailyBenchmarkPosition, 0, len(entries))
+	seenRules := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		ruleID := strings.TrimSpace(entry.V150RuleID)
+		buyPrice, endPrice, endTime, matchReason := resolveV150YieldDailyBenchmarkPrices(entry, priceSeries)
+		endDay := normalizeYieldOverviewTradeDay(endTime)
+		if matchReason != "" {
+			warnings = append(warnings, ruleID+":"+matchReason)
+			continue
+		}
+		if ruleID == "" || entry.BuyCostNet <= 0 || buyPrice <= 0 || endPrice <= 0 || endDay.Before(entry.BuyDay) {
+			warnings = append(warnings, ruleID+":"+v150BenchmarkDailySeriesHealthCode)
+			continue
+		}
+		if _, duplicate := seenRules[ruleID]; duplicate {
+			warnings = append(warnings, ruleID+":"+v150BenchmarkPartialHealthCode)
+			continue
+		}
+		seenRules[ruleID] = struct{}{}
+		buy := calcBenchmarkETFBuyTradeForVersion(v150.StrategyVersion, entry.BuyCostNet, buyPrice)
+		if !buy.Valid || buy.Shares <= 0 {
+			warnings = append(warnings, ruleID+":"+v150BenchmarkDailySeriesHealthCode)
+			continue
+		}
+		positions = append(positions, v150YieldDailyBenchmarkPosition{
+			RuleID: ruleID, BuyDay: entry.BuyDay, EndDay: endDay,
+			InvestedNet: entry.BuyCostNet, Shares: buy.Shares,
+			CashRemainder: buy.UnusedCash, EndPrice: endPrice,
+		})
+	}
+	if len(warnings) > 0 || len(positions) != len(entries) {
+		return nil, dedupeNonEmptyStrings(warnings, 0)
+	}
+
+	valueByDay := make(map[string]float64, len(tradingDays))
+	cumulativeAmountByDay := make(map[string]float64, len(tradingDays))
+	dailyAmountByDay := make(map[string]float64, len(tradingDays))
+	cumulativeRateByDay := make(map[string]float64, len(tradingDays))
+	dailyRateByDay := make(map[string]float64, len(tradingDays))
+	navByDay := make(map[string]float64, len(tradingDays))
+	previousCumulativeAmount := 0.0
+	for _, tradeDay := range tradingDays {
+		tradeDate := tradeDay.Format(time.DateOnly)
+		closePrice := priceSeries.CloseByDay[tradeDate]
+		if closePrice <= 0 {
+			return nil, []string{v150BenchmarkDailySeriesHealthCode + ":" + tradeDate}
+		}
+		totalValue := 0.0
+		costBasisNet := 0.0
+		for _, position := range positions {
+			if tradeDay.Before(position.BuyDay) {
+				continue
+			}
+			costBasisNet += position.InvestedNet
+			markPrice := closePrice
+			if !tradeDay.Before(position.EndDay) {
+				markPrice = position.EndPrice
+			}
+			mark := calcBenchmarkETFSellTradeForVersion(v150.StrategyVersion, position.Shares, markPrice)
+			if !mark.Valid || mark.NetAmount <= 0 {
+				return nil, []string{position.RuleID + ":" + v150BenchmarkDailySeriesHealthCode + ":" + tradeDate}
+			}
+			totalValue += mark.NetAmount + position.CashRemainder
+		}
+		cumulativeAmount := round2(totalValue - costBasisNet)
+		dailyAmount := round2(cumulativeAmount - previousCumulativeAmount)
+		previousEquity := v150.FixedStrategyV150Config().PortfolioCash + previousCumulativeAmount
+		equity := round2(v150.FixedStrategyV150Config().PortfolioCash + cumulativeAmount)
+		dailyRate := 0.0
+		if previousEquity > 0 {
+			dailyRate = round2(dailyAmount / previousEquity * 100)
+		}
+		valueByDay[tradeDate] = equity
+		cumulativeAmountByDay[tradeDate] = cumulativeAmount
+		dailyAmountByDay[tradeDate] = dailyAmount
+		cumulativeRateByDay[tradeDate] = round2(cumulativeAmount / v150.FixedStrategyV150Config().PortfolioCash * 100)
+		dailyRateByDay[tradeDate] = dailyRate
+		navByDay[tradeDate] = round4(equity / v150.FixedStrategyV150Config().PortfolioCash)
+		previousCumulativeAmount = cumulativeAmount
+	}
+	return &benchmarkDailySeries{
+		Code: defaultBenchmarkModelCode, Name: defaultBenchmarkName, PositionCount: len(positions),
+		CloseByDay: priceSeries.CloseByDay, ValueByDay: valueByDay,
+		CumulativeAmountByDay: cumulativeAmountByDay, DailyAmountByDay: dailyAmountByDay,
+		CumulativeRateByDay: cumulativeRateByDay, DailyRateByDay: dailyRateByDay, NavByDay: navByDay,
+	}, nil
+}
+
+func resolveV150YieldDailyBenchmarkPrices(
+	entry yieldDailyOverviewEntry,
+	priceSeries *yieldDailyOverviewPriceSeries,
+) (float64, float64, time.Time, string) {
+	buyTime := entry.BuyTime.In(cnLocation())
+	buyPrice, buyHealth := resolveV150BenchmarkMinutePriceAtWithHealth(buyTime, true)
+	if buyPrice <= 0 {
+		if buyHealth != "" {
+			return 0, 0, time.Time{}, buyHealth
+		}
+		return 0, 0, time.Time{}, v150BenchmarkBuyQuoteHealthCode
+	}
+	if entry.HasSellAmount {
+		endTime, parsed := parseYieldOverviewDisplayTime(entry.SellTime)
+		if !parsed || endTime.Before(buyTime) {
+			return 0, 0, time.Time{}, v150BenchmarkExitQuoteHealthCode
+		}
+		endTime = endTime.In(cnLocation())
+		endPrice, endHealth := resolveV150BenchmarkMinutePriceAtWithHealth(endTime, true)
+		if endPrice <= 0 {
+			if endHealth != "" {
+				return 0, 0, time.Time{}, endHealth
+			}
+			return 0, 0, time.Time{}, v150BenchmarkExitQuoteHealthCode
+		}
+		return buyPrice, endPrice, endTime, ""
+	}
+
+	endDay := normalizeYieldOverviewTradeDay(entry.CurrentDay)
+	if endDay.IsZero() {
+		if currentAt, parsed := parseYieldOverviewDisplayTime(entry.CurrentPriceTime); parsed {
+			endDay = normalizeYieldOverviewTradeDay(currentAt)
+		}
+	}
+	if endDay.IsZero() || endDay.Before(entry.BuyDay) || priceSeries == nil {
+		return 0, 0, time.Time{}, v150BenchmarkExitQuoteHealthCode
+	}
+	endPrice := priceSeries.CloseByDay[endDay.Format(time.DateOnly)]
+	if endPrice <= 0 {
+		return 0, 0, time.Time{}, v150YieldDailyRawBenchmarkPriceHealthCode
+	}
+	endTime := time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 15, 0, 0, 0, cnLocation())
+	return buyPrice, endPrice, endTime, ""
+}
+
 func buildYieldDailyOverviewPoints(
 	entries []yieldDailyOverviewEntry,
 	tradingDays []time.Time,
@@ -784,7 +1303,51 @@ func buildYieldDailyOverviewPointsWithV150Ledgers(
 	benchmarkSeries *yieldDailyOverviewPriceSeries,
 	v150DailyLedgers map[uint]v150YieldDailyOrderLedger,
 ) ([]models.AiRecommendYieldDailyOverviewPoint, []string) {
-	var benchmarkMatchedSeries *benchmarkDailySeries
+	return buildYieldDailyOverviewPointsWithLedgerLookup(
+		entries,
+		tradingDays,
+		priceSeriesMap,
+		benchmarkSeries,
+		func(entry yieldDailyOverviewEntry) (v150YieldDailyOrderLedger, bool) {
+			ledger, ok := v150DailyLedgers[entry.RecommendID]
+			return ledger, ok
+		},
+		nil,
+		false,
+	)
+}
+
+func buildYieldDailyOverviewPointsWithV150RuleLedgers(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
+	benchmarkSeries *yieldDailyOverviewPriceSeries,
+	v150DailyLedgers map[string]v150YieldDailyOrderLedger,
+	benchmarkMatchedSeries *benchmarkDailySeries,
+) ([]models.AiRecommendYieldDailyOverviewPoint, []string) {
+	return buildYieldDailyOverviewPointsWithLedgerLookup(
+		entries,
+		tradingDays,
+		priceSeriesMap,
+		benchmarkSeries,
+		func(entry yieldDailyOverviewEntry) (v150YieldDailyOrderLedger, bool) {
+			ledger, ok := v150DailyLedgers[strings.TrimSpace(entry.V150RuleID)]
+			return ledger, ok
+		},
+		benchmarkMatchedSeries,
+		true,
+	)
+}
+
+func buildYieldDailyOverviewPointsWithLedgerLookup(
+	entries []yieldDailyOverviewEntry,
+	tradingDays []time.Time,
+	priceSeriesMap map[string]*yieldDailyOverviewPriceSeries,
+	benchmarkSeries *yieldDailyOverviewPriceSeries,
+	ledgerLookup func(yieldDailyOverviewEntry) (v150YieldDailyOrderLedger, bool),
+	benchmarkMatchedSeries *benchmarkDailySeries,
+	benchmarkPrecomputed bool,
+) ([]models.AiRecommendYieldDailyOverviewPoint, []string) {
 	v150Portfolio := len(entries) > 0
 	for _, entry := range entries {
 		if !isV150CostVersion(entry.SummaryVersion) {
@@ -792,7 +1355,7 @@ func buildYieldDailyOverviewPointsWithV150Ledgers(
 			break
 		}
 	}
-	if benchmarkSeries != nil {
+	if !benchmarkPrecomputed && benchmarkSeries != nil {
 		if series, _, _, _, _, _, _, _, ok := calculateCashflowMatchedBenchmark(entries, tradingDays, benchmarkSeries); ok {
 			if !v150Portfolio || series.PositionCount == len(entries) {
 				benchmarkMatchedSeries = series
@@ -816,7 +1379,10 @@ func buildYieldDailyOverviewPointsWithV150Ledgers(
 			}
 			series := priceSeriesMap[entry.StockCode]
 			if isV150CostVersion(entry.SummaryVersion) {
-				ledger, ledgerOK := v150DailyLedgers[entry.RecommendID]
+				ledger, ledgerOK := v150YieldDailyOrderLedger{}, false
+				if ledgerLookup != nil {
+					ledger, ledgerOK = ledgerLookup(entry)
+				}
 				if !ledgerOK {
 					if v150Portfolio {
 						completePoint = false
@@ -998,6 +1564,20 @@ func resolveYieldDailyOverviewDataAsOf(entries []yieldDailyOverviewEntry, rangeE
 		return ""
 	}
 	return strings.TrimSpace(rangeEnd) + " 15:00:00"
+}
+
+func resolveV150YieldDailyOverviewDataAsOf(entries []yieldDailyOverviewEntry, rangeEnd string) string {
+	base := resolveYieldDailyOverviewDataAsOf(entries, rangeEnd)
+	latest, latestOK := parseYieldOverviewDisplayTime(base)
+	endDay, endOK := parseYieldOverviewTradeDay(rangeEnd)
+	if !endOK {
+		return base
+	}
+	endAt := time.Date(endDay.Year(), endDay.Month(), endDay.Day(), 15, 0, 0, 0, cnLocation())
+	if !latestOK || endAt.After(latest) {
+		return endAt.Format(time.DateTime)
+	}
+	return latest.In(cnLocation()).Format(time.DateTime)
 }
 
 func estimateYieldDailyOverviewKlineDays(startDay, endDay time.Time) int64 {
