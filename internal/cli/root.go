@@ -45,6 +45,13 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+	if cmd == "repair-market-summary" {
+		if err := runRepairMarketSummary(cmdArgs, opts, stdout, stderr); err != nil {
+			fmt.Fprintf(stderr, "execution failed: %v\n", err)
+			return 1
+		}
+		return 0
+	}
 
 	var resolvedDBPath string
 	if cmd == "strategy-rule-replay" {
@@ -68,8 +75,6 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		runErr = runAI(cmdArgs, opts, stdout, stderr)
 	case "network-audit":
 		runErr = runNetworkAudit(cmdArgs, opts, stdout, stderr)
-	case "repair-market-summary":
-		runErr = runRepairMarketSummary(cmdArgs, opts, stdout, stderr)
 	case "backfill-market-summary-recommend":
 		runErr = runBackfillMarketSummaryRecommend(cmdArgs, opts, stdout, stderr)
 	case "strategy-backtest":
@@ -146,8 +151,8 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  search  自然语言选股")
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
 	fmt.Fprintln(w, "  network-audit  审计当前环境下所有主要网络数据接口")
-	fmt.Fprintln(w, "  repair-market-summary  修复市场资讯历史激活规则与脏数据")
-	fmt.Fprintln(w, "  backfill-market-summary-recommend  从历史市场资讯 AI 报告补写推荐记录")
+	fmt.Fprintln(w, "  repair-market-summary  已禁用；历史推荐保持只读")
+	fmt.Fprintln(w, "  backfill-market-summary-recommend  仅支持 --dry-run 审计历史报告")
 	fmt.Fprintln(w, "  strategy-backtest  仅使用本地冻结订单事件生成并持久化确定性回放")
 	fmt.Fprintln(w, "    示例: strategy-backtest --version 1.5.0 --from 2026-01-01 --to 2026-06-30")
 	fmt.Fprintln(w, "  strategy-rule-replay  严格只读、cache-only 的历史结构化规则执行审计")
