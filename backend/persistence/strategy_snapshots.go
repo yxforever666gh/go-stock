@@ -397,6 +397,99 @@ func LoadFrozenStrategyInputs(ctx context.Context, database *gorm.DB, strategyVe
 	return result, nil
 }
 
+// LoadFrozenStrategyInputsAsOf returns the immutable input view that was
+// available at asOf. A run and each of its initial children must already be
+// sealed by the cutoff. Appended lifecycle events additionally have to be
+// effective by the cutoff, so a later same-day run or event cannot leak into
+// a point-in-time replay.
+func LoadFrozenStrategyInputsAsOf(ctx context.Context, database *gorm.DB, strategyVersion string, startDate, endDate, asOf time.Time) (FrozenStrategyInputs, error) {
+	var result FrozenStrategyInputs
+	if database == nil {
+		return result, fmt.Errorf("%w: database is nil", ErrInvalidImmutableRecord)
+	}
+	strategyVersion = strings.TrimSpace(strategyVersion)
+	if strategyVersion == "" || startDate.IsZero() || endDate.IsZero() || endDate.Before(startDate) || asOf.IsZero() {
+		return result, fmt.Errorf("%w: version, ordered date range and asOf are required", ErrInvalidImmutableRecord)
+	}
+	startText := startDate.Format(time.DateOnly)
+	endText := endDate.Format(time.DateOnly)
+	cutoff := asOf.UTC()
+	dbq := database.WithContext(ctx)
+	if err := dbq.Where(
+		"strategy_version = ? AND trade_date >= ? AND trade_date <= ? AND frozen_at IS NOT NULL AND frozen_at <= ?",
+		strategyVersion, startText, endText, cutoff,
+	).Order("trade_date ASC, as_of ASC, run_id ASC").Find(&result.Runs).Error; err != nil {
+		return result, err
+	}
+	if len(result.Runs) == 0 {
+		return result, fmt.Errorf("%w: version=%s range=%s..%s asOf=%s", ErrNoFrozenSnapshots, strategyVersion, startText, endText, asOf.Format(time.RFC3339Nano))
+	}
+	runIDs := make([]string, 0, len(result.Runs))
+	for _, run := range result.Runs {
+		runIDs = append(runIDs, run.RunID)
+	}
+	if err := dbq.Where("run_id IN ? AND frozen_at IS NOT NULL AND frozen_at <= ?", runIDs, cutoff).
+		Order("trade_date ASC, run_id ASC, rank ASC, symbol ASC").Find(&result.Candidates).Error; err != nil {
+		return result, err
+	}
+	if err := dbq.Where("run_id IN ? AND frozen_at IS NOT NULL AND frozen_at <= ?", runIDs, cutoff).
+		Order("trade_date ASC, run_id ASC, symbol ASC, path ASC, rule_id ASC").Find(&result.Rules).Error; err != nil {
+		return result, err
+	}
+	var allOrderEvents []models.OrderEvent
+	if err := dbq.Where("run_id IN ? AND frozen_at IS NOT NULL", runIDs).
+		Order("run_id ASC, rule_id ASC, sequence ASC, event_id ASC").Find(&allOrderEvents).Error; err != nil {
+		return result, err
+	}
+	result.OrderEvents = frozenOrderEventPrefixesAsOf(allOrderEvents, cutoff)
+	if err := dbq.Where("run_id IN ? AND frozen_at IS NOT NULL AND frozen_at <= ?", runIDs, cutoff).
+		Order("run_id ASC, symbol ASC, effective_from ASC, record_id ASC").Find(&result.SecurityMaster).Error; err != nil {
+		return result, err
+	}
+	if err := dbq.Where("run_id IN ? AND frozen_at IS NOT NULL AND frozen_at <= ?", runIDs, cutoff).
+		Order("run_id ASC, ex_date ASC, symbol ASC, event_id ASC").Find(&result.CorporateActions).Error; err != nil {
+		return result, err
+	}
+	if err := validateFrozenChildCounts(result); err != nil {
+		return result, err
+	}
+	if err := validateLoadedFrozenRuns(result); err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
+func frozenOrderEventPrefixesAsOf(events []models.OrderEvent, asOf time.Time) []models.OrderEvent {
+	type ledgerKey struct {
+		runID  string
+		ruleID string
+	}
+	blocked := make(map[ledgerKey]bool)
+	result := make([]models.OrderEvent, 0, len(events))
+	for i := range events {
+		event := events[i]
+		key := ledgerKey{runID: event.RunID, ruleID: event.RuleID}
+		if blocked[key] {
+			continue
+		}
+		if event.EventAt.After(asOf) || event.FrozenAt == nil || event.FrozenAt.After(asOf) {
+			blocked[key] = true
+			continue
+		}
+		result = append(result, event)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if !result[i].EventAt.Equal(result[j].EventAt) {
+			return result[i].EventAt.Before(result[j].EventAt)
+		}
+		if result[i].EventType != result[j].EventType {
+			return result[i].EventType < result[j].EventType
+		}
+		return result[i].EventID < result[j].EventID
+	})
+	return result
+}
+
 func validateLoadedFrozenRuns(inputs FrozenStrategyInputs) error {
 	candidates := make(map[string][]models.CandidateSnapshot, len(inputs.Runs))
 	rules := make(map[string][]models.RuleSnapshot, len(inputs.Runs))

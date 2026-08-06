@@ -241,6 +241,101 @@ func TestAppendAndLoadFrozenStrategySnapshotBundle(t *testing.T) {
 	}
 }
 
+func TestLoadFrozenStrategyInputsAsOfExcludesSameDayFutureRunAndEvents(t *testing.T) {
+	database := openStrategyPersistenceTestDB(t)
+	current := frozenStrategyBundle()
+	if err := AppendStrategySnapshotBundle(context.Background(), database, current); err != nil {
+		t.Fatal(err)
+	}
+
+	signalAt := *current.Run.ValidFromAt
+	orderAt := signalAt.Add(15 * time.Minute)
+	fillAt := orderAt.Add(30 * time.Minute)
+	signal := appendedOrderEvent(current, "asof-signal", "signal", 2, signalAt)
+	order := appendedOrderEvent(current, "asof-late-frozen-order", "order", 3, orderAt)
+	orderFrozenAt := fillAt.Add(15 * time.Minute)
+	order.FrozenAt = &orderFrozenAt
+	sealedOrder := []models.OrderEvent{order}
+	if err := SealStrategyOrderEvents(sealedOrder); err != nil {
+		t.Fatal(err)
+	}
+	order = sealedOrder[0]
+	fill := appendedOrderEvent(current, "asof-future-fill", "fill", 4, fillAt)
+	if err := AppendStrategyOrderEvents(context.Background(), database, current.Run.RunID, []models.OrderEvent{signal, order, fill}); err != nil {
+		t.Fatal(err)
+	}
+
+	cn := time.FixedZone("Asia/Shanghai", 8*60*60)
+	future := frozenStrategyBundle()
+	futureStartedAt := time.Date(2026, 8, 4, 11, 0, 0, 0, cn)
+	futureAsOf := time.Date(2026, 8, 4, 11, 10, 0, 0, cn)
+	futureDecisionAt := time.Date(2026, 8, 4, 11, 15, 0, 0, cn)
+	futureGeneratedAt := time.Date(2026, 8, 4, 11, 16, 0, 0, cn)
+	futureFrozenAt := time.Date(2026, 8, 4, 11, 17, 0, 0, cn)
+	futureValidFromAt := time.Date(2026, 8, 4, 11, 30, 0, 0, cn)
+	future.Run.RunID = "run-20260804-future"
+	future.Run.RunSlot = "future"
+	future.Run.StartedAt = futureStartedAt
+	future.Run.AsOf = futureAsOf
+	future.Run.DataCutoffAt = futureAsOf
+	future.Run.DecisionAt = futureDecisionAt
+	future.Run.GeneratedAt = futureGeneratedAt
+	future.Run.ValidFromAt = &futureValidFromAt
+	future.Run.FrozenAt = &futureFrozenAt
+	future.Candidates[0].CandidateID = "candidate-000001-future"
+	future.Candidates[0].RunID = future.Run.RunID
+	future.Candidates[0].FrozenAt = &futureFrozenAt
+	future.Rules[0].RuleID = "rule-000001-pullback-future"
+	future.Rules[0].RunID = future.Run.RunID
+	future.Rules[0].CandidateID = future.Candidates[0].CandidateID
+	future.Rules[0].ValidFromAt = futureValidFromAt
+	future.Rules[0].FrozenAt = &futureFrozenAt
+	future.OrderEvents[0].EventID = "order-event-future-1"
+	future.OrderEvents[0].RunID = future.Run.RunID
+	future.OrderEvents[0].RuleID = future.Rules[0].RuleID
+	future.OrderEvents[0].EventAt = futureDecisionAt
+	future.OrderEvents[0].FrozenAt = &futureFrozenAt
+	future.SecurityMaster[0].RecordID = "security-000001-future"
+	future.SecurityMaster[0].RunID = future.Run.RunID
+	future.SecurityMaster[0].FrozenAt = &futureFrozenAt
+	future.CorporateActions[0].EventID = "action-000001-future"
+	future.CorporateActions[0].RunID = future.Run.RunID
+	future.CorporateActions[0].FrozenAt = &futureFrozenAt
+	if err := SealStrategySnapshotBundle(&future); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendStrategySnapshotBundle(context.Background(), database, future); err != nil {
+		t.Fatal(err)
+	}
+
+	day := time.Date(2026, 8, 4, 0, 0, 0, 0, time.UTC)
+	// The fill is independently effective and sealed by this cutoff, but the
+	// preceding order is not sealed yet. The returned ledger must remain a
+	// valid prefix rather than leaking the later fill around that gap.
+	cutoff := time.Date(2026, 8, 4, 10, 20, 0, 0, cn)
+	inputs, err := LoadFrozenStrategyInputsAsOf(context.Background(), database, "1.5.0", day, day, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs.Runs) != 1 || inputs.Runs[0].RunID != current.Run.RunID {
+		t.Fatalf("point-in-time runs = %+v, want only %s", inputs.Runs, current.Run.RunID)
+	}
+	if len(inputs.Candidates) != 1 || len(inputs.Rules) != 1 || len(inputs.SecurityMaster) != 1 || len(inputs.CorporateActions) != 1 {
+		t.Fatalf("future run children leaked into point-in-time inputs: %+v", inputs)
+	}
+	if len(inputs.OrderEvents) != 2 || inputs.OrderEvents[0].EventID != current.OrderEvents[0].EventID || inputs.OrderEvents[1].EventID != signal.EventID {
+		t.Fatalf("point-in-time event prefix = %+v, want issued+signal", inputs.OrderEvents)
+	}
+
+	allInputs, err := LoadFrozenStrategyInputs(context.Background(), database, "1.5.0", day, day)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(allInputs.Runs) != 2 || len(allInputs.OrderEvents) != 5 {
+		t.Fatalf("legacy loader behavior changed: runs=%d events=%d", len(allInputs.Runs), len(allInputs.OrderEvents))
+	}
+}
+
 func TestAppendStrategySnapshotBundleRejectsUnfrozenChild(t *testing.T) {
 	database := openStrategyPersistenceTestDB(t)
 	bundle := frozenStrategyBundle()
