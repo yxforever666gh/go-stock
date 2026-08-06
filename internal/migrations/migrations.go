@@ -159,7 +159,7 @@ func appendModelDefinitions(definition *strings.Builder, group string, modelValu
 			fmt.Fprintf(definition, "%d:<invalid:%T>\n", modelIndex, modelValue)
 			continue
 		}
-		fmt.Fprintf(definition, "%d:%s.%s:%d\n", modelIndex, modelType.PkgPath(), modelType.Name(), modelType.NumField())
+		fmt.Fprintf(definition, "%d:%s:%d\n", modelIndex, schemaTypeIdentity(modelType), modelType.NumField())
 		for fieldIndex := 0; fieldIndex < modelType.NumField(); fieldIndex++ {
 			field := modelType.Field(fieldIndex)
 			fmt.Fprintf(
@@ -167,12 +167,32 @@ func appendModelDefinitions(definition *strings.Builder, group string, modelValu
 				"%d:%s:%s:%q:%t\n",
 				fieldIndex,
 				field.Name,
-				field.Type.String(),
+				schemaTypeIdentity(field.Type),
 				string(field.Tag),
 				field.Anonymous,
 			)
 		}
 	}
+}
+
+func schemaTypeIdentity(modelType reflect.Type) string {
+	switch modelType.Kind() {
+	case reflect.Pointer:
+		return "*" + schemaTypeIdentity(modelType.Elem())
+	case reflect.Slice:
+		return "[]" + schemaTypeIdentity(modelType.Elem())
+	case reflect.Array:
+		return fmt.Sprintf("[%d]%s", modelType.Len(), schemaTypeIdentity(modelType.Elem()))
+	case reflect.Map:
+		return "map[" + schemaTypeIdentity(modelType.Key()) + "]" + schemaTypeIdentity(modelType.Elem())
+	}
+	if modelType.Name() == "" {
+		return modelType.Kind().String()
+	}
+	if modelType.PkgPath() == "" || strings.HasPrefix(modelType.PkgPath(), "go-stock/") {
+		return modelType.Name()
+	}
+	return modelType.PkgPath() + "." + modelType.Name()
 }
 
 func mainModels() []any {

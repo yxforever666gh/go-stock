@@ -10,7 +10,7 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/models"
-	"go-stock/internal/service"
+	"go-stock/internal/bootstrap"
 )
 
 type marketSummaryRecommendBackfillRow struct {
@@ -57,7 +57,11 @@ func runBackfillMarketSummaryRecommend(args []string, g GlobalOptions, stdout, s
 
 	rows := make([]marketSummaryRecommendBackfillRow, 0, len(reports))
 	totalSaved := 0
-	aiService := service.NewAIService()
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		return err
+	}
+	aiService := services.AI
 	for _, report := range reports {
 		row := marketSummaryRecommendBackfillRow{
 			ID:           report.ID,

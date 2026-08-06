@@ -2,6 +2,7 @@ package data
 
 import (
 	"fmt"
+	"go-stock/backend/models"
 	"strings"
 )
 
@@ -10,17 +11,7 @@ const (
 	marketSummaryFeasibleDownsidePct = 5.00
 )
 
-type marketSummaryFeasiblePlan struct {
-	Path          string  `json:"path"`
-	EntryRange    string  `json:"entryRange,omitempty"`
-	WorstEntry    float64 `json:"worstEntry"`
-	StopLoss      float64 `json:"stopLoss"`
-	TakeProfit    float64 `json:"takeProfit"`
-	RewardRisk    float64 `json:"rewardRisk"`
-	DownsidePct   float64 `json:"downsidePct"`
-	PassHardGate  bool    `json:"passHardGate"`
-	FailureReason string  `json:"failureReason,omitempty"`
-}
+type marketSummaryFeasiblePlan = models.MarketSummaryFeasiblePlan
 
 type marketSummaryTradePlanFeasibility struct {
 	Score           int

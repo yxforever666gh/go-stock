@@ -177,6 +177,13 @@ func TestMigrationChecksumIncludesDefinition(t *testing.T) {
 	}
 }
 
+func TestDefinitionLockIgnoresInternalGoPackageLocation(t *testing.T) {
+	definition := mainMigrationDefinition()
+	if strings.Contains(definition, "go-stock/") {
+		t.Fatalf("schema definition contains an internal Go package path: %s", definition)
+	}
+}
+
 func TestBaselineMigrationChecksums(t *testing.T) {
 	tests := []struct {
 		name string
@@ -184,7 +191,7 @@ func TestBaselineMigrationChecksums(t *testing.T) {
 		want string
 	}{
 		{name: "main-v1-published", got: mainMigrations[0].checksum(), want: "41df05f8dbf7b1c56fe959ee8893d97938ddfe35425e98110333e47e2ee40ba6"},
-		{name: "main-v2-definition-lock", got: mainMigrations[1].checksum(), want: "b0ee5280aaa1292a1b72d9dedac9bd40bf0fded4733d1d37c5b856e4bccac50b"},
+		{name: "main-v2-definition-lock", got: mainMigrations[1].checksum(), want: "616fac7d92781aa3c88470d13f7a34df4ec2d35772978167a03b570385b8e9b3"},
 		{name: "minute-v1-published", got: minuteMigrations[0].checksum(), want: "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec"},
 		{name: "minute-v2-definition-lock", got: minuteMigrations[1].checksum(), want: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0"},
 	}

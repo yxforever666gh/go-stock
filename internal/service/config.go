@@ -1,21 +1,23 @@
 package service
 
-import "go-stock/backend/data"
+import "go-stock/backend/models"
 
-type ConfigService struct{}
-
-func NewConfigService() ConfigService {
-	return ConfigService{}
+type ConfigService struct {
+	operations ConfigOperations
 }
 
-func (s ConfigService) GetConfig() *data.SettingConfig {
-	return data.GetSettingConfig()
+func NewConfigService(operations ConfigOperations) ConfigService {
+	return ConfigService{operations: operations}
+}
+
+func (s ConfigService) GetConfig() *models.SettingConfig {
+	return s.operations.GetConfig()
 }
 
 func (s ConfigService) ExportConfig() string {
-	return data.NewSettingsApi().Export()
+	return s.operations.ExportConfig()
 }
 
-func (s ConfigService) UpdateConfig(settingConfig *data.SettingConfig) string {
-	return data.UpdateConfig(settingConfig)
+func (s ConfigService) UpdateConfig(settingConfig *models.SettingConfig) string {
+	return s.operations.UpdateConfig(settingConfig)
 }

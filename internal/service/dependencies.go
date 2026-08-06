@@ -48,6 +48,7 @@ type Dependencies struct {
 	Clock            Clock
 	Initializer      ApplicationInitializer
 	Providers        ProviderSet
+	Operations       ServiceOperations
 	ExecutionMonitor execution.Monitor
 }
 
@@ -58,7 +59,14 @@ func (d Dependencies) Validate() error {
 	if d.Initializer == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("application initializer is required"))
 	}
+	if err := d.Operations.Validate(); err != nil {
+		return errors.Join(ErrInvalidDependencies, err)
+	}
 	return nil
+}
+
+func operationRequiredError(name string) error {
+	return errors.New(name + " operations are required")
 }
 
 type RuntimeService struct {

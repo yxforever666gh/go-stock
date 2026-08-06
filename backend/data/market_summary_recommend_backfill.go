@@ -126,12 +126,7 @@ func EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, provid
 	})
 }
 
-type MarketSummaryRecommendSaveOptions struct {
-	NewRecordLimit        int
-	ProductionLimit       int
-	RepairableFailures    []models.MarketSummaryTradePlanRepairCandidate
-	RequireVerifiedRepair bool
-}
+type MarketSummaryRecommendSaveOptions = models.MarketSummaryRecommendSaveOptions
 
 type marketSummarySaveSelection struct {
 	Draft    *marketSummaryRecommendDraft

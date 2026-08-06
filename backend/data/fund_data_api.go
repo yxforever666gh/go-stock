@@ -10,12 +10,12 @@ import (
 	"github.com/go-resty/resty/v2"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"gorm.io/gorm"
 )
 
 type FundApi struct {
@@ -30,61 +30,8 @@ func NewFundApi() *FundApi {
 	}
 }
 
-type FollowedFund struct {
-	gorm.Model
-	Code string `json:"code" gorm:"index"` // 基金代码
-	Name string `json:"name"`              // 基金简称
-
-	NetUnitValue     *float64 `json:"netUnitValue"`         // 单位净值
-	NetUnitValueDate string   `json:"netUnitValueDate"`     // 单位净值日期
-	NetEstimatedUnit *float64 `json:"netEstimatedUnit"`     // 估算单位净值
-	NetEstimatedTime string   `json:"netEstimatedUnitTime"` // 估算单位净值日期
-	NetAccumulated   *float64 `json:"netAccumulated"`       // 累计净值
-
-	//计算值
-	NetEstimatedRate *float64 `json:"netEstimatedRate"` // 估算单位净值涨跌幅
-
-	FundBasic FundBasic `json:"fundBasic" gorm:"foreignKey:Code;references:Code"`
-}
-
-func (FollowedFund) TableName() string {
-	return "followed_fund"
-}
-
-// FundBasic 基金基本信息结构体
-type FundBasic struct {
-	gorm.Model
-	Code           string `json:"code" gorm:"index"` // 基金代码
-	Name           string `json:"name"`              // 基金简称
-	FullName       string `json:"fullName"`          // 基金全称
-	Type           string `json:"type"`              // 基金类型
-	Establishment  string `json:"establishment"`     // 成立日期
-	Scale          string `json:"scale"`             // 最新规模(亿元)
-	Company        string `json:"company"`           // 基金管理人
-	Manager        string `json:"manager"`           // 基金经理
-	Rating         string `json:"rating"`            //基金评级
-	TrackingTarget string `json:"trackingTarget"`    //跟踪标的
-
-	NetUnitValue     *float64 `json:"netUnitValue"`         // 单位净值
-	NetUnitValueDate string   `json:"netUnitValueDate"`     // 单位净值日期
-	NetEstimatedUnit *float64 `json:"netEstimatedUnit"`     // 估算单位净值
-	NetEstimatedTime string   `json:"netEstimatedUnitTime"` // 估算单位净值日期
-	NetAccumulated   *float64 `json:"netAccumulated"`       // 累计净值
-
-	//净值涨跌幅： 近1月,近3月,近6月,近1年,近3年,近5年,今年来,成立来
-	NetGrowth1   *float64 `json:"netGrowth1"`   //近1月
-	NetGrowth3   *float64 `json:"netGrowth3"`   //近3月
-	NetGrowth6   *float64 `json:"netGrowth6"`   //近6月
-	NetGrowth12  *float64 `json:"netGrowth12"`  //近1年
-	NetGrowth36  *float64 `json:"netGrowth36"`  //近3年
-	NetGrowth60  *float64 `json:"netGrowth60"`  //近5年
-	NetGrowthYTD *float64 `json:"netGrowthYTD"` //今年来
-	NetGrowthAll *float64 `json:"netGrowthAll"` //成立来
-}
-
-func (FundBasic) TableName() string {
-	return "fund_basic"
-}
+type FollowedFund = models.FollowedFund
+type FundBasic = models.FundBasic
 
 // CrawlFundBasic 爬取基金基本信息
 func (f *FundApi) CrawlFundBasic(fundCode string) (*FundBasic, error) {

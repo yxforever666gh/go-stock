@@ -6,6 +6,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/internal/bootstrap"
 	"go-stock/internal/service"
 	"strconv"
 	"strings"
@@ -47,7 +48,11 @@ const yieldEmailCronEntryPrefix = "YieldEmailCustom_"
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return NewAppWithServices(service.NewAppServices())
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		panic(err)
+	}
+	return NewAppWithServices(services)
 }
 
 func NewAppWithServices(services service.AppServices) *App {

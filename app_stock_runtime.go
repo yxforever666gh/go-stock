@@ -2,6 +2,7 @@ package main
 
 import (
 	"go-stock/backend/data"
+	"go-stock/internal/bootstrap"
 	"go-stock/internal/service"
 	"strings"
 	"time"
@@ -47,7 +48,11 @@ func (a *App) collectMonitoredStockSnapshot() monitoredStockSnapshot {
 }
 
 func GetStockInfos(follows ...data.FollowedStock) *[]data.StockInfo {
-	stockInfos := collectStockInfos(service.NewStockService(), follows...)
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		return &[]data.StockInfo{}
+	}
+	stockInfos := collectStockInfos(services.Stock, follows...)
 	return &stockInfos
 }
 
@@ -84,7 +89,11 @@ func collectStockInfos(stockService service.StockService, follows ...data.Follow
 }
 
 func getStockInfo(follow data.FollowedStock) *data.StockInfo {
-	return getStockInfoWithService(service.NewStockService(), follow)
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		return &data.StockInfo{}
+	}
+	return getStockInfoWithService(services.Stock, follow)
 }
 
 func getStockInfoWithService(stockService service.StockService, follow data.FollowedStock) *data.StockInfo {

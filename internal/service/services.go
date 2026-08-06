@@ -14,14 +14,6 @@ type AppServices struct {
 	Execution ExecutionService
 }
 
-func NewAppServices() AppServices {
-	services, _ := NewAppServicesWithDependencies(Dependencies{
-		Clock:       wallClock{},
-		Initializer: noOpApplicationInitializer{},
-	})
-	return services
-}
-
 func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, error) {
 	runtimeService, err := newRuntimeService(dependencies)
 	if err != nil {
@@ -29,15 +21,15 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 	}
 	return AppServices{
 		Runtime:   runtimeService,
-		Stock:     NewStockService(),
-		Market:    NewMarketService(),
-		AI:        NewAIService(),
-		Config:    NewConfigService(),
-		Group:     NewGroupService(),
-		Fund:      NewFundService(),
-		History:   NewHistoryService(),
-		Recommend: NewRecommendService(),
-		Notify:    NewNotifyService(),
+		Stock:     NewStockService(dependencies.Operations.Stock),
+		Market:    NewMarketService(dependencies.Operations.Market),
+		AI:        NewAIService(dependencies.Operations.AI),
+		Config:    NewConfigService(dependencies.Operations.Config),
+		Group:     NewGroupService(dependencies.Operations.Group),
+		Fund:      NewFundService(dependencies.Operations.Fund),
+		History:   NewHistoryService(dependencies.Operations.History),
+		Recommend: NewRecommendService(dependencies.Operations.Recommend),
+		Notify:    NewNotifyService(dependencies.Operations.Notify),
 		Execution: NewExecutionService(dependencies.ExecutionMonitor),
 	}, nil
 }

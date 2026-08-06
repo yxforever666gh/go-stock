@@ -42,6 +42,7 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 		Services: service.Dependencies{
 			Clock:       fixedClock{now: now},
 			Initializer: initializer,
+			Operations:  newCompatibilityServiceOperations(mainDB),
 		},
 	})
 	if err != nil {
@@ -70,15 +71,31 @@ func TestAssembleRuntimeRejectsMissingRequiredDependencies(t *testing.T) {
 		{
 			name: "clock",
 			deps: RuntimeDependencies{
-				Storage:  Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
-				Services: service.Dependencies{Initializer: &recordingInitializer{}},
+				Storage: Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
+				Services: service.Dependencies{
+					Initializer: &recordingInitializer{},
+					Operations:  newCompatibilityServiceOperations(&gorm.DB{}),
+				},
 			},
 		},
 		{
 			name: "initializer",
 			deps: RuntimeDependencies{
-				Storage:  Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
-				Services: service.Dependencies{Clock: fixedClock{}},
+				Storage: Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
+				Services: service.Dependencies{
+					Clock:      fixedClock{},
+					Operations: newCompatibilityServiceOperations(&gorm.DB{}),
+				},
+			},
+		},
+		{
+			name: "operations",
+			deps: RuntimeDependencies{
+				Storage: Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
+				Services: service.Dependencies{
+					Clock:       fixedClock{},
+					Initializer: &recordingInitializer{},
+				},
 			},
 		},
 	}

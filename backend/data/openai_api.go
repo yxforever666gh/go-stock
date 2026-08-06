@@ -169,22 +169,9 @@ type AiResponse struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 }
 
-type Tool struct {
-	Type     string       `json:"type"`
-	Function ToolFunction `json:"function"`
-}
-type FunctionParameters struct {
-	Type                 string         `json:"type"`
-	Properties           map[string]any `json:"properties"`
-	Required             []string       `json:"required"`
-	AdditionalProperties bool           `json:"additionalProperties"`
-}
-type ToolFunction struct {
-	Name        string              `json:"name"`
-	Strict      bool                `json:"strict"`
-	Description string              `json:"description"`
-	Parameters  *FunctionParameters `json:"parameters"`
-}
+type Tool = models.Tool
+type FunctionParameters = models.FunctionParameters
+type ToolFunction = models.ToolFunction
 
 type summaryFetchResult struct {
 	tool     string

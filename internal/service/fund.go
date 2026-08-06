@@ -1,41 +1,43 @@
 package service
 
-import "go-stock/backend/data"
+import "go-stock/backend/models"
 
-type FundService struct{}
-
-func NewFundService() FundService {
-	return FundService{}
+type FundService struct {
+	operations FundOperations
 }
 
-func (s FundService) GetFundList(key string) []data.FundBasic {
-	return data.NewFundApi().GetFundList(key)
+func NewFundService(operations FundOperations) FundService {
+	return FundService{operations: operations}
 }
 
-func (s FundService) GetFollowedFund() []data.FollowedFund {
-	return data.NewFundApi().GetFollowedFund()
+func (s FundService) GetFundList(key string) []models.FundBasic {
+	return s.operations.GetFundList(key)
+}
+
+func (s FundService) GetFollowedFund() []models.FollowedFund {
+	return s.operations.GetFollowedFund()
 }
 
 func (s FundService) FollowFund(fundCode string) string {
-	return data.NewFundApi().FollowFund(fundCode)
+	return s.operations.FollowFund(fundCode)
 }
 
 func (s FundService) UnFollowFund(fundCode string) string {
-	return data.NewFundApi().UnFollowFund(fundCode)
+	return s.operations.UnFollowFund(fundCode)
 }
 
 func (s FundService) AllFund() {
-	data.NewFundApi().AllFund()
+	s.operations.AllFund()
 }
 
-func (s FundService) CrawlFundBasic(code string) (*data.FundBasic, error) {
-	return data.NewFundApi().CrawlFundBasic(code)
+func (s FundService) CrawlFundBasic(code string) (*models.FundBasic, error) {
+	return s.operations.CrawlFundBasic(code)
 }
 
 func (s FundService) CrawlFundNetEstimatedUnit(code string) {
-	data.NewFundApi().CrawlFundNetEstimatedUnit(code)
+	s.operations.CrawlFundNetEstimatedUnit(code)
 }
 
 func (s FundService) CrawlFundNetUnitValue(code string) {
-	data.NewFundApi().CrawlFundNetUnitValue(code)
+	s.operations.CrawlFundNetUnitValue(code)
 }

@@ -80,6 +80,7 @@ func productionRuntimeDependencies() RuntimeDependencies {
 		Services: service.Dependencies{
 			Clock:            systemClock{},
 			Initializer:      legacyApplicationInitializer{},
+			Operations:       newCompatibilityServiceOperations(db.Dao),
 			ExecutionMonitor: data.NewCompatibilityExecutionMonitor(),
 			Providers: service.ProviderSet{
 				DailyBars:  marketData,

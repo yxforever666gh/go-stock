@@ -3,7 +3,6 @@ package service
 import (
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/models"
 )
 
@@ -14,89 +13,82 @@ type MarketSummaryActivationRepairResult struct {
 	SkippedNoRef int `json:"skippedNoRef"`
 }
 
-type RecommendService struct{}
+type RecommendService struct {
+	operations RecommendOperations
+}
 
-func NewRecommendService() RecommendService {
-	return RecommendService{}
+func NewRecommendService(operations RecommendOperations) RecommendService {
+	return RecommendService{operations: operations}
 }
 
 func (s RecommendService) GetAIResponseResultList(query models.AIResponseResultQuery) (*models.AIResponseResultPageData, error) {
-	return data.NewAIResponseResultService().GetAIResponseResultList(query)
+	return s.operations.GetAIResponseResultList(query)
 }
 
 func (s RecommendService) GetEmailSendLogList(query models.EmailSendLogQuery) (*models.EmailSendLogPageData, error) {
-	return data.NewEmailSendLogService().GetEmailSendLogList(query)
+	return s.operations.GetEmailSendLogList(query)
 }
 
 func (s RecommendService) DeleteAIResponseResult(id uint) error {
-	return data.NewAIResponseResultService().DeleteAIResponseResult(id)
+	return s.operations.DeleteAIResponseResult(id)
 }
 
 func (s RecommendService) BatchDeleteAIResponseResult(ids []uint) error {
-	return data.NewAIResponseResultService().BatchDeleteAIResponseResult(ids)
+	return s.operations.BatchDeleteAIResponseResult(ids)
 }
 
 func (s RecommendService) GetAiRecommendStocksList(query *models.AiRecommendStocksQuery) (*models.AiRecommendStocksPageData, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendStocksList(query)
+	return s.operations.GetAiRecommendStocksList(query)
 }
 
 func (s RecommendService) GetAiRecommendStocksDateRange() (string, string, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendStocksDateRange()
+	return s.operations.GetAiRecommendStocksDateRange()
 }
 
 func (s RecommendService) GetAiRecommendStocksYieldList(query *models.AiRecommendStocksQuery) (*models.AiRecommendStocksYieldPageData, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendStocksYieldList(query)
+	return s.operations.GetAiRecommendStocksYieldList(query)
 }
 
 func (s RecommendService) GetAiRecommendYieldMinuteChart(recommendID uint) (*models.AiRecommendYieldMinuteChartData, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendYieldMinuteChart(recommendID)
+	return s.operations.GetAiRecommendYieldMinuteChart(recommendID)
 }
 
 func (s RecommendService) GetAiRecommendYieldDailyOverview(query *models.AiRecommendStocksQuery) (*models.AiRecommendYieldDailyOverviewData, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendYieldDailyOverview(query)
+	return s.operations.GetAiRecommendYieldDailyOverview(query)
 }
 
 func (s RecommendService) StartAiRecommendMinuteDownload() (map[string]any, error) {
-	return data.NewAiRecommendStocksService().StartAiRecommendMinuteDownload()
+	return s.operations.StartAiRecommendMinuteDownload()
 }
 
 func (s RecommendService) GetAiRecommendYieldTaskStatus() (*models.AiRecommendStocksYieldPageData, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendYieldTaskStatus()
+	return s.operations.GetAiRecommendYieldTaskStatus()
 }
 
 func (s RecommendService) GetAiRecommendYieldErrorLogs(limit int) ([]map[string]string, error) {
-	return data.NewAiRecommendStocksService().GetAiRecommendYieldErrorLogs(limit)
+	return s.operations.GetAiRecommendYieldErrorLogs(limit)
 }
 
 func (s RecommendService) GetMarketSummaryRunDiagnostics(query models.MarketSummaryRunDiagnosticQuery) (models.MarketSummaryRunDiagnosticSummary, error) {
-	return data.GetMarketSummaryRunDiagnostics(query)
+	return s.operations.GetMarketSummaryRunDiagnostics(query)
 }
 
 func (s RecommendService) GetMarketSummaryEmptyRunCount(query models.MarketSummaryRunDiagnosticQuery) (int64, error) {
-	return data.GetMarketSummaryEmptyRunCount(query)
+	return s.operations.GetMarketSummaryEmptyRunCount(query)
 }
 
 func (s RecommendService) GetMarketSummaryBlockedReasonTop(query models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error) {
-	return data.GetMarketSummaryBlockedReasonTop(query)
+	return s.operations.GetMarketSummaryBlockedReasonTop(query)
 }
 
 func (s RecommendService) GetMarketSummaryProductionDowngradeReasonTop(query models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error) {
-	return data.GetMarketSummaryProductionDowngradeReasonTop(query)
+	return s.operations.GetMarketSummaryProductionDowngradeReasonTop(query)
 }
 
 func (s RecommendService) DeleteAiRecommendStocks(id uint) error {
-	return data.NewAiRecommendStocksService().DeleteAiRecommendStocks(id)
+	return s.operations.DeleteAiRecommendStocks(id)
 }
 
 func (s RecommendService) RepairHistoricalMarketSummaryActivationIssues(now time.Time) (MarketSummaryActivationRepairResult, error) {
-	result, err := data.RepairHistoricalMarketSummaryActivationIssues(now)
-	if err != nil {
-		return MarketSummaryActivationRepairResult{}, err
-	}
-	return MarketSummaryActivationRepairResult{
-		Scanned:      result.Scanned,
-		Downgraded:   result.Downgraded,
-		RuleUpgraded: result.RuleUpgraded,
-		SkippedNoRef: result.SkippedNoRef,
-	}, nil
+	return s.operations.RepairHistoricalMarketSummaryActivationIssues(now)
 }

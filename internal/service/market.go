@@ -1,101 +1,98 @@
 package service
 
 import (
-	"go-stock/backend/data"
 	"go-stock/backend/models"
 
 	"github.com/coocood/freecache"
 )
 
-type MarketService struct{}
+type MarketService struct {
+	operations MarketOperations
+}
 
-func NewMarketService() MarketService {
-	return MarketService{}
+func NewMarketService(operations MarketOperations) MarketService {
+	return MarketService{operations: operations}
 }
 
 func (s MarketService) LongTigerRank(date string) *[]models.LongTigerRankData {
-	return data.NewMarketNewsApi().LongTiger(date)
+	return s.operations.LongTigerRank(date)
 }
 
 func (s MarketService) StockResearchReport(stockCode string, days int) []any {
-	return data.NewMarketNewsApi().StockResearchReport(stockCode, days)
+	return s.operations.StockResearchReport(stockCode, days)
 }
 
 func (s MarketService) StockNotice(stockCode string) []any {
-	return data.NewMarketNewsApi().StockNotice(stockCode)
+	return s.operations.StockNotice(stockCode)
 }
 
 func (s MarketService) IndustryResearchReport(industryCode string, days int) []any {
-	return data.NewMarketNewsApi().IndustryResearchReport(industryCode, days)
+	return s.operations.IndustryResearchReport(industryCode, days)
 }
 
 func (s MarketService) EMDictCode(code string, cache *freecache.Cache) []any {
-	return data.NewMarketNewsApi().EMDictCode(code, cache)
+	return s.operations.EMDictCode(code, cache)
 }
 
 func (s MarketService) HotStock(marketType string, size int) *[]models.HotItem {
-	return data.NewMarketNewsApi().XUEQIUHotStock(size, marketType)
+	return s.operations.HotStock(marketType, size)
 }
 
 func (s MarketService) HotEvent(size int) *[]models.HotEvent {
-	return data.NewMarketNewsApi().HotEvent(size)
+	return s.operations.HotEvent(size)
 }
 
 func (s MarketService) HotTopic(size int) []any {
-	return data.NewMarketNewsApi().HotTopic(size)
+	return s.operations.HotTopic(size)
 }
 
 func (s MarketService) InvestCalendar(yearMonth string) []any {
-	return data.NewMarketNewsApi().InvestCalendar(yearMonth)
+	return s.operations.InvestCalendar(yearMonth)
 }
 
 func (s MarketService) ClsCalendar() []any {
-	return data.NewMarketNewsApi().ClsCalendar()
+	return s.operations.ClsCalendar()
 }
 
 func (s MarketService) GetTelegraphList(source string) *[]*models.Telegraph {
-	return data.NewMarketNewsApi().GetTelegraphList(source)
+	return s.operations.GetTelegraphList(source)
 }
 
 func (s MarketService) TelegraphList(timeout int64) *[]models.Telegraph {
-	return data.NewMarketNewsApi().TelegraphList(timeout)
+	return s.operations.TelegraphList(timeout)
 }
 
 func (s MarketService) GetSinaNews(timeout uint) *[]models.Telegraph {
-	return data.NewMarketNewsApi().GetSinaNews(timeout)
+	return s.operations.GetSinaNews(timeout)
 }
 
 func (s MarketService) TradingViewNews() *[]models.Telegraph {
-	return data.NewMarketNewsApi().TradingViewNews()
+	return s.operations.TradingViewNews()
 }
 
 func (s MarketService) RefreshTelegraphList(source string) *[]*models.Telegraph {
-	go data.NewMarketNewsApi().TelegraphList(30)
-	go data.NewMarketNewsApi().GetSinaNews(30)
-	go data.NewMarketNewsApi().TradingViewNews()
-	return data.NewMarketNewsApi().GetTelegraphList(source)
+	go s.operations.TelegraphList(30)
+	go s.operations.GetSinaNews(30)
+	go s.operations.TradingViewNews()
+	return s.operations.GetTelegraphList(source)
 }
 
 func (s MarketService) GlobalStockIndexes() map[string]any {
-	return data.NewMarketNewsApi().GlobalStockIndexes(30)
+	return s.operations.GlobalStockIndexes()
 }
 
 func (s MarketService) GetIndustryRank(sort string, count int) []any {
-	res := data.NewMarketNewsApi().GetIndustryRank(sort, count)
-	if items, ok := res["data"].([]any); ok && items != nil {
-		return items
-	}
-	return []any{}
+	return s.operations.GetIndustryRank(sort, count)
 }
 
 func (s MarketService) GetIndustryMoneyRankSina(category, sort string) []map[string]any {
-	return data.NewMarketNewsApi().GetIndustryMoneyRankSina(category, sort)
+	return s.operations.GetIndustryMoneyRankSina(category, sort)
 }
 
 func (s MarketService) GetMoneyRankSina(sort string) []map[string]any {
-	return data.NewMarketNewsApi().GetMoneyRankSina(sort)
+	return s.operations.GetMoneyRankSina(sort)
 }
 
 func (s MarketService) GetStockMoneyTrendByDay(stockCode string, days int) []map[string]any {
-	return data.NewMarketNewsApi().GetStockMoneyTrendByDay(stockCode, days)
+	return s.operations.GetStockMoneyTrendByDay(stockCode, days)
 }

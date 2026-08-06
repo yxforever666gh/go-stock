@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
 	"os"
 	"regexp"
@@ -18,90 +19,9 @@ import (
 	"gorm.io/gorm"
 )
 
-type Settings struct {
-	gorm.Model
-	TushareToken             string `json:"tushareToken"`
-	LocalPushEnable          bool   `json:"localPushEnable"`
-	DingPushEnable           bool   `json:"dingPushEnable"`
-	DingRobot                string `json:"dingRobot"`
-	YieldEmailEnable         bool   `json:"yieldEmailEnable"`
-	YieldEmailTo             string `json:"yieldEmailTo"`
-	YieldEmailFrom           string `json:"yieldEmailFrom"`
-	YieldEmailSMTPHost       string `json:"yieldEmailSmtpHost"`
-	YieldEmailSMTPPort       int    `json:"yieldEmailSmtpPort"`
-	YieldEmailSMTPUsername   string `json:"yieldEmailSmtpUsername"`
-	YieldEmailSMTPPassword   string `json:"yieldEmailSmtpPassword"`
-	YieldEmailCronEnabled    bool   `json:"yieldEmailCronEnabled"`
-	YieldEmailCronTimes      string `json:"yieldEmailCronTimes"`
-	MarketSummaryEmailEnable bool   `json:"marketSummaryEmailEnabled"`
-	UpdateBasicInfoOnStart   bool   `json:"updateBasicInfoOnStart"`
-	RefreshInterval          int64  `json:"refreshInterval"`
-	OpenAiEnable             bool   `json:"openAiEnable"`
-	Prompt                   string `json:"prompt"`
-	CheckUpdate              bool   `json:"checkUpdate"`
-	QuestionTemplate         string `json:"questionTemplate"`
-	CrawlTimeOut             int64  `json:"crawlTimeOut"`
-	KDays                    int64  `json:"kDays"`
-	EnableDanmu              bool   `json:"enableDanmu"`
-	BrowserPath              string `json:"browserPath"`
-	EnableNews               bool   `json:"enableNews"`
-	DarkTheme                bool   `json:"darkTheme"`
-	BrowserPoolSize          int    `json:"browserPoolSize"`
-	EnableFund               bool   `json:"enableFund"`
-	EnablePushNews           bool   `json:"enablePushNews"`
-	EnableOnlyPushRedNews    bool   `json:"enableOnlyPushRedNews"`
-	HttpProxy                string `json:"httpProxy"`
-	HttpProxyEnabled         bool   `json:"httpProxyEnabled"`
-	ForceNoProxyForFetch     bool   `json:"forceNoProxyForFetch" gorm:"default:true"`
-	EnableAgent              bool   `json:"enableAgent"`
-	QgqpBId                  string `json:"qgqpBId" gorm:"column:qgqp_b_id"`
-	MarketSummaryCronEnabled bool   `json:"marketSummaryCronEnabled" gorm:"default:true"`
-	MarketSummaryCronTimes   string `json:"marketSummaryCronTimes" gorm:"default:'09:40,11:30,14:30'"`
-	MinuteProviderMode       string `json:"minuteProviderMode" gorm:"default:'public'"`
-	MinuteLongHistoryHint    bool   `json:"minuteLongHistoryHintEnabled" gorm:"column:minute_long_history_hint_enabled;default:true"`
-	PrivateMinuteEnabled     bool   `json:"privateMinuteEnabled"`
-	PrivateMinuteBaseURL     string `json:"privateMinuteBaseUrl"`
-	PrivateMinuteAPIKey      string `json:"privateMinuteApiKey"`
-	PrivateMinuteTimeoutSec  int    `json:"privateMinuteTimeoutSec"`
-	PrivateMinuteMinInterval int    `json:"privateMinuteMinIntervalMs"`
-	PrivateMinuteProxyMode   string `json:"privateMinuteProxyMode" gorm:"default:'disable'"`
-	PrivateMinuteLevel       string `json:"privateMinuteLevel" gorm:"default:'1min'"`
-	AkshareEnabled           bool   `json:"akshareEnabled" gorm:"default:true"`
-	SinaMinuteEnabled        bool   `json:"sinaMinuteEnabled" gorm:"default:true"`
-	TencentMinuteEnabled     bool   `json:"tencentMinuteEnabled" gorm:"default:true"`
-	EastmoneyMinuteEnabled   bool   `json:"eastmoneyMinuteEnabled" gorm:"default:true"`
-	AkshareMinuteSourceMode  string `json:"akshareMinuteSourceMode" gorm:"default:'auto'"`
-}
-
-func (receiver Settings) TableName() string {
-	return "settings"
-}
-
-type AIConfig struct {
-	ID               uint `gorm:"primarykey"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
-	Sort             int     `json:"sort" gorm:"index"`
-	Name             string  `json:"name"`
-	BaseUrl          string  `json:"baseUrl"`
-	ApiKey           string  `json:"apiKey" `
-	ModelName        string  `json:"modelName"`
-	ApiProtocol      string  `json:"apiProtocol" gorm:"default:'chat_completions'"`
-	MaxTokens        int     `json:"maxTokens"`
-	Temperature      float64 `json:"temperature"`
-	TimeOut          int     `json:"timeOut"`
-	HttpProxy        string  `json:"httpProxy"`
-	HttpProxyEnabled bool    `json:"httpProxyEnabled"`
-}
-
-func (AIConfig) TableName() string {
-	return "ai_config"
-}
-
-type SettingConfig struct {
-	*Settings
-	AiConfigs []*AIConfig `json:"aiConfigs"`
-}
+type Settings = models.Settings
+type AIConfig = models.AIConfig
+type SettingConfig = models.SettingConfig
 
 type SettingsApi struct {
 	Config *SettingConfig

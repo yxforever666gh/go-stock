@@ -1,44 +1,43 @@
 package service
 
-import (
-	"go-stock/backend/data"
-	"go-stock/backend/db"
-)
+import "go-stock/backend/models"
 
-type GroupService struct{}
-
-func NewGroupService() GroupService {
-	return GroupService{}
+type GroupService struct {
+	operations GroupOperations
 }
 
-func (s GroupService) AddGroup(group data.Group) bool {
-	return data.NewStockGroupApi(db.Dao).AddGroup(group)
+func NewGroupService(operations GroupOperations) GroupService {
+	return GroupService{operations: operations}
 }
 
-func (s GroupService) GetGroupList() []data.Group {
-	return data.NewStockGroupApi(db.Dao).GetGroupList()
+func (s GroupService) AddGroup(group models.Group) bool {
+	return s.operations.AddGroup(group)
+}
+
+func (s GroupService) GetGroupList() []models.Group {
+	return s.operations.GetGroupList()
 }
 
 func (s GroupService) UpdateGroupSort(id int, newSort int) bool {
-	return data.NewStockGroupApi(db.Dao).UpdateGroupSort(id, newSort)
+	return s.operations.UpdateGroupSort(id, newSort)
 }
 
 func (s GroupService) InitializeGroupSort() bool {
-	return data.NewStockGroupApi(db.Dao).InitializeGroupSort()
+	return s.operations.InitializeGroupSort()
 }
 
-func (s GroupService) GetGroupStockList(groupID int) []data.GroupStock {
-	return data.NewStockGroupApi(db.Dao).GetGroupStockByGroupId(groupID)
+func (s GroupService) GetGroupStockList(groupID int) []models.GroupStock {
+	return s.operations.GetGroupStockList(groupID)
 }
 
 func (s GroupService) AddStockGroup(groupID int, stockCode string) bool {
-	return data.NewStockGroupApi(db.Dao).AddStockGroup(groupID, stockCode)
+	return s.operations.AddStockGroup(groupID, stockCode)
 }
 
 func (s GroupService) RemoveStockGroup(code, name string, groupID int) bool {
-	return data.NewStockGroupApi(db.Dao).RemoveStockGroup(code, name, groupID)
+	return s.operations.RemoveStockGroup(code, name, groupID)
 }
 
 func (s GroupService) RemoveGroup(groupID int) bool {
-	return data.NewStockGroupApi(db.Dao).RemoveGroup(groupID)
+	return s.operations.RemoveGroup(groupID)
 }

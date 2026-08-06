@@ -129,21 +129,7 @@ type xirrCashflow struct {
 	Amount float64
 }
 
-type aiEvidenceReference struct {
-	Type         string `json:"type"`
-	Summary      string `json:"summary"`
-	SourceName   string `json:"sourceName,omitempty"`
-	SourceType   string `json:"sourceType,omitempty"`
-	TrustLevel   string `json:"trustLevel,omitempty"`
-	LatencyLevel string `json:"latencyLevel,omitempty"`
-	Title        string `json:"title,omitempty"`
-	URL          string `json:"url,omitempty"`
-	PublishedAt  string `json:"publishedAt,omitempty"`
-	EntityType   string `json:"entityType,omitempty"`
-	EntityCode   string `json:"entityCode,omitempty"`
-	DedupeKey    string `json:"dedupeKey,omitempty"`
-	RawHash      string `json:"rawHash,omitempty"`
-}
+type aiEvidenceReference = models.AIEvidenceReference
 
 var priceNumberRegexp = regexp.MustCompile(`\d+(?:\.\d+)?`)
 var evidenceTagRegexp = regexp.MustCompile(`\[([^\]]+)\]`)

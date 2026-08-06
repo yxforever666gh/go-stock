@@ -1,7 +1,7 @@
 package data
 
 import (
-	"go-stock/backend/db"
+	"go-stock/backend/models"
 	"gorm.io/gorm"
 )
 
@@ -9,33 +9,15 @@ import (
 // @Date 2025/4/3 11:18
 // @Desc
 // -----------------------------------------------------------------------------------
-type Group struct {
-	gorm.Model
-	Name string `json:"name" gorm:"index"`
-	Sort int    `json:"sort"`
-}
-
-func (Group) TableName() string {
-	return "stock_groups"
-}
-
-type GroupStock struct {
-	gorm.Model
-	StockCode string `json:"stockCode" gorm:"index"`
-	GroupId   int    `json:"groupId" gorm:"index"`
-	GroupInfo Group  `json:"groupInfo" gorm:"foreignKey:GroupId;references:ID"`
-}
-
-func (GroupStock) TableName() string {
-	return "group_stock_info"
-}
+type Group = models.Group
+type GroupStock = models.GroupStock
 
 type StockGroupApi struct {
 	dao *gorm.DB
 }
 
 func NewStockGroupApi(dao *gorm.DB) *StockGroupApi {
-	return &StockGroupApi{dao: db.Dao}
+	return &StockGroupApi{dao: dao}
 }
 
 func (receiver StockGroupApi) AddGroup(group Group) bool {

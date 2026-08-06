@@ -76,17 +76,14 @@ var deprecatedDataImportDebt = map[string]bool{
 	"internal/cli/config_resolver.go":                        true,
 	"internal/cli/output.go":                                 true,
 	"internal/migrations/migrations.go":                      true,
-	"internal/service/ai.go":                                 true,
-	"internal/service/config.go":                             true,
-	"internal/service/fund.go":                               true,
-	"internal/service/group.go":                              true,
-	"internal/service/history.go":                            true,
-	"internal/service/market.go":                             true,
-	"internal/service/notify.go":                             true,
-	"internal/service/recommend.go":                          true,
-	"internal/service/stock.go":                              true,
 	"main.go":                                                true,
 	"runtime_bootstrap.go":                                   true,
+}
+
+var deprecatedDataCompatibilityAdapters = map[string]bool{
+	"internal/bootstrap/service_compat_ai.go":     true,
+	"internal/bootstrap/service_compat_market.go": true,
+	"internal/bootstrap/service_compat_stock.go":  true,
 }
 
 var globalDBImportDebt = map[string]bool{
@@ -105,8 +102,6 @@ var globalDBImportDebt = map[string]bool{
 	"internal/cli/cmd_strategy_backtest.go":                 true,
 	"internal/cli/cmd_strategy_rule_replay.go":              true,
 	"internal/cli/config_resolver.go":                       true,
-	"internal/service/group.go":                             true,
-	"internal/service/stock.go":                             true,
 	"main.go":                                               true,
 	"runtime_compat.go":                                     true,
 	"web_api.go":                                            true,
@@ -163,6 +158,9 @@ func TestDeprecatedDataDirectImportsCannotIncrease(t *testing.T) {
 	root := repositoryRoot(t)
 	actual := findProductionImporters(t, root, "go-stock/backend/data")
 	for filename := range actual {
+		if deprecatedDataCompatibilityAdapters[filename] {
+			continue
+		}
 		if !deprecatedDataImportDebt[filename] {
 			t.Errorf("new direct backend/data import outside the migration ledger: %s", filename)
 		}
@@ -170,6 +168,27 @@ func TestDeprecatedDataDirectImportsCannotIncrease(t *testing.T) {
 	for filename := range deprecatedDataImportDebt {
 		if !actual[filename] {
 			t.Errorf("stale backend/data debt entry %s; remove it after migrating the import", filename)
+		}
+	}
+	for filename := range deprecatedDataCompatibilityAdapters {
+		if !actual[filename] {
+			t.Errorf("stale backend/data compatibility adapter %s", filename)
+		}
+	}
+}
+
+func TestServiceUseCasesDoNotImportCompatibilityOrGlobalDB(t *testing.T) {
+	root := repositoryRoot(t)
+	files := parseProductionPackageFiles(t, filepath.Join(root, "internal", "service"))
+	for name, file := range files {
+		for _, spec := range file.Imports {
+			path, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				t.Fatalf("%s: invalid import %s", name, spec.Path.Value)
+			}
+			if path == "go-stock/backend/data" || path == "go-stock/backend/db" {
+				t.Errorf("service use case %s imports forbidden compatibility package %q", name, path)
+			}
 		}
 	}
 }

@@ -225,79 +225,10 @@ type marketSummaryDiscoveryResult struct {
 	RiskFlags           []string                          `json:"riskFlags,omitempty"`
 }
 
-type marketSummaryVerifiedCandidate struct {
-	StockName         string                        `json:"stockName"`
-	StockCode         string                        `json:"stockCode"`
-	Direction         string                        `json:"direction,omitempty"`
-	BkName            string                        `json:"bkName,omitempty"`
-	Reason            string                        `json:"reason,omitempty"`
-	CurrentPrice      string                        `json:"currentPrice,omitempty"`
-	CurrentPriceTime  string                        `json:"currentPriceTime,omitempty"`
-	MinutePrice       string                        `json:"minutePrice,omitempty"`
-	MinuteAmount      string                        `json:"minuteAmount,omitempty"`
-	MinuteVolume      string                        `json:"minuteVolume,omitempty"`
-	MinuteTime        string                        `json:"minuteTime,omitempty"`
-	MinuteDate        string                        `json:"minuteDate,omitempty"`
-	PriceAnchorSource string                        `json:"priceAnchorSource,omitempty"`
-	AuctionPrice      string                        `json:"auctionPrice,omitempty"`
-	AuctionAmount     string                        `json:"auctionAmount,omitempty"`
-	AuctionVolume     string                        `json:"auctionVolume,omitempty"`
-	AuctionTime       string                        `json:"auctionTime,omitempty"`
-	AuctionDate       string                        `json:"auctionDate,omitempty"`
-	AuctionOpen       string                        `json:"auctionOpen,omitempty"`
-	AuctionHigh       string                        `json:"auctionHigh,omitempty"`
-	AuctionLow        string                        `json:"auctionLow,omitempty"`
-	AuctionPreClose   string                        `json:"auctionPreClose,omitempty"`
-	AuctionTurnover   string                        `json:"auctionTurnoverRate,omitempty"`
-	AuctionCommittee  string                        `json:"auctionCommitteeRatio,omitempty"`
-	AuctionVolumeRate string                        `json:"auctionVolumeRatio,omitempty"`
-	AuctionBidPrice   []string                      `json:"auctionBidPrice,omitempty"`
-	AuctionAskPrice   []string                      `json:"auctionAskPrice,omitempty"`
-	AuctionBidVol     []string                      `json:"auctionBidVol,omitempty"`
-	AuctionAskVol     []string                      `json:"auctionAskVol,omitempty"`
-	TechnicalMetrics  marketSummaryTechnicalMetrics `json:"technicalMetrics,omitempty"`
-	TechnicalSnapshot string                        `json:"technicalSnapshot,omitempty"`
-	EvidenceSources   []aiEvidenceReference         `json:"evidenceSources,omitempty"`
-	PositiveSignals   []string                      `json:"positiveSignals,omitempty"`
-	NegativeSignals   []string                      `json:"negativeSignals,omitempty"`
-	VerdictHints      []string                      `json:"verdictHints,omitempty"`
-	FeasiblePlans     []marketSummaryFeasiblePlan   `json:"feasiblePlans,omitempty"`
-	VerifiedAt        time.Time                     `json:"verifiedAt"`
-}
-
-type MarketSummaryVerifiedCandidateSnapshot = marketSummaryVerifiedCandidate
-
-type MarketSummarySupplementRequest struct {
-	FailureSummary     []models.MarketSummaryBlockedReasonItem        `json:"failureSummary,omitempty"`
-	RemainingVerified  []MarketSummaryVerifiedCandidateSnapshot       `json:"remainingVerified,omitempty"`
-	ExcludedToday      []string                                       `json:"excludedToday,omitempty"`
-	RepairableFailures []models.MarketSummaryTradePlanRepairCandidate `json:"repairableFailures,omitempty"`
-	TargetProduction   int                                            `json:"targetProduction,omitempty"`
-	CurrentProduction  int                                            `json:"currentProduction,omitempty"`
-}
-
-type marketSummaryTechnicalMetrics struct {
-	DayAmount           string `json:"dayAmount,omitempty"`
-	DayVolume           string `json:"dayVolume,omitempty"`
-	VolumeRatio         string `json:"volumeRatio,omitempty"`
-	TurnoverRate        string `json:"turnoverRate,omitempty"`
-	Ma5                 string `json:"ma5,omitempty"`
-	Ma10                string `json:"ma10,omitempty"`
-	Ma20                string `json:"ma20,omitempty"`
-	High3d              string `json:"high3d,omitempty"`
-	Low3d               string `json:"low3d,omitempty"`
-	High5d              string `json:"high5d,omitempty"`
-	Low5d               string `json:"low5d,omitempty"`
-	High20d             string `json:"high20d,omitempty"`
-	Low20d              string `json:"low20d,omitempty"`
-	MinuteVolumeVsAvg5  string `json:"minuteVolumeVsAvg5,omitempty"`
-	MinuteVolumeVsAvg10 string `json:"minuteVolumeVsAvg10,omitempty"`
-	PriceAboveMa5       bool   `json:"priceAboveMa5,omitempty"`
-	PriceAboveMa10      bool   `json:"priceAboveMa10,omitempty"`
-	Breakout3dHigh      bool   `json:"breakout3dHigh,omitempty"`
-	Breakout5dHigh      bool   `json:"breakout5dHigh,omitempty"`
-	PullbackNearMa5     bool   `json:"pullbackNearMa5,omitempty"`
-}
+type marketSummaryVerifiedCandidate = models.MarketSummaryVerifiedCandidateSnapshot
+type MarketSummaryVerifiedCandidateSnapshot = models.MarketSummaryVerifiedCandidateSnapshot
+type MarketSummarySupplementRequest = models.MarketSummarySupplementRequest
+type marketSummaryTechnicalMetrics = models.MarketSummaryTechnicalMetrics
 
 type marketSummaryAuctionSnapshot struct {
 	Price          string

@@ -32,7 +32,6 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 	"gorm.io/gorm"
-	"gorm.io/plugin/soft_delete"
 )
 
 const sinaStockUrl = "http://hq.sinajs.cn/rn=%d&list=%s"
@@ -49,67 +48,7 @@ type StockDataApi struct {
 	client *resty.Client
 	config *SettingConfig
 }
-type StockInfo struct {
-	gorm.Model
-	Date     string  `json:"日期" gorm:"index"`
-	Time     string  `json:"时间" gorm:"index"`
-	Code     string  `json:"股票代码" gorm:"index"`
-	Name     string  `json:"股票名称" gorm:"index"`
-	PrePrice float64 `json:"上次当前价格"`
-	Price    string  `json:"当前价格"`
-	Volume   string  `json:"成交的股票数"`
-	Amount   string  `json:"成交金额"`
-	Open     string  `json:"今日开盘价"`
-	PreClose string  `json:"昨日收盘价"`
-	High     string  `json:"今日最高价"`
-	Low      string  `json:"今日最低价"`
-	Bid      string  `json:"竞买价"`
-	Ask      string  `json:"竞卖价"`
-	B1P      string  `json:"买一报价"`
-	B1V      string  `json:"买一申报"`
-	B2P      string  `json:"买二报价"`
-	B2V      string  `json:"买二申报"`
-	B3P      string  `json:"买三报价"`
-	B3V      string  `json:"买三申报"`
-	B4P      string  `json:"买四报价"`
-	B4V      string  `json:"买四申报"`
-	B5P      string  `json:"买五报价"`
-	B5V      string  `json:"买五申报"`
-	A1P      string  `json:"卖一报价"`
-	A1V      string  `json:"卖一申报"`
-	A2P      string  `json:"卖二报价"`
-	A2V      string  `json:"卖二申报"`
-	A3P      string  `json:"卖三报价"`
-	A3V      string  `json:"卖三申报"`
-	A4P      string  `json:"卖四报价"`
-	A4V      string  `json:"卖四申报"`
-	A5P      string  `json:"卖五报价"`
-	A5V      string  `json:"卖五申报"`
-	Market   string  `json:"市场"`
-	BA       string  `json:"盘前盘后"`
-	BAChange string  `json:"盘前盘后涨跌幅"`
-
-	//以下是字段值需二次计算
-	ChangePercent     float64 `json:"changePercent"`     //涨跌幅
-	ChangePrice       float64 `json:"changePrice"`       //涨跌额
-	HighRate          float64 `json:"highRate"`          //最高涨跌
-	LowRate           float64 `json:"lowRate"`           //最低涨跌
-	CostPrice         float64 `json:"costPrice"`         //成本价
-	CostVolume        int64   `json:"costVolume"`        //持仓数量
-	Profit            float64 `json:"profit"`            //总盈亏率
-	ProfitAmount      float64 `json:"profitAmount"`      //总盈亏金额
-	ProfitAmountToday float64 `json:"profitAmountToday"` //今日盈亏金额
-
-	Sort               int64   `json:"sort"` //排序
-	AlarmChangePercent float64 `json:"alarmChangePercent"`
-	AlarmPrice         float64 `json:"alarmPrice"`
-
-	Groups []GroupStock `gorm:"-:all"`
-}
-
-func (receiver StockInfo) TableName() string {
-	return "stock_info"
-}
+type StockInfo = models.StockInfo
 
 type TushareRequest struct {
 	ApiName string `json:"api_name"`
@@ -144,50 +83,8 @@ type TushareResponse struct {
 	act_name	str	实控人名称
 	act_ent_type	str	实控人企业性质*/
 
-type StockBasic struct {
-	gorm.Model
-	TsCode     string `json:"ts_code" gorm:"index"`
-	Symbol     string `json:"symbol" gorm:"index"`
-	Name       string `json:"name" gorm:"index"`
-	Area       string `json:"area"`
-	Industry   string `json:"industry" gorm:"index"`
-	Fullname   string `json:"fullname"`
-	Ename      string `json:"enname"`
-	Cnspell    string `json:"cnspell"`
-	Market     string `json:"market"`
-	Exchange   string `json:"exchange"`
-	CurrType   string `json:"curr_type"`
-	ListStatus string `json:"list_status"`
-	ListDate   string `json:"list_date"`
-	DelistDate string `json:"delist_date"`
-	IsHs       string `json:"is_hs"`
-	ActName    string `json:"act_name"`
-	ActEntType string `json:"act_ent_type"`
-	BKName     string `json:"bk_name"`
-	BKCode     string `json:"bk_code"`
-}
-
-type FollowedStock struct {
-	StockCode          string
-	Name               string
-	Volume             int64
-	CostPrice          float64
-	Price              float64
-	PriceChange        float64
-	ChangePercent      float64
-	AlarmChangePercent float64
-	AlarmPrice         float64
-	Time               time.Time
-	Sort               int64
-	Cron               *string
-	IsDel              soft_delete.DeletedAt `gorm:"softDelete:flag"`
-	Groups             []GroupStock          `gorm:"foreignKey:StockCode;references:StockCode"`
-	AiConfigId         int
-}
-
-func (receiver FollowedStock) TableName() string {
-	return "followed_stock"
-}
+type StockBasic = models.StockBasic
+type FollowedStock = models.FollowedStock
 
 type TushareStockBasicResponse struct {
 	TushareResponse
@@ -201,9 +98,6 @@ type StockBasicResponse struct {
 	Count   int      `json:"count"`
 }
 
-func (receiver StockBasic) TableName() string {
-	return "tushare_stock_basic"
-}
 func NewStockDataApi() *StockDataApi {
 	client := newRealtimeRestyClient()
 	return &StockDataApi{
@@ -2004,14 +1898,7 @@ func JSONToMarkdownTable(jsonData []byte) (string, error) {
 	return headerRow + separatorRow + bodyRows, nil
 }
 
-type KLineData struct {
-	Day    string `json:"day"`
-	Open   string `json:"open"`
-	High   string `json:"high"`
-	Low    string `json:"low"`
-	Close  string `json:"close"`
-	Volume string `json:"volume"`
-}
+type KLineData = models.KLineData
 
 type MinuteData struct {
 	Time   string  `json:"time"`

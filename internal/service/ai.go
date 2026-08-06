@@ -2,148 +2,123 @@ package service
 
 import (
 	"context"
-	"go-stock/backend/data"
-	"go-stock/backend/models"
-	"strings"
 	"time"
+
+	"go-stock/backend/models"
 )
 
-type AIService struct{}
+type AIService struct {
+	operations AIOperations
+}
 
-func NewAIService() AIService {
-	return AIService{}
+func NewAIService(operations AIOperations) AIService {
+	return AIService{operations: operations}
 }
 
 func (s AIService) AnalyzeSentiment(text string) models.SentimentResult {
-	return data.AnalyzeSentiment(text)
+	return s.operations.AnalyzeSentiment(text)
 }
 
 func (s AIService) AnalyzeSentimentWithFreqWeight(text string) map[string]any {
-	result, cleanFrequencies := data.NewsAnalyze(text, false)
-	return map[string]any{
-		"result":      result,
-		"frequencies": cleanFrequencies,
-	}
+	return s.operations.AnalyzeSentimentWithFreqWeight(text)
 }
 
 func (s AIService) GetAIResponseResult(ctx context.Context, stockCode string) *models.AIResponseResult {
-	return data.NewDeepSeekOpenAi(ctx, 0).GetAIResponseResult(stockCode)
+	return s.operations.GetAIResponseResult(ctx, stockCode)
 }
 
 func (s AIService) SaveAIResponseResult(ctx context.Context, stockCode, stockName, result, chatID, question string, aiConfigID int) {
-	data.NewDeepSeekOpenAi(ctx, aiConfigID).SaveAIResponseResult(stockCode, stockName, result, chatID, question)
+	s.operations.SaveAIResponseResult(ctx, stockCode, stockName, result, chatID, question, aiConfigID)
 }
 
 func (s AIService) GetPromptTemplates(name, promptType string) *[]models.PromptTemplate {
-	return data.NewPromptTemplateApi().GetPromptTemplates(name, promptType)
+	return s.operations.GetPromptTemplates(name, promptType)
 }
 
 func (s AIService) AddPrompt(prompt models.PromptTemplate) string {
-	return data.NewPromptTemplateApi().AddPrompt(prompt)
+	return s.operations.AddPrompt(prompt)
 }
 
 func (s AIService) DelPrompt(id uint) string {
-	return data.NewPromptTemplateApi().DelPrompt(id)
+	return s.operations.DelPrompt(id)
 }
 
-func (s AIService) GetAiConfigs() []*data.AIConfig {
-	cfg := data.GetSettingConfig()
-	if cfg == nil {
-		return []*data.AIConfig{}
-	}
-	return cfg.AiConfigs
+func (s AIService) GetAiConfigs() []*models.AIConfig {
+	return s.operations.GetAIConfigs()
 }
 
 func (s AIService) ResolveDefaultAIConfigID() int {
-	return data.SelectPrimaryAIConfigID(data.GetSettingConfig())
+	return s.operations.ResolveDefaultAIConfigID()
 }
 
 func (s AIService) ResolveAIFallbackOrder(aiConfigID int) []int {
-	return data.ResolveAIFallbackOrder(data.GetSettingConfig(), aiConfigID)
+	return s.operations.ResolveAIFallbackOrder(aiConfigID)
 }
 
 func (s AIService) ResolveAIModelName(aiConfigID int) string {
-	cfg := data.GetSettingConfig()
-	if cfg == nil || len(cfg.AiConfigs) == 0 {
-		return ""
-	}
-	if aiConfigID <= 0 {
-		if primary := data.SelectPrimaryAIConfig(cfg.AiConfigs); primary != nil {
-			return strings.TrimSpace(primary.ModelName)
-		}
-		return ""
-	}
-	for _, item := range cfg.AiConfigs {
-		if item != nil && int(item.ID) == aiConfigID {
-			return strings.TrimSpace(item.ModelName)
-		}
-	}
-	if primary := data.SelectPrimaryAIConfig(cfg.AiConfigs); primary != nil {
-		return strings.TrimSpace(primary.ModelName)
-	}
-	return ""
+	return s.operations.ResolveAIModelName(aiConfigID)
 }
 
-func (s AIService) NewChatStream(ctx context.Context, stock, stockCode, question string, aiConfigID int, sysPromptID *int, tools []data.Tool, think bool) <-chan map[string]any {
-	return data.NewDeepSeekOpenAi(ctx, aiConfigID).NewChatStream(stock, stockCode, question, sysPromptID, tools, think)
+func (s AIService) NewChatStream(ctx context.Context, stock, stockCode, question string, aiConfigID int, sysPromptID *int, tools []models.Tool, think bool) <-chan map[string]any {
+	return s.operations.NewChatStream(ctx, stock, stockCode, question, aiConfigID, sysPromptID, tools, think)
 }
 
 func (s AIService) NewSummaryStockNewsStream(ctx context.Context, aiConfigID int, question string, sysPromptID *int, think bool) <-chan map[string]any {
-	return data.NewDeepSeekOpenAi(ctx, aiConfigID).NewSummaryStockNewsStream(question, sysPromptID, think)
+	return s.operations.NewSummaryStockNewsStream(ctx, aiConfigID, question, sysPromptID, think)
 }
 
 func (s AIService) NewSummaryStockNewsStreamPhased(ctx context.Context, aiConfigID int, question string, sysPromptID *int, think bool) <-chan map[string]any {
-	return data.NewDeepSeekOpenAi(ctx, aiConfigID).NewSummaryStockNewsStreamPhased(question, sysPromptID, think)
+	return s.operations.NewSummaryStockNewsStreamPhased(ctx, aiConfigID, question, sysPromptID, think)
 }
 
-func (s AIService) GenerateMarketSummarySupplementTable(ctx context.Context, aiConfigID int, req data.MarketSummarySupplementRequest) (string, string, string, error) {
-	return data.NewDeepSeekOpenAi(ctx, aiConfigID).GenerateMarketSummarySupplementTable(req)
+func (s AIService) GenerateMarketSummarySupplementTable(ctx context.Context, aiConfigID int, req models.MarketSummarySupplementRequest) (string, string, string, error) {
+	return s.operations.GenerateMarketSummarySupplementTable(ctx, aiConfigID, req)
 }
 
 func (s AIService) NormalizeMarketSummaryQuestion(question string) string {
-	return data.NormalizeMarketSummaryQuestion(question)
+	return s.operations.NormalizeMarketSummaryQuestion(question)
 }
 
 func (s AIService) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
-	return data.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
+	return s.operations.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
 }
 
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName, startedAt, verifiedCandidates)
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
+	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName, startedAt, verifiedCandidates)
 }
 
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName, startedAt, verifiedCandidates, productionLimit)
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
+	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName, startedAt, verifiedCandidates, productionLimit)
 }
 
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot, outputLimit, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verifiedCandidates, outputLimit, productionLimit)
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot, outputLimit, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
+	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verifiedCandidates, outputLimit, productionLimit)
 }
 
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []data.MarketSummaryVerifiedCandidateSnapshot, options data.MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName, startedAt, verifiedCandidates, options)
+func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot, options models.MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
+	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName, startedAt, verifiedCandidates, options)
 }
 
 func (s AIService) EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
-	return data.EnsureMarketSummaryYieldOverridesSaved(summaryText, startedAt)
+	return s.operations.EnsureMarketSummaryYieldOverridesSaved(summaryText, startedAt)
 }
 
 func (s AIService) SendYieldEmailTestMessage() error {
-	return data.SendYieldEmailTestMessage()
+	return s.operations.SendYieldEmailTestMessage()
 }
 
 func (s AIService) SendYieldEmailXLSXNow() (int, error) {
-	return data.SendYieldEmailXLSXNow()
+	return s.operations.SendYieldEmailXLSXNow()
 }
 
 func (s AIService) SendLatestAIAnalysisReportEmail() (*models.AIResponseResult, error) {
-	return data.SendLatestAIAnalysisReportEmail()
+	return s.operations.SendLatestAIAnalysisReportEmail()
 }
 
 func (s AIService) SendLatestAIAnalysisReportEmailForCron() (*models.AIResponseResult, error) {
-	return data.SendLatestAIAnalysisReportEmailForCron()
+	return s.operations.SendLatestAIAnalysisReportEmailForCron()
 }
 
 func (s AIService) SendMarketSummaryEmail(sendType string, report *models.AIResponseResult, failureReason string) error {
-	return data.SendMarketSummaryEmail(sendType, report, failureReason)
+	return s.operations.SendMarketSummaryEmail(sendType, report, failureReason)
 }

@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"go-stock/internal/service"
+	"go-stock/internal/bootstrap"
 )
 
 func runRepairMarketSummary(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
@@ -19,7 +19,11 @@ func runRepairMarketSummary(args []string, g GlobalOptions, stdout, stderr io.Wr
 		return err
 	}
 
-	result, err := service.NewRecommendService().RepairHistoricalMarketSummaryActivationIssues(time.Now())
+	services, err := bootstrap.NewProductionServices()
+	if err != nil {
+		return err
+	}
+	result, err := services.Recommend.RepairHistoricalMarketSummaryActivationIssues(time.Now())
 	if err != nil {
 		return err
 	}
