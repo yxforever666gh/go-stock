@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
 	"go-stock/backend/strategy/v150"
+
+	"gorm.io/gorm"
 )
 
 func TestPausedStrategyRejectsEveryProductionWriteBoundary(t *testing.T) {
@@ -132,6 +135,134 @@ func TestStrategyProductionWriteFailsClosedWithoutRuntimeControl(t *testing.T) {
 		t.Fatalf("create error = %v, want ErrStrategyRuntimeUnavailable", err)
 	}
 	assertStrategyTableCount(t, &models.AiRecommendStocks{}, 0)
+}
+
+func TestYieldReadEndpointsAreSideEffectFreeWhenStrategyIsLive(t *testing.T) {
+	prepareYieldReadOnlyTestDB(t, "live-yield-reads")
+	fixedNow := time.Date(2026, 8, 6, 16, 0, 0, 0, cnLocation())
+	previousNow := timeNow
+	timeNow = func() time.Time { return fixedNow }
+	t.Cleanup(func() { timeNow = previousNow })
+
+	meta := models.AiRecommendYieldMeta{
+		CurrentTradeDate: "2026-08-05",
+		RecalcInProgress: true,
+		RecalcProgress:   37,
+		DownloadTotal:    11,
+		DownloadDone:     4,
+	}
+	if err := db.Dao.Create(&meta).Error; err != nil {
+		t.Fatal(err)
+	}
+	staleUpdatedAt := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).Where("id = ?", meta.ID).UpdateColumn("updated_at", staleUpdatedAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	clearMinuteCoverageStatsCache()
+
+	writes := registerYieldReadWriteCounter(t, db.Dao)
+	queryRecalcCalls := atomic.Int64{}
+	scopedRecalcCalls := atomic.Int64{}
+	previousQueryRecalc := requestAiRecommendYieldRecalcForQueryFn
+	previousScopedRecalc := requestAiRecommendYieldScopedRecalcForQueryFn
+	requestAiRecommendYieldRecalcForQueryFn = func(bool, string) { queryRecalcCalls.Add(1) }
+	requestAiRecommendYieldScopedRecalcForQueryFn = func(bool, string, []string) { scopedRecalcCalls.Add(1) }
+	t.Cleanup(func() {
+		requestAiRecommendYieldRecalcForQueryFn = previousQueryRecalc
+		requestAiRecommendYieldScopedRecalcForQueryFn = previousScopedRecalc
+	})
+
+	service := NewAiRecommendStocksService()
+	query := &models.AiRecommendStocksQuery{StrategyCohort: marketSummaryVersion150, YieldMode: aiRecommendYieldModeStrict}
+	if _, err := service.GetAiRecommendStocksYieldList(query); err != nil {
+		t.Fatalf("read yield list: %v", err)
+	}
+	if _, err := service.GetAiRecommendYieldTaskStatus(); err != nil {
+		t.Fatalf("read yield task status: %v", err)
+	}
+	if _, err := service.GetAiRecommendYieldDailyOverview(&models.AiRecommendStocksQuery{StrategyCohort: marketSummaryVersion150}); err != nil {
+		t.Fatalf("read yield daily overview: %v", err)
+	}
+
+	if got := writes.Load(); got != 0 {
+		t.Fatalf("yield reads executed %d database write callback(s)", got)
+	}
+	if queryRecalcCalls.Load() != 0 || scopedRecalcCalls.Load() != 0 {
+		t.Fatalf("yield reads scheduled recalculation: full=%d scoped=%d", queryRecalcCalls.Load(), scopedRecalcCalls.Load())
+	}
+	var persisted models.AiRecommendYieldMeta
+	if err := db.Dao.First(&persisted, meta.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !persisted.RecalcInProgress || persisted.RecalcProgress != 37 || persisted.CurrentTradeDate != "2026-08-05" || !persisted.UpdatedAt.Equal(staleUpdatedAt) {
+		t.Fatalf("yield read mutated stale persisted metadata: %+v", persisted)
+	}
+}
+
+func TestYieldStatusReadDoesNotCreateMissingMetadata(t *testing.T) {
+	prepareYieldReadOnlyTestDB(t, "missing-yield-meta-read")
+	clearMinuteCoverageStatsCache()
+	writes := registerYieldReadWriteCounter(t, db.Dao)
+
+	status, err := NewAiRecommendStocksService().GetAiRecommendYieldTaskStatus()
+	if err != nil {
+		t.Fatalf("read missing yield task status: %v", err)
+	}
+	if status == nil || status.RecalcInProgress || status.DownloadInProgress || status.MinuteDownloadTotal != 0 {
+		t.Fatalf("missing metadata status = %+v, want zero read model", status)
+	}
+	if got := writes.Load(); got != 0 {
+		t.Fatalf("missing metadata read executed %d database write callback(s)", got)
+	}
+	assertStrategyTableCount(t, &models.AiRecommendYieldMeta{}, 0)
+}
+
+func prepareYieldReadOnlyTestDB(t *testing.T, name string) {
+	t.Helper()
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), name+".db"))
+	if err := db.Dao.AutoMigrate(
+		&models.AiRecommendStocks{},
+		&models.AiRecommendYieldMeta{},
+		&models.AiRecommendYieldState{},
+		&models.AiRecommendYieldRecordState{},
+		&models.AiRecommendYieldDirtyCode{},
+		&models.AiRecommendYieldOverride{},
+		&models.AiRecommendMinuteBar{},
+		&models.AiRecommendDailyBar{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistence.MigrateStrategyPersistence(db.Dao); err != nil {
+		t.Fatal(err)
+	}
+	if err := governance.InitializeStrategyRuntimeControl(context.Background(), db.Dao, marketSummaryCurrentVersion); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := governance.SetStrategyRuntimeMode(context.Background(), db.Dao, governance.StrategyModeLive, marketSummaryCurrentVersion, "read-only test", "test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func registerYieldReadWriteCounter(t *testing.T, database *gorm.DB) *atomic.Int64 {
+	t.Helper()
+	counter := &atomic.Int64{}
+	name := "test:yield-read-write-counter"
+	count := func(*gorm.DB) { counter.Add(1) }
+	if err := database.Callback().Create().Before("gorm:create").Register(name, count); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Callback().Update().Before("gorm:update").Register(name, count); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Callback().Delete().Before("gorm:delete").Register(name, count); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		database.Callback().Create().Remove(name)
+		database.Callback().Update().Remove(name)
+		database.Callback().Delete().Remove(name)
+	})
+	return counter
 }
 
 func assertStrategyTableCount(t *testing.T, model any, want int64) {

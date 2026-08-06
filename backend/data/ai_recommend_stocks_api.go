@@ -394,6 +394,21 @@ func resolveExpectedYieldTradeDate(now time.Time) time.Time {
 	return shiftToPrevCNOpenTradeDay(day)
 }
 
+// resolveYieldReadTradeDate is the cache-only date boundary used by UI reads.
+// A persisted recalculation date is authoritative; without one, fall back to
+// the latest weekday without loading a remote trade calendar.
+func resolveYieldReadTradeDate(now time.Time, meta *models.AiRecommendYieldMeta) time.Time {
+	if meta != nil {
+		if persisted, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
+			return persisted
+		}
+	}
+	loc := cnLocation()
+	current := now.In(loc)
+	day := time.Date(current.Year(), current.Month(), current.Day(), 0, 0, 0, 0, loc)
+	return shiftToPrevWeekday(day)
+}
+
 func shouldTriggerYieldQueryRecalc(meta *models.AiRecommendYieldMeta, expectedTradeDate, now time.Time) bool {
 	if meta == nil || meta.ID == 0 || meta.RecalcInProgress || expectedTradeDate.IsZero() {
 		return false
@@ -546,7 +561,6 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		}
 	}
 
-	EnsureDiemengSelfCheckAsync("yield_list")
 	if err := ensureYieldMetaSchema(); err != nil {
 		return nil, err
 	}
@@ -581,9 +595,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	coverageIssues := make([]minuteCoverageIssue, 0, 32)
 	loc := cnLocation()
 	now := timeNow().In(loc)
-	expectedTradeDate := resolveExpectedYieldTradeDate(now)
-	latestTradeDate := expectedTradeDate
-	queryTriggeredRecalc := false
+	latestTradeDate := resolveYieldReadTradeDate(now, nil)
 	lastManualStartedAt := ""
 	lastManualFinishedAt := ""
 	lastManualScopeCount := 0
@@ -594,12 +606,7 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	lastManualProviderSummary := ""
 	lastManualAuditReady := false
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt = GetDiemengSelfCheckView()
-	metaPtr := (*models.AiRecommendYieldMeta)(nil)
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err == nil {
-		metaPtr = &meta
-		if resetStaleYieldRecalcIfNeeded(&meta) {
-			requestAiRecommendYieldRecalc(true, "recover_stale_recalc")
-		}
 		recalcInProgress = meta.RecalcInProgress
 		recalcProgress = meta.RecalcProgress
 		downloadInProgress = meta.DownloadInProgress
@@ -624,35 +631,15 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 		lastManualProviderSummary = strings.TrimSpace(meta.LastManualProviderSummary)
 		lastManualAuditReady = meta.LastManualFinishedAt != nil
 		manualCooldownUntil, manualCooldownRemainSec = resolveManualCooldownInfo(meta.ManualCooldownUntil)
-		stats, issues := loadMinuteCoverageStatsCachedOrSchedule(&meta, -1)
+		stats, issues := loadMinuteCoverageStatsCached(&meta, -1)
 		minuteDone, minuteTotal, minutePending, minuteUncoverable = stats.Done, stats.Total, stats.Pending, stats.Uncoverable
 		coverageIssues = issues
-		if t, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
-			latestTradeDate = t
-		}
+		latestTradeDate = resolveYieldReadTradeDate(now, &meta)
 	} else if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		logger.SugaredLogger.Warnf("load ai_recommend_yield_meta failed: %v", err)
 	}
-	if metaPtr == nil {
-		if createdMeta, createErr := getOrCreateYieldMeta(); createErr == nil {
-			meta = *createdMeta
-			metaPtr = &meta
-		} else {
-			logger.SugaredLogger.Warnf("getOrCreateYieldMeta failed: %v", createErr)
-		}
-	}
-	if expectedTradeDate.After(latestTradeDate) {
-		latestTradeDate = expectedTradeDate
-	}
-	if metaPtr != nil && triggerYieldQueryRecalcIfStale(metaPtr, expectedTradeDate, now) {
-		queryTriggeredRecalc = true
-		recalcInProgress = true
-		if recalcProgress < 0 {
-			recalcProgress = 0
-		}
-	}
 	if minuteTotal <= 0 {
-		stats, issues := loadMinuteCoverageStatsCachedOrSchedule(nil, -1)
+		stats, issues := loadMinuteCoverageStatsCached(nil, -1)
 		minuteDone, minuteTotal, minutePending, minuteUncoverable = stats.Done, stats.Total, stats.Pending, stats.Uncoverable
 		coverageIssues = issues
 	}
@@ -662,10 +649,6 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	if recalcProgress > 100 {
 		recalcProgress = 100
 	}
-	if queryTriggeredRecalc && minutePending == 0 && minuteTotal > minuteDone {
-		minutePending = minuteTotal - minuteDone
-	}
-
 	latestTradeDate = time.Date(latestTradeDate.Year(), latestTradeDate.Month(), latestTradeDate.Day(), 0, 0, 0, 0, loc)
 	coverableStart := minuteCoverableStartMinute(latestTradeDate)
 	recordCoverableStart := coverableStart
@@ -679,15 +662,6 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	}
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
 	records = collapseRecommendRecordsSameDayByCode(records)
-	if err := markInvalidActivationExitPlanDirtyCodes(aiRecommendYieldModeStrict); err != nil {
-		logger.SugaredLogger.Warnf("mark invalid activation exit plan dirty codes failed: %v", err)
-	}
-	if err := markV132VWAPScaleDirtyCodes(aiRecommendYieldModeStrict); err != nil {
-		logger.SugaredLogger.Warnf("mark v1.3.2 VWAP scale dirty codes failed: %v", err)
-	}
-	if err := markActivationWindowPolicyBugDirtyCodes(aiRecommendYieldModeStrict); err != nil {
-		logger.SugaredLogger.Warnf("mark activation window policy bug dirty codes failed: %v", err)
-	}
 	dirtyScope, err := loadDirtyAiRecommendYieldScope(aiRecommendYieldModeStrict)
 	if err != nil {
 		return nil, err
@@ -796,12 +770,6 @@ func (s *AiRecommendStocksService) GetAiRecommendStocksYieldList(query *models.A
 	recordStateMap, err := loadYieldRecordStateMapByRecommendRecords(records)
 	if err != nil {
 		return nil, err
-	}
-	if metaPtr != nil && triggerYieldPendingIntradayRecalcIfStale(metaPtr, now, latestTradeDate, records, recordStateMap) {
-		recalcInProgress = true
-		if recalcProgress < 0 {
-			recalcProgress = 0
-		}
 	}
 	stateMap, err := loadYieldStateMapByRecommendRecords(records)
 	if err != nil {
@@ -1107,29 +1075,24 @@ var (
 	minuteCoverageStatsCacheMu   sync.Mutex
 	minuteCoverageStatsCache     minuteCoverageStatsCacheEntry
 	minuteCoverageStatsComputeMu sync.Mutex
-	minuteCoverageStatsWarmMu    sync.Mutex
-	minuteCoverageStatsWarming   bool
 )
 
 const minuteCoverageStatsCacheTTL = 5 * time.Minute
 
-func loadMinuteCoverageStatsCachedOrSchedule(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
+// loadMinuteCoverageStatsCached is a read-only status view. Cache misses use
+// persisted meta counters and never start a goroutine, scan coverage, fetch
+// market data, or mutate the strategy database.
+func loadMinuteCoverageStatsCached(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
 	key := minuteCoverageStatsCacheKey(meta, issueLimit)
-	now := time.Now()
 	minuteCoverageStatsCacheMu.Lock()
 	if minuteCoverageStatsCache.Key == key && minuteCoverageStatsCache.IssueLimit == issueLimit {
 		stats := minuteCoverageStatsCache.Stats
 		issues := append([]minuteCoverageIssue(nil), minuteCoverageStatsCache.Issues...)
-		fresh := now.Before(minuteCoverageStatsCache.ExpireAt)
 		minuteCoverageStatsCacheMu.Unlock()
-		if !fresh {
-			scheduleMinuteCoverageStatsWarm(meta, issueLimit)
-		}
 		return stats, issues
 	}
 	minuteCoverageStatsCacheMu.Unlock()
 
-	scheduleMinuteCoverageStatsWarm(meta, issueLimit)
 	if meta == nil {
 		return minuteCoverageStats{}, nil
 	}
@@ -1145,31 +1108,6 @@ func loadMinuteCoverageStatsCachedOrSchedule(meta *models.AiRecommendYieldMeta, 
 		done = total
 	}
 	return minuteCoverageStats{Done: done, Total: total, Pending: total - done}, nil
-}
-
-func scheduleMinuteCoverageStatsWarm(meta *models.AiRecommendYieldMeta, issueLimit int) {
-	minuteCoverageStatsWarmMu.Lock()
-	if minuteCoverageStatsWarming {
-		minuteCoverageStatsWarmMu.Unlock()
-		return
-	}
-	minuteCoverageStatsWarming = true
-	minuteCoverageStatsWarmMu.Unlock()
-
-	var metaCopy *models.AiRecommendYieldMeta
-	if meta != nil {
-		cloned := *meta
-		metaCopy = &cloned
-	}
-	go func() {
-		defer func() {
-			_ = recover()
-			minuteCoverageStatsWarmMu.Lock()
-			minuteCoverageStatsWarming = false
-			minuteCoverageStatsWarmMu.Unlock()
-		}()
-		computeMinuteDownloadCoverageStatsWithIssues(metaCopy, issueLimit)
-	}()
 }
 
 func clearMinuteCoverageStatsCache() {
@@ -4328,15 +4266,15 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldTaskStatus() (*models.AiRe
 	if err := ensureYieldMetaSchema(); err != nil {
 		return nil, err
 	}
-	meta, err := getOrCreateYieldMeta()
-	if err != nil {
+	meta := &models.AiRecommendYieldMeta{}
+	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(meta).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	dataAsOf := ""
 	if meta.LastFullRecalcAt != nil {
 		dataAsOf = meta.LastFullRecalcAt.In(cnLocation()).Format("2006-01-02 15:04:05")
 	}
-	stats, _ := loadMinuteCoverageStatsCachedOrSchedule(meta, -1)
+	stats, _ := loadMinuteCoverageStatsCached(meta, -1)
 	manualCooldownUntil, manualCooldownRemainSec := resolveManualCooldownInfo(meta.ManualCooldownUntil)
 	diemengHealthStatus, diemengHealthSummary, diemengHealthCheckedAt := GetDiemengSelfCheckView()
 
@@ -4481,7 +4419,7 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldErrorLogs(limit int) ([]ma
 	// Also include synthetic "coverage check" rows so pending/uncoverable records
 	// are visible even when state status is still "正常".
 	if len(logs) < limit {
-		_, issues := computeMinuteDownloadCoverageStatsWithIssues(metaPtr, limit-len(logs))
+		_, issues := loadMinuteCoverageStatsCached(metaPtr, limit-len(logs))
 		for _, issue := range issues {
 			if len(logs) >= limit {
 				break
@@ -4602,7 +4540,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 	rawRepeatCountMap := countRecommendOccurrencesByCode(records)
 	records = collapseRecommendRecordsSameDayByCode(records)
 	if len(records) == 0 {
-		stats := computeMinuteDownloadCoverageStats(nil)
+		stats, _ := loadMinuteCoverageStatsCached(&meta, -1)
 		return &models.AiRecommendStocksYieldPageData{
 			List:                      []models.AiRecommendStocksYieldItem{},
 			Total:                     0,
@@ -4710,7 +4648,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		end = len(resultItems)
 	}
 
-	stats := computeMinuteDownloadCoverageStats(nil)
+	stats, _ := loadMinuteCoverageStatsCached(&meta, -1)
 	return &models.AiRecommendStocksYieldPageData{
 		List:                       resultItems[offset:end],
 		Total:                      total,
@@ -4755,7 +4693,7 @@ func (s *AiRecommendStocksService) buildYieldFallbackPage(
 		V132RewardRiskBlockedCount: diagnostics.V132RewardRiskBlockedCount,
 		V132CooldownBlockedCount:   diagnostics.V132CooldownBlockedCount,
 		DataAsOf:                   dataAsOf,
-		RecalcInProgress:           true,
+		RecalcInProgress:           recalcInProgress,
 		RecalcProgress:             recalcProgress,
 		LastDownloadError:          yieldLastDownloadMessage(meta.LastDownloadError),
 		MinuteDownloadDone:         stats.Done,
@@ -4895,7 +4833,10 @@ func (s *AiRecommendStocksService) buildFastYieldPage(
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		logger.SugaredLogger.Warnf("load ai_recommend_yield_meta fast failed: %v", err)
 	}
-	currentPriceMap, currentPriceTimeMap := loadCurrentPriceSnapshotForRecommendRecords(records)
+	// A read endpoint never reaches a live quote provider. Fast mode consumes
+	// only prices already persisted by explicit maintenance jobs.
+	currentPriceMap := map[string]float64{}
+	currentPriceTimeMap := map[string]string{}
 	strictStateMap, err := loadYieldRecordStateMapByRecommendRecords(records)
 	if err != nil {
 		return nil, err

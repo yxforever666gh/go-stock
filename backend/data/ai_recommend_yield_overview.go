@@ -43,16 +43,10 @@ func (s *AiRecommendStocksService) GetAiRecommendYieldDailyOverview(query *model
 func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecommendStocksQuery) (*models.AiRecommendYieldDailyOverviewData, error) {
 	loc := cnLocation()
 	now := timeNow().In(loc)
-	expectedTradeDate := resolveExpectedYieldTradeDate(now)
-	latestTradeDate := expectedTradeDate
 	meta := models.AiRecommendYieldMeta{}
+	latestTradeDate := resolveYieldReadTradeDate(now, nil)
 	if err := db.Dao.Model(&models.AiRecommendYieldMeta{}).First(&meta).Error; err == nil {
-		if t, ok := parseYieldTradeDate(meta.CurrentTradeDate); ok {
-			latestTradeDate = t
-		}
-	}
-	if expectedTradeDate.After(latestTradeDate) {
-		latestTradeDate = expectedTradeDate
+		latestTradeDate = resolveYieldReadTradeDate(now, &meta)
 	}
 	latestTradeDate = time.Date(latestTradeDate.Year(), latestTradeDate.Month(), latestTradeDate.Day(), 0, 0, 0, 0, loc)
 	coverableStart := minuteCoverableStartMinute(latestTradeDate)
@@ -166,11 +160,7 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 
 	var tradingDays []time.Time
 	var benchmarkSeries *yieldDailyOverviewPriceSeries
-	if isV150CostVersion(query.StrategyCohort) {
-		tradingDays, benchmarkSeries, err = loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay)
-	} else {
-		tradingDays, benchmarkSeries, err = loadYieldDailyOverviewTradingDays(startDay, endDay)
-	}
+	tradingDays, benchmarkSeries, err = loadYieldDailyOverviewTradingDaysFromCache(startDay, endDay)
 	if err != nil {
 		if isV150CostVersion(query.StrategyCohort) {
 			result.SkippedRecordCount = result.TotalRecordCount
@@ -191,7 +181,7 @@ func (s *AiRecommendStocksService) buildYieldDailyOverview(query *models.AiRecom
 	if isV150CostVersion(query.StrategyCohort) {
 		priceSeriesMap, missingCodes, err = loadV150YieldDailyRawMinutePriceSeries(entries, tradingDays)
 	} else {
-		priceSeriesMap, missingCodes, err = loadYieldDailyOverviewPriceSeries(entries, tradingDays)
+		priceSeriesMap, missingCodes, err = loadYieldDailyOverviewPriceSeriesFromCache(entries, tradingDays)
 	}
 	if err != nil {
 		return nil, err
