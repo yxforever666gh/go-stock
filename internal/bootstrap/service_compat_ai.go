@@ -224,6 +224,38 @@ func (*compatibilityServiceAdapter) NormalizeMarketSummaryQuestion(question stri
 	return data.NormalizeMarketSummaryQuestion(question)
 }
 
+func (*compatibilityServiceAdapter) ResolveMarketSummaryRecommendationCountPolicy(question string) service.MarketSummaryRecommendationCountPolicy {
+	policy := data.ResolveMarketSummaryRecommendationCountPolicy(question)
+	return service.MarketSummaryRecommendationCountPolicy{
+		MinimumOutput: policy.MinimumOutput, MaximumOutput: policy.MaximumOutput, ProductionTarget: policy.ProductionTarget,
+		RequestedMinimum: policy.RequestedMinimum, RequestedMaximum: policy.RequestedMaximum, Source: policy.Source,
+		Custom: policy.Custom, Clamped: policy.Clamped,
+	}
+}
+
+func (*compatibilityServiceAdapter) PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time.Time, outputLimit int) (string, service.MarketSummaryReportPrepareStats, error) {
+	prepared, stats, err := data.PrepareMarketSummaryReportForPersistenceWithLimit(summaryText, startedAt, outputLimit)
+	return prepared, service.MarketSummaryReportPrepareStats{
+		RowsSeen: stats.RowsSeen, DuplicateRowsOmit: stats.DuplicateRowsOmit, OutputRowsOmit: stats.OutputRowsOmit,
+		AnalysisOnlyRows: stats.AnalysisOnlyRows, RecommendationRows: stats.RecommendationRows,
+	}, err
+}
+
+func (*compatibilityServiceAdapter) RunMorningOpeningReview(now time.Time) (string, error) {
+	return data.RunMorningOpeningReview(now)
+}
+
+func (*compatibilityServiceAdapter) MergeMarketSummarySupplementReport(baseText, supplementText string, acceptedCodes []string, maximumOutput int) (string, service.MarketSummaryReportMergeStats) {
+	merged, stats := data.MergeMarketSummarySupplementReport(baseText, supplementText, acceptedCodes, maximumOutput)
+	return merged, service.MarketSummaryReportMergeStats{
+		BaseTableFound: stats.BaseTableFound, SupplementTableFound: stats.SupplementTableFound, MaximumOutput: stats.MaximumOutput,
+		AcceptedCodeCount: stats.AcceptedCodeCount, BaseRecommendationRows: stats.BaseRecommendationRows, SupplementRecommendationRows: stats.SupplementRecommendationRows,
+		DuplicateRowsOmitted: stats.DuplicateRowsOmitted, UnconfirmedRowsOmitted: stats.UnconfirmedRowsOmitted, OutputRowsOmitted: stats.OutputRowsOmitted,
+		ReplacedCodes: append([]string(nil), stats.ReplacedCodes...), AppendedCodes: append([]string(nil), stats.AppendedCodes...), VisibleCodes: append([]string(nil), stats.VisibleCodes...),
+		UnconfirmedCodes: append([]string(nil), stats.UnconfirmedCodes...), MissingAcceptedCodes: append([]string(nil), stats.MissingAcceptedCodes...), OmittedByLimitCodes: append([]string(nil), stats.OmittedByLimitCodes...),
+	}
+}
+
 func (*compatibilityServiceAdapter) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
 	return data.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
 }
@@ -338,6 +370,14 @@ func (*compatibilityServiceAdapter) TrimSessionMessages(sessionID string, maxMes
 
 func (a *compatibilityServiceAdapter) RequireStrategyLive(ctx context.Context, strategyVersion string) error {
 	return governance.RequireStrategyLive(ctx, a.main, strategyVersion)
+}
+
+func (*compatibilityServiceAdapter) EncodeMarketSummaryBlockedReasons(items []models.MarketSummaryBlockedReasonItem) string {
+	return data.EncodeMarketSummaryBlockedReasons(items)
+}
+
+func (*compatibilityServiceAdapter) SaveMarketSummaryRunDiagnostic(item *models.MarketSummaryRunDiagnostic) error {
+	return data.SaveMarketSummaryRunDiagnostic(item)
 }
 
 func (a *compatibilityServiceAdapter) CreateAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {

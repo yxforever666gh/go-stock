@@ -87,6 +87,22 @@ func (s AIService) NormalizeMarketSummaryQuestion(question string) string {
 	return s.operations.NormalizeMarketSummaryQuestion(question)
 }
 
+func (s AIService) ResolveMarketSummaryRecommendationCountPolicy(question string) MarketSummaryRecommendationCountPolicy {
+	return s.operations.ResolveMarketSummaryRecommendationCountPolicy(question)
+}
+
+func (s AIService) PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time.Time, outputLimit int) (string, MarketSummaryReportPrepareStats, error) {
+	return s.operations.PrepareMarketSummaryReportForPersistence(summaryText, startedAt, outputLimit)
+}
+
+func (s AIService) RunMorningOpeningReview(now time.Time) (string, error) {
+	return s.operations.RunMorningOpeningReview(now)
+}
+
+func (s AIService) MergeMarketSummarySupplementReport(baseText, supplementText string, acceptedCodes []string, maximumOutput int) (string, MarketSummaryReportMergeStats) {
+	return s.operations.MergeMarketSummarySupplementReport(baseText, supplementText, acceptedCodes, maximumOutput)
+}
+
 func (s AIService) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
 	return s.operations.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
 }

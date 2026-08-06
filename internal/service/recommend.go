@@ -25,6 +25,14 @@ func (s RecommendService) RequireStrategyLive(ctx context.Context, strategyVersi
 	return s.operations.RequireStrategyLive(ctx, strategyVersion)
 }
 
+func (s RecommendService) EncodeMarketSummaryBlockedReasons(items []models.MarketSummaryBlockedReasonItem) string {
+	return s.operations.EncodeMarketSummaryBlockedReasons(items)
+}
+
+func (s RecommendService) SaveMarketSummaryRunDiagnostic(item *models.MarketSummaryRunDiagnostic) error {
+	return s.operations.SaveMarketSummaryRunDiagnostic(item)
+}
+
 func (s RecommendService) CreateAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
 	return s.operations.CreateAIResponseReport(ctx, result)
 }

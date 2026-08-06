@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"testing"
+	"time"
 
 	"go-stock/backend/models"
 )
@@ -28,6 +29,12 @@ type recordingAIOperations struct {
 	result        *models.AIModelTestResult
 	humanizeInput string
 	humanized     string
+	policy        MarketSummaryRecommendationCountPolicy
+	prepared      string
+	prepareStats  MarketSummaryReportPrepareStats
+	review        string
+	merged        string
+	mergeStats    MarketSummaryReportMergeStats
 }
 
 type recordingRecommendOperations struct {
@@ -77,6 +84,22 @@ func (o *recordingAIOperations) HumanizeMarketSummaryReport(raw string) string {
 	return o.humanized
 }
 
+func (o *recordingAIOperations) ResolveMarketSummaryRecommendationCountPolicy(string) MarketSummaryRecommendationCountPolicy {
+	return o.policy
+}
+
+func (o *recordingAIOperations) PrepareMarketSummaryReportForPersistence(string, time.Time, int) (string, MarketSummaryReportPrepareStats, error) {
+	return o.prepared, o.prepareStats, nil
+}
+
+func (o *recordingAIOperations) RunMorningOpeningReview(time.Time) (string, error) {
+	return o.review, nil
+}
+
+func (o *recordingAIOperations) MergeMarketSummarySupplementReport(string, string, []string, int) (string, MarketSummaryReportMergeStats) {
+	return o.merged, o.mergeStats
+}
+
 func (o *recordingConfigOperations) GetConfig() *models.SettingConfig {
 	return o.config
 }
@@ -123,6 +146,32 @@ func TestAIServiceHumanizesMarketSummaryThroughInjectedPort(t *testing.T) {
 	}
 	if operations.humanizeInput != "raw report" {
 		t.Fatalf("delegated report = %q", operations.humanizeInput)
+	}
+}
+
+func TestAIServiceDelegatesMarketSummaryPresentationThroughInjectedPort(t *testing.T) {
+	operations := &recordingAIOperations{
+		policy:       MarketSummaryRecommendationCountPolicy{MaximumOutput: 12, ProductionTarget: 4},
+		prepared:     "prepared",
+		prepareStats: MarketSummaryReportPrepareStats{RowsSeen: 3, OutputRowsOmit: 1},
+		review:       "opening review",
+		merged:       "merged",
+		mergeStats:   MarketSummaryReportMergeStats{VisibleCodes: []string{"000001"}},
+	}
+	service := NewAIService(operations)
+	if policy := service.ResolveMarketSummaryRecommendationCountPolicy("recommend"); policy != operations.policy {
+		t.Fatalf("policy = %#v", policy)
+	}
+	prepared, stats, err := service.PrepareMarketSummaryReportForPersistence("raw", time.Unix(0, 0), 12)
+	if err != nil || prepared != "prepared" || stats != operations.prepareStats {
+		t.Fatalf("prepared=%q stats=%#v err=%v", prepared, stats, err)
+	}
+	if review, err := service.RunMorningOpeningReview(time.Unix(0, 0)); err != nil || review != "opening review" {
+		t.Fatalf("review=%q err=%v", review, err)
+	}
+	merged, mergeStats := service.MergeMarketSummarySupplementReport("base", "supplement", []string{"000001"}, 12)
+	if merged != "merged" || len(mergeStats.VisibleCodes) != 1 || mergeStats.VisibleCodes[0] != "000001" {
+		t.Fatalf("merged=%q stats=%#v", merged, mergeStats)
 	}
 }
 

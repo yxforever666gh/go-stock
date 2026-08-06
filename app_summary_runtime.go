@@ -6,6 +6,7 @@ import (
 	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/internal/service"
 	"strconv"
 	"strings"
 	"time"
@@ -404,8 +405,8 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 		return
 	}
 
-	countPolicy := data.ResolveMarketSummaryRecommendationCountPolicy(res.finalQuestion)
-	preparedText, prepStats, err := data.PrepareMarketSummaryReportForPersistenceWithLimit(res.text, startedAt, countPolicy.MaximumOutput)
+	countPolicy := a.services.AI.ResolveMarketSummaryRecommendationCountPolicy(res.finalQuestion)
+	preparedText, prepStats, err := a.services.AI.PrepareMarketSummaryReportForPersistence(res.text, startedAt, countPolicy.MaximumOutput)
 	if err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结净化失败，回退原始文本保存: %v", err)
 		preparedText = res.text
@@ -422,7 +423,7 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 
 	reportText := preparedText
 	if startedAt.In(time.FixedZone("CST", 8*3600)).Format("15:04") == "09:40" {
-		if reviewMarkdown, reviewErr := data.RunMorningOpeningReview(startedAt); reviewErr != nil {
+		if reviewMarkdown, reviewErr := a.services.AI.RunMorningOpeningReview(startedAt); reviewErr != nil {
 			logger.SugaredLogger.Warnf("09:40 开盘复核生成失败: %v", reviewErr)
 		} else if strings.TrimSpace(reviewMarkdown) != "" {
 			reportText = strings.TrimSpace(preparedText) + "\n\n" + strings.TrimSpace(reviewMarkdown)
@@ -439,7 +440,7 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 			ModelName:    strings.TrimSpace(res.modelName),
 			ChatId:       res.chatID,
 			Question:     strings.TrimSpace(res.finalQuestion),
-			Content:      data.HumanizeMarketSummaryReport(reportText),
+			Content:      a.services.AI.HumanizeMarketSummaryReport(reportText),
 		}
 		report.CreatedAt = startedAt
 	}
@@ -494,7 +495,7 @@ func (a *App) persistMarketSummaryV150RunResult(res summaryRunResult, startedAt 
 		ModelName:    strings.TrimSpace(res.modelName),
 		ChatId:       res.chatID,
 		Question:     strings.TrimSpace(res.finalQuestion),
-		Content:      data.HumanizeMarketSummaryReport(res.text),
+		Content:      a.services.AI.HumanizeMarketSummaryReport(res.text),
 	}
 	report.CreatedAt = startedAt
 	if err := a.services.Recommend.CreateAIResponseReport(a.ctx, report); err != nil {
@@ -539,16 +540,16 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 	if firstResult == nil {
 		return firstResult
 	}
-	countPolicy := data.ResolveMarketSummaryRecommendationCountPolicy(res.finalQuestion)
+	countPolicy := a.services.AI.ResolveMarketSummaryRecommendationCountPolicy(res.finalQuestion)
 	if !shouldRunMarketSummaryModelSupplement(data.MarketSummaryCurrentVersion()) {
 		firstResult.SupplementTriggered = false
 		firstResult.SupplementText = "V1.5.0 已禁用为凑数量而发起的第二轮模型生成；结构字段仅在首次持久化前逐条规范化，单条失败不会影响同批记录。"
-		reportText, _ = data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
+		reportText, _ = a.services.AI.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
 		a.updateMarketSummaryReportRuntimeResult(report, reportText, firstResult.SupplementText, res.routeLog, countPolicy, firstResult, firstOutputRowsOmitted)
 		return firstResult
 	}
 	targetProduction := countPolicy.ProductionTarget
-	reportText, _ = data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
+	reportText, _ = a.services.AI.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
 	updateReport := func(note string, outputRowsOmitted int) {
 		a.updateMarketSummaryReportRuntimeResult(report, reportText, note, res.routeLog, countPolicy, firstResult, outputRowsOmitted)
 	}
@@ -623,7 +624,7 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 	if secondResult != nil {
 		acceptedCodes = mergeRuntimeStringSet(secondResult.SavedStockCodes, secondResult.UpgradedStockCodes)
 	}
-	mergedReportText, mergeStats := data.MergeMarketSummarySupplementReport(reportText, supplementText, acceptedCodes, countPolicy.MaximumOutput)
+	mergedReportText, mergeStats := a.services.AI.MergeMarketSummarySupplementReport(reportText, supplementText, acceptedCodes, countPolicy.MaximumOutput)
 	reportText = mergedReportText
 	mergeMarketSummarySaveResult(firstResult, secondResult)
 	firstResult.SupplementText = buildMarketSummarySupplementNote(true, targetProduction, supplementCandidateCodes, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
@@ -638,22 +639,22 @@ func shouldRunMarketSummaryModelSupplement(version string) bool {
 	return strings.TrimSpace(version) != "1.5.0"
 }
 
-func (a *App) updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy data.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {
+func (a *App) updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy service.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {
 	if report == nil {
 		return
 	}
-	clampedText, mergeStats := data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
+	clampedText, mergeStats := a.services.AI.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
 	parts := []string{strings.TrimSpace(clampedText), buildMarketSummaryCandidateFunnel(routeLog, countPolicy, result, len(mergeStats.VisibleCodes), outputRowsOmitted)}
 	if strings.TrimSpace(note) != "" {
 		parts = append(parts, strings.TrimSpace(note))
 	}
-	report.Content = data.HumanizeMarketSummaryReport(strings.Join(parts, "\n\n"))
+	report.Content = a.services.AI.HumanizeMarketSummaryReport(strings.Join(parts, "\n\n"))
 	if err := a.services.Recommend.PersistAIResponseReport(a.ctx, report); err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结候选漏斗更新失败: %v", err)
 	}
 }
 
-func buildMarketSummaryCandidateFunnel(routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy data.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, visibleCount, outputRowsOmitted int) string {
+func buildMarketSummaryCandidateFunnel(routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy service.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, visibleCount, outputRowsOmitted int) string {
 	indicatorCandidates := 0
 	indicatorAIInput := 0
 	discoveryCandidates := 0
@@ -1010,17 +1011,17 @@ func (a *App) persistMarketSummaryDiagnostic(res summaryRunResult, startedAt, fi
 		item.ProductionCount = saveResult.ProductionCount
 		item.AnalysisOnlyCount = saveResult.AnalysisOnlyCount
 		item.BlockedCount = saveResult.BlockedCount
-		item.BlockedReasonTop = data.EncodeMarketSummaryBlockedReasons(saveResult.BlockedReasons)
-		item.ProductionDowngradeReasonTop = data.EncodeMarketSummaryBlockedReasons(saveResult.ProductionDowngradeReasons)
+		item.BlockedReasonTop = a.services.Recommend.EncodeMarketSummaryBlockedReasons(saveResult.BlockedReasons)
+		item.ProductionDowngradeReasonTop = a.services.Recommend.EncodeMarketSummaryBlockedReasons(saveResult.ProductionDowngradeReasons)
 	} else {
 		item.BlockedReasonTop = "[]"
 		item.ProductionDowngradeReasonTop = "[]"
 	}
 	if item.IndicatorCandidateCount == 0 && item.VerifiedCandidateCount == 0 && item.BlockedCount == 0 && strings.TrimSpace(res.text) == "" {
 		item.BlockedCount = 1
-		item.BlockedReasonTop = data.EncodeMarketSummaryBlockedReasons([]models.MarketSummaryBlockedReasonItem{{Reason: "候选池为空", Count: 1}})
+		item.BlockedReasonTop = a.services.Recommend.EncodeMarketSummaryBlockedReasons([]models.MarketSummaryBlockedReasonItem{{Reason: "候选池为空", Count: 1}})
 	}
-	if err := data.SaveMarketSummaryRunDiagnostic(item); err != nil {
+	if err := a.services.Recommend.SaveMarketSummaryRunDiagnostic(item); err != nil {
 		logger.SugaredLogger.Warnf("save market summary diagnostic failed: %v", err)
 	}
 }

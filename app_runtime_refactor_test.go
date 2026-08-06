@@ -3,6 +3,7 @@ package main
 import (
 	"go-stock/backend/data"
 	"go-stock/backend/models"
+	"go-stock/internal/service"
 	"strings"
 	"testing"
 	"time"
@@ -215,7 +216,12 @@ func TestSelectRuntimeRepairableVerifiedCandidatesRequiresSnapshot(t *testing.T)
 }
 
 func TestBuildMarketSummaryCandidateFunnelExplainsHardLimits(t *testing.T) {
-	policy := data.ResolveMarketSummaryRecommendationCountPolicy("推荐20只股票")
+	legacyPolicy := data.ResolveMarketSummaryRecommendationCountPolicy("推荐20只股票")
+	policy := service.MarketSummaryRecommendationCountPolicy{
+		MinimumOutput: legacyPolicy.MinimumOutput, MaximumOutput: legacyPolicy.MaximumOutput, ProductionTarget: legacyPolicy.ProductionTarget,
+		RequestedMinimum: legacyPolicy.RequestedMinimum, RequestedMaximum: legacyPolicy.RequestedMaximum, Source: legacyPolicy.Source,
+		Custom: legacyPolicy.Custom, Clamped: legacyPolicy.Clamped,
+	}
 	text := buildMarketSummaryCandidateFunnel(
 		&data.MarketSummaryRouteLogSnapshot{IndicatorCandidateCt: 120, IndicatorAIInputCt: 50, DiscoveryCandidateCt: 36, VerifiedCandidateCt: 8},
 		policy,

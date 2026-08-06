@@ -76,6 +76,10 @@ type AIOperations interface {
 	NewSummaryStockNewsStreamPhased(context.Context, int, string, *int, bool) <-chan map[string]any
 	GenerateMarketSummarySupplementTable(context.Context, int, models.MarketSummarySupplementRequest) (string, string, string, error)
 	NormalizeMarketSummaryQuestion(string) string
+	ResolveMarketSummaryRecommendationCountPolicy(string) MarketSummaryRecommendationCountPolicy
+	PrepareMarketSummaryReportForPersistence(string, time.Time, int) (string, MarketSummaryReportPrepareStats, error)
+	RunMorningOpeningReview(time.Time) (string, error)
+	MergeMarketSummarySupplementReport(string, string, []string, int) (string, MarketSummaryReportMergeStats)
 	EnsureMarketSummaryRecommendStocksSaved(string, string, string, time.Time) (int, error)
 	EnsureMarketSummaryRecommendStocksSavedWithResult(string, string, string, time.Time, []models.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error)
 	EnsureMarketSummaryRecommendStocksSavedWithResultLimit(string, string, string, time.Time, []models.MarketSummaryVerifiedCandidateSnapshot, int) (*models.MarketSummaryRecommendSaveResult, error)
@@ -168,6 +172,8 @@ type NotifyOperations interface {
 
 type RecommendOperations interface {
 	RequireStrategyLive(context.Context, string) error
+	EncodeMarketSummaryBlockedReasons([]models.MarketSummaryBlockedReasonItem) string
+	SaveMarketSummaryRunDiagnostic(*models.MarketSummaryRunDiagnostic) error
 	CreateAIResponseReport(context.Context, *models.AIResponseResult) error
 	PersistAIResponseReport(context.Context, *models.AIResponseResult) error
 	PersistMarketSummaryV150Decision(context.Context, MarketSummaryDecisionSnapshot, string, string) (*models.MarketSummaryRecommendSaveResult, error)
