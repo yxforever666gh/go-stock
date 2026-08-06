@@ -130,6 +130,10 @@ func (*compatibilityServiceAdapter) TestAIConfig(ctx context.Context, aiConfigID
 	return result
 }
 
+func (*compatibilityServiceAdapter) HumanizeMarketSummaryReport(raw string) string {
+	return data.HumanizeMarketSummaryReport(raw)
+}
+
 func (*compatibilityServiceAdapter) AnalyzeSentiment(text string) models.SentimentResult {
 	return data.AnalyzeSentiment(text)
 }

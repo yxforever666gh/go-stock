@@ -59,6 +59,7 @@ func (o ServiceOperations) Validate() error {
 
 type AIOperations interface {
 	TestAIConfig(context.Context, int) *models.AIModelTestResult
+	HumanizeMarketSummaryReport(string) string
 	AnalyzeSentiment(string) models.SentimentResult
 	AnalyzeSentimentWithFreqWeight(string) map[string]any
 	GetAIResponseResult(context.Context, string) *models.AIResponseResult

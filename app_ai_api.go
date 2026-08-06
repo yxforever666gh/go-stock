@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
+	aicontract "go-stock/backend/ai"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
@@ -111,10 +111,10 @@ func (a *App) SendLatestAIAnalysisReportNow() string {
 
 func (a *App) SendMarketSummaryEmailNow(summaryText, question, modelName, summaryTime, errorMessage string) string {
 	return a.withYieldEmailTaskLock("manual_market_summary_email", func() string {
-		report := buildMarketSummaryEmailReport(
+		report := a.buildMarketSummaryEmailReport(
 			summaryText,
 			question,
-			resolveAIProviderName(0, modelName),
+			a.resolveAIProviderName(0, modelName),
 			modelName,
 			summaryTime,
 		)
@@ -132,30 +132,30 @@ func (a *App) SendMarketSummaryEmailNow(summaryText, question, modelName, summar
 	})
 }
 
-func resolveAIProviderName(aiConfigID int, modelName string) string {
-	cfg := data.GetSettingConfig()
+func (a *App) resolveAIProviderName(aiConfigID int, modelName string) string {
+	cfg := a.services.Config.GetConfig()
 	if cfg == nil {
 		return resolveAIProviderNameFromConfigs(nil, aiConfigID, modelName)
 	}
 	return resolveAIProviderNameFromConfigs(cfg.AiConfigs, aiConfigID, modelName)
 }
 
-func resolveAIProviderNameFromConfigs(aiConfigs []*data.AIConfig, aiConfigID int, modelName string) string {
+func resolveAIProviderNameFromConfigs(aiConfigs []*models.AIConfig, aiConfigID int, modelName string) string {
 	if aiConfigID > 0 {
 		for _, item := range aiConfigs {
 			if item != nil && int(item.ID) == aiConfigID {
-				if provider := strings.TrimSpace(data.DisplayAIProviderName(item)); provider != "" {
+				if provider := strings.TrimSpace(aicontract.DisplayProviderName(item.Name, item.BaseUrl, item.ModelName)); provider != "" {
 					return provider
 				}
 				break
 			}
 		}
 	}
-	return strings.TrimSpace(data.DetectAIProviderName(&data.AIConfig{ModelName: strings.TrimSpace(modelName)}))
+	return strings.TrimSpace(aicontract.DetectProviderName("", "", strings.TrimSpace(modelName)))
 }
 
-func buildMarketSummaryEmailReport(summaryText, question, providerName, modelName, summaryTime string) *models.AIResponseResult {
-	content := data.HumanizeMarketSummaryReport(summaryText)
+func (a *App) buildMarketSummaryEmailReport(summaryText, question, providerName, modelName, summaryTime string) *models.AIResponseResult {
+	content := a.services.AI.HumanizeMarketSummaryReport(summaryText)
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
@@ -275,6 +275,6 @@ func GetImageBase(bytes []byte) string {
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(bytes)
 }
 
-func (a *App) GetAiConfigs() []*data.AIConfig {
+func (a *App) GetAiConfigs() []*models.AIConfig {
 	return a.services.AI.GetAiConfigs()
 }

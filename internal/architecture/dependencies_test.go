@@ -14,6 +14,7 @@ import (
 )
 
 var boundaryImports = map[string]map[string]bool{
+	"backend/ai":             {},
 	"backend/marketdata":     {},
 	"backend/news":           {},
 	"backend/marketintel":    {},
@@ -39,13 +40,12 @@ var v150AllowedProductionImports = map[string]bool{
 // direct imports fail the test; removing one requires removing its entry here
 // in the same change, so the list can only shrink deliberately.
 var deprecatedDataImportDebt = map[string]bool{
-	"app_ai_api.go":              true,
-	"app_summary_runtime.go":     true,
-	"backend/agent/agent_api.go": true,
-	"internal/bootstrap/dependencies.go":                     true,
-	"internal/migrations/migrations.go":                      true,
-	"main.go":                                                true,
-	"runtime_bootstrap.go":                                   true,
+	"app_summary_runtime.go":             true,
+	"backend/agent/agent_api.go":         true,
+	"internal/bootstrap/dependencies.go": true,
+	"internal/migrations/migrations.go":  true,
+	"main.go":                            true,
+	"runtime_bootstrap.go":               true,
 }
 
 var deprecatedDataCompatibilityAdapters = map[string]bool{

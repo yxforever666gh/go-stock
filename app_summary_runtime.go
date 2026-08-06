@@ -432,8 +432,8 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 		}
 	}
 
-	providerName := resolveAIProviderName(res.aiConfigId, res.modelName)
-	report := buildMarketSummaryEmailReport(reportText, res.finalQuestion, providerName, res.modelName, startedAt.Format(time.DateTime))
+	providerName := a.resolveAIProviderName(res.aiConfigId, res.modelName)
+	report := a.buildMarketSummaryEmailReport(reportText, res.finalQuestion, providerName, res.modelName, startedAt.Format(time.DateTime))
 	if report == nil {
 		report = &models.AIResponseResult{
 			ProviderName: strings.TrimSpace(providerName),
@@ -489,7 +489,7 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 // Markdown parser. Scores, targets, state and rule JSON are taken only from the
 // frozen backend decision carried in res.v150Run; res.text is presentation-only.
 func (a *App) persistMarketSummaryV150RunResult(res summaryRunResult, startedAt time.Time) {
-	providerName := resolveAIProviderName(res.aiConfigId, res.modelName)
+	providerName := a.resolveAIProviderName(res.aiConfigId, res.modelName)
 	report := &models.AIResponseResult{
 		ProviderName: strings.TrimSpace(providerName),
 		StockCode:    "市场资讯",

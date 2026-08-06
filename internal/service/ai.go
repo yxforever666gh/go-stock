@@ -19,6 +19,10 @@ func (s AIService) TestAIConfig(ctx context.Context, aiConfigID int) *models.AIM
 	return s.operations.TestAIConfig(ctx, aiConfigID)
 }
 
+func (s AIService) HumanizeMarketSummaryReport(raw string) string {
+	return s.operations.HumanizeMarketSummaryReport(raw)
+}
+
 func (s AIService) AnalyzeSentiment(text string) models.SentimentResult {
 	return s.operations.AnalyzeSentiment(text)
 }

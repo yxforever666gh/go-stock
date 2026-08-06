@@ -24,13 +24,20 @@ type recordingConfigOperations struct {
 
 type recordingAIOperations struct {
 	AIOperations
-	configID int
-	result   *models.AIModelTestResult
+	configID      int
+	result        *models.AIModelTestResult
+	humanizeInput string
+	humanized     string
 }
 
 func (o *recordingAIOperations) TestAIConfig(_ context.Context, configID int) *models.AIModelTestResult {
 	o.configID = configID
 	return o.result
+}
+
+func (o *recordingAIOperations) HumanizeMarketSummaryReport(raw string) string {
+	o.humanizeInput = raw
+	return o.humanized
 }
 
 func (o *recordingConfigOperations) GetConfig() *models.SettingConfig {
@@ -69,5 +76,15 @@ func TestAIServiceTestsConfigurationThroughInjectedPort(t *testing.T) {
 	}
 	if operations.configID != 17 {
 		t.Fatalf("delegated AI config id = %d, want 17", operations.configID)
+	}
+}
+
+func TestAIServiceHumanizesMarketSummaryThroughInjectedPort(t *testing.T) {
+	operations := &recordingAIOperations{humanized: "clean report"}
+	if got := NewAIService(operations).HumanizeMarketSummaryReport("raw report"); got != "clean report" {
+		t.Fatalf("HumanizeMarketSummaryReport() = %q", got)
+	}
+	if operations.humanizeInput != "raw report" {
+		t.Fatalf("delegated report = %q", operations.humanizeInput)
 	}
 }
