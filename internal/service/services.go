@@ -13,6 +13,8 @@ type AppServices struct {
 	Scheduler SchedulerService
 	Notify    NotifyService
 	Execution ExecutionService
+	Portfolio PortfolioService
+	Legacy    LegacyService
 	System    SystemService
 }
 
@@ -34,6 +36,14 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		Scheduler: NewSchedulerService(dependencies.Operations.Scheduler),
 		Notify:    NewNotifyService(dependencies.Operations.Notify),
 		Execution: NewExecutionService(dependencies.ExecutionMonitor, dependencies.Operations.Scheduler, dependencies.Operations.System),
-		System:    NewSystemService(dependencies.Operations.System),
+		Portfolio: NewPortfolioService(
+			dependencies.PortfolioReader,
+			dependencies.Providers.Quotes,
+			dependencies.CurrentStrategyVersion,
+			dependencies.PortfolioInitialCash,
+			dependencies.PortfolioMaxQuoteAge,
+		),
+		Legacy: NewLegacyService(dependencies.LegacyReader),
+		System: NewSystemService(dependencies.Operations.System),
 	}, nil
 }

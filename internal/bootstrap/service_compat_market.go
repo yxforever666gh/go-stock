@@ -6,8 +6,12 @@ import (
 	"time"
 
 	"go-stock/backend/data"
+	"go-stock/backend/legacy"
 	"go-stock/backend/models"
+	"go-stock/backend/portfolio"
+	"go-stock/backend/strategy/v150"
 	cliports "go-stock/internal/cli/ports"
+	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 
 	"github.com/coocood/freecache"
@@ -38,12 +42,20 @@ func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) err
 func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 	marketData := data.NewCompatibilityMarketDataReader(storage.Main, storage.Minute)
 	newsReader := data.NewCompatibilityNewsReader()
+	ledger := data.NewCompatibilityPortfolioLedger(storage.Main)
+	legacyRepository := data.NewCompatibilityLegacyRepository(storage.Main)
+	strategyConfig := v150.FixedStrategyV150Config()
 	return service.Dependencies{
 		Clock:                   systemClock{},
 		Initializer:             legacyApplicationInitializer{},
 		Operations:              newCompatibilityServiceOperations(storage.Main),
 		RecommendationPublisher: &compatibilityServiceAdapter{main: storage.Main},
 		ExecutionMonitor:        data.NewCompatibilityExecutionMonitor(),
+		PortfolioReader:         portfolio.NewReader(ledger),
+		LegacyReader:            legacy.NewService(legacyRepository, marketData),
+		CurrentStrategyVersion:  releaseinfo.Manifest().CurrentStrategyVersion,
+		PortfolioInitialCash:    strategyConfig.PortfolioCash,
+		PortfolioMaxQuoteAge:    strategyConfig.MaximumRealtimeQuoteLag,
 		Providers: service.ProviderSet{
 			DailyBars:   marketData,
 			MinuteBars:  marketData,
@@ -51,8 +63,8 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 			Securities:  marketData,
 			News:        newsReader,
 			MarketIntel: data.NewCompatibilityMarketIntelReader(newsReader),
-			Ledger:      data.NewCompatibilityPortfolioLedger(storage.Main),
-			Legacy:      data.NewCompatibilityLegacyRepository(storage.Main),
+			Ledger:      ledger,
+			Legacy:      legacyRepository,
 		},
 	}
 }

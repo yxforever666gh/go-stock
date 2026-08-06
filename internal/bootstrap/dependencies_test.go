@@ -6,6 +6,9 @@ import (
 	"testing"
 	"time"
 
+	"go-stock/backend/legacy"
+	"go-stock/backend/marketdata"
+	"go-stock/backend/portfolio"
 	appconfig "go-stock/internal/config"
 	"go-stock/internal/service"
 
@@ -15,6 +18,12 @@ import (
 type fixedClock struct{ now time.Time }
 
 func (c fixedClock) Now() time.Time { return c.now }
+
+type unavailableQuoteReader struct{}
+
+func (unavailableQuoteReader) Quote(context.Context, string, time.Time) (marketdata.Quote, error) {
+	return marketdata.Quote{}, marketdata.ErrObservationUnavailable
+}
 
 type recordingInitializer struct {
 	settingsCalls  int
@@ -44,6 +53,12 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 			Initializer:             initializer,
 			Operations:              newCompatibilityServiceOperations(mainDB),
 			RecommendationPublisher: &compatibilityServiceAdapter{main: mainDB},
+			Providers:               service.ProviderSet{Quotes: unavailableQuoteReader{}},
+			PortfolioReader:         portfolio.NewReader(nil),
+			LegacyReader:            legacy.NewService(nil, nil),
+			CurrentStrategyVersion:  "1.5.0",
+			PortfolioInitialCash:    100000,
+			PortfolioMaxQuoteAge:    5 * time.Minute,
 		},
 	})
 	if err != nil {
@@ -126,7 +141,8 @@ func TestCompatibilityDependenciesInjectAllProviderNeutralPorts(t *testing.T) {
 	providers := deps.Providers
 	if providers.DailyBars == nil || providers.MinuteBars == nil || providers.Quotes == nil || providers.Securities == nil ||
 		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil ||
-		deps.RecommendationPublisher == nil {
+		deps.RecommendationPublisher == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
+		deps.PortfolioInitialCash != 100000 || deps.PortfolioMaxQuoteAge != 5*time.Minute {
 		t.Fatalf("compatibility provider set has an unconfigured port: %+v", providers)
 	}
 }

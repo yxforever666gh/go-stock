@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"errors"
+	"math"
+	"strings"
 	"time"
 
 	"go-stock/backend/execution"
@@ -52,6 +54,11 @@ type Dependencies struct {
 	Operations              ServiceOperations
 	RecommendationPublisher recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult]
 	ExecutionMonitor        execution.Monitor
+	PortfolioReader         PortfolioAccountReader
+	LegacyReader            LegacyRecommendationReader
+	CurrentStrategyVersion  string
+	PortfolioInitialCash    float64
+	PortfolioMaxQuoteAge    time.Duration
 }
 
 func (d Dependencies) Validate() error {
@@ -66,6 +73,24 @@ func (d Dependencies) Validate() error {
 	}
 	if d.RecommendationPublisher == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("recommendation publisher is required"))
+	}
+	if d.PortfolioReader == nil {
+		return errors.Join(ErrInvalidDependencies, errors.New("portfolio reader is required"))
+	}
+	if d.LegacyReader == nil {
+		return errors.Join(ErrInvalidDependencies, errors.New("legacy reader is required"))
+	}
+	if d.Providers.Quotes == nil {
+		return errors.Join(ErrInvalidDependencies, errors.New("quote reader is required"))
+	}
+	if strings.TrimSpace(d.CurrentStrategyVersion) == "" {
+		return errors.Join(ErrInvalidDependencies, errors.New("current strategy version is required"))
+	}
+	if d.PortfolioInitialCash <= 0 || math.IsNaN(d.PortfolioInitialCash) || math.IsInf(d.PortfolioInitialCash, 0) {
+		return errors.Join(ErrInvalidDependencies, errors.New("portfolio initial cash must be positive"))
+	}
+	if d.PortfolioMaxQuoteAge <= 0 {
+		return errors.Join(ErrInvalidDependencies, errors.New("portfolio quote freshness policy is required"))
 	}
 	return nil
 }
