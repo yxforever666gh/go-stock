@@ -30,6 +30,43 @@ type recordingAIOperations struct {
 	humanized     string
 }
 
+type recordingRecommendOperations struct {
+	RecommendOperations
+	gateVersion       string
+	created           *models.AIResponseResult
+	persisted         *models.AIResponseResult
+	decision          MarketSummaryDecisionSnapshot
+	providerName      string
+	modelName         string
+	publicationResult *models.MarketSummaryRecommendSaveResult
+}
+
+func (o *recordingRecommendOperations) RequireStrategyLive(_ context.Context, version string) error {
+	o.gateVersion = version
+	return nil
+}
+
+func (o *recordingRecommendOperations) CreateAIResponseReport(_ context.Context, result *models.AIResponseResult) error {
+	o.created = result
+	return nil
+}
+
+func (o *recordingRecommendOperations) PersistAIResponseReport(_ context.Context, result *models.AIResponseResult) error {
+	o.persisted = result
+	return nil
+}
+
+func (o *recordingRecommendOperations) PersistMarketSummaryV150Decision(_ context.Context, decision MarketSummaryDecisionSnapshot, providerName, modelName string) (*models.MarketSummaryRecommendSaveResult, error) {
+	o.decision = decision
+	o.providerName = providerName
+	o.modelName = modelName
+	return o.publicationResult, nil
+}
+
+type recordingDecisionSnapshot struct{ version string }
+
+func (d recordingDecisionSnapshot) MarketSummaryDecisionVersion() string { return d.version }
+
 func (o *recordingAIOperations) TestAIConfig(_ context.Context, configID int) *models.AIModelTestResult {
 	o.configID = configID
 	return o.result
@@ -86,5 +123,40 @@ func TestAIServiceHumanizesMarketSummaryThroughInjectedPort(t *testing.T) {
 	}
 	if operations.humanizeInput != "raw report" {
 		t.Fatalf("delegated report = %q", operations.humanizeInput)
+	}
+}
+
+func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
+	result := &models.AIResponseResult{}
+	publication := &models.MarketSummaryRecommendSaveResult{SavedCount: 2}
+	operations := &recordingRecommendOperations{publicationResult: publication}
+	service := NewRecommendService(operations)
+	ctx := context.WithValue(context.Background(), struct{}{}, "summary")
+	decision := recordingDecisionSnapshot{version: "1.5.0"}
+
+	if err := service.RequireStrategyLive(ctx, "1.5.0"); err != nil {
+		t.Fatalf("RequireStrategyLive: %v", err)
+	}
+	if operations.gateVersion != "1.5.0" {
+		t.Fatalf("gate version = %q", operations.gateVersion)
+	}
+	if err := service.CreateAIResponseReport(ctx, result); err != nil {
+		t.Fatalf("CreateAIResponseReport: %v", err)
+	}
+	if operations.created != result {
+		t.Fatal("create report was not delegated")
+	}
+	if err := service.PersistAIResponseReport(ctx, result); err != nil {
+		t.Fatalf("PersistAIResponseReport: %v", err)
+	}
+	if operations.persisted != result {
+		t.Fatal("persist report was not delegated")
+	}
+	got, err := service.PersistMarketSummaryV150Decision(ctx, decision, "provider", "model")
+	if err != nil {
+		t.Fatalf("PersistMarketSummaryV150Decision: %v", err)
+	}
+	if got != publication || operations.decision != decision || operations.providerName != "provider" || operations.modelName != "model" {
+		t.Fatalf("publication delegation mismatch: result=%p decision=%#v provider=%q model=%q", got, operations.decision, operations.providerName, operations.modelName)
 	}
 }

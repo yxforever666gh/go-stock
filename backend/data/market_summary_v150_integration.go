@@ -144,6 +144,15 @@ type MarketSummaryV150RunSnapshot struct {
 	NoTradeReason        string                                `json:"noTradeReason,omitempty"`
 }
 
+// MarketSummaryDecisionVersion lets the service-layer publication port accept
+// this frozen snapshot without importing backend/data.
+func (r *MarketSummaryV150RunSnapshot) MarketSummaryDecisionVersion() string {
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.RunContext.StrategyVersion)
+}
+
 const (
 	marketSummaryV150LocalModelSpec  = "strategy-v150-local-evidence-verifier-v1"
 	marketSummaryV150LocalPromptSpec = "event-fields-only:direction,relevance,importance,confidence,evidence_ids;no-ranking,no-target,no-state"

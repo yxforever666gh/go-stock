@@ -9,6 +9,7 @@ import (
 
 	"go-stock/backend/data"
 	"go-stock/backend/db"
+	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/service"
@@ -16,6 +17,8 @@ import (
 	"github.com/cloudwego/eino/schema"
 	"gorm.io/gorm"
 )
+
+var _ service.MarketSummaryDecisionSnapshot = (*data.MarketSummaryV150RunSnapshot)(nil)
 
 func NewProductionCommandAIResolver() (cliports.CommandAIResolver, error) {
 	if db.Dao == nil {
@@ -331,6 +334,48 @@ func (*compatibilityServiceAdapter) AppendMessage(sessionID, role, content, reas
 
 func (*compatibilityServiceAdapter) TrimSessionMessages(sessionID string, maxMessages int) error {
 	return data.NewAgentChatHistoryService().TrimSessionMessages(sessionID, maxMessages)
+}
+
+func (a *compatibilityServiceAdapter) RequireStrategyLive(ctx context.Context, strategyVersion string) error {
+	return governance.RequireStrategyLive(ctx, a.main, strategyVersion)
+}
+
+func (a *compatibilityServiceAdapter) CreateAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
+	if a.main == nil {
+		return errors.New("main database is not initialized")
+	}
+	if result == nil {
+		return errors.New("AI response result is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.main.WithContext(ctx).Create(result).Error
+}
+
+func (a *compatibilityServiceAdapter) PersistAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
+	if a.main == nil {
+		return errors.New("main database is not initialized")
+	}
+	if result == nil {
+		return errors.New("AI response result is required")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.main.WithContext(ctx).Save(result).Error
+}
+
+func (a *compatibilityServiceAdapter) PersistMarketSummaryV150Decision(
+	ctx context.Context,
+	decision service.MarketSummaryDecisionSnapshot,
+	providerName, modelName string,
+) (*models.MarketSummaryRecommendSaveResult, error) {
+	run, ok := decision.(*data.MarketSummaryV150RunSnapshot)
+	if !ok || run == nil {
+		return nil, fmt.Errorf("unsupported market summary decision snapshot %T", decision)
+	}
+	return data.PersistMarketSummaryV150Decision(ctx, a.main, run, providerName, modelName)
 }
 
 func (*compatibilityServiceAdapter) GetAIResponseResultList(query models.AIResponseResultQuery) (*models.AIResponseResultPageData, error) {

@@ -1,10 +1,18 @@
 package service
 
 import (
+	"context"
 	"time"
 
 	"go-stock/backend/models"
 )
+
+// MarketSummaryDecisionSnapshot is the consumer-owned boundary for publishing
+// a frozen strategy decision. Compatibility adapters may accept their concrete
+// snapshot type, but the use-case layer does not depend on backend/data.
+type MarketSummaryDecisionSnapshot interface {
+	MarketSummaryDecisionVersion() string
+}
 
 type MarketSummaryActivationRepairResult struct {
 	Scanned      int `json:"scanned"`
@@ -19,6 +27,26 @@ type RecommendService struct {
 
 func NewRecommendService(operations RecommendOperations) RecommendService {
 	return RecommendService{operations: operations}
+}
+
+func (s RecommendService) RequireStrategyLive(ctx context.Context, strategyVersion string) error {
+	return s.operations.RequireStrategyLive(ctx, strategyVersion)
+}
+
+func (s RecommendService) CreateAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
+	return s.operations.CreateAIResponseReport(ctx, result)
+}
+
+func (s RecommendService) PersistAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
+	return s.operations.PersistAIResponseReport(ctx, result)
+}
+
+func (s RecommendService) PersistMarketSummaryV150Decision(
+	ctx context.Context,
+	decision MarketSummaryDecisionSnapshot,
+	providerName, modelName string,
+) (*models.MarketSummaryRecommendSaveResult, error) {
+	return s.operations.PersistMarketSummaryV150Decision(ctx, decision, providerName, modelName)
 }
 
 func (s RecommendService) GetAIResponseResultList(query models.AIResponseResultQuery) (*models.AIResponseResultPageData, error) {

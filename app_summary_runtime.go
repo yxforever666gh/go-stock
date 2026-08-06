@@ -1,11 +1,8 @@
 package main
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 	"go-stock/backend/data"
-	"go-stock/backend/db"
 	"go-stock/backend/governance"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
@@ -68,7 +65,7 @@ func (a *App) SummaryStockNews(question string, aiConfigId int, sysPromptId *int
 }
 
 func (a *App) runSummaryStockNewsTask(question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) summaryRunResult {
-	if err := governance.RequireStrategyLive(a.ctx, db.Dao, data.MarketSummaryCurrentVersion()); err != nil {
+	if err := a.services.Recommend.RequireStrategyLive(a.ctx, data.MarketSummaryCurrentVersion()); err != nil {
 		logger.SugaredLogger.Warnf("market summary production blocked: %v", err)
 		emitEvent(a.ctx, "summaryStockNewsToolStatus", map[string]any{
 			"event":  "summaryStockNewsToolStatus",
@@ -450,7 +447,7 @@ func (a *App) persistSummaryRunResult(res summaryRunResult, startedAt time.Time)
 		return
 	}
 	report.ChatId = res.chatID
-	if err := db.Dao.Create(report).Error; err != nil {
+	if err := a.services.Recommend.CreateAIResponseReport(a.ctx, report); err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结保存失败: %v", err)
 	}
 
@@ -500,23 +497,11 @@ func (a *App) persistMarketSummaryV150RunResult(res summaryRunResult, startedAt 
 		Content:      data.HumanizeMarketSummaryReport(res.text),
 	}
 	report.CreatedAt = startedAt
-	if db.Dao != nil {
-		if err := db.Dao.Create(report).Error; err != nil {
-			logger.SugaredLogger.Warnf("V1.5 市场报告保存失败: %v", err)
-		}
+	if err := a.services.Recommend.CreateAIResponseReport(a.ctx, report); err != nil {
+		logger.SugaredLogger.Warnf("V1.5 市场报告保存失败: %v", err)
 	}
 
-	var saveResult *models.MarketSummaryRecommendSaveResult
-	var persistErr error
-	if db.Dao == nil {
-		persistErr = fmt.Errorf("V1.5 数据库未初始化")
-	} else {
-		persistContext := a.ctx
-		if persistContext == nil {
-			persistContext = context.Background()
-		}
-		saveResult, persistErr = data.PersistMarketSummaryV150Decision(persistContext, db.Dao, res.v150Run, providerName, res.modelName)
-	}
+	saveResult, persistErr := a.services.Recommend.PersistMarketSummaryV150Decision(a.ctx, res.v150Run, providerName, res.modelName)
 	if persistErr != nil {
 		logger.SugaredLogger.Warnf("V1.5 决策持久化失败（不会回退到旧模型解析）: %v", persistErr)
 		if saveResult == nil {
@@ -559,13 +544,13 @@ func (a *App) tryRunMarketSummarySupplement(report *models.AIResponseResult, rep
 		firstResult.SupplementTriggered = false
 		firstResult.SupplementText = "V1.5.0 已禁用为凑数量而发起的第二轮模型生成；结构字段仅在首次持久化前逐条规范化，单条失败不会影响同批记录。"
 		reportText, _ = data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
-		updateMarketSummaryReportRuntimeResult(report, reportText, firstResult.SupplementText, res.routeLog, countPolicy, firstResult, firstOutputRowsOmitted)
+		a.updateMarketSummaryReportRuntimeResult(report, reportText, firstResult.SupplementText, res.routeLog, countPolicy, firstResult, firstOutputRowsOmitted)
 		return firstResult
 	}
 	targetProduction := countPolicy.ProductionTarget
 	reportText, _ = data.MergeMarketSummarySupplementReport(reportText, "", nil, countPolicy.MaximumOutput)
 	updateReport := func(note string, outputRowsOmitted int) {
-		updateMarketSummaryReportRuntimeResult(report, reportText, note, res.routeLog, countPolicy, firstResult, outputRowsOmitted)
+		a.updateMarketSummaryReportRuntimeResult(report, reportText, note, res.routeLog, countPolicy, firstResult, outputRowsOmitted)
 	}
 	if firstResult.ProductionCount >= targetProduction {
 		firstResult.SupplementText = buildMarketSummarySupplementNote(false, targetProduction, nil, mergeMarketSummaryBlockedReasons(firstResult.BlockedReasons, firstResult.ProductionDowngradeReasons))
@@ -653,7 +638,7 @@ func shouldRunMarketSummaryModelSupplement(version string) bool {
 	return strings.TrimSpace(version) != "1.5.0"
 }
 
-func updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy data.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {
+func (a *App) updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, reportText, note string, routeLog *data.MarketSummaryRouteLogSnapshot, countPolicy data.MarketSummaryRecommendationCountPolicy, result *models.MarketSummaryRecommendSaveResult, outputRowsOmitted int) {
 	if report == nil {
 		return
 	}
@@ -663,7 +648,7 @@ func updateMarketSummaryReportRuntimeResult(report *models.AIResponseResult, rep
 		parts = append(parts, strings.TrimSpace(note))
 	}
 	report.Content = data.HumanizeMarketSummaryReport(strings.Join(parts, "\n\n"))
-	if err := db.Dao.Save(report).Error; err != nil {
+	if err := a.services.Recommend.PersistAIResponseReport(a.ctx, report); err != nil {
 		logger.SugaredLogger.Warnf("市场资讯AI总结候选漏斗更新失败: %v", err)
 	}
 }
