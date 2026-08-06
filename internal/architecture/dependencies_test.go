@@ -42,7 +42,6 @@ var v150AllowedProductionImports = map[string]bool{
 var deprecatedDataImportDebt = map[string]bool{
 	"app_summary_runtime.go":            true,
 	"internal/migrations/migrations.go": true,
-	"runtime_bootstrap.go":              true,
 }
 
 var deprecatedDataCompatibilityAdapters = map[string]bool{

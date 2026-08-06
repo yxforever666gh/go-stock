@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 
-	"go-stock/backend/data"
 	log "go-stock/backend/logger"
 	"go-stock/internal/bootstrap"
 	appconfig "go-stock/internal/config"
@@ -50,7 +49,7 @@ func runDesktopApp(app *App) error {
 		width = 1456
 	}
 
-	darkTheme := data.GetSettingConfig().DarkTheme
+	darkTheme := desktopDarkTheme(app)
 	backgroundColour := &options.RGBA{R: 255, G: 255, B: 255, A: 1}
 	if darkTheme {
 		backgroundColour = &options.RGBA{R: 27, G: 38, B: 54, A: 1}
@@ -108,6 +107,14 @@ func runDesktopApp(app *App) error {
 			},
 		},
 	})
+}
+
+func desktopDarkTheme(app *App) bool {
+	if app == nil {
+		return false
+	}
+	config := app.services.Config.GetConfig()
+	return config != nil && config.Settings != nil && config.DarkTheme
 }
 
 func logStartupConfig(cfg appconfig.AppConfig) {
