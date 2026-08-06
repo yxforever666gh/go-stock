@@ -135,6 +135,54 @@ func TestCompatibilityCurrentRecommendationReaderAppliesSnapshotAndEventAsOf(t *
 	}
 }
 
+func TestCompatibilityCurrentRecommendationReaderExcludesLaterSameDayRunAtLoadBoundary(t *testing.T) {
+	database := openCompatibilityCurrentRecommendationTestDB(t)
+	visible := compatibilityCurrentRecommendationBundle(t)
+	sealAndAppendCompatibilityBundle(t, database, &visible)
+
+	cutoff := visible.Run.FrozenAt.Add(time.Minute)
+	future := compatibilityCurrentRecommendationBundle(t)
+	future.Run.RunID = "current-run-future"
+	future.Run.DecisionAt = cutoff.Add(time.Hour)
+	future.Run.GeneratedAt = future.Run.DecisionAt.Add(time.Minute)
+	future.Run.DataCutoffAt = future.Run.DecisionAt.Add(-time.Minute)
+	future.Run.AsOf = future.Run.DataCutoffAt
+	future.Run.StartedAt = future.Run.DataCutoffAt.Add(-time.Minute)
+	futureFrozenAt := future.Run.DecisionAt.Add(2 * time.Minute)
+	futureValidFromAt := future.Run.DecisionAt.Add(15 * time.Minute)
+	future.Run.FrozenAt = &futureFrozenAt
+	future.Run.ValidFromAt = &futureValidFromAt
+	future.Run.ConfigHash = "future-invalid-config-must-not-be-read"
+	future.Candidates[0].RunID = future.Run.RunID
+	future.Candidates[0].CandidateID = "current-candidate-future"
+	future.Candidates[0].Symbol = "000002.SZ"
+	future.Candidates[0].FrozenAt = &futureFrozenAt
+	future.Rules[0].RunID = future.Run.RunID
+	future.Rules[0].RuleID = "current-rule-future"
+	future.Rules[0].CandidateID = future.Candidates[0].CandidateID
+	future.Rules[0].Symbol = future.Candidates[0].Symbol
+	future.Rules[0].ValidFromAt = futureValidFromAt
+	future.Rules[0].FrozenAt = &futureFrozenAt
+	future.OrderEvents[0].RunID = future.Run.RunID
+	future.OrderEvents[0].RuleID = future.Rules[0].RuleID
+	future.OrderEvents[0].Symbol = future.Rules[0].Symbol
+	future.OrderEvents[0].EventID = "current-event-future-issued"
+	future.OrderEvents[0].EventAt = future.Run.DecisionAt
+	future.OrderEvents[0].FrozenAt = &futureFrozenAt
+	sealAndAppendCompatibilityBundle(t, database, &future)
+
+	got, err := NewCompatibilityCurrentRecommendationReader(database).List(
+		context.Background(),
+		compatibilityQueryForBundle(visible, cutoff),
+	)
+	if err != nil {
+		t.Fatalf("later same-day run contaminated point-in-time read: %v", err)
+	}
+	if len(got) != 1 || got[0].Frozen.RunID != visible.Run.RunID {
+		t.Fatalf("point-in-time recommendations = %+v, want only %s", got, visible.Run.RunID)
+	}
+}
+
 func TestCompatibilityCurrentRecommendationReaderNoFrozenSnapshotsIsEmpty(t *testing.T) {
 	database := openCompatibilityCurrentRecommendationTestDB(t)
 	zone := time.FixedZone("Asia/Shanghai", 8*60*60)

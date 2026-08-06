@@ -35,12 +35,13 @@ func (reader CompatibilityCurrentRecommendationReader) List(
 		return nil, err
 	}
 
-	inputs, err := persistence.LoadFrozenStrategyInputs(
+	inputs, err := persistence.LoadFrozenStrategyInputsAsOf(
 		ctx,
 		reader.database,
 		v150.StrategyVersion,
 		query.Start,
 		query.End,
+		query.AsOf,
 	)
 	if err != nil {
 		if errors.Is(err, persistence.ErrNoFrozenSnapshots) {
