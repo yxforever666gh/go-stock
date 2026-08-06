@@ -37,19 +37,21 @@ func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) err
 // while the old package is being retired.
 func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 	marketData := data.NewCompatibilityMarketDataReader(storage.Main, storage.Minute)
+	newsReader := data.NewCompatibilityNewsReader()
 	return service.Dependencies{
 		Clock:            systemClock{},
 		Initializer:      legacyApplicationInitializer{},
 		Operations:       newCompatibilityServiceOperations(storage.Main),
 		ExecutionMonitor: data.NewCompatibilityExecutionMonitor(),
 		Providers: service.ProviderSet{
-			DailyBars:  marketData,
-			MinuteBars: marketData,
-			Quotes:     marketData,
-			Securities: marketData,
-			News:       data.NewCompatibilityNewsReader(),
-			Ledger:     data.NewCompatibilityPortfolioLedger(storage.Main),
-			Legacy:     data.NewCompatibilityLegacyRepository(storage.Main),
+			DailyBars:   marketData,
+			MinuteBars:  marketData,
+			Quotes:      marketData,
+			Securities:  marketData,
+			News:        newsReader,
+			MarketIntel: data.NewCompatibilityMarketIntelReader(newsReader),
+			Ledger:      data.NewCompatibilityPortfolioLedger(storage.Main),
+			Legacy:      data.NewCompatibilityLegacyRepository(storage.Main),
 		},
 	}
 }

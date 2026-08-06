@@ -108,3 +108,12 @@ func TestAssembleRuntimeRejectsMissingRequiredDependencies(t *testing.T) {
 		})
 	}
 }
+
+func TestCompatibilityDependenciesInjectAllProviderNeutralPorts(t *testing.T) {
+	deps := newCompatibilityServiceDependencies(Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}})
+	providers := deps.Providers
+	if providers.DailyBars == nil || providers.MinuteBars == nil || providers.Quotes == nil || providers.Securities == nil ||
+		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil {
+		t.Fatalf("compatibility provider set has an unconfigured port: %+v", providers)
+	}
+}
