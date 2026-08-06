@@ -54,9 +54,7 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 	"internal/bootstrap/runtime_compat.go":             true,
 }
 
-var globalDBImportDebt = map[string]bool{
-	"internal/cli/cmd_release.go": true,
-}
+var globalDBImportDebt = map[string]bool{}
 
 func TestBoundaryPackagesHaveExplicitDependencyDirection(t *testing.T) {
 	root := repositoryRoot(t)

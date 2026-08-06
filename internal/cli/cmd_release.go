@@ -13,13 +13,10 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/db"
-	"go-stock/backend/models"
 	"go-stock/backend/strategy/v150"
 	"go-stock/internal/bootstrap"
+	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/releaseinfo"
-
-	"gorm.io/gorm"
 )
 
 type releaseInspectResult struct {
@@ -29,6 +26,10 @@ type releaseInspectResult struct {
 }
 
 func runRelease(args []string, _ GlobalOptions, stdout io.Writer) error {
+	return runReleaseWithRepository(args, stdout, bootstrap.NewProductionReleaseInspectionRepository())
+}
+
+func runReleaseWithRepository(args []string, stdout io.Writer, repository cliports.ReleaseInspectionRepository) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: release inspect|verify-replay-bundle")
 	}
@@ -39,7 +40,7 @@ func runRelease(args []string, _ GlobalOptions, stdout io.Writer) error {
 		}
 		return runReleaseInspect(stdout)
 	case "verify-replay-bundle":
-		return runVerifyReplayBundle(args[1:], stdout)
+		return runVerifyReplayBundle(args[1:], stdout, repository)
 	default:
 		return fmt.Errorf("usage: release inspect|verify-replay-bundle")
 	}
@@ -93,7 +94,7 @@ type replayBundleVerification struct {
 	Verified            bool   `json:"verified"`
 }
 
-func runVerifyReplayBundle(args []string, stdout io.Writer) error {
+func runVerifyReplayBundle(args []string, stdout io.Writer, repository cliports.ReleaseInspectionRepository) error {
 	fs := flag.NewFlagSet("release verify-replay-bundle", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	bundlePath := fs.String("bundle", filepath.Join("runtime", "backups", "pre-refactor-20260806-001309"), "directory containing the frozen stock.db and minute.db")
@@ -105,7 +106,7 @@ func runVerifyReplayBundle(args []string, stdout io.Writer) error {
 	if len(fs.Args()) != 0 {
 		return fmt.Errorf("verify-replay-bundle does not accept positional arguments: %s", strings.Join(fs.Args(), " "))
 	}
-	result, err := verifyReplayBundle(*bundlePath, *manifestPath)
+	result, err := verifyReplayBundleWithRepository(*bundlePath, *manifestPath, repository)
 	if err != nil {
 		return err
 	}
@@ -122,7 +123,14 @@ func runVerifyReplayBundle(args []string, stdout io.Writer) error {
 }
 
 func verifyReplayBundle(bundlePath, manifestPath string) (replayBundleVerification, error) {
+	return verifyReplayBundleWithRepository(bundlePath, manifestPath, bootstrap.NewProductionReleaseInspectionRepository())
+}
+
+func verifyReplayBundleWithRepository(bundlePath, manifestPath string, repository cliports.ReleaseInspectionRepository) (replayBundleVerification, error) {
 	var result replayBundleVerification
+	if repository == nil {
+		return result, fmt.Errorf("release inspection repository is required")
+	}
 	manifest, absoluteManifest, err := loadReplayBundleManifest(manifestPath)
 	if err != nil {
 		return result, err
@@ -144,28 +152,6 @@ func verifyReplayBundle(bundlePath, manifestPath string) (replayBundleVerificati
 		return result, fmt.Errorf("minute database: %w", err)
 	}
 
-	oldMain, oldMinute := db.Dao, db.MinuteDao
-	oldMinuteEnv, hadMinuteEnv := os.LookupEnv("GO_STOCK_MINUTE_DB_PATH")
-	if err := os.Setenv("GO_STOCK_MINUTE_DB_PATH", minutePath); err != nil {
-		return result, err
-	}
-	db.Dao, db.MinuteDao = nil, nil
-	defer func() {
-		_ = db.Close()
-		db.Dao, db.MinuteDao = oldMain, oldMinute
-		if hadMinuteEnv {
-			_ = os.Setenv("GO_STOCK_MINUTE_DB_PATH", oldMinuteEnv)
-		} else {
-			_ = os.Unsetenv("GO_STOCK_MINUTE_DB_PATH")
-		}
-	}()
-	if _, err := db.InitReadOnly(mainPath); err != nil {
-		return result, fmt.Errorf("open verified replay bundle: %w", err)
-	}
-	if db.MinuteDao == nil {
-		return result, fmt.Errorf("open verified replay bundle: minute database is unavailable")
-	}
-
 	expectedAsOf, err := time.Parse(time.RFC3339, manifest.MinuteDatabase.AsOf)
 	if err != nil {
 		return result, fmt.Errorf("parse minute database asOf: %w", err)
@@ -174,53 +160,36 @@ func verifyReplayBundle(bundlePath, manifestPath string) (replayBundleVerificati
 	if err != nil {
 		return result, fmt.Errorf("parse replay recommendationTo: %w", err)
 	}
-	legacyRuleRows, err := countReplayBundleRules(db.Dao, to)
-	if err != nil {
-		return result, err
-	}
-	legacyMinuteRows, err := countTableRows(db.Dao, "ai_recommend_minute_bar")
-	if err != nil {
-		return result, err
-	}
-	minuteRows, minuteMaxMillis, err := minuteBundleStats(db.MinuteDao)
-	if err != nil {
-		return result, err
-	}
-	actualAsOf := time.UnixMilli(minuteMaxMillis)
-	if legacyRuleRows != manifest.MainDatabase.LegacyRuleRows {
-		return result, fmt.Errorf("legacy rule row count mismatch: got %d want %d", legacyRuleRows, manifest.MainDatabase.LegacyRuleRows)
-	}
-	if legacyMinuteRows != manifest.MainDatabase.LegacyMinuteBarRows {
-		return result, fmt.Errorf("legacy minute row count mismatch: got %d want %d", legacyMinuteRows, manifest.MainDatabase.LegacyMinuteBarRows)
-	}
-	if minuteRows != manifest.MinuteDatabase.MinuteBarRows {
-		return result, fmt.Errorf("minute row count mismatch: got %d want %d", minuteRows, manifest.MinuteDatabase.MinuteBarRows)
-	}
-	if !actualAsOf.Equal(expectedAsOf) {
-		return result, fmt.Errorf("minute asOf mismatch: got %s want %s", actualAsOf.Format(time.RFC3339), expectedAsOf.Format(time.RFC3339))
-	}
-	if err := verifyReplayQuickCheck(db.Dao, "main"); err != nil {
-		return result, err
-	}
-	if err := verifyReplayQuickCheck(db.MinuteDao, "minute"); err != nil {
-		return result, err
-	}
-
-	report, err := bootstrap.ReplayLegacyStructuredRulesCacheOnly(context.Background(), bootstrap.LegacyReplayOptions{
-		To: to, ExpectedRuleCount: manifest.Replay.ExpectedRuleCount,
+	inspection, err := repository.InspectReplayBundle(context.Background(), cliports.ReleaseReplayInspectionRequest{
+		MainDatabasePath:   mainPath,
+		MinuteDatabasePath: minutePath,
+		RecommendationTo:   to,
+		ExpectedRuleCount:  manifest.Replay.ExpectedRuleCount,
 	})
 	if err != nil {
 		return result, err
 	}
-	if !report.Deterministic || report.DeterminismViolations != 0 || report.ResultHash != manifest.Replay.ExpectedResultHash || report.RepeatedResultHash != manifest.Replay.ExpectedResultHash {
-		return result, fmt.Errorf("frozen replay mismatch: count=%d deterministic=%t hash=%s repeat=%s", report.TotalRules, report.Deterministic, report.ResultHash, report.RepeatedResultHash)
+	if inspection.LegacyRuleRows != manifest.MainDatabase.LegacyRuleRows {
+		return result, fmt.Errorf("legacy rule row count mismatch: got %d want %d", inspection.LegacyRuleRows, manifest.MainDatabase.LegacyRuleRows)
+	}
+	if inspection.LegacyMinuteBarRows != manifest.MainDatabase.LegacyMinuteBarRows {
+		return result, fmt.Errorf("legacy minute row count mismatch: got %d want %d", inspection.LegacyMinuteBarRows, manifest.MainDatabase.LegacyMinuteBarRows)
+	}
+	if inspection.MinuteBarRows != manifest.MinuteDatabase.MinuteBarRows {
+		return result, fmt.Errorf("minute row count mismatch: got %d want %d", inspection.MinuteBarRows, manifest.MinuteDatabase.MinuteBarRows)
+	}
+	if !inspection.MinuteAsOf.Equal(expectedAsOf) {
+		return result, fmt.Errorf("minute asOf mismatch: got %s want %s", inspection.MinuteAsOf.Format(time.RFC3339), expectedAsOf.Format(time.RFC3339))
+	}
+	if !inspection.Deterministic || inspection.DeterminismFailures != 0 || inspection.ResultHash != manifest.Replay.ExpectedResultHash || inspection.RepeatedResultHash != manifest.Replay.ExpectedResultHash {
+		return result, fmt.Errorf("frozen replay mismatch: count=%d deterministic=%t hash=%s repeat=%s", inspection.ReplayRuleCount, inspection.Deterministic, inspection.ResultHash, inspection.RepeatedResultHash)
 	}
 	result = replayBundleVerification{
 		BundlePath: absoluteBundle, ManifestPath: absoluteManifest,
 		MainSHA256: mainHash, MinuteSHA256: minuteHash,
-		LegacyRuleRows: legacyRuleRows, LegacyMinuteBarRows: legacyMinuteRows,
-		MinuteBarRows: minuteRows, AsOf: expectedAsOf.Format(time.RFC3339),
-		ResultHash: report.ResultHash, Verified: true,
+		LegacyRuleRows: inspection.LegacyRuleRows, LegacyMinuteBarRows: inspection.LegacyMinuteBarRows,
+		MinuteBarRows: inspection.MinuteBarRows, AsOf: expectedAsOf.Format(time.RFC3339),
+		ResultHash: inspection.ResultHash, Verified: true,
 	}
 	return result, nil
 }
@@ -293,40 +262,4 @@ func verifyReplayBundleFile(path, expectedHash string) (string, error) {
 		return actual, fmt.Errorf("SHA256 mismatch: got %s want %s", actual, expectedHash)
 	}
 	return actual, nil
-}
-
-func countReplayBundleRules(database *gorm.DB, to time.Time) (int64, error) {
-	var count int64
-	err := database.Model(&models.AiRecommendStocks{}).
-		Where("TRIM(COALESCE(activation_rule_json, '')) <> ''").
-		Where("TRIM(COALESCE(summary_version, '')) <> ?", v150.StrategyVersion).
-		Where("COALESCE(data_time, created_at) < ?", to.AddDate(0, 0, 1)).
-		Count(&count).Error
-	return count, err
-}
-
-func countTableRows(database *gorm.DB, table string) (int64, error) {
-	var count int64
-	err := database.Table(table).Count(&count).Error
-	return count, err
-}
-
-func minuteBundleStats(database *gorm.DB) (int64, int64, error) {
-	var stats struct {
-		Rows      int64
-		MaxMillis int64
-	}
-	err := database.Raw("SELECT COUNT(*) AS rows, COALESCE(MAX(trade_time), 0) AS max_millis FROM minute_bar").Scan(&stats).Error
-	return stats.Rows, stats.MaxMillis, err
-}
-
-func verifyReplayQuickCheck(database *gorm.DB, name string) error {
-	var result string
-	if err := database.Raw("PRAGMA quick_check").Scan(&result).Error; err != nil {
-		return fmt.Errorf("%s quick_check: %w", name, err)
-	}
-	if !strings.EqualFold(strings.TrimSpace(result), "ok") {
-		return fmt.Errorf("%s quick_check returned %q", name, result)
-	}
-	return nil
 }
