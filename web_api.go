@@ -11,23 +11,34 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/db"
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/internal/releaseinfo"
+	"go-stock/internal/service"
 )
 
 type webStatusProvider interface {
 	SystemVersion(context.Context) releaseinfo.VersionStatus
 	StrategyRuntime(context.Context) governance.StrategyRuntimeStatus
+	LatestMarketSummary(context.Context) (models.AIResponseResult, error)
+	Now() time.Time
 }
 
-type defaultWebStatusProvider struct{}
+type defaultWebStatusProvider struct {
+	system  service.SystemService
+	runtime service.RuntimeService
+}
 
-func (defaultWebStatusProvider) StrategyRuntime(ctx context.Context) governance.StrategyRuntimeStatus {
+func (p defaultWebStatusProvider) StrategyRuntime(ctx context.Context) governance.StrategyRuntimeStatus {
 	manifest := releaseinfo.Manifest()
-	return governance.GetStrategyRuntimeStatus(ctx, db.Dao, manifest.CurrentStrategyVersion)
+	return p.system.StrategyRuntime(ctx, manifest.CurrentStrategyVersion)
 }
+
+func (p defaultWebStatusProvider) LatestMarketSummary(ctx context.Context) (models.AIResponseResult, error) {
+	return p.system.LatestMarketSummary(ctx)
+}
+
+func (p defaultWebStatusProvider) Now() time.Time { return p.runtime.Now() }
 
 func (p defaultWebStatusProvider) SystemVersion(ctx context.Context) releaseinfo.VersionStatus {
 	strategy := p.StrategyRuntime(ctx)
@@ -88,7 +99,9 @@ func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status 
 	}))
 
 	mux.HandleFunc("/api/v1/events/ws", methodHandler(http.MethodGet, hub.HandleWS))
-	mux.HandleFunc("/api/v1/market/summary/latest", methodHandler(http.MethodGet, handleLatestMarketSummary))
+	mux.HandleFunc("/api/v1/market/summary/latest", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+		handleLatestMarketSummary(status, w, r)
+	}))
 	mux.HandleFunc("/api/v1/exports/markdown", methodHandler(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		handleMarkdownExport(app, w, r)
 	}))
@@ -110,7 +123,7 @@ func methodHandler(method string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func handleLatestMarketSummary(w http.ResponseWriter, r *http.Request) {
+func handleLatestMarketSummary(status webStatusProvider, w http.ResponseWriter, r *http.Request) {
 	sinceSeconds := 0
 	if raw := strings.TrimSpace(r.URL.Query().Get("sinceSeconds")); raw != "" {
 		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
@@ -118,16 +131,15 @@ func handleLatestMarketSummary(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var latest models.AIResponseResult
-	_ = db.Dao.Model(&models.AIResponseResult{}).
-		Where("stock_name = ? OR stock_code = ?", "市场资讯", "市场资讯").
-		Order("id desc").
-		Limit(1).
-		Find(&latest).Error
+	latest, err := status.LatestMarketSummary(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "market summary is unavailable"})
+		return
+	}
 
 	ok := latest.ID != 0 && strings.TrimSpace(latest.Content) != ""
 	if ok && sinceSeconds > 0 {
-		ok = time.Since(latest.CreatedAt) <= time.Duration(sinceSeconds)*time.Second
+		ok = status.Now().Sub(latest.CreatedAt) <= time.Duration(sinceSeconds)*time.Second
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

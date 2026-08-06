@@ -104,8 +104,6 @@ var globalDBImportDebt = map[string]bool{
 	"internal/cli/config_resolver.go":                       true,
 	"main.go":                                               true,
 	"runtime_compat.go":                                     true,
-	"web_api.go":                                            true,
-	"web_server.go":                                         true,
 }
 
 func TestBoundaryPackagesHaveExplicitDependencyDirection(t *testing.T) {

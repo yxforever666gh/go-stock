@@ -12,6 +12,7 @@ type AppServices struct {
 	Recommend RecommendService
 	Notify    NotifyService
 	Execution ExecutionService
+	System    SystemService
 }
 
 func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, error) {
@@ -31,5 +32,6 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		Recommend: NewRecommendService(dependencies.Operations.Recommend),
 		Notify:    NewNotifyService(dependencies.Operations.Notify),
 		Execution: NewExecutionService(dependencies.ExecutionMonitor),
+		System:    NewSystemService(dependencies.Operations.System),
 	}, nil
 }

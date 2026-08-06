@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"go-stock/backend/governance"
 	"go-stock/backend/models"
 
 	"github.com/cloudwego/eino/schema"
@@ -23,6 +24,7 @@ type ServiceOperations struct {
 	Notify    NotifyOperations
 	Recommend RecommendOperations
 	Stock     StockOperations
+	System    SystemOperations
 }
 
 func (o ServiceOperations) Validate() error {
@@ -45,6 +47,8 @@ func (o ServiceOperations) Validate() error {
 		return operationRequiredError("recommend")
 	case o.Stock == nil:
 		return operationRequiredError("stock")
+	case o.System == nil:
+		return operationRequiredError("system")
 	default:
 		return nil
 	}
@@ -191,4 +195,9 @@ type StockOperations interface {
 	SearchStock(string) map[string]any
 	GetHotStrategy() map[string]any
 	GetStockCodeRealTimeData(...string) (*[]models.StockInfo, error)
+}
+
+type SystemOperations interface {
+	StrategyRuntime(context.Context, string) governance.StrategyRuntimeStatus
+	LatestMarketSummary(context.Context) (models.AIResponseResult, error)
 }

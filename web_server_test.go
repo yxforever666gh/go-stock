@@ -15,12 +15,17 @@ import (
 
 	"github.com/gorilla/websocket"
 	"go-stock/backend/governance"
+	"go-stock/backend/models"
 	"go-stock/internal/releaseinfo"
+	"gorm.io/gorm"
 )
 
 type fakeWebStatusProvider struct {
-	version  releaseinfo.VersionStatus
-	strategy governance.StrategyRuntimeStatus
+	version   releaseinfo.VersionStatus
+	strategy  governance.StrategyRuntimeStatus
+	latest    models.AIResponseResult
+	latestErr error
+	now       time.Time
 }
 
 func (p fakeWebStatusProvider) SystemVersion(context.Context) releaseinfo.VersionStatus {
@@ -30,6 +35,12 @@ func (p fakeWebStatusProvider) SystemVersion(context.Context) releaseinfo.Versio
 func (p fakeWebStatusProvider) StrategyRuntime(context.Context) governance.StrategyRuntimeStatus {
 	return p.strategy
 }
+
+func (p fakeWebStatusProvider) LatestMarketSummary(context.Context) (models.AIResponseResult, error) {
+	return p.latest, p.latestErr
+}
+
+func (p fakeWebStatusProvider) Now() time.Time { return p.now }
 
 func TestSpaFileServerServesExistingAssets(t *testing.T) {
 	handler := spaFileServer(testStaticFS())
@@ -178,6 +189,38 @@ func TestWebV1ReadinessUsesServiceUnavailableUntilReady(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/readyz", nil))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("readiness status = %d, want 503", rec.Code)
+	}
+}
+
+func TestMarketSummaryLatestUsesInjectedProviderAndClock(t *testing.T) {
+	now := time.Date(2026, time.August, 6, 12, 0, 0, 0, time.UTC)
+	provider := fakeWebStatusProvider{
+		now: now,
+		latest: models.AIResponseResult{
+			Model:     gorm.Model{ID: 7, CreatedAt: now.Add(-2 * time.Second)},
+			StockName: "市场资讯",
+			Content:   "summary",
+		},
+	}
+	mux := http.NewServeMux()
+	registerWebV1Routes(mux, nil, NewWebEventHub(), provider)
+
+	for _, route := range []string{"/api/v1/market/summary/latest?sinceSeconds=5"} {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, route, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ok":true`) {
+			t.Fatalf("latest summary response = %d %s", rec.Code, rec.Body.String())
+		}
+	}
+
+	failingProvider := provider
+	failingProvider.latestErr = errors.New("database unavailable")
+	failingMux := http.NewServeMux()
+	registerWebV1Routes(failingMux, nil, NewWebEventHub(), failingProvider)
+	rec := httptest.NewRecorder()
+	failingMux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/market/summary/latest", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("latest summary failure status = %d, body=%s", rec.Code, rec.Body.String())
 	}
 }
 

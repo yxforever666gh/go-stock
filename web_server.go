@@ -13,16 +13,13 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 	"unicode"
 
 	"github.com/gorilla/websocket"
-	"go-stock/backend/db"
 	log "go-stock/backend/logger"
-	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
 	"go-stock/internal/releaseinfo"
 )
@@ -183,7 +180,8 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 	}
 	mux := http.NewServeMux()
 	var server *http.Server
-	registerWebV1Routes(mux, app, hub, defaultWebStatusProvider{})
+	status := defaultWebStatusProvider{system: app.services.System, runtime: app.services.Runtime}
+	registerWebV1Routes(mux, app, hub, status)
 
 	mux.HandleFunc("/healthz", methodHandler(http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -236,36 +234,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-		sinceSeconds := 0
-		if raw := strings.TrimSpace(r.URL.Query().Get("sinceSeconds")); raw != "" {
-			if v, err := strconv.Atoi(raw); err == nil && v > 0 {
-				sinceSeconds = v
-			}
-		}
-
-		var latest models.AIResponseResult
-		_ = db.Dao.Model(&models.AIResponseResult{}).
-			Where("stock_name = ? OR stock_code = ?", "市场资讯", "市场资讯").
-			Order("id desc").
-			Limit(1).
-			Find(&latest).Error
-
-		ok := latest.ID != 0 && strings.TrimSpace(latest.Content) != ""
-		if ok && sinceSeconds > 0 {
-			ok = time.Since(latest.CreatedAt) <= time.Duration(sinceSeconds)*time.Second
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":           ok,
-			"id":           latest.ID,
-			"createdAt":    latest.CreatedAt,
-			"stockCode":    latest.StockCode,
-			"stockName":    latest.StockName,
-			"question":     latest.Question,
-			"providerName": latest.ProviderName,
-			"modelName":    latest.ModelName,
-			"contentLen":   len(strings.TrimSpace(latest.Content)),
-		})
+		handleLatestMarketSummary(status, w, r)
 	})
 
 	mux.HandleFunc("/build/appicon.png", func(w http.ResponseWriter, r *http.Request) {
