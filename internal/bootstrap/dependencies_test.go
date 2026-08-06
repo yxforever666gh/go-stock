@@ -25,6 +25,12 @@ func (unavailableQuoteReader) Quote(context.Context, string, time.Time) (marketd
 	return marketdata.Quote{}, marketdata.ErrObservationUnavailable
 }
 
+type emptyCurrentRecommendationReader struct{}
+
+func (emptyCurrentRecommendationReader) List(context.Context, portfolio.RecommendationQuery) ([]portfolio.CurrentRecommendation, error) {
+	return []portfolio.CurrentRecommendation{}, nil
+}
+
 type recordingInitializer struct {
 	settingsCalls  int
 	sentimentCalls int
@@ -49,16 +55,17 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 	runtime, err := AssembleRuntime(appconfig.AppConfig{}, RuntimeDependencies{
 		Storage: Storage{Main: mainDB, Minute: minuteDB},
 		Services: service.Dependencies{
-			Clock:                   fixedClock{now: now},
-			Initializer:             initializer,
-			Operations:              newCompatibilityServiceOperations(mainDB),
-			RecommendationPublisher: &compatibilityServiceAdapter{main: mainDB},
-			Providers:               service.ProviderSet{Quotes: unavailableQuoteReader{}},
-			PortfolioReader:         portfolio.NewReader(nil),
-			LegacyReader:            legacy.NewService(nil, nil),
-			CurrentStrategyVersion:  "1.5.0",
-			PortfolioInitialCash:    100000,
-			PortfolioMaxQuoteAge:    5 * time.Minute,
+			Clock:                       fixedClock{now: now},
+			Initializer:                 initializer,
+			Operations:                  newCompatibilityServiceOperations(mainDB),
+			RecommendationPublisher:     &compatibilityServiceAdapter{main: mainDB},
+			Providers:                   service.ProviderSet{Quotes: unavailableQuoteReader{}},
+			PortfolioReader:             portfolio.NewReader(nil),
+			LegacyReader:                legacy.NewService(nil, nil),
+			CurrentRecommendationReader: emptyCurrentRecommendationReader{},
+			CurrentStrategyVersion:      "1.5.0",
+			PortfolioInitialCash:        100000,
+			PortfolioMaxQuoteAge:        5 * time.Minute,
 		},
 	})
 	if err != nil {
@@ -75,6 +82,14 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 	}
 	if initializer.settingsCalls != 1 || initializer.sentimentCalls != 1 {
 		t.Fatalf("initializer calls = settings:%d sentiment:%d, want 1/1", initializer.settingsCalls, initializer.sentimentCalls)
+	}
+}
+
+func TestCompatibilityDependenciesRequireCurrentRecommendationReader(t *testing.T) {
+	deps := newCompatibilityServiceDependencies(Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}})
+	deps.CurrentRecommendationReader = nil
+	if err := deps.Validate(); !errors.Is(err, service.ErrInvalidDependencies) {
+		t.Fatalf("error = %v, want ErrInvalidDependencies", err)
 	}
 }
 
@@ -141,7 +156,7 @@ func TestCompatibilityDependenciesInjectAllProviderNeutralPorts(t *testing.T) {
 	providers := deps.Providers
 	if providers.DailyBars == nil || providers.MinuteBars == nil || providers.Quotes == nil || providers.Securities == nil ||
 		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil ||
-		deps.RecommendationPublisher == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
+		deps.RecommendationPublisher == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentRecommendationReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
 		deps.PortfolioInitialCash != 100000 || deps.PortfolioMaxQuoteAge != 5*time.Minute {
 		t.Fatalf("compatibility provider set has an unconfigured port: %+v", providers)
 	}

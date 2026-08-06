@@ -45,19 +45,21 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 	newsReader := data.NewCompatibilityNewsReader()
 	ledger := data.NewCompatibilityPortfolioLedger(storage.Main)
 	legacyRepository := data.NewCompatibilityLegacyRepository(storage.Main)
+	currentRecommendations := data.NewCompatibilityCurrentRecommendationReader(storage.Main)
 	orderEvents := persistence.NewGORMOrderEventStore(storage.Main)
 	strategyConfig := v150.FixedStrategyV150Config()
 	return service.Dependencies{
-		Clock:                   systemClock{},
-		Initializer:             legacyApplicationInitializer{},
-		Operations:              newCompatibilityServiceOperations(storage.Main),
-		RecommendationPublisher: &compatibilityServiceAdapter{main: storage.Main},
-		ExecutionMonitor:        data.NewCompatibilityExecutionMonitor(orderEvents),
-		PortfolioReader:         portfolio.NewReader(ledger),
-		LegacyReader:            legacy.NewService(legacyRepository, marketData),
-		CurrentStrategyVersion:  releaseinfo.Manifest().CurrentStrategyVersion,
-		PortfolioInitialCash:    strategyConfig.PortfolioCash,
-		PortfolioMaxQuoteAge:    strategyConfig.MaximumRealtimeQuoteLag,
+		Clock:                       systemClock{},
+		Initializer:                 legacyApplicationInitializer{},
+		Operations:                  newCompatibilityServiceOperations(storage.Main),
+		RecommendationPublisher:     &compatibilityServiceAdapter{main: storage.Main},
+		ExecutionMonitor:            data.NewCompatibilityExecutionMonitor(orderEvents),
+		PortfolioReader:             portfolio.NewReader(ledger),
+		LegacyReader:                legacy.NewService(legacyRepository, marketData),
+		CurrentRecommendationReader: currentRecommendations,
+		CurrentStrategyVersion:      releaseinfo.Manifest().CurrentStrategyVersion,
+		PortfolioInitialCash:        strategyConfig.PortfolioCash,
+		PortfolioMaxQuoteAge:        strategyConfig.MaximumRealtimeQuoteLag,
 		Providers: service.ProviderSet{
 			DailyBars:   marketData,
 			MinuteBars:  marketData,

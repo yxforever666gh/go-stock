@@ -221,7 +221,7 @@ func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
 	publication := &models.MarketSummaryRecommendSaveResult{SavedCount: 2}
 	operations := &recordingRecommendOperations{}
 	publisher := &recordingRecommendationPublisher{result: publication}
-	service := NewRecommendService(operations, publisher)
+	service := NewRecommendService(operations, publisher, nil, nil, "")
 	ctx := context.WithValue(context.Background(), struct{}{}, "summary")
 	decision := recordingDecisionSnapshot{version: "1.5.0"}
 

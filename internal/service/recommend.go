@@ -2,8 +2,10 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"go-stock/backend/models"
+	"go-stock/backend/portfolio"
 	"go-stock/backend/recommendation"
 )
 
@@ -13,17 +15,26 @@ import (
 type MarketSummaryDecisionSnapshot = recommendation.FrozenDecision
 
 type RecommendService struct {
-	operations RecommendOperations
-	production recommendation.ProductionService[*models.MarketSummaryRecommendSaveResult]
+	operations             RecommendOperations
+	production             recommendation.ProductionService[*models.MarketSummaryRecommendSaveResult]
+	currentRecommendations portfolio.CurrentRecommendationReader
+	clock                  Clock
+	currentStrategyVersion string
 }
 
 func NewRecommendService(
 	operations RecommendOperations,
 	publisher recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult],
+	currentRecommendations portfolio.CurrentRecommendationReader,
+	clock Clock,
+	currentStrategyVersion string,
 ) RecommendService {
 	return RecommendService{
-		operations: operations,
-		production: recommendation.NewProductionService(publisher),
+		operations:             operations,
+		production:             recommendation.NewProductionService(publisher),
+		currentRecommendations: currentRecommendations,
+		clock:                  clock,
+		currentStrategyVersion: strings.TrimSpace(currentStrategyVersion),
 	}
 }
 
@@ -69,10 +80,6 @@ func (s RecommendService) DeleteAIResponseResult(id uint) error {
 
 func (s RecommendService) BatchDeleteAIResponseResult(ids []uint) error {
 	return s.operations.BatchDeleteAIResponseResult(ids)
-}
-
-func (s RecommendService) GetAiRecommendStocksList(query *models.AiRecommendStocksQuery) (*models.AiRecommendStocksPageData, error) {
-	return s.operations.GetAiRecommendStocksList(query)
 }
 
 func (s RecommendService) GetAiRecommendStocksDateRange() (string, string, error) {

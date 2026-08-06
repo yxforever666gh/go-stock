@@ -48,17 +48,18 @@ type ProviderSet struct {
 }
 
 type Dependencies struct {
-	Clock                   Clock
-	Initializer             ApplicationInitializer
-	Providers               ProviderSet
-	Operations              ServiceOperations
-	RecommendationPublisher recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult]
-	ExecutionMonitor        execution.Monitor
-	PortfolioReader         PortfolioAccountReader
-	LegacyReader            LegacyRecommendationReader
-	CurrentStrategyVersion  string
-	PortfolioInitialCash    float64
-	PortfolioMaxQuoteAge    time.Duration
+	Clock                       Clock
+	Initializer                 ApplicationInitializer
+	Providers                   ProviderSet
+	Operations                  ServiceOperations
+	RecommendationPublisher     recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult]
+	ExecutionMonitor            execution.Monitor
+	PortfolioReader             PortfolioAccountReader
+	LegacyReader                LegacyRecommendationReader
+	CurrentRecommendationReader portfolio.CurrentRecommendationReader
+	CurrentStrategyVersion      string
+	PortfolioInitialCash        float64
+	PortfolioMaxQuoteAge        time.Duration
 }
 
 func (d Dependencies) Validate() error {
@@ -79,6 +80,9 @@ func (d Dependencies) Validate() error {
 	}
 	if d.LegacyReader == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("legacy reader is required"))
+	}
+	if d.CurrentRecommendationReader == nil {
+		return errors.Join(ErrInvalidDependencies, errors.New("current recommendation reader is required"))
 	}
 	if d.Providers.Quotes == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("quote reader is required"))
