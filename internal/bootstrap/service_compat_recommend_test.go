@@ -6,8 +6,10 @@ import (
 	"strings"
 	"testing"
 
+	"go-stock/backend/data"
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
+	"go-stock/backend/strategy/v150"
 	"go-stock/internal/service"
 )
 
@@ -67,9 +69,64 @@ func TestRecommendationCompatibilityAdapterRejectsUnknownDecisionType(t *testing
 	}
 }
 
+func TestMarketSummaryV150SnapshotFromDecisionPreservesTypedSnapshot(t *testing.T) {
+	run := validMarketSummaryV150PublicationSnapshot("typed-run")
+
+	restored, err := marketSummaryV150SnapshotFromDecision(run)
+	if err != nil {
+		t.Fatalf("accept typed snapshot: %v", err)
+	}
+	if restored != run {
+		t.Fatal("typed snapshot was copied or JSON round-tripped before publication")
+	}
+}
+
+func TestRecommendationCompatibilityAdapterRejectsInvalidTypedSnapshotBeforePersistence(t *testing.T) {
+	valid := validMarketSummaryV150PublicationSnapshot("valid-run")
+	var nilRun *data.MarketSummaryV150RunSnapshot
+
+	tests := []struct {
+		name string
+		run  *data.MarketSummaryV150RunSnapshot
+		want string
+	}{
+		{name: "nil", run: nilRun, want: "snapshot is nil"},
+		{name: "missing run id", run: func() *data.MarketSummaryV150RunSnapshot {
+			copy := *valid
+			copy.RunContext.RunID = ""
+			return &copy
+		}(), want: "run id is required"},
+		{name: "wrong strategy version", run: func() *data.MarketSummaryV150RunSnapshot {
+			copy := *valid
+			copy.RunContext.StrategyVersion = "1.4.2"
+			return &copy
+		}(), want: "strategy version"},
+		{name: "wrong config hash", run: func() *data.MarketSummaryV150RunSnapshot {
+			copy := *valid
+			copy.RunContext.ConfigHash = "forged-config"
+			return &copy
+		}(), want: "config hash"},
+	}
+
+	// A nil database makes this an explicit ordering test: every malformed
+	// typed snapshot must be rejected before the persistence adapter is entered.
+	adapter := compatibilityServiceAdapter{}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := adapter.PublishDecision(context.Background(), test.run, "provider", "model")
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invalid typed snapshot error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestMarketSummaryV150SnapshotFromEnvelopeRestoresFrozenJSON(t *testing.T) {
 	envelope, err := service.DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
-		"runContext":    map[string]any{"runId": "run-restore", "strategyVersion": "1.5.0"},
+		"runContext": map[string]any{
+			"runId": "run-restore", "strategyVersion": v150.StrategyVersion,
+			"configHash": v150.FixedStrategyV150ConfigHash(),
+		},
 		"candidates":    []map[string]any{{"candidate": map[string]any{"symbol": "000001.SZ"}}},
 		"production":    []map[string]any{{"symbol": "000001.SZ"}},
 		"noTradeReason": "",
@@ -77,13 +134,21 @@ func TestMarketSummaryV150SnapshotFromEnvelopeRestoresFrozenJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode envelope: %v", err)
 	}
-	run, err := marketSummaryV150SnapshotFromEnvelope(envelope)
+	run, err := marketSummaryV150SnapshotFromDecision(envelope)
 	if err != nil {
 		t.Fatalf("restore envelope: %v", err)
 	}
 	if run.RunContext.RunID != envelope.RunID || run.RunContext.StrategyVersion != envelope.StrategyVersion || len(run.Candidates) != envelope.CandidateCount || len(run.Production) != envelope.ProductionCount {
 		t.Fatalf("restored snapshot does not preserve envelope identity: %#v", run)
 	}
+}
+
+func validMarketSummaryV150PublicationSnapshot(runID string) *data.MarketSummaryV150RunSnapshot {
+	return &data.MarketSummaryV150RunSnapshot{RunContext: v150.RunContext{
+		RunID:           runID,
+		StrategyVersion: v150.StrategyVersion,
+		ConfigHash:      v150.FixedStrategyV150ConfigHash(),
+	}}
 }
 
 func TestMarketSummaryV150SnapshotFromEnvelopeRejectsPayloadMismatch(t *testing.T) {

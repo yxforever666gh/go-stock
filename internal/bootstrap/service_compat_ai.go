@@ -13,6 +13,7 @@ import (
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/backend/recommendation"
+	"go-stock/backend/strategy/v150"
 	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/service"
 
@@ -21,6 +22,7 @@ import (
 )
 
 var _ service.MarketSummaryDecisionSnapshot = (*service.MarketSummaryV150DecisionEnvelope)(nil)
+var _ service.MarketSummaryDecisionSnapshot = (*data.MarketSummaryV150RunSnapshot)(nil)
 var _ recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult] = (*compatibilityServiceAdapter)(nil)
 var _ recommendation.EventVerifier = (*marketSummaryEventVerifierCompatibilityAdapter)(nil)
 
@@ -433,15 +435,27 @@ func (a *compatibilityServiceAdapter) PublishDecision(
 	decision service.MarketSummaryDecisionSnapshot,
 	providerName, modelName string,
 ) (*models.MarketSummaryRecommendSaveResult, error) {
-	envelope, ok := decision.(*service.MarketSummaryV150DecisionEnvelope)
-	if !ok || envelope == nil {
-		return nil, fmt.Errorf("unsupported market summary decision snapshot %T", decision)
-	}
-	run, err := marketSummaryV150SnapshotFromEnvelope(envelope)
+	run, err := marketSummaryV150SnapshotFromDecision(decision)
 	if err != nil {
 		return nil, err
 	}
 	return data.PersistMarketSummaryV150Decision(ctx, a.main, run, providerName, modelName)
+}
+
+func marketSummaryV150SnapshotFromDecision(decision service.MarketSummaryDecisionSnapshot) (*data.MarketSummaryV150RunSnapshot, error) {
+	switch snapshot := decision.(type) {
+	case *data.MarketSummaryV150RunSnapshot:
+		if err := validateMarketSummaryV150PublicationSnapshot(snapshot); err != nil {
+			return nil, err
+		}
+		// Runner already owns the frozen typed snapshot. Preserve its exact
+		// identity and bytes; the publication boundary must not JSON round-trip it.
+		return snapshot, nil
+	case *service.MarketSummaryV150DecisionEnvelope:
+		return marketSummaryV150SnapshotFromEnvelope(snapshot)
+	default:
+		return nil, fmt.Errorf("unsupported market summary decision snapshot %T", decision)
+	}
 }
 
 func marketSummaryV150SnapshotFromEnvelope(envelope *service.MarketSummaryV150DecisionEnvelope) (*data.MarketSummaryV150RunSnapshot, error) {
@@ -460,7 +474,26 @@ func marketSummaryV150SnapshotFromEnvelope(envelope *service.MarketSummaryV150De
 		strings.TrimSpace(run.NoTradeReason) != strings.TrimSpace(envelope.NoTradeReason) {
 		return nil, errors.New("market summary V1.5 decision envelope payload mismatch")
 	}
+	if err := validateMarketSummaryV150PublicationSnapshot(&run); err != nil {
+		return nil, err
+	}
 	return &run, nil
+}
+
+func validateMarketSummaryV150PublicationSnapshot(run *data.MarketSummaryV150RunSnapshot) error {
+	if run == nil {
+		return errors.New("market summary V1.5 decision snapshot is nil")
+	}
+	if strings.TrimSpace(run.RunContext.RunID) == "" {
+		return errors.New("market summary V1.5 decision run id is required")
+	}
+	if version := strings.TrimSpace(run.RunContext.StrategyVersion); version != v150.StrategyVersion {
+		return fmt.Errorf("market summary decision strategy version %q does not match frozen %s", version, v150.StrategyVersion)
+	}
+	if hash := strings.TrimSpace(run.RunContext.ConfigHash); hash != v150.FixedStrategyV150ConfigHash() {
+		return errors.New("market summary V1.5 decision config hash does not match the frozen strategy")
+	}
+	return nil
 }
 
 func (*compatibilityServiceAdapter) GetAIResponseResultList(query models.AIResponseResultQuery) (*models.AIResponseResultPageData, error) {
