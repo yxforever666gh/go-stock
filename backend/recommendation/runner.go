@@ -2,6 +2,7 @@ package recommendation
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -32,7 +33,9 @@ type MarketRequest struct {
 }
 
 type MarketSnapshot struct {
-	Benchmark v150.BenchmarkSnapshot
+	Benchmark               v150.BenchmarkSnapshot `json:"benchmark"`
+	Evidence                []marketintel.Evidence `json:"evidence"`
+	CompatibilityProjection json.RawMessage        `json:"compatibilityProjection,omitempty"`
 }
 
 // CandidatesPort retains the existing typed candidate boundary while giving
@@ -49,10 +52,73 @@ type EvidencePort interface {
 type EvidenceRequest struct {
 	RunContext v150.RunContext
 	Candidates []v150.ScoredCandidate
+	// StatusOnly asks the adapter to return the already-frozen evidence/news
+	// availability state without performing candidate verification. Risk-off
+	// and empty-top-set runs use this path.
+	StatusOnly bool
 }
 
 type EvidenceSnapshot struct {
-	Items []marketintel.Evidence
+	Status     EvidenceStatus      `json:"status"`
+	Warning    string              `json:"warning,omitempty"`
+	Candidates []CandidateEvidence `json:"candidates"`
+}
+
+type EvidenceStatus string
+
+const (
+	EvidenceStatusOK     EvidenceStatus = "ok"
+	EvidenceStatusEmpty  EvidenceStatus = "empty"
+	EvidenceStatusFailed EvidenceStatus = "failed"
+	EvidenceStatusStale  EvidenceStatus = "stale"
+)
+
+// CandidateEvidence is the factual, point-in-time evidence admitted for one
+// already-ranked candidate. CompatibilityProjection preserves the old display
+// snapshot during strangulation; Symbol, VerifiedAt and Items remain the
+// strategy-facing source of truth and are checked against that projection.
+type CandidateEvidence struct {
+	Symbol                  string                 `json:"symbol"`
+	VerifiedAt              time.Time              `json:"verifiedAt"`
+	Items                   []marketintel.Evidence `json:"items"`
+	CompatibilityProjection json.RawMessage        `json:"compatibilityProjection,omitempty"`
+}
+
+// FinalQuotePort refreshes only the deterministic top-for-verification set.
+// It is deliberately separate from the initial candidate snapshot because a
+// long evidence/model stage can make the initial executable price stale.
+type FinalQuotePort interface {
+	FinalQuotes(context.Context, FinalQuoteRequest) (FinalQuoteSnapshot, error)
+}
+
+type FinalQuoteRequest struct {
+	RunContext v150.RunContext `json:"runContext"`
+	AsOf       time.Time       `json:"asOf"`
+	Symbols    []string        `json:"symbols"`
+}
+
+type FinalQuoteSnapshot struct {
+	Quotes   []FinalQuote `json:"quotes"`
+	Warnings []string     `json:"warnings,omitempty"`
+}
+
+// FinalQuote is normalized provider output. Has* fields retain the distinction
+// between an observed zero and a missing/unparseable provider field. SourceAt
+// is the exchange/provider observation time; the pipeline supplies the later
+// availability time from its injected Clock after the port returns.
+type FinalQuote struct {
+	Symbol           string    `json:"symbol"`
+	Name             string    `json:"name,omitempty"`
+	Price            float64   `json:"price"`
+	PreviousClose    float64   `json:"previousClose"`
+	Open             float64   `json:"open"`
+	Amount           float64   `json:"amount"`
+	HasPrice         bool      `json:"hasPrice"`
+	HasPreviousClose bool      `json:"hasPreviousClose"`
+	HasOpen          bool      `json:"hasOpen"`
+	HasAmount        bool      `json:"hasAmount"`
+	HasVolume        bool      `json:"hasVolume"`
+	SourceAt         time.Time `json:"sourceAt"`
 }
 
 // PortfolioPort supplies the frozen portfolio admission state used for final
@@ -78,6 +144,7 @@ type PipelinePorts struct {
 	Candidates    CandidatesPort
 	Evidence      EvidencePort
 	EventVerifier EventVerifier
+	FinalQuotes   FinalQuotePort
 	Portfolio     PortfolioPort
 }
 
@@ -86,6 +153,8 @@ type PipelinePorts struct {
 type BuildRequest struct {
 	StrategyVersion string
 	ConfigHash      string
+	ProviderName    string
+	ModelName       string
 }
 
 // ProducedDecision carries the immutable identity proven by the pipeline in
@@ -135,6 +204,8 @@ func (r Runner[Receipt]) Run(
 	produced, err := r.dependencies.Pipeline.Build(ctx, BuildRequest{
 		StrategyVersion: v150.StrategyVersion,
 		ConfigHash:      v150.FixedStrategyV150ConfigHash(),
+		ProviderName:    providerName,
+		ModelName:       modelName,
 	}, r.dependencies.PipelinePorts)
 	if err != nil {
 		return zero, err
@@ -171,6 +242,7 @@ func validateRunnerDependencies[Receipt any](dependencies RunnerDependencies[Rec
 		{name: "candidates", value: dependencies.Candidates},
 		{name: "evidence", value: dependencies.Evidence},
 		{name: "event verifier", value: dependencies.EventVerifier},
+		{name: "final quotes", value: dependencies.FinalQuotes},
 		{name: "portfolio", value: dependencies.Portfolio},
 	}
 	for _, check := range checks {

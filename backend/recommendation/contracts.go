@@ -16,12 +16,27 @@ import (
 var ErrInvalidPublication = errors.New("invalid recommendation publication")
 
 type CandidateSource interface {
-	Candidates(context.Context, CandidateRequest) ([]v150.Candidate, error)
+	Candidates(context.Context, CandidateRequest) (CandidateBatch, error)
 }
 
 type CandidateRequest struct {
 	RunContext v150.RunContext
 	Benchmark  v150.BenchmarkSnapshot
+}
+
+// CandidateInput keeps the strategy value separate from its point-in-time
+// audit evidence. CompatibilityProjection is a temporary, output-only carrier
+// for fields still persisted by backend/data; a pipeline must derive strategy
+// behaviour from Candidate and Evidence, never from that projection alone.
+type CandidateInput struct {
+	Candidate               v150.Candidate         `json:"candidate"`
+	Evidence                []marketintel.Evidence `json:"evidence"`
+	CompatibilityProjection json.RawMessage        `json:"compatibilityProjection,omitempty"`
+}
+
+type CandidateBatch struct {
+	Items    []CandidateInput `json:"items"`
+	Warnings []string         `json:"warnings,omitempty"`
 }
 
 // EventVerifier is defined by the recommendation consumer. One call carries

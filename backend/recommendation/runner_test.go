@@ -23,8 +23,8 @@ func (*runnerMarket) MarketSnapshot(context.Context, MarketRequest) (MarketSnaps
 
 type runnerCandidates struct{}
 
-func (*runnerCandidates) Candidates(context.Context, CandidateRequest) ([]v150.Candidate, error) {
-	return nil, nil
+func (*runnerCandidates) Candidates(context.Context, CandidateRequest) (CandidateBatch, error) {
+	return CandidateBatch{}, nil
 }
 
 type runnerEvidence struct{}
@@ -37,6 +37,12 @@ type runnerEventVerifier struct{}
 
 func (*runnerEventVerifier) Verify(context.Context, EventVerificationCall) (EventVerificationCompletion, error) {
 	return EventVerificationCompletion{}, nil
+}
+
+type runnerFinalQuotes struct{}
+
+func (*runnerFinalQuotes) FinalQuotes(context.Context, FinalQuoteRequest) (FinalQuoteSnapshot, error) {
+	return FinalQuoteSnapshot{}, nil
 }
 
 type runnerPortfolio struct{}
@@ -114,6 +120,7 @@ func completeRunnerDependencies(
 			Candidates:    &runnerCandidates{},
 			Evidence:      &runnerEvidence{},
 			EventVerifier: &runnerEventVerifier{},
+			FinalQuotes:   &runnerFinalQuotes{},
 			Portfolio:     &runnerPortfolio{},
 		},
 	}
@@ -149,11 +156,15 @@ func TestRunnerBuildsAndPublishesFrozenV150DecisionExactlyOnce(t *testing.T) {
 	if pipeline.request.ConfigHash != v150.FixedStrategyV150ConfigHash() {
 		t.Fatalf("Build config hash = %q, want frozen V1.5.0 hash", pipeline.request.ConfigHash)
 	}
+	if pipeline.request.ProviderName != " provider " || pipeline.request.ModelName != " model " {
+		t.Fatalf("Build provider/model = %q/%q, want exact inputs", pipeline.request.ProviderName, pipeline.request.ModelName)
+	}
 	if pipeline.ports.Clock != dependencies.Clock ||
 		pipeline.ports.Market != dependencies.Market ||
 		pipeline.ports.Candidates != dependencies.Candidates ||
 		pipeline.ports.Evidence != dependencies.Evidence ||
 		pipeline.ports.EventVerifier != dependencies.EventVerifier ||
+		pipeline.ports.FinalQuotes != dependencies.FinalQuotes ||
 		pipeline.ports.Portfolio != dependencies.Portfolio {
 		t.Fatal("Pipeline did not receive the exact injected ports")
 	}
@@ -209,6 +220,7 @@ func TestRunnerRejectsEveryNilDependencyBeforeBuild(t *testing.T) {
 		{name: "candidates", remove: func(d *RunnerDependencies[*runnerReceipt]) { d.Candidates = nil }},
 		{name: "evidence", remove: func(d *RunnerDependencies[*runnerReceipt]) { d.Evidence = nil }},
 		{name: "event verifier", remove: func(d *RunnerDependencies[*runnerReceipt]) { d.EventVerifier = nil }},
+		{name: "final quotes", remove: func(d *RunnerDependencies[*runnerReceipt]) { d.FinalQuotes = nil }},
 		{name: "portfolio", remove: func(d *RunnerDependencies[*runnerReceipt]) { d.Portfolio = nil }},
 	}
 	for _, test := range tests {
@@ -332,6 +344,7 @@ var (
 	_ CandidatesPort                    = (*runnerCandidates)(nil)
 	_ EvidencePort                      = (*runnerEvidence)(nil)
 	_ EventVerifier                     = (*runnerEventVerifier)(nil)
+	_ FinalQuotePort                    = (*runnerFinalQuotes)(nil)
 	_ PortfolioPort                     = (*runnerPortfolio)(nil)
 	_ Pipeline                          = (*recordingRunnerPipeline)(nil)
 	_ DecisionPublisher[*runnerReceipt] = (*recordingRunnerPublisher)(nil)
