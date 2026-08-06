@@ -67,7 +67,6 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 }
 
 var globalDBImportDebt = map[string]bool{
-	"app_cron_runtime.go":                                   true,
 	"app_summary_runtime.go":                                true,
 	"app_update_runtime.go":                                 true,
 	"app_v150_execution_runtime.go":                         true,

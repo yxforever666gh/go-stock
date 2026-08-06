@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"os"
@@ -177,6 +176,23 @@ func (a *App) enableSummaryStockNewsTestCron() {
 	logger.SugaredLogger.Infof("市场资讯AI总结1分钟测试任务已启用")
 }
 
+func (a *App) createCronTaskRun(taskRun *models.CronTaskRun) {
+	if err := a.services.Scheduler.CreateTaskRun(a.ctx, taskRun); err != nil {
+		logger.SugaredLogger.Errorf("persist cron task run failed: %v", err)
+	}
+}
+
+func (a *App) updateCronTaskRun(taskRun *models.CronTaskRun, status, errorMessage string) {
+	if taskRun == nil || taskRun.ID == 0 {
+		return
+	}
+	taskRun.Status = status
+	taskRun.ErrorMessage = errorMessage
+	if err := a.services.Scheduler.UpdateTaskRun(a.ctx, taskRun); err != nil {
+		logger.SugaredLogger.Errorf("update cron task run failed: %v", err)
+	}
+}
+
 func (a *App) runSummaryStockNewsTestOnce() {
 	setting := a.services.Config.GetConfig()
 	if setting == nil || setting.Settings == nil {
@@ -210,17 +226,12 @@ func (a *App) runSummaryStockNewsTestOnce() {
 		Attempts:    1,
 		AiConfigId:  aiConfigId,
 	}
-	_ = db.Dao.Create(taskRun).Error
+	a.createCronTaskRun(taskRun)
 
 	marketSummaryQuestion := a.services.AI.NormalizeMarketSummaryQuestion(setting.QuestionTemplate)
 	a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
 
-	var latest models.AIResponseResult
-	_ = db.Dao.Model(&models.AIResponseResult{}).
-		Where("stock_name = ? AND question = ? AND created_at >= ?", "市场资讯", marketSummaryQuestion, start).
-		Order("id desc").
-		Limit(1).
-		Find(&latest).Error
+	latest, _ := a.services.Scheduler.LatestAIResponseSince(a.ctx, "市场资讯", marketSummaryQuestion, start)
 
 	status := "failed"
 	errMsg := "未生成可保存的总结内容"
@@ -228,10 +239,7 @@ func (a *App) runSummaryStockNewsTestOnce() {
 		status = "success"
 		errMsg = ""
 	}
-	_ = db.Dao.Model(&models.CronTaskRun{}).Where("id = ?", taskRun.ID).Updates(map[string]any{
-		"status":        status,
-		"error_message": errMsg,
-	}).Error
+	a.updateCronTaskRun(taskRun, status, errMsg)
 
 	logger.SugaredLogger.Infof("市场资讯AI总结1分钟测试任务完成 aiConfigId=%d status=%s", aiConfigId, status)
 }
@@ -241,7 +249,7 @@ func (a *App) runScheduledSummaryStockNews() {
 
 	setting := a.services.Config.GetConfig()
 	if setting == nil || setting.Settings == nil {
-		db.Dao.Create(&models.CronTaskRun{
+		a.createCronTaskRun(&models.CronTaskRun{
 			TaskName:     "market_summary",
 			TriggeredAt:  time.Now(),
 			Status:       "skipped",
@@ -251,7 +259,7 @@ func (a *App) runScheduledSummaryStockNews() {
 		return
 	}
 	if !setting.OpenAiEnable {
-		db.Dao.Create(&models.CronTaskRun{
+		a.createCronTaskRun(&models.CronTaskRun{
 			TaskName:     "market_summary",
 			TriggeredAt:  time.Now(),
 			Status:       "skipped",
@@ -261,7 +269,7 @@ func (a *App) runScheduledSummaryStockNews() {
 		return
 	}
 	if len(setting.AiConfigs) == 0 {
-		db.Dao.Create(&models.CronTaskRun{
+		a.createCronTaskRun(&models.CronTaskRun{
 			TaskName:     "market_summary",
 			TriggeredAt:  time.Now(),
 			Status:       "skipped",
@@ -276,7 +284,7 @@ func (a *App) runScheduledSummaryStockNews() {
 	}
 	now := time.Now().In(loc)
 	if !a.services.Market.IsCNOpenTradeDay(now) {
-		db.Dao.Create(&models.CronTaskRun{
+		a.createCronTaskRun(&models.CronTaskRun{
 			TaskName:     "market_summary",
 			TriggeredAt:  now,
 			Status:       "skipped",
@@ -287,7 +295,7 @@ func (a *App) runScheduledSummaryStockNews() {
 	}
 
 	if a.isSummaryTaskBusy() {
-		db.Dao.Create(&models.CronTaskRun{
+		a.createCronTaskRun(&models.CronTaskRun{
 			TaskName:     "market_summary",
 			TriggeredAt:  now,
 			Status:       "skipped",
@@ -305,7 +313,7 @@ func (a *App) runScheduledSummaryStockNews() {
 		Attempts:    1,
 		AiConfigId:  aiConfigId,
 	}
-	_ = db.Dao.Create(taskRun).Error
+	a.createCronTaskRun(taskRun)
 
 	logger.SugaredLogger.Infof("开始执行市场资讯AI总结定时任务 aiConfigId=%d", aiConfigId)
 	marketSummaryQuestion := a.services.AI.NormalizeMarketSummaryQuestion(setting.QuestionTemplate)
@@ -318,7 +326,7 @@ func (a *App) runScheduledSummaryStockNews() {
 		errMsg = ""
 	} else {
 		taskRun.Attempts = 2
-		_ = db.Dao.Model(&models.CronTaskRun{}).Where("id = ?", taskRun.ID).Updates(map[string]any{"attempts": taskRun.Attempts}).Error
+		a.updateCronTaskRun(taskRun, taskRun.Status, taskRun.ErrorMessage)
 		res = a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, true)
 		errMsg = summarizeSummaryRunError(res)
 		if strings.TrimSpace(res.text) != "" {
@@ -327,10 +335,7 @@ func (a *App) runScheduledSummaryStockNews() {
 		}
 	}
 
-	_ = db.Dao.Model(&models.CronTaskRun{}).Where("id = ?", taskRun.ID).Updates(map[string]any{
-		"status":        status,
-		"error_message": errMsg,
-	}).Error
+	a.updateCronTaskRun(taskRun, status, errMsg)
 
 	logger.SugaredLogger.Infof("市场资讯AI总结定时任务执行完成 aiConfigId=%d status=%s", aiConfigId, status)
 }
@@ -351,7 +356,7 @@ func (a *App) runScheduledLatestAIAnalysisReportEmail() {
 			Attempts:     1,
 			ErrorMessage: message,
 		}
-		_ = db.Dao.Create(taskRun).Error
+		a.createCronTaskRun(taskRun)
 		return taskRun
 	}
 	updateTaskRun := func(taskRun *models.CronTaskRun, status, message string) {
@@ -359,13 +364,7 @@ func (a *App) runScheduledLatestAIAnalysisReportEmail() {
 			createTaskRun(status, message)
 			return
 		}
-		taskRun.Status = status
-		taskRun.ErrorMessage = message
-		_ = db.Dao.Model(&models.CronTaskRun{}).Where("id = ?", taskRun.ID).Updates(map[string]any{
-			"status":        status,
-			"error_message": message,
-			"attempts":      taskRun.Attempts,
-		}).Error
+		a.updateCronTaskRun(taskRun, status, message)
 	}
 
 	if !a.tryAcquireYieldEmailTask() {
@@ -409,11 +408,8 @@ func (a *App) runScheduledLatestAIAnalysisReportEmail() {
 
 	minuteStart := now.Truncate(time.Minute)
 	minuteEnd := minuteStart.Add(time.Minute)
-	var earliestTask models.CronTaskRun
-	if err := db.Dao.Model(&models.CronTaskRun{}).
-		Where("task_name = ? AND triggered_at >= ? AND triggered_at < ? AND status IN ?", "latest_ai_analysis_email", minuteStart, minuteEnd, []string{"started", "success"}).
-		Order("id asc").
-		First(&earliestTask).Error; err == nil && earliestTask.ID != taskRun.ID {
+	earliestTask, earliestErr := a.services.Scheduler.EarliestTaskRun(a.ctx, "latest_ai_analysis_email", minuteStart, minuteEnd, []string{"started", "success"})
+	if earliestErr == nil && earliestTask.ID != taskRun.ID {
 		msg := fmt.Sprintf("同一分钟内已有更早的任务记录 id=%d，跳过重复发送", earliestTask.ID)
 		updateTaskRun(taskRun, "skipped", msg)
 		logger.SugaredLogger.Warnf("跳过最新 AI 分析报告定时发送: %s", msg)

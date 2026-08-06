@@ -23,6 +23,7 @@ type ServiceOperations struct {
 	Market    MarketOperations
 	Notify    NotifyOperations
 	Recommend RecommendOperations
+	Scheduler SchedulerOperations
 	Stock     StockOperations
 	System    SystemOperations
 }
@@ -45,6 +46,8 @@ func (o ServiceOperations) Validate() error {
 		return operationRequiredError("notify")
 	case o.Recommend == nil:
 		return operationRequiredError("recommend")
+	case o.Scheduler == nil:
+		return operationRequiredError("scheduler")
 	case o.Stock == nil:
 		return operationRequiredError("stock")
 	case o.System == nil:
@@ -179,6 +182,13 @@ type RecommendOperations interface {
 	GetMarketSummaryProductionDowngradeReasonTop(models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error)
 	DeleteAiRecommendStocks(uint) error
 	RepairHistoricalMarketSummaryActivationIssues(time.Time) (MarketSummaryActivationRepairResult, error)
+}
+
+type SchedulerOperations interface {
+	CreateTaskRun(context.Context, *models.CronTaskRun) error
+	UpdateTaskRun(context.Context, *models.CronTaskRun) error
+	LatestAIResponseSince(context.Context, string, string, time.Time) (models.AIResponseResult, error)
+	EarliestTaskRun(context.Context, string, time.Time, time.Time, []string) (models.CronTaskRun, error)
 }
 
 type StockOperations interface {

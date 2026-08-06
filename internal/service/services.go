@@ -10,6 +10,7 @@ type AppServices struct {
 	Fund      FundService
 	History   HistoryService
 	Recommend RecommendService
+	Scheduler SchedulerService
 	Notify    NotifyService
 	Execution ExecutionService
 	System    SystemService
@@ -30,6 +31,7 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		Fund:      NewFundService(dependencies.Operations.Fund),
 		History:   NewHistoryService(dependencies.Operations.History),
 		Recommend: NewRecommendService(dependencies.Operations.Recommend),
+		Scheduler: NewSchedulerService(dependencies.Operations.Scheduler),
 		Notify:    NewNotifyService(dependencies.Operations.Notify),
 		Execution: NewExecutionService(dependencies.ExecutionMonitor),
 		System:    NewSystemService(dependencies.Operations.System),
