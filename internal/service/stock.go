@@ -23,6 +23,14 @@ func (s StockService) ReplaceStockBaseInfo(
 	return s.operations.ReplaceStockBaseInfo(ctx, domestic, hongKong, unitedStates)
 }
 
+func (s StockService) RefreshStockBaseInfo() {
+	s.operations.RefreshStockBaseInfo()
+}
+
+func (s StockService) RefreshIndexBaseInfo() {
+	s.operations.RefreshIndexBaseInfo()
+}
+
 func (s StockService) Follow(stockCode string) string {
 	return s.operations.Follow(stockCode)
 }

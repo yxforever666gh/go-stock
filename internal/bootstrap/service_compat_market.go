@@ -7,6 +7,14 @@ import (
 	"github.com/coocood/freecache"
 )
 
+func (*compatibilityServiceAdapter) AnalyzeNews(text string, save bool) {
+	data.NewsAnalyze(text, save)
+}
+
+func (*compatibilityServiceAdapter) EnsureMarketDataSelfCheck(reason string) {
+	data.EnsureDiemengSelfCheckAsync(reason)
+}
+
 func (*compatibilityServiceAdapter) GetFundList(key string) []models.FundBasic {
 	return data.NewFundApi().GetFundList(key)
 }

@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"go-stock/backend/data"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 	"go-stock/internal/releaseinfo"
 	"time"
 )
@@ -21,7 +21,7 @@ func (a *App) domReady(ctx context.Context) {
 		return
 	}
 
-	updateBasicInfo()
+	a.updateBasicInfo()
 
 	config := a.services.Config.GetConfig()
 	a.registerRealtimeRuntime(config)
@@ -52,13 +52,13 @@ func (a *App) emitDomReadyDone() {
 	}()
 }
 
-func (a *App) registerRealtimeRuntime(config *data.SettingConfig) {
+func (a *App) registerRealtimeRuntime(config *models.SettingConfig) {
 	interval := config.RefreshInterval
 	if interval <= 0 {
 		interval = 1
 	}
 	if _, err := a.cron.AddFunc(fmt.Sprintf("@every %ds", interval+60), func() {
-		data.NewsAnalyze("", true)
+		a.services.Market.AnalyzeNews("", true)
 	}); err != nil {
 		a.recordSchedulerRegistrationError("NewsAnalyze", fmt.Sprintf("@every %ds", interval+60), err)
 		logger.SugaredLogger.Errorf("注册 NewsAnalyze 定时任务失败: %v", err)
@@ -95,7 +95,7 @@ func (a *App) registerNewsPollingCrons(interval int64, enablePush bool) {
 	})
 }
 
-func (a *App) registerFundRuntime(config *data.SettingConfig) {
+func (a *App) registerFundRuntime(config *models.SettingConfig) {
 	if !config.EnableFund {
 		return
 	}
@@ -104,12 +104,12 @@ func (a *App) registerFundRuntime(config *data.SettingConfig) {
 	})
 }
 
-func (a *App) registerTelegraphRuntime(config *data.SettingConfig) {
+func (a *App) registerTelegraphRuntime(config *models.SettingConfig) {
 	return
 }
 
-func (a *App) startImmediateRuntimeTasks(config *data.SettingConfig) {
-	go data.EnsureDiemengSelfCheckAsync("app_dom_ready")
+func (a *App) startImmediateRuntimeTasks(config *models.SettingConfig) {
+	go a.services.Market.EnsureMarketDataSelfCheck("app_dom_ready")
 	go MonitorStockPrices(a)
 	if config.EnableFund {
 		go MonitorFundPrices(a)
@@ -117,7 +117,7 @@ func (a *App) startImmediateRuntimeTasks(config *data.SettingConfig) {
 	}
 }
 
-func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
+func (a *App) registerMaintenanceRuntime(config *models.SettingConfig) {
 	if config.UpdateBasicInfoOnStart {
 		go a.CheckStockBaseInfo(a.ctx)
 	}
@@ -131,7 +131,7 @@ func (a *App) registerMaintenanceRuntime(config *data.SettingConfig) {
 	}
 }
 
-func (a *App) registerConfiguredCronRuntimes(config *data.SettingConfig) {
+func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
 	a.reloadSummaryStockNewsCron(config)
 	a.enableSummaryStockNewsTestCron()
 }

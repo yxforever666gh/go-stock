@@ -42,8 +42,6 @@ var deprecatedDataImportDebt = map[string]bool{
 	"app_ai_api.go":                       true,
 	"app_config_api.go":                   true,
 	"app_cron_runtime.go":                 true,
-	"app_runtime_helpers.go":              true,
-	"app_startup_runtime.go":              true,
 	"app_summary_runtime.go":              true,
 	"backend/agent/agent.go":              true,
 	"backend/agent/agent_api.go":          true,
@@ -74,7 +72,6 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 
 var globalDBImportDebt = map[string]bool{
 	"app_cron_runtime.go":                                   true,
-	"app_runtime_helpers.go":                                true,
 	"app_summary_runtime.go":                                true,
 	"app_update_runtime.go":                                 true,
 	"app_v150_execution_runtime.go":                         true,

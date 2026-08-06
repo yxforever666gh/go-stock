@@ -14,6 +14,14 @@ func NewMarketService(operations MarketOperations) MarketService {
 	return MarketService{operations: operations}
 }
 
+func (s MarketService) AnalyzeNews(text string, save bool) {
+	s.operations.AnalyzeNews(text, save)
+}
+
+func (s MarketService) EnsureMarketDataSelfCheck(reason string) {
+	s.operations.EnsureMarketDataSelfCheck(reason)
+}
+
 func (s MarketService) LongTigerRank(date string) *[]models.LongTigerRankData {
 	return s.operations.LongTigerRank(date)
 }

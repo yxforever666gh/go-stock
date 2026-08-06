@@ -37,6 +37,14 @@ func replaceAllRows[T any](tx *gorm.DB, rows []T) error {
 	return tx.CreateInBatches(&rows, 400).Error
 }
 
+func (*compatibilityServiceAdapter) RefreshStockBaseInfo() {
+	data.NewStockDataApi().GetStockBaseInfo()
+}
+
+func (*compatibilityServiceAdapter) RefreshIndexBaseInfo() {
+	data.NewStockDataApi().GetIndexBasic()
+}
+
 func (a *compatibilityServiceAdapter) AddGroup(group models.Group) bool {
 	return data.NewStockGroupApi(a.main).AddGroup(group)
 }

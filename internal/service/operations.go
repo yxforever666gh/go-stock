@@ -129,6 +129,8 @@ type HistoryOperations interface {
 }
 
 type MarketOperations interface {
+	AnalyzeNews(string, bool)
+	EnsureMarketDataSelfCheck(string)
 	LongTigerRank(string) *[]models.LongTigerRankData
 	StockResearchReport(string, int) []any
 	StockNotice(string) []any
@@ -178,6 +180,8 @@ type RecommendOperations interface {
 
 type StockOperations interface {
 	ReplaceStockBaseInfo(context.Context, []models.StockBasic, []models.StockInfoHK, []models.StockInfoUS) error
+	RefreshStockBaseInfo()
+	RefreshIndexBaseInfo()
 	Follow(string) string
 	UnFollow(string) string
 	GetFollowList(int) *[]models.FollowedStock
