@@ -22,6 +22,23 @@ import (
 
 var _ service.MarketSummaryDecisionSnapshot = (*service.MarketSummaryV150DecisionEnvelope)(nil)
 var _ recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult] = (*compatibilityServiceAdapter)(nil)
+var _ recommendation.EventVerifier = (*marketSummaryEventVerifierCompatibilityAdapter)(nil)
+
+// marketSummaryEventVerifierCompatibilityAdapter is provider plumbing only:
+// the recommendation chain owns the batch shape, and this adapter forwards it
+// to the same OpenAi instance that owns the phased run.
+type marketSummaryEventVerifierCompatibilityAdapter struct {
+	openAI *data.OpenAi
+}
+
+func (a *marketSummaryEventVerifierCompatibilityAdapter) Verify(_ context.Context, call recommendation.EventVerificationCall) (recommendation.EventVerificationCompletion, error) {
+	content, responseID, model, err := a.openAI.CompleteChat(call.Messages, call.Think)
+	return recommendation.EventVerificationCompletion{
+		Content:    content,
+		ResponseID: responseID,
+		Model:      model,
+	}, err
+}
 
 func NewProductionCommandAIResolver() (cliports.CommandAIResolver, error) {
 	if db.Dao == nil {
@@ -216,7 +233,9 @@ func (*compatibilityServiceAdapter) NewSummaryStockNewsStream(ctx context.Contex
 }
 
 func (*compatibilityServiceAdapter) NewSummaryStockNewsStreamPhased(ctx context.Context, aiConfigID int, question string, sysPromptID *int, think bool) <-chan map[string]any {
-	return data.NewDeepSeekOpenAi(ctx, aiConfigID).NewSummaryStockNewsStreamPhased(question, sysPromptID, think)
+	openAI := data.NewDeepSeekOpenAi(ctx, aiConfigID)
+	data.BindMarketSummaryV150EventVerifier(openAI, &marketSummaryEventVerifierCompatibilityAdapter{openAI: openAI})
+	return openAI.NewSummaryStockNewsStreamPhased(question, sysPromptID, think)
 }
 
 func (*compatibilityServiceAdapter) GenerateMarketSummarySupplementTable(ctx context.Context, aiConfigID int, req models.MarketSummarySupplementRequest) (string, string, string, error) {

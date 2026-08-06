@@ -24,16 +24,22 @@ type CandidateRequest struct {
 	Benchmark  v150.BenchmarkSnapshot
 }
 
-// EventVerifier is defined by the recommendation consumer. Provider-specific
-// AI and HTTP adapters implement this interface without entering the use case.
+// EventVerifier is defined by the recommendation consumer. One call carries
+// the already-determined verification batch without serializing or reshaping
+// provider messages at the boundary.
 type EventVerifier interface {
-	Verify(context.Context, VerificationRequest) (VerificationResult, error)
+	Verify(context.Context, EventVerificationCall) (EventVerificationCompletion, error)
 }
 
-type VerificationRequest struct {
-	RunContext v150.RunContext
-	Candidate  v150.ScoredCandidate
-	Evidence   []marketintel.Evidence
+type EventVerificationCall struct {
+	Messages []map[string]any
+	Think    bool
+}
+
+type EventVerificationCompletion struct {
+	Content    string
+	ResponseID string
+	Model      string
 }
 
 type VerificationResult struct {

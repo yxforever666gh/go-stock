@@ -33,6 +33,7 @@ import (
 // -----------------------------------------------------------------------------------
 type OpenAi struct {
 	ctx              context.Context
+	eventVerifier    marketSummaryV150EventVerifier
 	BaseUrl          string  `json:"base_url"`
 	ApiKey           string  `json:"api_key"`
 	ApiProtocol      string  `json:"api_protocol"`

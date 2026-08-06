@@ -1,14 +1,29 @@
 package data
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"go-stock/backend/recommendation"
 	"go-stock/backend/strategy/v150"
 )
+
+type recordingMarketSummaryEventVerifier struct {
+	calls      []recommendation.EventVerificationCall
+	completion recommendation.EventVerificationCompletion
+	err        error
+}
+
+func (v *recordingMarketSummaryEventVerifier) Verify(_ context.Context, call recommendation.EventVerificationCall) (recommendation.EventVerificationCompletion, error) {
+	v.calls = append(v.calls, call)
+	return v.completion, v.err
+}
 
 func TestApplyMarketSummaryV150EventModelResponseDegradesOnlyInvalidCandidate(t *testing.T) {
 	now := time.Date(2026, 8, 5, 10, 30, 0, 0, cnLocation())
@@ -114,27 +129,108 @@ func TestVerifyMarketSummaryV150EventsUsesOnlyStructuredEventFields(t *testing.T
 			Title: "公司公告", Summary: "签署订单", SourceName: "exchange", PublishedAt: now.Add(-time.Hour).Format(time.RFC3339Nano), RawHash: "evidence-1",
 		}},
 	}}
-	original := completeMarketSummaryV150EventModel
-	t.Cleanup(func() { completeMarketSummaryV150EventModel = original })
-	completeMarketSummaryV150EventModel = func(_ *OpenAi, messages []map[string]any) (string, string, string, error) {
-		if len(messages) != 2 {
-			t.Fatalf("messages=%d, want 2", len(messages))
-		}
-		body, _ := messages[1]["content"].(string)
-		if strings.Contains(body, "targetPrice") || strings.Contains(body, "executionState") {
-			t.Fatalf("forbidden decision fields leaked into event request: %s", body)
-		}
-		return `{"assessments":[{"symbol":"600000.SH","direction":"positive","relevance":1,"importance":1,"confidence":0.8,"evidenceIds":["evidence-1"]}]}`, "chat", "model-x", nil
-	}
+	verifier := &recordingMarketSummaryEventVerifier{completion: recommendation.EventVerificationCompletion{
+		Content:    `{"assessments":[{"symbol":"600000.SH","direction":"positive","relevance":1,"importance":1,"confidence":0.8,"evidenceIds":["evidence-1"]}]}`,
+		ResponseID: "chat",
+		Model:      "model-x",
+	}}
 	o := &OpenAi{ProviderName: "provider", Model: "configured-model", ApiProtocol: AIAPIProtocolChatCompletions}
+	BindMarketSummaryV150EventVerifier(o, verifier)
 	if err := o.verifyMarketSummaryV150Events(run, verified); err != nil {
 		t.Fatal(err)
+	}
+	if len(verifier.calls) != 1 || verifier.calls[0].Think {
+		t.Fatalf("event verifier calls=%d think=%v, want one non-thinking batch", len(verifier.calls), len(verifier.calls) == 1 && verifier.calls[0].Think)
+	}
+	messages := verifier.calls[0].Messages
+	if len(messages) != 2 {
+		t.Fatalf("messages=%d, want 2", len(messages))
+	}
+	body, _ := messages[1]["content"].(string)
+	if strings.Contains(body, "targetPrice") || strings.Contains(body, "executionState") {
+		t.Fatalf("forbidden decision fields leaked into event request: %s", body)
 	}
 	if run.Candidates[0].Candidate.Signals.EventStrength != 0.8 {
 		t.Fatalf("event strength=%v, want 0.8", run.Candidates[0].Candidate.Signals.EventStrength)
 	}
-	if len(run.ModelHash) != 64 || len(run.PromptHash) != 64 {
-		t.Fatalf("model/prompt hashes not frozen: %q %q", run.ModelHash, run.PromptHash)
+	if got, want := run.PromptHash, "19770f22e5ee855b5e88ed5cae1553a2b28205d83ca8471ce1cd6f74ae378322"; got != want {
+		t.Fatalf("prompt hash=%q, want frozen %q", got, want)
+	}
+	if got, want := run.ModelHash, "d4349e9f596539dd747e4b28ce98b7bdd10a72b2017fe51b03c0ac098f26ea73"; got != want {
+		t.Fatalf("model hash=%q, want frozen %q", got, want)
+	}
+}
+
+func TestVerifyMarketSummaryV150EventsSendsTop18AsOneLosslessBatch(t *testing.T) {
+	now := time.Date(2026, 8, 5, 10, 30, 0, 0, cnLocation())
+	run := &MarketSummaryV150RunSnapshot{
+		RunContext: v150.RunContext{AsOf: now, DataCutoffAt: now, StrategyVersion: v150.StrategyVersion},
+	}
+	verified := make([]marketSummaryVerifiedCandidate, 0, 18)
+	assessments := make([]marketSummaryV150EventModelAssessment, 0, 18)
+	for index := 1; index <= 18; index++ {
+		symbol := fmt.Sprintf("%06d.SZ", index)
+		run.VerificationSymbols = append(run.VerificationSymbols, symbol)
+		run.Candidates = append(run.Candidates, MarketSummaryV150CandidateSnapshot{
+			Candidate: v150.Candidate{Symbol: symbol},
+			Rank:      index,
+		})
+		verified = append(verified, marketSummaryVerifiedCandidate{StockCode: symbol, VerifiedAt: now})
+		assessments = append(assessments, marketSummaryV150EventModelAssessment{
+			Symbol: symbol, Direction: "neutral", EvidenceIDs: []string{},
+		})
+	}
+	response, err := json.Marshal(map[string]any{"assessments": assessments})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifier := &recordingMarketSummaryEventVerifier{completion: recommendation.EventVerificationCompletion{
+		Content: string(response), Model: "model-x",
+	}}
+	o := BindMarketSummaryV150EventVerifier(&OpenAi{
+		ProviderName: "provider", Model: "configured-model", ApiProtocol: AIAPIProtocolChatCompletions,
+	}, verifier)
+	if err := o.verifyMarketSummaryV150Events(run, verified); err != nil {
+		t.Fatal(err)
+	}
+	if len(verifier.calls) != 1 {
+		t.Fatalf("event verifier calls=%d, want exactly one top-18 batch", len(verifier.calls))
+	}
+	call := verifier.calls[0]
+	if call.Think {
+		t.Fatal("event verifier unexpectedly enabled model thinking")
+	}
+	wantSystem := map[string]any{"role": "system", "content": marketSummaryV150EventModelSystemPrompt}
+	if len(call.Messages) != 2 || !reflect.DeepEqual(call.Messages[0], wantSystem) {
+		t.Fatalf("system message changed: %#v", call.Messages)
+	}
+	if got := call.Messages[1]["role"]; got != "user" {
+		t.Fatalf("user role=%v", got)
+	}
+	userContent, ok := call.Messages[1]["content"].(string)
+	prefix := marketSummaryV150EventModelSchemaPrompt + "\nInput JSON:\n"
+	if !ok || !strings.HasPrefix(userContent, prefix) {
+		t.Fatalf("user message does not preserve schema/input structure: %#v", call.Messages[1])
+	}
+	var request marketSummaryV150EventModelRequest
+	if err := json.Unmarshal([]byte(strings.TrimPrefix(userContent, prefix)), &request); err != nil {
+		t.Fatalf("decode batched request: %v", err)
+	}
+	gotSymbols := make([]string, 0, len(request.Candidates))
+	for _, candidate := range request.Candidates {
+		gotSymbols = append(gotSymbols, candidate.Symbol)
+	}
+	if !reflect.DeepEqual(gotSymbols, run.VerificationSymbols) {
+		t.Fatalf("batch candidate order changed: got=%v want=%v", gotSymbols, run.VerificationSymbols)
+	}
+	for index, candidate := range run.Candidates {
+		if candidate.Rank != index+1 {
+			t.Fatalf("event verifier changed deterministic rank at %d: %+v", index, candidate)
+		}
+	}
+	if run.PromptHash != "19770f22e5ee855b5e88ed5cae1553a2b28205d83ca8471ce1cd6f74ae378322" ||
+		run.ModelHash != "d4349e9f596539dd747e4b28ce98b7bdd10a72b2017fe51b03c0ac098f26ea73" {
+		t.Fatalf("frozen model identity changed: prompt=%s model=%s", run.PromptHash, run.ModelHash)
 	}
 }
 
@@ -147,12 +243,9 @@ func TestVerifyMarketSummaryV150EventsBatchFailureCanDegradeWithoutStoppingRun(t
 			Symbol: "600000.SH", EventAt: &now, Signals: v150.ScoreSignals{EventStrength: 1},
 		}}},
 	}
-	original := completeMarketSummaryV150EventModel
-	t.Cleanup(func() { completeMarketSummaryV150EventModel = original })
-	completeMarketSummaryV150EventModel = func(_ *OpenAi, _ []map[string]any) (string, string, string, error) {
-		return "", "", "", errors.New("provider unavailable")
-	}
-	err := (&OpenAi{Model: "model-x"}).verifyMarketSummaryV150Events(run, []marketSummaryVerifiedCandidate{{StockCode: "600000.SH"}})
+	verifier := &recordingMarketSummaryEventVerifier{err: errors.New("provider unavailable")}
+	o := BindMarketSummaryV150EventVerifier(&OpenAi{Model: "model-x"}, verifier)
+	err := o.verifyMarketSummaryV150Events(run, []marketSummaryVerifiedCandidate{{StockCode: "600000.SH"}})
 	if err != nil {
 		// runMarketSummaryV150Phase owns the batch-level downgrade so that this
 		// helper remains explicit about provider failure.

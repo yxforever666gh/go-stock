@@ -51,13 +51,6 @@ type marketSummaryV150EventModelAssessment struct {
 	EvidenceIDs []string `json:"evidenceIds"`
 }
 
-var completeMarketSummaryV150EventModel = func(o *OpenAi, messages []map[string]any) (string, string, string, error) {
-	if o == nil {
-		return "", "", "", errors.New("event verifier model is unavailable")
-	}
-	return o.CompleteChat(messages, false)
-}
-
 // applyMarketSummaryV150NewsEventGate keeps the technical pipeline live when
 // news is unavailable, but makes the event component fail closed. Only an OK
 // window may be sent to the event verifier.
@@ -96,7 +89,7 @@ func (o *OpenAi) verifyMarketSummaryV150Events(run *MarketSummaryV150RunSnapshot
 		{"role": "system", "content": marketSummaryV150EventModelSystemPrompt},
 		{"role": "user", "content": marketSummaryV150EventModelSchemaPrompt + "\nInput JSON:\n" + string(payload)},
 	}
-	content, _, modelName, err := completeMarketSummaryV150EventModel(o, messages)
+	content, _, modelName, err := o.completeMarketSummaryV150EventBatch(messages, false)
 	run.PromptHash = marketSummaryV150StableHash(marketSummaryV150EventModelSystemPrompt + "\n" + marketSummaryV150EventModelSchemaPrompt)
 	modelIdentity := strings.Join([]string{strings.TrimSpace(o.ProviderName), strings.TrimSpace(o.Model), strings.TrimSpace(modelName), NormalizeAIAPIProtocol(o.ApiProtocol)}, "|")
 	run.ModelHash = marketSummaryV150StableHash(modelIdentity)
