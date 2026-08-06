@@ -2,9 +2,9 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
@@ -177,39 +177,10 @@ func syncedTelegraphSource(tags []string) string {
 }
 
 func (a *App) persistSyncedTelegraph(telegraph *models.Telegraph, tags []string) bool {
-	if telegraph == nil {
+	created, err := a.services.Market.PersistSyncedTelegraph(context.Background(), telegraph, tags)
+	if err != nil {
+		logger.SugaredLogger.Errorf("persist synced telegraph failed: %v", err)
 		return false
 	}
-	cnt := int64(0)
-	if telegraph.Title == "" {
-		db.Dao.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
-	} else {
-		db.Dao.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
-	}
-	if cnt > 0 {
-		return false
-	}
-	db.Dao.Model(telegraph).Create(telegraph)
-	a.persistTelegraphTags(telegraph, tags)
-	return true
-}
-
-func (a *App) persistTelegraphTags(telegraph *models.Telegraph, tags []string) {
-	if telegraph == nil {
-		return
-	}
-	subjects := slice.Filter(tags, func(index int, item string) bool {
-		return !(item == "rotating_light" || item == "loudspeaker")
-	})
-	for _, subject := range subjects {
-		tag := &models.Tags{
-			Name: subject,
-			Type: "subject",
-		}
-		db.Dao.Model(tag).Where("name=? and type=?", subject, "subject").FirstOrCreate(tag)
-		db.Dao.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tag.ID).FirstOrCreate(&models.TelegraphTags{
-			TelegraphId: telegraph.ID,
-			TagId:       tag.ID,
-		})
-	}
+	return created
 }

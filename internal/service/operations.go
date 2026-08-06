@@ -134,6 +134,7 @@ type HistoryOperations interface {
 }
 
 type MarketOperations interface {
+	PersistSyncedTelegraph(context.Context, *models.Telegraph, []string) (bool, error)
 	AnalyzeNews(string, bool)
 	EnsureMarketDataSelfCheck(string)
 	NormalizeYieldEmailCronTimes(string) ([]string, error)

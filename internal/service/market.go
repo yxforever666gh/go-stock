@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"time"
 
 	"go-stock/backend/models"
@@ -14,6 +15,10 @@ type MarketService struct {
 
 func NewMarketService(operations MarketOperations) MarketService {
 	return MarketService{operations: operations}
+}
+
+func (s MarketService) PersistSyncedTelegraph(ctx context.Context, telegraph *models.Telegraph, tags []string) (bool, error) {
+	return s.operations.PersistSyncedTelegraph(ctx, telegraph, tags)
 }
 
 func (s MarketService) AnalyzeNews(text string, save bool) {

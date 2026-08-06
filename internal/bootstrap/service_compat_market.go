@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"go-stock/backend/data"
@@ -10,6 +11,7 @@ import (
 	"go-stock/internal/service"
 
 	"github.com/coocood/freecache"
+	"gorm.io/gorm"
 )
 
 type legacyApplicationInitializer struct{}
@@ -405,6 +407,52 @@ func (a *marketAuditTushareCompatibilityAdapter) GetStockMinuteBars(tsCode strin
 
 func (*compatibilityServiceAdapter) AnalyzeNews(text string, save bool) {
 	data.NewsAnalyze(text, save)
+}
+
+func (a *compatibilityServiceAdapter) PersistSyncedTelegraph(ctx context.Context, telegraph *models.Telegraph, tags []string) (bool, error) {
+	if telegraph == nil {
+		return false, nil
+	}
+	if a.main == nil {
+		return false, errors.New("main database is not initialized")
+	}
+
+	created := false
+	err := a.main.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var count int64
+		query := tx.Model(&models.Telegraph{})
+		if telegraph.Title == "" {
+			query = query.Where("content = ?", telegraph.Content)
+		} else {
+			query = query.Where("title = ?", telegraph.Title)
+		}
+		if err := query.Count(&count).Error; err != nil {
+			return err
+		}
+		if count > 0 {
+			return nil
+		}
+		if err := tx.Create(telegraph).Error; err != nil {
+			return err
+		}
+
+		for _, name := range tags {
+			if name == "rotating_light" || name == "loudspeaker" {
+				continue
+			}
+			tag := &models.Tags{Name: name, Type: "subject"}
+			if err := tx.Where("name = ? AND type = ?", name, "subject").FirstOrCreate(tag).Error; err != nil {
+				return err
+			}
+			association := &models.TelegraphTags{TelegraphId: telegraph.ID, TagId: tag.ID}
+			if err := tx.Where("telegraph_id = ? AND tag_id = ?", telegraph.ID, tag.ID).FirstOrCreate(association).Error; err != nil {
+				return err
+			}
+		}
+		created = true
+		return nil
+	})
+	return created, err
 }
 
 func (*compatibilityServiceAdapter) EnsureMarketDataSelfCheck(reason string) {
