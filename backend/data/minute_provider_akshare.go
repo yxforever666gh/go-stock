@@ -46,6 +46,35 @@ type akShareMinuteRow struct {
 	Amount    float64 `json:"amount"`
 }
 
+func akShareMinuteAdjustment(provider string) string {
+	// Eastmoney's one-minute endpoint is explicitly requested without
+	// adjustment. Sina honors GO_STOCK_AKSHARE_MINUTE_ADJUST, so that setting
+	// must become part of the persisted provenance rather than disappearing
+	// behind the generic "akshare:sina" label.
+	if strings.EqualFold(strings.TrimSpace(provider), "em") {
+		return "none"
+	}
+	adjustment := strings.ToLower(strings.TrimSpace(os.Getenv("GO_STOCK_AKSHARE_MINUTE_ADJUST")))
+	switch adjustment {
+	case "qfq", "hfq":
+		return adjustment
+	default:
+		return "none"
+	}
+}
+
+func akShareMinuteSourceLabel(provider string) string {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	return fmt.Sprintf("akshare:%s:adjustment=%s", provider, akShareMinuteAdjustment(provider))
+}
+
+func setMinuteBarsSource(bars []minuteBar, source string) []minuteBar {
+	for index := range bars {
+		bars[index].Source = strings.TrimSpace(source)
+	}
+	return bars
+}
+
 func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
 	if !start.Before(end) {
 		return []minuteBar{}, "", nil
@@ -110,15 +139,17 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 	if sourcePref == "auto" {
 		sinaRows, sinaErr := fetchRows("sina")
 		if sinaErr == nil {
-			sinaBars := convertAkShareRowsToBars(sinaRows, start, end)
+			sinaSource := akShareMinuteSourceLabel("sina")
+			sinaBars := setMinuteBarsSource(convertAkShareRowsToBars(sinaRows, start, end), sinaSource)
 			if minuteBarsCoverTradingSessions(sinaBars, start, end) {
-				return sinaBars, "akshare:sina", nil
+				return sinaBars, sinaSource, nil
 			}
 			emRows, emErr := fetchRows("em")
 			if emErr == nil {
-				emBars := convertAkShareRowsToBars(emRows, start, end)
+				emSource := akShareMinuteSourceLabel("em")
+				emBars := setMinuteBarsSource(convertAkShareRowsToBars(emRows, start, end), emSource)
 				if len(emBars) > 0 {
-					return emBars, "akshare:em", nil
+					return emBars, emSource, nil
 				}
 			} else {
 				// Record EM failure so we don't keep hammering a broken upstream.
@@ -126,7 +157,7 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 			}
 			// Fall back to whatever Sina returned (even if incomplete) so we can
 			// at least advance the cache tail.
-			return sinaBars, "akshare:sina", nil
+			return sinaBars, sinaSource, nil
 		}
 
 		// Sina hard-failed: try EM as the only fallback.
@@ -135,16 +166,16 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 			return nil, "", emErr
 		}
 		rows = emRows
-		usedSource = "akshare:em"
+		usedSource = akShareMinuteSourceLabel("em")
 	} else {
 		rows, err = fetchRows(sourcePref)
 		if err != nil {
 			return nil, "", err
 		}
-		usedSource = "akshare:" + sourcePref
+		usedSource = akShareMinuteSourceLabel(sourcePref)
 	}
 
-	bars := convertAkShareRowsToBars(rows, start, end)
+	bars := setMinuteBarsSource(convertAkShareRowsToBars(rows, start, end), usedSource)
 	return bars, usedSource, nil
 }
 

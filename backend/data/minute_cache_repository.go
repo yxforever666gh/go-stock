@@ -15,13 +15,16 @@ import (
 )
 
 type minuteBar struct {
-	TradeTime  time.Time
-	Open       float64
-	High       float64
-	Low        float64
-	Close      float64
-	Volume     float64
-	Amount     float64
+	TradeTime time.Time
+	Open      float64
+	High      float64
+	Low       float64
+	Close     float64
+	Volume    float64
+	Amount    float64
+	// Source must survive cache reads so V1.5 valuation can distinguish
+	// executable unadjusted minutes from qfq/hfq observations.
+	Source     string
 	SlotIndex  int
 	SlotWindow int
 }
@@ -48,6 +51,35 @@ func normalizeMinuteTime(t time.Time) time.Time {
 		return t
 	}
 	return t.Truncate(time.Minute)
+}
+
+// minuteBarSourceProvesUnadjusted is intentionally allowlist-based. V1.5
+// execution and NAV accounting apply corporate actions from the sealed ledger;
+// consuming a qfq/hfq minute as well would double-adjust price and quantity.
+// Historical akshare:sina rows are ambiguous because the old source label did
+// not record GO_STOCK_AKSHARE_MINUTE_ADJUST, whereas the EM minute endpoint has
+// always forced adjust="" and is therefore safe to recognize explicitly.
+func minuteBarSourceProvesUnadjusted(source string) bool {
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		return false
+	}
+	for _, adjusted := range []string{"qfq", "hfq", "adjustment=forward", "adjustment=backward"} {
+		if strings.Contains(source, adjusted) {
+			return false
+		}
+	}
+	if strings.Contains(source, "adjustment=none") || strings.Contains(source, "unadjusted") ||
+		source == "raw" || strings.HasSuffix(source, ":raw") || strings.Contains(source, "_raw") {
+		return true
+	}
+	switch source {
+	case "sina", "tencent", "diemeng", "diemeng_dump", "akshare:em":
+		return true
+	}
+	// Test fixtures construct raw OHLC directly. Keep those explicit labels out
+	// of the production-provider allowlist while still exercising provenance.
+	return source == "test" || strings.HasPrefix(source, "test:") || strings.HasSuffix(source, "-test")
 }
 
 func minuteTimeMillis(t time.Time) int64 {
@@ -109,6 +141,7 @@ func listMinuteBarsFromMinuteDB(code string, start, end time.Time) ([]minuteBar,
 			Close:     row.Close,
 			Volume:    row.Volume,
 			Amount:    row.Amount,
+			Source:    strings.TrimSpace(row.Source),
 		})
 	}
 	return bars, nil
@@ -137,6 +170,7 @@ func listMinuteBarsFromLegacyCache(code string, start, end time.Time) ([]minuteB
 			Close:     row.Close,
 			Volume:    row.Volume,
 			Amount:    row.Amount,
+			Source:    strings.TrimSpace(row.Source),
 		})
 	}
 	return bars, nil
@@ -189,6 +223,10 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 		if bar.TradeTime.IsZero() {
 			continue
 		}
+		rowSource := strings.TrimSpace(bar.Source)
+		if rowSource == "" {
+			rowSource = strings.TrimSpace(source)
+		}
 		rows = append(rows, models.AiRecommendMinuteBar{
 			StockCode: code,
 			TradeTime: normalizeMinuteTime(bar.TradeTime),
@@ -198,7 +236,7 @@ func upsertMinuteBarsToCache(stockCode string, bars []minuteBar, source string) 
 			Close:     round2(bar.Close),
 			Volume:    bar.Volume,
 			Amount:    bar.Amount,
-			Source:    strings.TrimSpace(source),
+			Source:    rowSource,
 		})
 	}
 	if len(rows) == 0 {

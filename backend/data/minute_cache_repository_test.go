@@ -56,6 +56,9 @@ func TestMinuteCacheWritesMinuteDBByDefault(t *testing.T) {
 	if bars[0].Open != 10.11 || bars[0].High != 10.23 {
 		t.Fatalf("rounded OHLC mismatch: %+v", bars[0])
 	}
+	if bars[0].Source != "test" {
+		t.Fatalf("minute source was dropped: %+v", bars[0])
+	}
 
 	var legacyCount int64
 	if err := db.Dao.Model(&models.AiRecommendMinuteBar{}).Count(&legacyCount).Error; err != nil {
@@ -114,7 +117,7 @@ func TestMinuteCacheFallbackReadsLegacyTable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list minute bars failed: %v", err)
 	}
-	if len(bars) != 1 || bars[0].Close != 5.5 {
+	if len(bars) != 1 || bars[0].Close != 5.5 || bars[0].Source != "legacy" {
 		t.Fatalf("fallback bars = %+v, want legacy close=5.5", bars)
 	}
 	start, end, err := getMinuteCacheRange("300003.SZ")
@@ -156,11 +159,37 @@ func TestMinuteCacheMergesMinuteDBAndLegacyRows(t *testing.T) {
 	if !bars[0].TradeTime.Equal(legacyTime) || bars[0].Close != 1 {
 		t.Fatalf("legacy-only row mismatch: %+v", bars[0])
 	}
-	if !bars[1].TradeTime.Equal(overlapTime) || bars[1].Close != 20 {
+	if !bars[1].TradeTime.Equal(overlapTime) || bars[1].Close != 20 || bars[1].Source != "minute-db" {
 		t.Fatalf("overlap row should prefer minute-db data: %+v", bars[1])
 	}
 	if !bars[2].TradeTime.Equal(primaryTime) || bars[2].Close != 3 {
 		t.Fatalf("minute-db-only row mismatch: %+v", bars[2])
+	}
+}
+
+func TestMinuteBarSourceProvesUnadjusted(t *testing.T) {
+	tests := []struct {
+		source string
+		want   bool
+	}{
+		{source: "sina", want: true},
+		{source: "tencent", want: true},
+		{source: "diemeng", want: true},
+		{source: "diemeng_dump", want: true},
+		{source: "akshare:em", want: true},
+		{source: "akshare:sina:adjustment=none", want: true},
+		{source: "akshare:sina", want: false},
+		{source: "akshare:sina:adjustment=qfq", want: false},
+		{source: "akshare:sina:adjustment=hfq", want: false},
+		{source: "", want: false},
+		{source: "unknown", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.source, func(t *testing.T) {
+			if got := minuteBarSourceProvesUnadjusted(test.source); got != test.want {
+				t.Fatalf("minuteBarSourceProvesUnadjusted(%q)=%v want %v", test.source, got, test.want)
+			}
+		})
 	}
 }
 

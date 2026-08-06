@@ -61,3 +61,24 @@ func TestExtractAShareSymbol(t *testing.T) {
 		}
 	}
 }
+
+func TestAkShareMinuteSourceLabelCarriesAdjustment(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		provider   string
+		adjustment string
+		want       string
+	}{
+		{name: "sina raw default", provider: "sina", want: "akshare:sina:adjustment=none"},
+		{name: "sina qfq", provider: "sina", adjustment: "qfq", want: "akshare:sina:adjustment=qfq"},
+		{name: "sina hfq", provider: "sina", adjustment: "hfq", want: "akshare:sina:adjustment=hfq"},
+		{name: "em always raw", provider: "em", adjustment: "qfq", want: "akshare:em:adjustment=none"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("GO_STOCK_AKSHARE_MINUTE_ADJUST", test.adjustment)
+			if got := akShareMinuteSourceLabel(test.provider); got != test.want {
+				t.Fatalf("source label=%q want %q", got, test.want)
+			}
+		})
+	}
+}
