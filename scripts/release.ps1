@@ -165,8 +165,23 @@ function Assert-UniqueMainBranch {
     if ($localBranches.Count -ne 1 -or $localBranches[0] -ne "main") {
         throw "Release workspace must contain only the local main branch (found: $($localBranches -join ', '))"
     }
-    $remoteHeadOutput = @(& git -C $ProjectRoot -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote --heads origin 2>&1)
-    $remoteExitCode = $LASTEXITCODE
+    $remoteHeadOutput = @()
+    $remoteExitCode = 1
+    for ($remoteAttempt = 1; $remoteAttempt -le 3; $remoteAttempt++) {
+        $attemptOutput = @()
+        $attemptExitCode = 1
+        try {
+            $attemptOutput = @(& git -C $ProjectRoot -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote --heads origin 2>&1)
+            $attemptExitCode = $LASTEXITCODE
+        } catch {
+            if ($LASTEXITCODE) { $attemptExitCode = $LASTEXITCODE }
+            $attemptOutput = @($_.Exception.Message)
+        }
+        $remoteHeadOutput = $attemptOutput
+        $remoteExitCode = $attemptExitCode
+        if ($remoteExitCode -eq 0) { break }
+        if ($remoteAttempt -lt 3) { Start-Sleep -Seconds $remoteAttempt }
+    }
     if ($remoteExitCode -ne 0) {
         $details = ($remoteHeadOutput | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
         if ($details) { throw "Cannot query origin branch heads (exit $remoteExitCode)`n$details" }

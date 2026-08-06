@@ -59,8 +59,12 @@ func TestReleaseBranchGateQueriesActualOriginHeads(t *testing.T) {
 		t.Fatal("release branch gate must not trust cached refs/remotes/origin")
 	}
 	for _, fragment := range []string{
+		`for ($remoteAttempt = 1; $remoteAttempt -le 3; $remoteAttempt++)`,
+		`try {`,
 		`& git -C $ProjectRoot -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote --heads origin`,
-		`$remoteExitCode = $LASTEXITCODE`,
+		`catch {`,
+		`if ($remoteAttempt -lt 3) { Start-Sleep -Seconds $remoteAttempt }`,
+		`$attemptExitCode = $LASTEXITCODE`,
 		`$remoteBranches.Count -ne 1`,
 		`$remoteBranches[0] -ne "refs/heads/main"`,
 	} {
