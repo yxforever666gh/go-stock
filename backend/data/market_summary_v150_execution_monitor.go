@@ -1,6 +1,7 @@
 package data
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -200,7 +201,7 @@ func RunMarketSummaryV150ExecutionMonitor(now time.Time) (MarketSummaryV150Execu
 		return result, errors.New("v1.5 execution monitor database is unavailable")
 	}
 
-	records, pendingCount, openCount, skippedCount, warnings, err := loadMarketSummaryV150ActiveExecutionRecords()
+	records, pendingCount, openCount, skippedCount, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(window.EvaluationCutoff)
 	result.PendingCount = pendingCount
 	result.OpenCount = openCount
 	result.SkippedCount = skippedCount
@@ -261,44 +262,74 @@ func wrapMarketSummaryV150ExecutionMonitorError(operation string, err error) err
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
-func loadMarketSummaryV150ActiveExecutionRecords() ([]models.AiRecommendStocks, int, int, int, []string, error) {
+func loadMarketSummaryV150ActiveExecutionRecords(observedAt time.Time) ([]models.AiRecommendStocks, int, int, int, []string, error) {
 	if db.Dao == nil {
 		return nil, 0, 0, 0, nil, errors.New("strategy database is unavailable")
 	}
-	for _, table := range []any{&models.AiRecommendStocks{}, &models.RuleSnapshot{}, &models.OrderEvent{}} {
+	for _, table := range []any{&models.StrategyRunSnapshot{}, &models.CandidateSnapshot{}, &models.RuleSnapshot{}, &models.OrderEvent{}} {
 		if !db.Dao.Migrator().HasTable(table) {
 			return nil, 0, 0, 0, nil, fmt.Errorf("v1.5 execution table %T is unavailable", table)
 		}
 	}
 
-	var records []models.AiRecommendStocks
-	if err := db.Dao.Model(&models.AiRecommendStocks{}).
-		Where("summary_version = ? AND strategy_run_id <> '' AND strategy_rule_id <> ''", marketSummaryVersion150).
-		Order("id ASC").
-		Find(&records).Error; err != nil {
-		return nil, 0, 0, 0, nil, err
-	}
-	if len(records) == 0 {
-		return []models.AiRecommendStocks{}, 0, 0, 0, []string{}, nil
-	}
-
-	ruleIDs := make([]string, 0, len(records))
-	for _, record := range records {
-		if ruleID := strings.TrimSpace(record.StrategyRuleID); ruleID != "" {
-			ruleIDs = append(ruleIDs, ruleID)
-		}
-	}
+	// Frozen entry rules and their append-only lifecycle events are the only
+	// authority for execution enumeration. ai_recommend_stocks is a mutable
+	// display projection and is deliberately loaded only after the immutable
+	// execution identities have been established.
 	var rules []models.RuleSnapshot
 	if err := db.Dao.Model(&models.RuleSnapshot{}).
-		Where("rule_id IN ? AND strategy_version = ? AND frozen_at IS NOT NULL", ruleIDs, marketSummaryVersion150).
+		Where("strategy_version = ? AND frozen_at IS NOT NULL", marketSummaryVersion150).
+		Order("rule_id ASC").
 		Find(&rules).Error; err != nil {
 		return nil, 0, 0, 0, nil, err
 	}
-	frozenRules := make(map[string]struct{}, len(rules))
+	entryRules := rules[:0]
 	for _, rule := range rules {
 		if strings.EqualFold(strings.TrimSpace(rule.RuleType), "entry") {
-			frozenRules[strings.TrimSpace(rule.RuleID)] = struct{}{}
+			entryRules = append(entryRules, rule)
 		}
+	}
+	if len(entryRules) == 0 {
+		return []models.AiRecommendStocks{}, 0, 0, 0, []string{}, nil
+	}
+
+	ruleIDs := make([]string, 0, len(entryRules))
+	runIDs := make([]string, 0, len(entryRules))
+	candidateIDs := make([]string, 0, len(entryRules))
+	for _, rule := range entryRules {
+		if ruleID := strings.TrimSpace(rule.RuleID); ruleID != "" {
+			ruleIDs = append(ruleIDs, ruleID)
+		}
+		if runID := strings.TrimSpace(rule.RunID); runID != "" {
+			runIDs = append(runIDs, runID)
+		}
+		if candidateID := strings.TrimSpace(rule.CandidateID); candidateID != "" {
+			candidateIDs = append(candidateIDs, candidateID)
+		}
+	}
+
+	var runs []models.StrategyRunSnapshot
+	if err := db.Dao.Model(&models.StrategyRunSnapshot{}).
+		Where("run_id IN ? AND strategy_version = ? AND frozen_at IS NOT NULL", runIDs, marketSummaryVersion150).
+		Find(&runs).Error; err != nil {
+		return nil, 0, 0, 0, nil, err
+	}
+	runsByID := make(map[string]models.StrategyRunSnapshot, len(runs))
+	for _, run := range runs {
+		runsByID[strings.TrimSpace(run.RunID)] = run
+	}
+
+	var candidates []models.CandidateSnapshot
+	if len(candidateIDs) > 0 {
+		if err := db.Dao.Model(&models.CandidateSnapshot{}).
+			Where("candidate_id IN ? AND strategy_version = ? AND frozen_at IS NOT NULL", candidateIDs, marketSummaryVersion150).
+			Find(&candidates).Error; err != nil {
+			return nil, 0, 0, 0, nil, err
+		}
+	}
+	candidatesByID := make(map[string]models.CandidateSnapshot, len(candidates))
+	for _, candidate := range candidates {
+		candidatesByID[strings.TrimSpace(candidate.CandidateID)] = candidate
 	}
 
 	var events []models.OrderEvent
@@ -314,31 +345,49 @@ func loadMarketSummaryV150ActiveExecutionRecords() ([]models.AiRecommendStocks, 
 		eventsByRule[ruleID] = append(eventsByRule[ruleID], event)
 	}
 
-	active := make([]models.AiRecommendStocks, 0, len(records))
+	projectionsByRule := make(map[string][]models.AiRecommendStocks, len(ruleIDs))
+	if db.Dao.Migrator().HasTable(&models.AiRecommendStocks{}) {
+		var projections []models.AiRecommendStocks
+		if err := db.Dao.Model(&models.AiRecommendStocks{}).
+			Where("strategy_rule_id IN ? AND summary_version = ?", ruleIDs, marketSummaryVersion150).
+			Order("strategy_rule_id ASC, id ASC").
+			Find(&projections).Error; err != nil {
+			return nil, 0, 0, 0, nil, err
+		}
+		for _, projection := range projections {
+			ruleID := strings.TrimSpace(projection.StrategyRuleID)
+			projectionsByRule[ruleID] = append(projectionsByRule[ruleID], projection)
+		}
+	}
+
+	active := make([]models.AiRecommendStocks, 0, len(entryRules))
 	warnings := make([]string, 0)
-	seenRules := make(map[string]struct{}, len(records))
 	pendingCount, openCount, skippedCount := 0, 0, 0
-	for _, record := range records {
-		ruleID := strings.TrimSpace(record.StrategyRuleID)
-		if normalizeRecommendExecutionState(record.ExecutionState) == recommendExecutionAnalysisOnly {
+	for _, rule := range entryRules {
+		ruleID := strings.TrimSpace(rule.RuleID)
+		runID := strings.TrimSpace(rule.RunID)
+		candidateID := strings.TrimSpace(rule.CandidateID)
+		run, hasRun := runsByID[runID]
+		candidate, hasCandidate := candidatesByID[candidateID]
+		if ruleID == "" || runID == "" || !hasRun || strings.TrimSpace(run.RunID) != runID {
 			skippedCount++
-			warnings = append(warnings, "analysis_only recommendation cannot enter execution "+ruleID)
+			warnings = append(warnings, "missing frozen strategy run for entry rule "+ruleID)
 			continue
 		}
-		if _, duplicate := seenRules[ruleID]; duplicate {
+		if candidateID == "" || !hasCandidate || strings.TrimSpace(candidate.RunID) != runID ||
+			normalizeRecommendStockCode(candidate.Symbol) != normalizeRecommendStockCode(rule.Symbol) {
 			skippedCount++
-			warnings = append(warnings, "duplicate recommendation for immutable rule "+ruleID)
-			continue
-		}
-		seenRules[ruleID] = struct{}{}
-		if _, exists := frozenRules[ruleID]; !exists {
-			skippedCount++
-			warnings = append(warnings, "missing frozen entry rule "+ruleID)
+			warnings = append(warnings, "missing or mismatched frozen candidate for entry rule "+ruleID)
 			continue
 		}
 
 		issued, open, terminal := false, false, false
 		for _, event := range eventsByRule[ruleID] {
+			if strings.TrimSpace(event.RunID) != runID ||
+				normalizeRecommendStockCode(event.Symbol) != normalizeRecommendStockCode(rule.Symbol) {
+				warnings = append(warnings, "ignored mismatched immutable order event for rule "+ruleID)
+				continue
+			}
 			switch strings.ToLower(strings.TrimSpace(event.EventType)) {
 			case "rule_issued":
 				issued = true
@@ -359,12 +408,38 @@ func loadMarketSummaryV150ActiveExecutionRecords() ([]models.AiRecommendStocks, 
 			warnings = append(warnings, "missing immutable rule_issued event "+ruleID)
 			continue
 		}
+		if terminal {
+			continue
+		}
+
+		projection, projectionWarnings := selectMarketSummaryV150ExecutionProjection(ruleID, projectionsByRule[ruleID])
+		warnings = append(warnings, projectionWarnings...)
+		record := buildMarketSummaryV150ExecutionCompatibilityRecord(rule, run, candidate, projection)
+		if _, planErr := loadMarketSummaryV150FrozenExecutionPlan(record); planErr != nil {
+			skippedCount++
+			if open {
+				// A corrupt plan cannot safely drive an exit, but an existing fill
+				// remains an open ledger fact. Never try to rewrite that lifecycle
+				// as an entry rejection or hide it from the monitor count.
+				openCount++
+				warnings = append(warnings, "open rule has invalid frozen entry plan "+ruleID+": "+planErr.Error())
+				continue
+			}
+			reason := marketSummaryV150DataHealthReject + ": invalid frozen entry plan: " + planErr.Error()
+			rejectAt := marketSummaryV150InvalidPlanRejectAt(observedAt, run, eventsByRule[ruleID])
+			appendErr := appendMarketSummaryV150OrderEvents(record, run, []v150.OrderEvent{{
+				Type: v150.EventReject, At: rejectAt, Symbol: record.StockCode, Reason: reason,
+			}}, marketSummaryV150EventAccounting{})
+			warning := "rejected invalid frozen entry plan " + ruleID + ": " + planErr.Error()
+			if appendErr != nil {
+				warning += "; append reject lifecycle: " + appendErr.Error()
+			}
+			warnings = append(warnings, warning)
+			continue
+		}
 		if open {
 			openCount++
 			active = append(active, record)
-			continue
-		}
-		if terminal {
 			continue
 		}
 		pendingCount++
@@ -380,4 +455,108 @@ func loadMarketSummaryV150ActiveExecutionRecords() ([]models.AiRecommendStocks, 
 		return active[i].ID < active[j].ID
 	})
 	return active, pendingCount, openCount, skippedCount, dedupeNonEmptyStrings(warnings, 64), nil
+}
+
+func marketSummaryV150InvalidPlanRejectAt(observedAt time.Time, run models.StrategyRunSnapshot, events []models.OrderEvent) time.Time {
+	rejectAt := observedAt
+	if rejectAt.IsZero() || (!run.DecisionAt.IsZero() && rejectAt.Before(run.DecisionAt)) {
+		rejectAt = run.DecisionAt
+	}
+	for _, event := range events {
+		if event.EventAt.After(rejectAt) {
+			rejectAt = event.EventAt
+		}
+	}
+	return rejectAt
+}
+
+// selectMarketSummaryV150ExecutionProjection chooses at most one mutable row
+// to receive compatibility projections. Missing, duplicate, or terminal
+// analysis-only rows never remove the immutable rule from execution.
+func selectMarketSummaryV150ExecutionProjection(ruleID string, rows []models.AiRecommendStocks) (*models.AiRecommendStocks, []string) {
+	warnings := make([]string, 0, 3)
+	if len(rows) == 0 {
+		return nil, []string{"missing display projection for immutable rule " + ruleID}
+	}
+	if len(rows) > 1 {
+		warnings = append(warnings, "duplicate display projections ignored for immutable rule "+ruleID)
+	}
+	var selected *models.AiRecommendStocks
+	for index := range rows {
+		if normalizeRecommendExecutionState(rows[index].ExecutionState) == recommendExecutionAnalysisOnly ||
+			isAnalysisOnlyRecommend(&rows[index]) {
+			warnings = append(warnings, "analysis_only display projection ignored for immutable rule "+ruleID)
+			continue
+		}
+		if selected == nil {
+			projection := rows[index]
+			selected = &projection
+		}
+	}
+	return selected, warnings
+}
+
+// buildMarketSummaryV150ExecutionCompatibilityRecord exposes only the legacy
+// shape required by the existing event replay and projection writer. Every
+// execution-relevant value is rebuilt from immutable run/rule/candidate data;
+// the optional mutable projection contributes only its database identity and
+// non-behavioural provider/model labels.
+func buildMarketSummaryV150ExecutionCompatibilityRecord(
+	rule models.RuleSnapshot,
+	run models.StrategyRunSnapshot,
+	candidate models.CandidateSnapshot,
+	projection *models.AiRecommendStocks,
+) models.AiRecommendStocks {
+	record := models.AiRecommendStocks{}
+	if projection != nil {
+		record.ID = projection.ID
+		record.ProviderName = strings.TrimSpace(projection.ProviderName)
+		record.ModelName = strings.TrimSpace(projection.ModelName)
+	}
+	decisionAt := run.DecisionAt
+	record.DataTime = &decisionAt
+	record.StockCode = normalizeRecommendStockCode(rule.Symbol)
+	record.StockName = firstNonEmptyText(strings.TrimSpace(candidate.Name), record.StockCode)
+	record.BkName = strings.TrimSpace(candidate.Sector)
+	record.SummaryVersion = marketSummaryVersion150
+	record.StrategyRunID = strings.TrimSpace(rule.RunID)
+	record.StrategyRuleID = strings.TrimSpace(rule.RuleID)
+	record.ExecutionState = recommendExecutionConditional
+	record.RecommendCategory = recommendExecutionConditional
+	record.RecommendStatus = "valid"
+	record.ActivationStatus = "pending"
+	record.ActivationRuleJSON = `{}`
+	record.ActivationRuleVersion = marketSummaryVersion150
+	record.ActivationRuleSource = "frozen_rule_snapshot"
+
+	if plan, ok := marketSummaryV150ExecutionPlanProjection(rule); ok {
+		entryMin, entryMax := marketSummaryV150PlanEntryRange(plan)
+		record.RecommendBuyPriceMin = entryMin
+		record.RecommendBuyPriceMax = entryMax
+		if entryMin > 0 && entryMax > 0 {
+			record.RecommendBuyPrice = fmt.Sprintf("%.2f-%.2f", entryMin, entryMax)
+		}
+		record.RecommendStopLossPrice = formatMarketSummaryPlanPrice(plan.Stop)
+		record.RecommendStopProfitPrice = formatMarketSummaryPlanPrice(plan.Target)
+		record.RecommendStopProfitPriceMin = plan.Target
+		record.RecommendStopProfitPriceMax = plan.Target
+	}
+	return record
+}
+
+func marketSummaryV150ExecutionPlanProjection(rule models.RuleSnapshot) (v150.TradePlan, bool) {
+	var payload struct {
+		Production struct {
+			Plan v150.TradePlan `json:"plan"`
+		} `json:"production"`
+	}
+	if err := json.Unmarshal([]byte(rule.PayloadJSON), &payload); err != nil {
+		return v150.TradePlan{}, false
+	}
+	plan := payload.Production.Plan
+	if normalizeRecommendStockCode(plan.Symbol) == "" ||
+		normalizeRecommendStockCode(plan.Symbol) != normalizeRecommendStockCode(rule.Symbol) {
+		return v150.TradePlan{}, false
+	}
+	return plan, true
 }

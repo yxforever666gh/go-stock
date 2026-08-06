@@ -141,16 +141,25 @@ func TestLoadMarketSummaryV150ActiveExecutionRecordsIncludesPendingAndOpen(t *te
 	decision := time.Date(2026, 8, 5, 9, 0, 0, 0, loc)
 	validFrom := time.Date(2026, 8, 5, 9, 30, 0, 0, loc)
 
-	pendingRule := seedMarketSummaryV150PortfolioRule(t, 1, "600001.SH", "bank", decision, validFrom, false, nil)
-	openRule := seedMarketSummaryV150PortfolioRule(t, 2, "000002.SZ", "technology", decision, validFrom, true, nil)
+	pendingRule := seedMarketSummaryV150MonitorFrozenRule(t, "600001.SH", "bank", decision, validFrom, false, nil)
+	openRule := seedMarketSummaryV150MonitorFrozenRule(t, "000002.SZ", "technology", decision, validFrom, true, nil)
 	exitDay := shiftToNextCNOpenTradeDaySafe(validFrom.AddDate(0, 0, 1))
 	exitAt := marketSummaryV150SessionTime(exitDay, 10, 0)
-	closedRule := seedMarketSummaryV150PortfolioRule(t, 3, "600003.SH", "consumer", decision, validFrom, true, &exitAt)
+	closedRule := seedMarketSummaryV150MonitorFrozenRule(t, "600003.SH", "consumer", decision, validFrom, true, &exitAt)
+	missingProjectionRule := seedMarketSummaryV150MonitorFrozenRule(t, "600004.SH", "industrial", decision, validFrom, false, nil)
+	analysisProjectionRule := seedMarketSummaryV150MonitorFrozenRule(t, "000005.SZ", "healthcare", decision, validFrom, false, nil)
+	openProjection := marketSummaryV150MonitorRecommendation(openRule, "000002.SZ", decision)
+	openProjection.StockCode = "300999.SZ"
+	openProjection.StrategyRunID = "forged-run"
+	openProjection.RecommendCategory = "avoid"
+	analysisProjection := marketSummaryV150MonitorRecommendation(analysisProjectionRule, "000005.SZ", decision)
+	analysisProjection.ExecutionState = recommendExecutionAnalysisOnly
 	rows := []models.AiRecommendStocks{
 		marketSummaryV150MonitorRecommendation(pendingRule, "600001.SH", decision),
-		marketSummaryV150MonitorRecommendation(openRule, "000002.SZ", decision),
+		openProjection,
 		marketSummaryV150MonitorRecommendation(closedRule, "600003.SH", decision),
-		{DataTime: &decision, StockCode: "600004.SH", SummaryVersion: v150.StrategyVersion, StrategyRunID: "missing-run", StrategyRuleID: "missing-rule"},
+		{DataTime: &decision, StockCode: "600006.SH", SummaryVersion: v150.StrategyVersion, StrategyRunID: "missing-run", StrategyRuleID: "missing-rule"},
+		analysisProjection,
 	}
 	analysisOnly := marketSummaryV150MonitorRecommendation(pendingRule, "600001.SH", decision)
 	analysisOnly.ExecutionState = recommendExecutionAnalysisOnly
@@ -159,23 +168,187 @@ func TestLoadMarketSummaryV150ActiveExecutionRecordsIncludesPendingAndOpen(t *te
 		t.Fatal(err)
 	}
 
-	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords()
+	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(validFrom)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(active) != 2 || pending != 1 || open != 1 {
-		t.Fatalf("active=%d pending=%d open=%d, want 2/1/1", len(active), pending, open)
+	if len(active) != 4 || pending != 3 || open != 1 {
+		t.Fatalf("active=%d pending=%d open=%d, want 4/3/1", len(active), pending, open)
 	}
 	warningText := strings.Join(warnings, ";")
-	if skipped != 2 || !strings.Contains(warningText, "missing frozen entry rule") || !strings.Contains(warningText, "analysis_only") {
+	if skipped != 0 || !strings.Contains(warningText, "duplicate display projections") ||
+		!strings.Contains(warningText, "analysis_only display projection ignored") ||
+		!strings.Contains(warningText, "missing display projection") {
 		t.Fatalf("skipped=%d warnings=%v", skipped, warnings)
 	}
-	seen := map[string]bool{}
+	seen := map[string]models.AiRecommendStocks{}
 	for _, record := range active {
-		seen[record.StrategyRuleID] = true
+		if _, duplicate := seen[record.StrategyRuleID]; duplicate {
+			t.Fatalf("immutable rule returned more than once: %s", record.StrategyRuleID)
+		}
+		seen[record.StrategyRuleID] = record
 	}
-	if !seen[pendingRule] || !seen[openRule] || seen[closedRule] {
+	if _, ok := seen[pendingRule]; !ok {
+		t.Fatalf("pending rule missing: %+v", seen)
+	}
+	if _, ok := seen[openRule]; !ok {
+		t.Fatalf("open rule missing: %+v", seen)
+	}
+	if _, ok := seen[missingProjectionRule]; !ok {
+		t.Fatalf("rule without projection missing: %+v", seen)
+	}
+	if _, ok := seen[analysisProjectionRule]; !ok {
+		t.Fatalf("rule with only analysis projection missing: %+v", seen)
+	}
+	if _, ok := seen[closedRule]; ok {
 		t.Fatalf("wrong lifecycle selection: %+v", seen)
+	}
+	if got := seen[openRule]; got.StockCode != "000002.SZ" || got.StrategyRunID == "forged-run" ||
+		got.RecommendCategory != recommendExecutionConditional || got.ExecutionState != recommendExecutionConditional || got.RecommendStatus != "valid" {
+		t.Fatalf("mutable projection changed frozen execution identity: %+v", got)
+	}
+	if got := seen[missingProjectionRule]; got.ID != 0 || got.StrategyRuleID != missingProjectionRule {
+		t.Fatalf("missing display projection changed execution enumeration: %+v", got)
+	}
+	if got := seen[analysisProjectionRule]; got.ID != 0 || got.ExecutionState != recommendExecutionConditional {
+		t.Fatalf("analysis-only display projection changed execution enumeration: %+v", got)
+	}
+}
+
+func TestMarketSummaryV150ExecutionFrozenRuleWithoutProjectionStillFills(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	initMarketSummaryV150ExecutionTestDB(t)
+	recommendation := appendMarketSummaryV150ExecutionFixtureWithSecurity(t, decision, marketSummaryV150TestBreakoutPlan(validFrom), true)
+	seedMarketSummaryV150BreakoutBars(t, recommendation, decision, validFrom)
+	if db.Dao.Migrator().HasTable(&models.AiRecommendStocks{}) {
+		t.Fatal("fixture unexpectedly created the optional recommendation projection table")
+	}
+
+	active, pending, open, skipped, _, err := loadMarketSummaryV150ActiveExecutionRecords(validFrom.Add(45 * time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || pending != 1 || open != 0 || skipped != 0 {
+		t.Fatalf("active=%d pending=%d open=%d skipped=%d, want 1/1/0/0", len(active), pending, open, skipped)
+	}
+	if active[0].ID != 0 || active[0].StrategyRuleID != recommendation.StrategyRuleID {
+		t.Fatalf("missing projection did not produce an executable compatibility record: %+v", active[0])
+	}
+
+	ctx := yieldBuildContext{
+		Now: validFrom.Add(45 * time.Minute), InTradingSession: true,
+		LatestTradeDate: decision, DisableMinuteFetch: true,
+	}
+	activationAt, _, info := resolveMarketSummaryV150Activation(active[0], ctx, false)
+	if activationAt == nil || !activationAt.Equal(validFrom.Add(30*time.Minute)) || info.V150Entry == nil {
+		t.Fatalf("frozen rule without display projection did not execute: at=%v info=%+v", activationAt, info)
+	}
+	var events []models.OrderEvent
+	if err := db.Dao.Where("rule_id = ?", recommendation.StrategyRuleID).Order("sequence ASC").Find(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := marketSummaryV150TestEventTypes(events); got != "rule_issued,signal,order,fill" {
+		t.Fatalf("events=%s", got)
+	}
+}
+
+func TestMarketSummaryV150ExecutionMonitorRejectsCorruptFrozenEntryPlan(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	observedAt := validFrom.Add(45 * time.Minute)
+	initMarketSummaryV150ExecutionTestDB(t)
+	recommendation := appendMarketSummaryV150ExecutionFixtureWithSecurity(t, decision, marketSummaryV150TestBreakoutPlan(validFrom), false)
+
+	// Fault injection models storage-level corruption by briefly bypassing the
+	// immutable update trigger in this disposable test database. The production
+	// mutation guard is restored before the monitor is invoked.
+	if err := db.Dao.Exec("DROP TRIGGER immutable_strategy_rule_snapshot_update").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Exec("UPDATE strategy_rule_snapshot SET payload_json = ? WHERE rule_id = ?", `{}`, recommendation.StrategyRuleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Exec("CREATE TRIGGER immutable_strategy_rule_snapshot_update BEFORE UPDATE ON strategy_rule_snapshot BEGIN SELECT RAISE(ABORT, 'immutable table strategy_rule_snapshot'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(observedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 || pending != 0 || open != 0 || skipped != 1 {
+		t.Fatalf("active=%d pending=%d open=%d skipped=%d, want 0/0/0/1", len(active), pending, open, skipped)
+	}
+	if warningText := strings.Join(warnings, ";"); !strings.Contains(warningText, "rejected invalid frozen entry plan") ||
+		!strings.Contains(warningText, "frozen V1.5 plan symbol is invalid") {
+		t.Fatalf("warnings=%v", warnings)
+	}
+
+	var events []models.OrderEvent
+	if err := db.Dao.Where("rule_id = ?", recommendation.StrategyRuleID).Order("sequence ASC").Find(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := marketSummaryV150TestEventTypes(events); got != "rule_issued,reject" {
+		t.Fatalf("events=%s", got)
+	}
+	if !strings.Contains(events[1].Reason, marketSummaryV150DataHealthReject) || !events[1].EventAt.Equal(observedAt) {
+		t.Fatalf("reject=%+v", events[1])
+	}
+
+	// The reject is terminal and idempotent: later scans neither re-enumerate
+	// the rule nor append another lifecycle event.
+	active, pending, open, skipped, _, err = loadMarketSummaryV150ActiveExecutionRecords(observedAt.Add(15 * time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 || pending != 0 || open != 0 || skipped != 0 {
+		t.Fatalf("terminal rescan active=%d pending=%d open=%d skipped=%d", len(active), pending, open, skipped)
+	}
+	var eventCount int64
+	if err := db.Dao.Model(&models.OrderEvent{}).Where("rule_id = ?", recommendation.StrategyRuleID).Count(&eventCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if eventCount != 2 {
+		t.Fatalf("event count=%d, want 2", eventCount)
+	}
+}
+
+func TestMarketSummaryV150ExecutionMonitorPreservesOpenLedgerWhenPlanIsCorrupt(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	observedAt := validFrom.Add(45 * time.Minute)
+	initMarketSummaryV150ExecutionTestDB(t)
+	ruleID := seedMarketSummaryV150MonitorFrozenRule(t, "600001.SH", "bank", decision, validFrom, true, nil)
+
+	if err := db.Dao.Exec("DROP TRIGGER immutable_strategy_rule_snapshot_update").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Exec("UPDATE strategy_rule_snapshot SET payload_json = ? WHERE rule_id = ?", `{}`, ruleID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Exec("CREATE TRIGGER immutable_strategy_rule_snapshot_update BEFORE UPDATE ON strategy_rule_snapshot BEGIN SELECT RAISE(ABORT, 'immutable table strategy_rule_snapshot'); END").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	active, pending, open, skipped, warnings, err := loadMarketSummaryV150ActiveExecutionRecords(observedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 0 || pending != 0 || open != 1 || skipped != 1 {
+		t.Fatalf("active=%d pending=%d open=%d skipped=%d, want 0/0/1/1", len(active), pending, open, skipped)
+	}
+	if warningText := strings.Join(warnings, ";"); !strings.Contains(warningText, "open rule has invalid frozen entry plan") {
+		t.Fatalf("warnings=%v", warnings)
+	}
+	var events []models.OrderEvent
+	if err := db.Dao.Where("rule_id = ?", ruleID).Order("sequence ASC").Find(&events).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := marketSummaryV150TestEventTypes(events); got != "rule_issued,signal,order,fill" {
+		t.Fatalf("open ledger was rewritten: events=%s", got)
 	}
 }
 
@@ -196,4 +369,43 @@ func marketSummaryV150MonitorRecommendation(ruleID, symbol string, decision time
 		RecommendStopLossPrice:      "9",
 		RecommendStopProfitPriceMin: 12,
 	}
+}
+
+func seedMarketSummaryV150MonitorFrozenRule(t *testing.T, symbol, sector string, decision, validFrom time.Time, withFill bool, exitAt *time.Time) string {
+	t.Helper()
+	plan := marketSummaryV150TestBreakoutPlan(validFrom)
+	plan.Symbol = symbol
+	recommendation := appendMarketSummaryV150ExecutionFixtureWithSector(t, decision, plan, sector, false)
+	if !withFill {
+		return recommendation.StrategyRuleID
+	}
+	var run models.StrategyRunSnapshot
+	if err := db.Dao.Where("run_id = ?", recommendation.StrategyRunID).First(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	cfg := v150.FixedStrategyV150Config()
+	scenario := cfg.SlippageScenarios()[0]
+	entryRaw := 10.0
+	unitCost := v150.CalculateTradeCost(v150.SideBuy, v150.ResolveMarket(symbol), entryRaw, cfg.RoundLotSize, scenario, cfg)
+	size := v150.SizeRoundLot(unitCost.EffectivePrice, cfg.TargetCashPerPosition, cfg)
+	entryCost := v150.CalculateTradeCost(v150.SideBuy, v150.ResolveMarket(symbol), entryRaw, size.Quantity, scenario, cfg)
+	fillAt := validFrom.Add(15 * time.Minute)
+	events := []v150.OrderEvent{
+		{Type: v150.EventSignal, At: validFrom, Symbol: symbol, Reason: string(v150.PathBreakout)},
+		{Type: v150.EventOrder, At: fillAt, Symbol: symbol, Reason: "next_bar_market_order"},
+		{Type: v150.EventFill, At: fillAt, Symbol: symbol, Price: entryCost.EffectivePrice, Quantity: size.Quantity},
+	}
+	accounting := marketSummaryV150EventAccounting{Entry: &entryCost}
+	if exitAt != nil {
+		exitCost := v150.CalculateTradeCost(v150.SideSell, v150.ResolveMarket(symbol), 10.5, size.Quantity, scenario, cfg)
+		accounting.Exit = &exitCost
+		events = append(events,
+			v150.OrderEvent{Type: v150.EventExitSignal, At: *exitAt, Symbol: symbol, Price: exitCost.EffectivePrice, Quantity: size.Quantity, Reason: string(v150.ExitTarget)},
+			v150.OrderEvent{Type: v150.EventExitFill, At: *exitAt, Symbol: symbol, Price: exitCost.EffectivePrice, Quantity: size.Quantity, Reason: string(v150.ExitTarget)},
+		)
+	}
+	if err := appendMarketSummaryV150OrderEvents(recommendation, run, events, accounting); err != nil {
+		t.Fatal(err)
+	}
+	return recommendation.StrategyRuleID
 }
