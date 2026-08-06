@@ -46,6 +46,7 @@ func (a *App) BatchDeleteAIResponseResult(ids []uint) string {
 func (a *App) GetAiRecommendStocksList(query models.AiRecommendStocksQuery) *models.AiRecommendStocksPageData {
 	page, err := a.services.Recommend.GetAiRecommendStocksList(&query)
 	if err != nil {
+		logger.SugaredLogger.Errorf("GetAiRecommendStocksList failed: cohort=%q err=%v", query.StrategyCohort, err)
 		return &models.AiRecommendStocksPageData{}
 	}
 	return page
