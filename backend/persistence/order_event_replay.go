@@ -141,7 +141,112 @@ func ReplayFrozenStrategyInputs(backtestID, strategyVersion string, inputs Froze
 	if err != nil {
 		return nil, OrderEventReplayStats{}, "", fmt.Errorf("%w: %v", ErrInvalidOrderEventReplay, err)
 	}
+	if err := validateRecommendationPublicationPolicy(inputs, policy); err != nil {
+		return nil, OrderEventReplayStats{}, "", fmt.Errorf("%w: %v", ErrInvalidOrderEventReplay, err)
+	}
 	return replayFrozenOrderEvents(backtestID, strategyVersion, inputs.OrderEvents, frozenAt, policy)
+}
+
+type recommendationPublicationInterval struct {
+	runID      string
+	ruleID     string
+	symbol     string
+	sector     string
+	issuedAt   time.Time
+	terminalAt time.Time
+	stopAt     time.Time
+}
+
+// validateRecommendationPublicationPolicy enforces recommendation-time
+// constraints from frozen rules and their complete visible event prefixes.
+// Fill-only replay is too late for daily quotas, sector concentration and a
+// duplicate symbol that remains pending or held under another rule.
+func validateRecommendationPublicationPolicy(inputs FrozenStrategyInputs, policy orderEventReplayPolicy) error {
+	eventsByRule := make(map[string][]models.OrderEvent, len(inputs.Rules))
+	for _, event := range inputs.OrderEvents {
+		key := event.RunID + "\x00" + event.RuleID
+		eventsByRule[key] = append(eventsByRule[key], event)
+	}
+	intervals := make([]recommendationPublicationInterval, 0, len(inputs.Rules))
+	for _, rule := range inputs.Rules {
+		key := rule.RunID + "\x00" + rule.RuleID
+		interval := recommendationPublicationInterval{
+			runID: rule.RunID, ruleID: rule.RuleID,
+			symbol: strings.ToUpper(strings.TrimSpace(rule.Symbol)),
+			sector: strings.TrimSpace(policy.sectorByRule[key]),
+		}
+		for _, event := range eventsByRule[key] {
+			switch normalizedOrderEventType(event.EventType) {
+			case "rule_issued":
+				if !interval.issuedAt.IsZero() {
+					return fmt.Errorf("rule %s has duplicate rule_issued facts", rule.RuleID)
+				}
+				interval.issuedAt = event.EventAt
+			case "reject", "activation_expired", "expired":
+				if interval.terminalAt.IsZero() || event.EventAt.Before(interval.terminalAt) {
+					interval.terminalAt = event.EventAt
+				}
+			case "exit_fill":
+				if interval.terminalAt.IsZero() || event.EventAt.Before(interval.terminalAt) {
+					interval.terminalAt = event.EventAt
+				}
+				if replayIsStopReason(event.Reason) && (interval.stopAt.IsZero() || event.EventAt.Before(interval.stopAt)) {
+					interval.stopAt = event.EventAt
+				}
+			}
+		}
+		if interval.symbol == "" || interval.issuedAt.IsZero() {
+			return fmt.Errorf("rule %s has no symbol or rule_issued fact", rule.RuleID)
+		}
+		if !interval.terminalAt.IsZero() && interval.terminalAt.Before(interval.issuedAt) {
+			return fmt.Errorf("rule %s terminates before publication", rule.RuleID)
+		}
+		intervals = append(intervals, interval)
+	}
+
+	sort.Slice(intervals, func(i, j int) bool {
+		if !intervals[i].issuedAt.Equal(intervals[j].issuedAt) {
+			return intervals[i].issuedAt.Before(intervals[j].issuedAt)
+		}
+		if intervals[i].runID != intervals[j].runID {
+			return intervals[i].runID < intervals[j].runID
+		}
+		return intervals[i].ruleID < intervals[j].ruleID
+	})
+	dailyPublished := make(map[string]int)
+	dailySectorPublished := make(map[string]int)
+	priorBySymbol := make(map[string][]recommendationPublicationInterval)
+	for _, interval := range intervals {
+		cap, ok := policy.dailyCapByRun[interval.runID]
+		if !ok || cap <= 0 {
+			return fmt.Errorf("rule %s has no positive frozen daily cap", interval.ruleID)
+		}
+		day := cnDateText(interval.issuedAt)
+		if dailyPublished[day] >= cap {
+			return fmt.Errorf("more than %d recommendations were published on %s for run %s", cap, day, interval.runID)
+		}
+		sectorKey := day + "\x00" + interval.sector
+		if interval.sector != "" && dailySectorPublished[sectorKey] >= v150.FixedStrategyV150Config().MaximumSectorEntriesDay {
+			return fmt.Errorf("more than %d recommendations were published for sector %s on %s", v150.FixedStrategyV150Config().MaximumSectorEntriesDay, interval.sector, day)
+		}
+		for _, prior := range priorBySymbol[interval.symbol] {
+			if prior.terminalAt.IsZero() || !interval.issuedAt.After(prior.terminalAt) {
+				return fmt.Errorf("symbol %s was republished while rule %s remained pending or held", interval.symbol, prior.ruleID)
+			}
+			if !prior.stopAt.IsZero() {
+				elapsed := replayEventTradeDayIndex(models.OrderEvent{EventAt: interval.issuedAt}) - replayEventTradeDayIndex(models.OrderEvent{EventAt: prior.stopAt})
+				if elapsed < v150.FixedStrategyV150Config().StopCooldownTradeDays {
+					return fmt.Errorf("symbol %s was republished before %d-trade-day stop cooldown", interval.symbol, v150.FixedStrategyV150Config().StopCooldownTradeDays)
+				}
+			}
+		}
+		dailyPublished[day]++
+		if interval.sector != "" {
+			dailySectorPublished[sectorKey]++
+		}
+		priorBySymbol[interval.symbol] = append(priorBySymbol[interval.symbol], interval)
+	}
+	return nil
 }
 
 // ReplayFrozenOrderEvents deterministically replays already-validated facts.

@@ -300,6 +300,109 @@ func TestBuildOrderEventReplayPolicyReadsRunCapAndCandidateSector(t *testing.T) 
 	}
 }
 
+func TestValidateRecommendationPublicationPolicyRejectsRuleTimeViolations(t *testing.T) {
+	cn := time.FixedZone("Asia/Shanghai", 8*60*60)
+	day := time.Date(2026, 8, 4, 9, 30, 0, 0, cn)
+	makeInputs := func(rows []struct {
+		runID, ruleID, symbol, sector string
+		issuedAt                      time.Time
+		dailyCap                      int
+		terminalAt                    time.Time
+		terminalType, terminalReason  string
+	}) FrozenStrategyInputs {
+		inputs := FrozenStrategyInputs{}
+		for _, row := range rows {
+			candidateID := "candidate-" + row.ruleID
+			inputs.Runs = append(inputs.Runs, models.StrategyRunSnapshot{
+				RunID: row.runID, RuleCount: 1,
+				PayloadJSON: fmt.Sprintf(`{"run":{"regime":{"dailyCap":%d}}}`, row.dailyCap),
+			})
+			inputs.Candidates = append(inputs.Candidates, models.CandidateSnapshot{
+				CandidateID: candidateID, RunID: row.runID, Symbol: row.symbol, Sector: row.sector,
+			})
+			inputs.Rules = append(inputs.Rules, models.RuleSnapshot{
+				RuleID: row.ruleID, RunID: row.runID, CandidateID: candidateID, Symbol: row.symbol,
+			})
+			inputs.OrderEvents = append(inputs.OrderEvents, models.OrderEvent{
+				EventID: row.ruleID + "|issued", RunID: row.runID, RuleID: row.ruleID,
+				Symbol: row.symbol, EventType: "rule_issued", EventAt: row.issuedAt,
+			})
+			if !row.terminalAt.IsZero() {
+				inputs.OrderEvents = append(inputs.OrderEvents, models.OrderEvent{
+					EventID: row.ruleID + "|terminal", RunID: row.runID, RuleID: row.ruleID,
+					Symbol: row.symbol, EventType: row.terminalType, EventAt: row.terminalAt, Reason: row.terminalReason,
+				})
+			}
+		}
+		return inputs
+	}
+	assertRejected := func(t *testing.T, inputs FrozenStrategyInputs) {
+		t.Helper()
+		policy, err := buildOrderEventReplayPolicy(inputs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateRecommendationPublicationPolicy(inputs, policy); err == nil {
+			t.Fatal("publication policy unexpectedly accepted invalid frozen rules")
+		}
+	}
+
+	t.Run("daily recommendation cap includes pending rules", func(t *testing.T) {
+		assertRejected(t, makeInputs([]struct {
+			runID, ruleID, symbol, sector string
+			issuedAt                      time.Time
+			dailyCap                      int
+			terminalAt                    time.Time
+			terminalType, terminalReason  string
+		}{
+			{runID: "cap-a", ruleID: "cap-rule-a", symbol: "000001.SZ", sector: "bank", issuedAt: day, dailyCap: 1},
+			{runID: "cap-b", ruleID: "cap-rule-b", symbol: "000002.SZ", sector: "software", issuedAt: day.Add(time.Minute), dailyCap: 1},
+		}))
+	})
+
+	t.Run("sector cap includes unfilled rules", func(t *testing.T) {
+		assertRejected(t, makeInputs([]struct {
+			runID, ruleID, symbol, sector string
+			issuedAt                      time.Time
+			dailyCap                      int
+			terminalAt                    time.Time
+			terminalType, terminalReason  string
+		}{
+			{runID: "sector-a", ruleID: "sector-rule-a", symbol: "000011.SZ", sector: "bank", issuedAt: day, dailyCap: 2},
+			{runID: "sector-b", ruleID: "sector-rule-b", symbol: "000012.SZ", sector: "bank", issuedAt: day.Add(time.Minute), dailyCap: 2},
+		}))
+	})
+
+	t.Run("same symbol cannot overlap while pending", func(t *testing.T) {
+		assertRejected(t, makeInputs([]struct {
+			runID, ruleID, symbol, sector string
+			issuedAt                      time.Time
+			dailyCap                      int
+			terminalAt                    time.Time
+			terminalType, terminalReason  string
+		}{
+			{runID: "pending-a", ruleID: "pending-rule-a", symbol: "000021.SZ", sector: "bank", issuedAt: day, dailyCap: 2},
+			{runID: "pending-b", ruleID: "pending-rule-b", symbol: "000021.SZ", sector: "bank", issuedAt: day.AddDate(0, 0, 1), dailyCap: 2},
+		}))
+	})
+
+	t.Run("stop cooldown starts before a new rule is published", func(t *testing.T) {
+		assertRejected(t, makeInputs([]struct {
+			runID, ruleID, symbol, sector string
+			issuedAt                      time.Time
+			dailyCap                      int
+			terminalAt                    time.Time
+			terminalType, terminalReason  string
+		}{
+			{
+				runID: "stop-a", ruleID: "stop-rule-a", symbol: "000031.SZ", sector: "bank",
+				issuedAt: day, dailyCap: 2, terminalAt: day.AddDate(0, 0, 1), terminalType: "exit_fill", terminalReason: "stop",
+			},
+			{runID: "stop-b", ruleID: "stop-rule-b", symbol: "000031.SZ", sector: "bank", issuedAt: day.AddDate(0, 0, 2), dailyCap: 2},
+		}))
+	})
+}
+
 func TestReplayFrozenOrderEventsRejectsFeePolicyMismatchAfterValidSeal(t *testing.T) {
 	at := time.Date(2026, 8, 4, 1, 45, 0, 0, time.UTC)
 	event := frozenReplayEvent("fill-wrong-fee", "fill", 1, at, 10, 1000, 99)
