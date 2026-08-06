@@ -165,7 +165,7 @@ function Assert-UniqueMainBranch {
     if ($localBranches.Count -ne 1 -or $localBranches[0] -ne "main") {
         throw "Release workspace must contain only the local main branch (found: $($localBranches -join ', '))"
     }
-    $remoteHeadOutput = @(& git -C $ProjectRoot ls-remote --heads origin 2>&1)
+    $remoteHeadOutput = @(& git -C $ProjectRoot -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote --heads origin 2>&1)
     $remoteExitCode = $LASTEXITCODE
     if ($remoteExitCode -ne 0) {
         $details = ($remoteHeadOutput | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
