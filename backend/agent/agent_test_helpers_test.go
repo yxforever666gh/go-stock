@@ -7,6 +7,14 @@ import (
 
 type fakeAgentToolDataProvider struct{}
 
+type fakeAgentConfigurationProvider struct {
+	configs []*models.AIConfig
+	prompt  string
+}
+
+func (p fakeAgentConfigurationProvider) AIConfigs() []*models.AIConfig { return p.configs }
+func (p fakeAgentConfigurationProvider) PromptTemplateByID(int) string { return p.prompt }
+
 var _ tools.ToolDataProvider = fakeAgentToolDataProvider{}
 
 func (fakeAgentToolDataProvider) SearchStocks(string) []models.StockBasic { return nil }

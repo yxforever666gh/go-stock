@@ -41,7 +41,6 @@ var v150AllowedProductionImports = map[string]bool{
 // in the same change, so the list can only shrink deliberately.
 var deprecatedDataImportDebt = map[string]bool{
 	"app_summary_runtime.go":             true,
-	"backend/agent/agent_api.go":         true,
 	"internal/bootstrap/dependencies.go": true,
 	"internal/migrations/migrations.go":  true,
 	"main.go":                            true,
@@ -49,11 +48,12 @@ var deprecatedDataImportDebt = map[string]bool{
 }
 
 var deprecatedDataCompatibilityAdapters = map[string]bool{
-	"internal/bootstrap/agent_tools_compat.go":    true,
-	"internal/bootstrap/service_compat_ai.go":     true,
-	"internal/bootstrap/service_compat_market.go": true,
-	"internal/bootstrap/service_compat_stock.go":  true,
-	"internal/bootstrap/legacy_replay.go":         true,
+	"internal/bootstrap/agent_tools_compat.go":         true,
+	"internal/bootstrap/agent_configuration_compat.go": true,
+	"internal/bootstrap/service_compat_ai.go":          true,
+	"internal/bootstrap/service_compat_market.go":      true,
+	"internal/bootstrap/service_compat_stock.go":       true,
+	"internal/bootstrap/legacy_replay.go":              true,
 }
 
 var globalDBImportDebt = map[string]bool{

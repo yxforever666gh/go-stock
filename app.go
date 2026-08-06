@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"go-stock/backend/agent"
 	agenttools "go-stock/backend/agent/tools"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
@@ -28,6 +29,7 @@ type App struct {
 	AiTools            []models.Tool
 	services           service.AppServices
 	agentToolData      agenttools.ToolDataProvider
+	agentConfiguration agent.ConfigurationProvider
 	agentSessions      map[string]*AgentSession
 	agentSessionsMu    sync.RWMutex
 	summaryTaskMu      sync.Mutex
@@ -54,12 +56,15 @@ func NewApp() *App {
 	if err != nil {
 		panic(err)
 	}
-	return NewAppWithServices(services, bootstrap.NewProductionAgentToolDataProvider())
+	return NewAppWithServices(services, bootstrap.NewProductionAgentToolDataProvider(), bootstrap.NewProductionAgentConfigurationProvider())
 }
 
-func NewAppWithServices(services service.AppServices, agentToolData agenttools.ToolDataProvider) *App {
+func NewAppWithServices(services service.AppServices, agentToolData agenttools.ToolDataProvider, agentConfiguration agent.ConfigurationProvider) *App {
 	if agentToolData == nil {
 		panic("agent tool data provider is required")
+	}
+	if agentConfiguration == nil {
+		panic("agent configuration provider is required")
 	}
 	cacheSize := 512 * 1024
 	cache := freecache.NewCache(cacheSize)
@@ -68,13 +73,14 @@ func NewAppWithServices(services service.AppServices, agentToolData agenttools.T
 	var tools []models.Tool
 	tools = AddTools(tools)
 	return &App{
-		cache:         cache,
-		cron:          c,
-		cronEntrys:    make(map[string]cron.EntryID),
-		AiTools:       tools,
-		services:      services,
-		agentToolData: agentToolData,
-		agentSessions: make(map[string]*AgentSession),
+		cache:              cache,
+		cron:               c,
+		cronEntrys:         make(map[string]cron.EntryID),
+		AiTools:            tools,
+		services:           services,
+		agentToolData:      agentToolData,
+		agentConfiguration: agentConfiguration,
+		agentSessions:      make(map[string]*AgentSession),
 	}
 }
 

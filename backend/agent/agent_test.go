@@ -91,7 +91,7 @@ func TestAgent(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	md := strings.Builder{}
-	ch := NewStockAiAgentApi(fakeAgentToolDataProvider{}).Chat("分析一下立讯精密", 0, nil)
+	ch := NewStockAiAgentApi(fakeAgentToolDataProvider{}, fakeAgentConfigurationProvider{}).Chat("分析一下立讯精密", 0, nil)
 	for message := range ch {
 		logger.SugaredLogger.Infof("res:%s", message.String())
 		md.WriteString(message.String())

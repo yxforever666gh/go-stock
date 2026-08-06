@@ -8,11 +8,10 @@ import (
 	"github.com/cloudwego/eino/flow/agent"
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
-	"github.com/samber/lo"
-	"go-stock/backend/agent/tools"
 	"go-stock/backend/agent/tool_logger"
-	"go-stock/backend/data"
+	"go-stock/backend/agent/tools"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
 	"io"
 )
 
@@ -23,30 +22,29 @@ import (
 type StockAiAgent struct {
 	*react.Agent
 	toolDataProvider tools.ToolDataProvider
+	configuration    ConfigurationProvider
 }
 
-func NewStockAiAgentApi(toolDataProvider tools.ToolDataProvider) *StockAiAgent {
-	return &StockAiAgent{toolDataProvider: toolDataProvider}
+func NewStockAiAgentApi(toolDataProvider tools.ToolDataProvider, configuration ConfigurationProvider) *StockAiAgent {
+	return &StockAiAgent{toolDataProvider: toolDataProvider, configuration: configuration}
 }
 
 func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId int) (*StockAiAgent, string) {
 	if receiver.toolDataProvider == nil {
 		return nil, tools.ErrToolDataProviderRequired.Error()
 	}
-	settingConfig := data.GetSettingConfig()
-	if len(settingConfig.AiConfigs) == 0 {
+	if receiver.configuration == nil {
+		return nil, "AI configuration provider is required"
+	}
+	aiConfigs := receiver.configuration.AIConfigs()
+	if len(aiConfigs) == 0 {
 		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
 	}
-	aiConfig, ok := lo.Find(settingConfig.AiConfigs, func(item *data.AIConfig) bool {
-		return uint(aiConfigId) == item.ID
-	})
-	if !ok {
-		aiConfig = data.SelectPrimaryAIConfig(settingConfig.AiConfigs)
-	}
+	aiConfig := resolveAIConfig(aiConfigs, aiConfigId)
 	if aiConfig == nil {
 		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
 	}
-	if data.NormalizeAIAPIProtocol(aiConfig.ApiProtocol) != data.AIAPIProtocolChatCompletions {
+	if models.NormalizeAIAPIProtocol(aiConfig.ApiProtocol) != models.AIAPIProtocolChatCompletions {
 		return nil, "AI智能体暂不支持 OpenAI Responses 或 Anthropic Messages，请切换到 Chat Completions 协议的模型配置"
 	}
 	agentInstance := GetStockAiAgent(ctx, *aiConfig, receiver.toolDataProvider)
@@ -83,7 +81,7 @@ func (receiver StockAiAgent) ChatWithMessages(messages []*schema.Message, aiConf
 	if sysPromptId == nil || *sysPromptId == 0 {
 		sysPrompt = "你现在扮演一位拥有20年实战经验的顶级股票投资大师，精通价值投资、趋势交易、量化分析等多种策略。你擅长结合宏观经济、行业周期和企业基本面进行全方位、精准的多维分析，尤其对A股、港股、美股市场有深刻理解，始终秉持“风险控制第一”的原则，善于用通俗易懂的方式传授投资智慧。"
 	} else {
-		sysPrompt = data.NewPromptTemplateApi().GetPromptTemplateByID(*sysPromptId)
+		sysPrompt = receiver.configuration.PromptTemplateByID(*sysPromptId)
 	}
 	agentOption := []agent.AgentOption{
 		agent.WithComposeOptions(compose.WithCallbacks(&tool_logger.LoggerCallback{MessageChanel: ch})),
