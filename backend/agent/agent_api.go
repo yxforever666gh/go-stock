@@ -9,6 +9,7 @@ import (
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 	"github.com/samber/lo"
+	"go-stock/backend/agent/tools"
 	"go-stock/backend/agent/tool_logger"
 	"go-stock/backend/data"
 	"go-stock/backend/logger"
@@ -21,13 +22,17 @@ import (
 // -----------------------------------------------------------------------------------
 type StockAiAgent struct {
 	*react.Agent
+	toolDataProvider tools.ToolDataProvider
 }
 
-func NewStockAiAgentApi() *StockAiAgent {
-	return &StockAiAgent{}
+func NewStockAiAgentApi(toolDataProvider tools.ToolDataProvider) *StockAiAgent {
+	return &StockAiAgent{toolDataProvider: toolDataProvider}
 }
 
 func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId int) (*StockAiAgent, string) {
+	if receiver.toolDataProvider == nil {
+		return nil, tools.ErrToolDataProviderRequired.Error()
+	}
 	settingConfig := data.GetSettingConfig()
 	if len(settingConfig.AiConfigs) == 0 {
 		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
@@ -44,7 +49,7 @@ func (receiver StockAiAgent) newStockAiAgent(ctx *context.Context, aiConfigId in
 	if data.NormalizeAIAPIProtocol(aiConfig.ApiProtocol) != data.AIAPIProtocolChatCompletions {
 		return nil, "AI智能体暂不支持 OpenAI Responses 或 Anthropic Messages，请切换到 Chat Completions 协议的模型配置"
 	}
-	agentInstance := GetStockAiAgent(ctx, *aiConfig)
+	agentInstance := GetStockAiAgent(ctx, *aiConfig, receiver.toolDataProvider)
 	if agentInstance == nil {
 		return nil, "AI智能体初始化失败，请检查 AI 模型配置（服务地址、模型名、API Key）"
 	}

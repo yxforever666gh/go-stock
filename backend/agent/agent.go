@@ -22,7 +22,11 @@ import (
 // @Date 2025/8/4 16:17
 // @Desc
 // -----------------------------------------------------------------------------------
-func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig) *react.Agent {
+func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig, toolDataProvider tools.ToolDataProvider) *react.Agent {
+	if toolDataProvider == nil {
+		logger.SugaredLogger.Error(tools.ErrToolDataProviderRequired)
+		return nil
+	}
 	temperature := float32(aiConfig.Temperature)
 	var toolableChatModel model.ToolCallingChatModel
 	var err error
@@ -71,15 +75,15 @@ func GetStockAiAgent(ctx *context.Context, aiConfig data.AIConfig) *react.Agent 
 		Tools: []tool.BaseTool{
 			tools.GetQueryEconomicDataTool(),
 			tools.GetQueryStockPriceInfoTool(),
-			tools.GetQueryStockCodeInfoTool(),
-			tools.GetQueryMarketNewsTool(),
+			tools.GetQueryStockCodeInfoTool(toolDataProvider),
+			tools.GetQueryMarketNewsTool(toolDataProvider),
 			tools.GetChoiceStockByIndicatorsTool(),
 			tools.GetStockKLineTool(),
 			tools.GetInteractiveAnswerDataTool(),
 			tools.GetFinancialReportTool(),
 			tools.GetQueryStockNewsTool(),
 			tools.GetIndustryResearchReportTool(),
-			tools.GetQueryBKDictTool(),
+			tools.GetQueryBKDictTool(toolDataProvider),
 		},
 	}
 	// 创建 agent

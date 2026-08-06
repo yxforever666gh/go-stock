@@ -39,7 +39,7 @@ func TestGetStockAiAgentDoesNotLogAPIKey(t *testing.T) {
 		MaxTokens:   32,
 		TimeOut:     1,
 		Temperature: 0.1,
-	})
+	}, fakeAgentToolDataProvider{})
 	_ = applogger.Logger.Sync()
 
 	if strings.Contains(output.String(), secret) {

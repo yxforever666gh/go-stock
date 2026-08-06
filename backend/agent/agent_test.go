@@ -33,7 +33,7 @@ func TestGetStockAiAgent(t *testing.T) {
 	db.Init("../../data/stock.db")
 	t.Cleanup(func() { _ = db.Close() })
 	config := data.GetSettingConfig()
-	aiAgent := GetStockAiAgent(&ctx, *config.AiConfigs[0])
+	aiAgent := GetStockAiAgent(&ctx, *config.AiConfigs[0], fakeAgentToolDataProvider{})
 
 	opt := []agent.AgentOption{
 		agent.WithComposeOptions(compose.WithCallbacks(&tool_logger.LoggerCallback{})),
@@ -91,7 +91,7 @@ func TestAgent(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 
 	md := strings.Builder{}
-	ch := NewStockAiAgentApi().Chat("分析一下立讯精密", 0, nil)
+	ch := NewStockAiAgentApi(fakeAgentToolDataProvider{}).Chat("分析一下立讯精密", 0, nil)
 	for message := range ch {
 		logger.SugaredLogger.Infof("res:%s", message.String())
 		md.WriteString(message.String())

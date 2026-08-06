@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-stock/backend/agent"
+	agenttools "go-stock/backend/agent/tools"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 
@@ -198,7 +199,7 @@ func (a *App) ChatWithAgent(question string, aiConfigId int, sysPromptId *int, s
 	var assistantContent strings.Builder
 	var assistantReasoning strings.Builder
 	for idx, targetAIConfigID := range runOrder {
-		messages, answer, reasoning, shouldFailover := runAgentWithFallback(requestMessages, targetAIConfigID, sysPromptId)
+		messages, answer, reasoning, shouldFailover := runAgentWithFallback(a.agentToolData, requestMessages, targetAIConfigID, sysPromptId)
 		assistantMessages = messages
 		assistantContent.Reset()
 		assistantContent.WriteString(answer)
@@ -236,8 +237,8 @@ func (a *App) ChatWithAgent(question string, aiConfigId int, sysPromptId *int, s
 	}
 }
 
-func runAgentWithFallback(messages []*schema.Message, aiConfigId int, sysPromptId *int) ([]*schema.Message, string, string, bool) {
-	ch := agent.NewStockAiAgentApi().ChatWithMessages(messages, aiConfigId, sysPromptId)
+func runAgentWithFallback(toolDataProvider agenttools.ToolDataProvider, messages []*schema.Message, aiConfigId int, sysPromptId *int) ([]*schema.Message, string, string, bool) {
+	ch := agent.NewStockAiAgentApi(toolDataProvider).ChatWithMessages(messages, aiConfigId, sysPromptId)
 	result := make([]*schema.Message, 0, 128)
 	var assistantContent strings.Builder
 	var assistantReasoning strings.Builder

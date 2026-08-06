@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	agenttools "go-stock/backend/agent/tools"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/internal/bootstrap"
@@ -26,6 +27,7 @@ type App struct {
 	cronEntrysMu       sync.RWMutex
 	AiTools            []models.Tool
 	services           service.AppServices
+	agentToolData      agenttools.ToolDataProvider
 	agentSessions      map[string]*AgentSession
 	agentSessionsMu    sync.RWMutex
 	summaryTaskMu      sync.Mutex
@@ -52,10 +54,13 @@ func NewApp() *App {
 	if err != nil {
 		panic(err)
 	}
-	return NewAppWithServices(services)
+	return NewAppWithServices(services, bootstrap.NewProductionAgentToolDataProvider())
 }
 
-func NewAppWithServices(services service.AppServices) *App {
+func NewAppWithServices(services service.AppServices, agentToolData agenttools.ToolDataProvider) *App {
+	if agentToolData == nil {
+		panic("agent tool data provider is required")
+	}
 	cacheSize := 512 * 1024
 	cache := freecache.NewCache(cacheSize)
 	c := cron.New(cron.WithSeconds())
@@ -68,6 +73,7 @@ func NewAppWithServices(services service.AppServices) *App {
 		cronEntrys:    make(map[string]cron.EntryID),
 		AiTools:       tools,
 		services:      services,
+		agentToolData: agentToolData,
 		agentSessions: make(map[string]*AgentSession),
 	}
 }

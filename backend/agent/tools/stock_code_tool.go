@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"go-stock/backend/data"
 )
 
 // @Author spark
@@ -13,11 +12,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetQueryStockCodeInfoTool() tool.InvokableTool {
-	return &QueryStockCodeInfo{}
+func GetQueryStockCodeInfoTool(provider StockCodeProvider) tool.InvokableTool {
+	return &QueryStockCodeInfo{provider: provider}
 }
 
 type QueryStockCodeInfo struct {
+	provider StockCodeProvider
 }
 
 func (q QueryStockCodeInfo) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -35,12 +35,15 @@ func (q QueryStockCodeInfo) Info(ctx context.Context) (*schema.ToolInfo, error) 
 }
 
 func (q QueryStockCodeInfo) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if q.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
 	parms := map[string]any{}
 	err := json.Unmarshal([]byte(argumentsInJSON), &parms)
 	if err != nil {
 		return "", err
 	}
-	stockList := data.NewStockDataApi().GetStockList(parms["searchWord"].(string))
+	stockList := q.provider.SearchStocks(parms["searchWord"].(string))
 	marshal, err := json.Marshal(stockList)
 	if err != nil {
 		return "", err

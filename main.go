@@ -88,7 +88,7 @@ func main() {
 	//log.SugaredLogger.Infof("build key: %s", BuildKey)
 
 	// Create an instance of the app structure
-	app := NewAppWithServices(appRuntime.Services)
+	app := NewAppWithServices(appRuntime.Services, bootstrap.NewProductionAgentToolDataProvider())
 	if *webMode {
 		log.SugaredLogger.Infof("starting web mode at http://%s", cfg.Web.ListenAddr)
 		setRuntimeEventsEnabled(false)

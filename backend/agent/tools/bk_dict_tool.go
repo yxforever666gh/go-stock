@@ -3,18 +3,18 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"go-stock/backend/data"
 
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
-	"github.com/coocood/freecache"
 )
 
 // @Author spark
 // @Date 2025/9/27 14:09
 // @Desc
 // -----------------------------------------------------------------------------------
-type ToolQueryBKDict struct{}
+type ToolQueryBKDict struct {
+	provider BKDictProvider
+}
 
 func (t ToolQueryBKDict) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	return &schema.ToolInfo{
@@ -24,11 +24,14 @@ func (t ToolQueryBKDict) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (t ToolQueryBKDict) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
-	resp := data.NewMarketNewsApi().EMDictCode("016", freecache.NewCache(100))
+	if t.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
+	resp := t.provider.BoardDictionary()
 	bytes, err := json.Marshal(resp)
 	return string(bytes), err
 }
 
-func GetQueryBKDictTool() tool.InvokableTool {
-	return &ToolQueryBKDict{}
+func GetQueryBKDictTool(provider BKDictProvider) tool.InvokableTool {
+	return &ToolQueryBKDict{provider: provider}
 }

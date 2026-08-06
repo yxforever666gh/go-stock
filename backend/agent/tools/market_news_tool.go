@@ -3,7 +3,6 @@ package tools
 import (
 	"context"
 	"encoding/json"
-	"go-stock/backend/data"
 	"go-stock/backend/logger"
 	"strings"
 
@@ -18,11 +17,12 @@ import (
 // @Desc
 //-----------------------------------------------------------------------------------
 
-func GetQueryMarketNewsTool() tool.InvokableTool {
-	return &QueryMarketNews{}
+type QueryMarketNews struct {
+	provider MarketNewsProvider
 }
 
-type QueryMarketNews struct {
+func GetQueryMarketNewsTool(provider MarketNewsProvider) tool.InvokableTool {
+	return &QueryMarketNews{provider: provider}
 }
 
 func (q QueryMarketNews) Info(ctx context.Context) (*schema.ToolInfo, error) {
@@ -33,8 +33,11 @@ func (q QueryMarketNews) Info(ctx context.Context) (*schema.ToolInfo, error) {
 }
 
 func (q QueryMarketNews) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
+	if q.provider == nil {
+		return "", ErrToolDataProviderRequired
+	}
 	md := strings.Builder{}
-	res := data.NewMarketNewsApi().ClsCalendar()
+	res := q.provider.MarketCalendar()
 	for _, a := range res {
 		bytes, err := json.Marshal(a)
 		if err != nil {
@@ -52,27 +55,32 @@ func (q QueryMarketNews) InvokableRun(ctx context.Context, argumentsInJSON strin
 		})
 	}
 
-	news := data.NewMarketNewsApi().GetNewsList("", random.RandInt(100, 500))
+	news := q.provider.MarketNews("", random.RandInt(100, 500))
 	messageText := strings.Builder{}
-	for _, telegraph := range *news {
+	for _, telegraph := range news {
+		if telegraph == nil {
+			continue
+		}
 		messageText.WriteString("## " + telegraph.Time + ":" + "\n")
 		messageText.WriteString("### " + telegraph.Content + "\n")
 	}
 	md.WriteString("\n### 市场资讯：\n" + messageText.String())
 
-	resp := data.NewMarketNewsApi().TradingViewNews()
+	resp := q.provider.TradingViewNews()
 	var newsText strings.Builder
-	for _, a := range *resp {
+	for _, a := range resp {
 		logger.SugaredLogger.Debugf("TradingViewNews: %s", a.Title)
 		newsText.WriteString(a.Title + "\n")
 	}
 	md.WriteString("\n### 全球新闻资讯：\n" + newsText.String())
 
-	reutersNew := data.NewMarketNewsApi().ReutersNew()
+	reutersNew := q.provider.ReutersNews()
 	reutersNewMessageText := strings.Builder{}
-	for _, article := range reutersNew.Result.Articles {
-		reutersNewMessageText.WriteString("## " + article.Title + "\n")
-		reutersNewMessageText.WriteString("### " + article.Description + "\n")
+	if reutersNew != nil {
+		for _, article := range reutersNew.Result.Articles {
+			reutersNewMessageText.WriteString("## " + article.Title + "\n")
+			reutersNewMessageText.WriteString("### " + article.Description + "\n")
+		}
 	}
 	md.WriteString("\n### 外媒全球新闻资讯：\n" + reutersNewMessageText.String())
 

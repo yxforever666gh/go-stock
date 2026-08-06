@@ -39,20 +39,17 @@ var v150AllowedProductionImports = map[string]bool{
 // direct imports fail the test; removing one requires removing its entry here
 // in the same change, so the list can only shrink deliberately.
 var deprecatedDataImportDebt = map[string]bool{
-	"app_ai_api.go":                       true,
-	"app_config_api.go":                   true,
-	"app_cron_runtime.go":                 true,
-	"app_summary_runtime.go":              true,
-	"backend/agent/agent.go":              true,
-	"backend/agent/agent_api.go":          true,
-	"backend/agent/tools/bk_dict_tool.go": true,
+	"app_ai_api.go":              true,
+	"app_config_api.go":          true,
+	"app_cron_runtime.go":        true,
+	"app_summary_runtime.go":     true,
+	"backend/agent/agent.go":     true,
+	"backend/agent/agent_api.go": true,
 	"backend/agent/tools/choice_stock_by_indicators_tool.go": true,
 	"backend/agent/tools/economic_data_tool.go":              true,
 	"backend/agent/tools/financial_reports_tool.go":          true,
 	"backend/agent/tools/industry_research_report_tool.go":   true,
 	"backend/agent/tools/interactive_answer_data_tool.go":    true,
-	"backend/agent/tools/market_news_tool.go":                true,
-	"backend/agent/tools/stock_code_tool.go":                 true,
 	"backend/agent/tools/stock_k_line_data_tool.go":          true,
 	"backend/agent/tools/stock_news_tool.go":                 true,
 	"backend/agent/tools/stock_price_info_tool.go":           true,
@@ -64,6 +61,7 @@ var deprecatedDataImportDebt = map[string]bool{
 }
 
 var deprecatedDataCompatibilityAdapters = map[string]bool{
+	"internal/bootstrap/agent_tools_compat.go":    true,
 	"internal/bootstrap/service_compat_ai.go":     true,
 	"internal/bootstrap/service_compat_market.go": true,
 	"internal/bootstrap/service_compat_stock.go":  true,
