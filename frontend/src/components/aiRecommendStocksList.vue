@@ -30,9 +30,8 @@ const tableOverflowTooltip = {
 const dataRef = ref([])
 const loadingRef = ref(true)
 const tableScrollX = 2500
-const strategyCohortRef = ref('all')
+const strategyCohortRef = ref('1.5.0')
 const strategyCohortOptions = [
-  { label: 'All', value: 'all' },
   { label: 'V1.5.0', value: '1.5.0' },
   { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },

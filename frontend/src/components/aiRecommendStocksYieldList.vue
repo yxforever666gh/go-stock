@@ -15,9 +15,8 @@ import { useSharedResearchDateRange } from "../composables/useSharedResearchDate
 const message = useMessage()
 const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
 const rangeReadyRef = ref(false)
-const strategyCohortRef = ref('all')
+const strategyCohortRef = ref('1.5.0')
 const strategyCohortOptions = [
-  { label: 'All', value: 'all' },
   { label: 'V1.5.0', value: '1.5.0' },
   { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },
@@ -1507,7 +1506,7 @@ function replayMarkerSummaryText() {
     >
       V1.5.0 前向验证中：组合按 10 万元本金、单笔 10%、100 股整手口径回放。
     </n-alert>
-    <n-text depth="3" style="margin-left: 12px;">默认查看全部阶段；可切换 V1.4.2、V1.4.1、V1.4.0、V1.3.6、V1.3.2、V1.3.1 对比不同策略阶段。</n-text>
+    <n-text depth="3" style="margin-left: 12px;">默认精确查看 V1.5.0；可切换只读历史版本对比不同策略阶段，不再混合统计。</n-text>
   </div>
   <div style="margin-top: 6px;">
     <n-text depth="3">当前口径：严格回算</n-text>

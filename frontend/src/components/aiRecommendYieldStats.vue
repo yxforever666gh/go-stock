@@ -10,7 +10,7 @@ const loadingRef = ref(true)
 const overviewLoadingRef = ref(true)
 const diagnosticLoadingRef = ref(false)
 const rangeReadyRef = ref(false)
-const strategyCohortRef = ref('all')
+const strategyCohortRef = ref('1.5.0')
 
 const totalYieldRateRef = ref(0)
 const totalYieldRateTextRef = ref('--')
@@ -57,7 +57,6 @@ const v150HealthWarningsRef = ref([])
 const dailyOverviewDataRef = ref(null)
 const dailyOverviewTabRef = ref('cumulative')
 const strategyCohortOptions = [
-  { label: 'All', value: 'all' },
   { label: 'V1.5.0', value: '1.5.0' },
   { label: 'V1.4.2', value: '1.4.2' },
   { label: 'V1.4.1', value: '1.4.1' },
@@ -456,7 +455,7 @@ function dailyOverviewWarningText() {
           </n-button>
         </n-input-group>
         <div class="yield-stats-toolbar-hint">
-          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认查看全部阶段；可切换 V1.5.0、V1.4.2、V1.4.1、V1.4.0、V1.3.6、V1.3.2、V1.3.1 对比不同策略阶段。</n-text>
+          <n-text depth="3">当前分层：{{ strategyCohortLabelRef }}。默认精确查看 V1.5.0；可切换只读历史版本进行对比，不再混合统计。</n-text>
           <n-alert
             v-if="strategyCohortRef === '1.5.0'"
             type="warning"
