@@ -11,8 +11,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go-stock/backend/db"
 	"go-stock/backend/governance"
+	"go-stock/internal/bootstrap"
+	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/releaseinfo"
 )
 
@@ -25,13 +26,24 @@ func runStrategy(args []string, opts GlobalOptions, stdout, stderr io.Writer) er
 		return fmt.Errorf("unknown strategy subcommand %q", subcommand)
 	}
 
-	db.Init(resolveStrategyDBPath(opts.DataDir, opts.DBPath))
-	defer db.Close()
+	controller, err := bootstrap.NewProductionStrategyRuntimeController(resolveStrategyDBPath(opts.DataDir, opts.DBPath))
+	if err != nil {
+		return err
+	}
+	defer controller.Close()
+	return runStrategyWithController(args, opts, stdout, stderr, controller)
+}
+
+func runStrategyWithController(args []string, opts GlobalOptions, stdout, stderr io.Writer, controller cliports.StrategyRuntimeController) error {
+	if controller == nil {
+		return fmt.Errorf("strategy runtime controller is required")
+	}
+	subcommand := strings.ToLower(strings.TrimSpace(args[0]))
 	manifest := releaseinfo.Manifest()
 	ctx := context.Background()
 
 	if subcommand == "status" {
-		status := governance.GetStrategyRuntimeStatus(ctx, db.Dao, manifest.CurrentStrategyVersion)
+		status := controller.Status(ctx, manifest.CurrentStrategyVersion)
 		if err := writeStrategyStatus(stdout, opts.JSON, status); err != nil {
 			return err
 		}
@@ -59,7 +71,7 @@ func runStrategy(args []string, opts GlobalOptions, stdout, stderr io.Writer) er
 	if subcommand == "resume" {
 		mode = governance.StrategyModeLive
 	}
-	status, err := governance.SetStrategyRuntimeMode(ctx, db.Dao, mode, manifest.CurrentStrategyVersion, *reason, *operator)
+	status, err := controller.SetMode(ctx, mode, manifest.CurrentStrategyVersion, *reason, *operator)
 	if err != nil {
 		return err
 	}
