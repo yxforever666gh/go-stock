@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -16,6 +15,37 @@ import (
 const FrozenThroughStrategyVersion = "1.4.2"
 
 var ErrNotFrozenLegacy = errors.New("strategy version is not in the frozen legacy cohort")
+
+// frozenVersionAliases is the canonical allowlist for historical rows that
+// existed before Strategy 1.5.0. Keep this list explicit: an unknown or future
+// version must not become readable merely because it sorts below a current
+// version or differs from it.
+var frozenVersionAliases = []string{
+	"",
+	"phase1-v1",
+	"phase2-v1",
+	"phase3-v2",
+	"phase3-v3",
+	"phase3-v4",
+	"1.3.2",
+	"v1.3.2",
+	"1.3.6",
+	"v1.3.6",
+	"1.4.0",
+	"v1.4.0",
+	"1.4.1",
+	"v1.4.1",
+	"1.4.2",
+	"v1.4.2",
+}
+
+var frozenVersionAliasSet = func() map[string]struct{} {
+	result := make(map[string]struct{}, len(frozenVersionAliases))
+	for _, version := range frozenVersionAliases {
+		result[version] = struct{}{}
+	}
+	return result
+}()
 
 type Recommendation struct {
 	ID              uint            `json:"id"`
@@ -82,35 +112,17 @@ func (s Service) List(ctx context.Context, query Query) ([]Recommendation, error
 }
 
 func IsFrozenVersion(raw string) bool {
-	version, ok := parseVersion(raw)
-	if !ok || version[0] != 1 {
-		return false
-	}
-	limit := [3]int{1, 4, 2}
-	for i := range version {
-		if version[i] < limit[i] {
-			return true
-		}
-		if version[i] > limit[i] {
-			return false
-		}
-	}
-	return true
+	_, ok := frozenVersionAliasSet[normalizeVersion(raw)]
+	return ok
 }
 
-func parseVersion(raw string) ([3]int, bool) {
-	var result [3]int
-	raw = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(raw)), "v")
-	parts := strings.Split(raw, ".")
-	if len(parts) != len(result) {
-		return result, false
-	}
-	for i, part := range parts {
-		value, err := strconv.Atoi(part)
-		if err != nil || value < 0 {
-			return [3]int{}, false
-		}
-		result[i] = value
-	}
-	return result, true
+// FrozenVersionAliases returns normalized values suitable for a storage-level
+// allowlist. The returned slice is a copy so callers cannot widen the legacy
+// boundary at runtime.
+func FrozenVersionAliases() []string {
+	return append([]string(nil), frozenVersionAliases...)
+}
+
+func normalizeVersion(raw string) string {
+	return strings.ToLower(strings.TrimSpace(raw))
 }

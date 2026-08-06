@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -31,11 +32,29 @@ func (r CompatibilityLegacyRepository) Find(ctx context.Context, id uint) (legac
 		return legacy.Recommendation{}, fmt.Errorf("legacy recommendation storage is unavailable")
 	}
 	var row models.AiRecommendStocks
-	if err := r.database.WithContext(ctx).First(&row, id).Error; err != nil {
-		return legacy.Recommendation{}, err
-	}
-	if !legacy.IsFrozenVersion(row.SummaryVersion) {
-		return legacy.Recommendation{}, fmt.Errorf("%w: %q", legacy.ErrNotFrozenLegacy, row.SummaryVersion)
+	err := compatibilityLegacyScope(r.database.WithContext(ctx).Model(&models.AiRecommendStocks{})).
+		Where("id = ?", id).
+		First(&row).Error
+	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return legacy.Recommendation{}, err
+		}
+		var rejected struct {
+			SummaryVersion string
+		}
+		rejectedErr := r.database.WithContext(ctx).
+			Model(&models.AiRecommendStocks{}).
+			Select("summary_version").
+			Where("id = ?", id).
+			Take(&rejected).Error
+		switch {
+		case rejectedErr == nil:
+			return legacy.Recommendation{}, fmt.Errorf("%w: %q", legacy.ErrNotFrozenLegacy, rejected.SummaryVersion)
+		case errors.Is(rejectedErr, gorm.ErrRecordNotFound):
+			return legacy.Recommendation{}, err
+		default:
+			return legacy.Recommendation{}, rejectedErr
+		}
 	}
 	return compatibilityLegacyRecommendation(row)
 }
@@ -51,7 +70,7 @@ func (r CompatibilityLegacyRepository) List(ctx context.Context, query legacy.Qu
 		return nil, fmt.Errorf("legacy recommendation end is before start")
 	}
 
-	dbq := r.database.WithContext(ctx).Model(&models.AiRecommendStocks{})
+	dbq := compatibilityLegacyScope(r.database.WithContext(ctx).Model(&models.AiRecommendStocks{}))
 	if len(query.Symbols) > 0 {
 		codes := make([]string, 0, len(query.Symbols))
 		for _, symbol := range query.Symbols {
@@ -70,6 +89,9 @@ func (r CompatibilityLegacyRepository) List(ctx context.Context, query legacy.Qu
 	if !query.End.IsZero() {
 		dbq = dbq.Where("COALESCE(data_time, created_at) <= ?", query.End)
 	}
+	if query.Limit > 0 {
+		dbq = dbq.Limit(query.Limit)
+	}
 	rows := make([]models.AiRecommendStocks, 0)
 	if err := dbq.Order("COALESCE(data_time, created_at) DESC, id DESC").Find(&rows).Error; err != nil {
 		return nil, err
@@ -84,11 +106,18 @@ func (r CompatibilityLegacyRepository) List(ctx context.Context, query legacy.Qu
 			return nil, err
 		}
 		result = append(result, mapped)
-		if query.Limit > 0 && len(result) >= query.Limit {
-			break
-		}
 	}
 	return result, nil
+}
+
+func compatibilityLegacyScope(query *gorm.DB) *gorm.DB {
+	if query == nil {
+		return nil
+	}
+	return query.Where(
+		"LOWER(TRIM(COALESCE(summary_version, ''))) IN ?",
+		legacy.FrozenVersionAliases(),
+	)
 }
 
 func compatibilityLegacyRecommendation(row models.AiRecommendStocks) (legacy.Recommendation, error) {
