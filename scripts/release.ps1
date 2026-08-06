@@ -154,6 +154,30 @@ function Get-ReleaseContext {
     }
 }
 
+function Get-GitHubOriginRepository {
+    $originURL = (& git -C $ProjectRoot remote get-url origin).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $originURL) { throw "Cannot resolve origin URL" }
+
+    $repository = $null
+    foreach ($prefix in @(
+        "https://github.com/",
+        "git@github.com:",
+        "ssh://git@github.com/",
+        "ssh://git@ssh.github.com:443/"
+    )) {
+        if ($originURL.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $repository = $originURL.Substring($prefix.Length).TrimEnd('/')
+            break
+        }
+    }
+    if (-not $repository) { throw "Origin is not a supported GitHub URL" }
+    if ($repository.EndsWith(".git", [System.StringComparison]::OrdinalIgnoreCase)) {
+        $repository = $repository.Substring(0, $repository.Length - 4)
+    }
+    if ($repository -notmatch '^[^/]+/[^/]+$') { throw "Cannot parse GitHub repository from origin" }
+    return $repository
+}
+
 function Assert-UniqueMainBranch {
     $current = (& git -C $ProjectRoot branch --show-current).Trim()
     if ($LASTEXITCODE -ne 0 -or $current -ne "main") {
@@ -182,21 +206,39 @@ function Assert-UniqueMainBranch {
         if ($remoteExitCode -eq 0) { break }
         if ($remoteAttempt -lt 3) { Start-Sleep -Seconds $remoteAttempt }
     }
-    if ($remoteExitCode -ne 0) {
-        $details = ($remoteHeadOutput | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
-        if ($details) { throw "Cannot query origin branch heads (exit $remoteExitCode)`n$details" }
-        throw "Cannot query origin branch heads (exit $remoteExitCode)"
-    }
-    $remoteBranches = @($remoteHeadOutput | ForEach-Object {
-        $line = ([string]$_).Trim()
-        if ($line) {
-            $fields = @($line -split '\s+', 2)
-            if ($fields.Count -ne 2 -or -not $fields[1].StartsWith("refs/heads/")) {
-                throw "Cannot parse origin branch head: $line"
+    if ($remoteExitCode -eq 0) {
+        $remoteBranches = @($remoteHeadOutput | ForEach-Object {
+            $line = ([string]$_).Trim()
+            if ($line) {
+                $fields = @($line -split '\s+', 2)
+                if ($fields.Count -ne 2 -or -not $fields[1].StartsWith("refs/heads/")) {
+                    throw "Cannot parse origin branch head: $line"
+                }
+                $fields[1]
             }
-            $fields[1]
+        })
+    } else {
+        $gitDetails = ($remoteHeadOutput | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        $repository = Get-GitHubOriginRepository
+        $endpoint = "repos/$repository/git/matching-refs/heads/?per_page=100"
+        $apiOutput = @()
+        $apiExitCode = 1
+        try {
+            $apiOutput = @(& gh api --paginate $endpoint --jq ".[].ref" 2>&1)
+            $apiExitCode = $LASTEXITCODE
+        } catch {
+            if ($LASTEXITCODE) { $apiExitCode = $LASTEXITCODE }
+            $apiOutput = @($_.Exception.Message)
         }
-    })
+        if ($apiExitCode -ne 0) {
+            $apiDetails = ($apiOutput | Select-Object -Last 20 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+            throw "Cannot query origin branch heads through git (exit $remoteExitCode) or GitHub API (exit $apiExitCode)`n$gitDetails`n$apiDetails"
+        }
+        $remoteBranches = @($apiOutput | ForEach-Object { ([string]$_).Trim() } | Where-Object { $_ })
+        if (@($remoteBranches | Where-Object { -not $_.StartsWith("refs/heads/") }).Count -gt 0) {
+            throw "Cannot parse GitHub API origin branch heads"
+        }
+    }
     if ($remoteBranches.Count -ne 1 -or $remoteBranches[0] -ne "refs/heads/main") {
         throw "Release remote must contain only refs/heads/main (found: $($remoteBranches -join ', '))"
     }

@@ -59,12 +59,18 @@ func TestReleaseBranchGateQueriesActualOriginHeads(t *testing.T) {
 		t.Fatal("release branch gate must not trust cached refs/remotes/origin")
 	}
 	for _, fragment := range []string{
+		`function Get-GitHubOriginRepository`,
+		`git -C $ProjectRoot remote get-url origin`,
+		`Origin is not a supported GitHub URL`,
 		`for ($remoteAttempt = 1; $remoteAttempt -le 3; $remoteAttempt++)`,
 		`try {`,
 		`& git -C $ProjectRoot -c http.version=HTTP/1.1 -c http.lowSpeedLimit=1 -c http.lowSpeedTime=20 ls-remote --heads origin`,
 		`catch {`,
 		`if ($remoteAttempt -lt 3) { Start-Sleep -Seconds $remoteAttempt }`,
 		`$attemptExitCode = $LASTEXITCODE`,
+		`$endpoint = "repos/$repository/git/matching-refs/heads/?per_page=100"`,
+		`& gh api --paginate $endpoint --jq ".[].ref"`,
+		`Cannot query origin branch heads through git`,
 		`$remoteBranches.Count -ne 1`,
 		`$remoteBranches[0] -ne "refs/heads/main"`,
 	} {
