@@ -150,7 +150,18 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 			}
 			coveredCorporateActionDays[barDayKey] = struct{}{}
 		}
-		signal, nextState := v150.DetectActivation(executionPlan, previous, bar, state)
+		signal, nextState, evaluationErr := evaluateMarketSummaryV150ActivationBar(
+			ctx.V150ExecutionEvaluator,
+			frozen,
+			executionPlan,
+			previous,
+			bar,
+			state,
+		)
+		if evaluationErr != nil {
+			reason := marketSummaryV150DataHealthReject + ": execution evaluator activation failed: " + evaluationErr.Error()
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, nil, bar.Start, reason, info)
+		}
 		state = nextState
 		if signal.Reason == v150.RejectActivationExpired {
 			at := bar.Start
@@ -244,7 +255,20 @@ func resolveMarketSummaryV150Activation(rec models.AiRecommendStocks, ctx yieldB
 		}
 		dailyCap := marketSummaryV150ExecutionDailyCap(frozen, cfg)
 		portfolio.ExecutionDailyCap = &dailyCap
-		fill := v150.TryFillEntryOnNextBar(order, nextBar, portfolio, cfg.PortfolioCash, cfg.SlippageScenarios()[0], cfg)
+		fill, evaluationErr := evaluateMarketSummaryV150EntryBar(
+			ctx.V150ExecutionEvaluator,
+			frozen,
+			order,
+			nextBar,
+			portfolio,
+			cfg.PortfolioCash,
+			cfg.SlippageScenarios()[0],
+		)
+		if evaluationErr != nil {
+			marketSummaryV150ExecutionMu.Unlock()
+			reason := marketSummaryV150DataHealthReject + ": execution evaluator entry failed: " + evaluationErr.Error()
+			return rejectMarketSummaryV150Activation(ctx, rec, &frozen, &signal, nextBar.Start, reason, info)
+		}
 		if fill.Status != v150.FillFilled {
 			events := []v150.OrderEvent{
 				{Type: v150.EventSignal, At: signal.At, Symbol: code, Reason: string(signal.Path)},
@@ -422,7 +446,18 @@ func evaluateMarketSummaryV150Exit(rec models.AiRecommendStocks, entry marketSum
 			return "", time.Time{}, 0, info
 		}
 		decorateMarketSummaryV150Tradability(&bar, security, previousClose)
-		result := v150.EvaluateExit(position, bar, cfg.SlippageScenarios()[0], cfg)
+		result, nextPosition, evaluationErr := evaluateMarketSummaryV150ExitBar(
+			ctx.V150ExecutionEvaluator,
+			frozen,
+			position,
+			bar,
+			cfg.SlippageScenarios()[0],
+		)
+		if evaluationErr != nil {
+			info.DataStatus = "鏃犳硶鍒ゅ畾"
+			info.DataStatusReason = marketSummaryV150DataHealthReject + ": execution evaluator exit failed: " + evaluationErr.Error()
+			return "", time.Time{}, 0, info
+		}
 		if result.Triggered {
 			if err := ctx.appendMarketSummaryV150OrderEvents(rec, frozen.Run, result.Events, marketSummaryV150EventAccounting{Exit: &result.Cost}); err != nil {
 				info.DataStatus = "无法判定"
@@ -438,7 +473,7 @@ func evaluateMarketSummaryV150Exit(rec models.AiRecommendStocks, entry marketSum
 			}
 			return status, result.At, result.Cost.RawPrice, info
 		}
-		position = v150.AdvanceTrailingStop(position, bar, cfg)
+		position = nextPosition
 	}
 	if syncInfo.SyncErr != nil && len(bars) == 0 {
 		info.DataStatus = "无法判定"
@@ -475,6 +510,9 @@ func loadMarketSummaryV150FrozenExecutionPlan(rec models.AiRecommendStocks) (mar
 	}
 	if err := db.Dao.Where("candidate_id = ? AND run_id = ? AND strategy_version = ? AND frozen_at IS NOT NULL", result.Rule.CandidateID, runID, v150.StrategyVersion).First(&result.Candidate).Error; err != nil {
 		return result, fmt.Errorf("frozen strategy candidate unavailable: %w", err)
+	}
+	if strings.TrimSpace(result.Run.ConfigHash) != v150.FixedStrategyV150ConfigHash() {
+		return result, errors.New("frozen strategy run config hash does not match Strategy 1.5.0")
 	}
 	if result.Run.ValidFromAt == nil || result.Run.ValidFromAt.IsZero() || result.Run.DecisionAt.IsZero() || !result.Run.DecisionAt.Before(*result.Run.ValidFromAt) || result.Run.DataCutoffAt.After(result.Run.DecisionAt) {
 		return result, errors.New("frozen strategy run violates cutoff <= decision < validFrom")

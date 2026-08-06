@@ -200,17 +200,19 @@ func runMarketSummaryV150ExecutionMonitorWithStore(
 	ctx context.Context,
 	now time.Time,
 	store marketSummaryV150OrderEventStore,
+	evaluator marketSummaryV150ExecutionEvaluator,
 ) (MarketSummaryV150ExecutionMonitorResult, error) {
-	if store == nil {
+	if store == nil || evaluator == nil {
 		return MarketSummaryV150ExecutionMonitorResult{ObservedAt: now.In(cnLocation())}, errors.New("v1.5 execution monitor order event store is unavailable")
 	}
-	return runMarketSummaryV150ExecutionMonitor(ctx, now, newMarketSummaryV150OrderEventSink(ctx, store))
+	return runMarketSummaryV150ExecutionMonitor(ctx, now, newMarketSummaryV150OrderEventSink(ctx, store), evaluator)
 }
 
 func runMarketSummaryV150ExecutionMonitor(
 	ctx context.Context,
 	now time.Time,
 	eventSink marketSummaryV150OrderEventSink,
+	evaluator marketSummaryV150ExecutionEvaluator,
 ) (MarketSummaryV150ExecutionMonitorResult, error) {
 	result := MarketSummaryV150ExecutionMonitorResult{ObservedAt: now.In(cnLocation())}
 	if ctx == nil {
@@ -272,6 +274,7 @@ func runMarketSummaryV150ExecutionMonitor(
 		V150EvaluationCutoff:              window.EvaluationCutoff,
 		FailOnV150ObservationRefreshError: true,
 		V150OrderEventSink:                eventSink,
+		V150ExecutionEvaluator:            evaluator,
 	}
 	writer := newAiRecommendYieldSnapshotWriter(meta.ID, len(scheduled)+1)
 	replayErr := processMarketSummaryV150RecordsInEventOrder(scheduled, buildCtx, writer)

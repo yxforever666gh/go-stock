@@ -33,10 +33,11 @@ type yieldBuildContext struct {
 	// V150OrderEventSink is set only by the production execution monitor in the
 	// current migration slice. A zero value preserves the legacy recalculation
 	// compatibility path until that producer is injected separately.
-	V150OrderEventSink  marketSummaryV150OrderEventSink
-	Tushare             *TushareApi
-	CurrentPriceMap     map[string]float64
-	CurrentPriceTimeMap map[string]string
+	V150OrderEventSink     marketSummaryV150OrderEventSink
+	V150ExecutionEvaluator marketSummaryV150ExecutionEvaluator
+	Tushare                *TushareApi
+	CurrentPriceMap        map[string]float64
+	CurrentPriceTimeMap    map[string]string
 }
 
 func isSoldPositionStatus(status string) bool {

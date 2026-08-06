@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-stock/backend/data"
+	"go-stock/backend/execution"
 	"go-stock/backend/legacy"
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
@@ -53,7 +54,7 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 		Initializer:                 legacyApplicationInitializer{},
 		Operations:                  newCompatibilityServiceOperations(storage.Main),
 		RecommendationPublisher:     &compatibilityServiceAdapter{main: storage.Main},
-		ExecutionMonitor:            data.NewCompatibilityExecutionMonitor(orderEvents),
+		ExecutionMonitor:            data.NewCompatibilityExecutionMonitor(orderEvents, execution.Evaluator{}),
 		PortfolioReader:             portfolio.NewReader(ledger),
 		LegacyReader:                legacy.NewService(legacyRepository, marketData),
 		CurrentRecommendationReader: currentRecommendations,

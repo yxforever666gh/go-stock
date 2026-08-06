@@ -8,12 +8,23 @@ import (
 	"time"
 
 	"go-stock/backend/db"
+	"go-stock/backend/execution"
 	"go-stock/backend/models"
 	"go-stock/backend/persistence"
 	"go-stock/backend/strategy/v150"
 )
 
 type marketSummaryV150MonitorContextKey struct{}
+
+type recordingMarketSummaryV150ContextEvaluator struct {
+	delegate marketSummaryV150ExecutionEvaluator
+	calls    int
+}
+
+func (e *recordingMarketSummaryV150ContextEvaluator) Evaluate(ctx execution.ExecutionContext) (execution.EvaluationResult, error) {
+	e.calls++
+	return e.delegate.Evaluate(ctx)
+}
 
 func loadMarketSummaryV150ActiveExecutionRecordsForTest(observedAt time.Time) ([]models.AiRecommendStocks, int, int, int, []string, error) {
 	sink := newMarketSummaryV150OrderEventSink(context.Background(), persistence.NewGORMOrderEventStore(db.Dao))
@@ -22,7 +33,7 @@ func loadMarketSummaryV150ActiveExecutionRecordsForTest(observedAt time.Time) ([
 
 func TestCompatibilityExecutionMonitorCanceledContextDoesNotAppend(t *testing.T) {
 	store := &recordingMarketSummaryV150OrderEventStore{}
-	monitor := NewCompatibilityExecutionMonitor(store)
+	monitor := NewCompatibilityExecutionMonitor(store, execution.Evaluator{})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -87,7 +98,8 @@ func TestCompatibilityExecutionMonitorFillUsesInjectedStoreAndContext(t *testing
 	securityNow = observedAt
 
 	store := &recordingMarketSummaryV150OrderEventStore{delegate: persistence.NewGORMOrderEventStore(db.Dao)}
-	monitor := NewCompatibilityExecutionMonitor(store)
+	evaluator := &recordingMarketSummaryV150ContextEvaluator{delegate: execution.Evaluator{}}
+	monitor := NewCompatibilityExecutionMonitor(store, evaluator)
 	ctx := context.WithValue(context.Background(), marketSummaryV150MonitorContextKey{}, "monitor-fill")
 	result, err := monitor.Run(ctx, observedAt)
 	if err != nil {
@@ -95,6 +107,9 @@ func TestCompatibilityExecutionMonitorFillUsesInjectedStoreAndContext(t *testing
 	}
 	if result.ProcessedCount != 1 || store.calls != 1 || len(store.batches) != 1 {
 		t.Fatalf("result=%+v store calls=%d batches=%d", result, store.calls, len(store.batches))
+	}
+	if evaluator.calls == 0 {
+		t.Fatal("production monitor did not invoke backend/execution evaluator")
 	}
 	if got := marketSummaryV150TestEventTypes(store.batches[0]); got != "signal,order,fill" {
 		t.Fatalf("injected batch=%s", got)
@@ -129,7 +144,7 @@ func TestCompatibilityExecutionMonitorCorruptPlanRejectUsesInjectedStoreAndConte
 	}
 
 	store := &recordingMarketSummaryV150OrderEventStore{delegate: persistence.NewGORMOrderEventStore(db.Dao)}
-	monitor := NewCompatibilityExecutionMonitor(store)
+	monitor := NewCompatibilityExecutionMonitor(store, execution.Evaluator{})
 	ctx := context.WithValue(context.Background(), marketSummaryV150MonitorContextKey{}, "monitor-reject")
 	result, err := monitor.Run(ctx, observedAt)
 	if err != nil {

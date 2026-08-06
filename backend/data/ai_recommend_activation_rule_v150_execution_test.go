@@ -25,6 +25,27 @@ type recordingMarketSummaryV150OrderEventStore struct {
 	batches  [][]models.OrderEvent
 }
 
+func TestLoadMarketSummaryV150FrozenExecutionPlanRejectsConfigHashMismatch(t *testing.T) {
+	loc := cnLocation()
+	decision := time.Date(2026, 8, 4, 9, 0, 0, 0, loc)
+	validFrom := time.Date(2026, 8, 4, 9, 30, 0, 0, loc)
+	initMarketSummaryV150ExecutionTestDB(t)
+	recommendation := appendMarketSummaryV150ExecutionFixtureWithSecurity(t, decision, marketSummaryV150TestBreakoutPlan(validFrom), false)
+	if err := db.Dao.Exec("DROP TRIGGER immutable_strategy_run_snapshot_update").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Dao.Model(&models.StrategyRunSnapshot{}).
+		Where("run_id = ?", recommendation.StrategyRunID).
+		UpdateColumn("config_hash", "wrong-cohort-hash").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := loadMarketSummaryV150FrozenExecutionPlan(recommendation)
+	if err == nil || !strings.Contains(err.Error(), "config hash") {
+		t.Fatalf("error = %v, want fail-closed config hash rejection", err)
+	}
+}
+
 func (s *recordingMarketSummaryV150OrderEventStore) AppendOrderEvents(ctx context.Context, runID string, events []models.OrderEvent) error {
 	s.calls++
 	s.contexts = append(s.contexts, ctx)

@@ -7,14 +7,24 @@ import (
 	"go-stock/backend/execution"
 )
 
+// marketSummaryV150ExecutionEvaluator is local to the compatibility adapter so
+// backend/data production files do not depend on backend/execution directly.
+type marketSummaryV150ExecutionEvaluator interface {
+	Evaluate(execution.ExecutionContext) (execution.EvaluationResult, error)
+}
+
 // CompatibilityExecutionMonitor keeps the existing V1.5.0 engine intact
 // while removing delivery-layer knowledge of backend/data.
 type CompatibilityExecutionMonitor struct {
 	orderEvents marketSummaryV150OrderEventStore
+	evaluator   marketSummaryV150ExecutionEvaluator
 }
 
-func NewCompatibilityExecutionMonitor(orderEvents marketSummaryV150OrderEventStore) CompatibilityExecutionMonitor {
-	return CompatibilityExecutionMonitor{orderEvents: orderEvents}
+func NewCompatibilityExecutionMonitor(
+	orderEvents marketSummaryV150OrderEventStore,
+	evaluator marketSummaryV150ExecutionEvaluator,
+) CompatibilityExecutionMonitor {
+	return CompatibilityExecutionMonitor{orderEvents: orderEvents, evaluator: evaluator}
 }
 
 func (CompatibilityExecutionMonitor) ResolveWindow(now time.Time) (execution.MonitorWindow, bool) {
@@ -29,10 +39,10 @@ func (m CompatibilityExecutionMonitor) Run(ctx context.Context, now time.Time) (
 	if err := ctx.Err(); err != nil {
 		return execution.MonitorResult{ObservedAt: now}, err
 	}
-	if m.orderEvents == nil {
+	if m.orderEvents == nil || m.evaluator == nil {
 		return execution.MonitorResult{ObservedAt: now}, execution.ErrMonitorUnavailable
 	}
-	result, err := runMarketSummaryV150ExecutionMonitorWithStore(ctx, now, m.orderEvents)
+	result, err := runMarketSummaryV150ExecutionMonitorWithStore(ctx, now, m.orderEvents, m.evaluator)
 	return execution.MonitorResult{
 		ObservedAt: result.ObservedAt, EvaluationCutoff: result.EvaluationCutoff,
 		PendingCount: result.PendingCount, OpenCount: result.OpenCount,
