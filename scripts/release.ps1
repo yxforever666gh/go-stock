@@ -374,19 +374,6 @@ function Start-Candidate {
     return $process
 }
 
-function Wait-WebHealth {
-    param([int]$ProcessId)
-    for ($attempt = 0; $attempt -lt $RollbackHealthAttempts; $attempt++) {
-        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { throw "Web process exited before health check" }
-        try {
-            $response = Invoke-RestMethod -Uri "http://$WebAddr/healthz" -TimeoutSec 2
-            if ($response.ok) { return }
-        } catch {}
-        Start-Sleep -Seconds 1
-    }
-    throw "Web process did not become healthy"
-}
-
 function Assert-SingleListener {
     param([int]$ExpectedProcessId = 0)
     $port = Get-WebPort
@@ -424,6 +411,90 @@ function Get-PreviousReleasePointer {
         binary = (Resolve-Path -LiteralPath $binary).Path
         artifactSHA256 = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
     }
+}
+
+function Get-PreviousReadinessExpectation {
+    param($Previous)
+    if (-not $Previous -or -not $Previous.appVersion -or -not $Previous.commit -or -not $Previous.binary -or -not $Previous.artifactSHA256) {
+        throw "Previous release pointer is incomplete"
+    }
+    if (-not (Test-Path -LiteralPath $Previous.binary)) {
+        throw "Previous release binary is missing: $($Previous.binary)"
+    }
+
+    $actualHash = (Get-FileHash -LiteralPath $Previous.binary -Algorithm SHA256).Hash.ToLowerInvariant()
+    $pointerHash = ([string]$Previous.artifactSHA256).ToLowerInvariant()
+    if ($actualHash -ne $pointerHash) {
+        throw "Previous release pointer artifact hash does not match its binary"
+    }
+
+    $inspectOutput = @(& $Previous.binary "release" "inspect" 2>&1)
+    $inspectExitCode = $LASTEXITCODE
+    if ($inspectExitCode -ne 0) {
+        throw "Previous release embedded metadata inspection failed (exit $inspectExitCode)"
+    }
+    try {
+        $embeddedJSON = ($inspectOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        $embedded = $embeddedJSON | ConvertFrom-Json
+    } catch {
+        throw "Previous release embedded metadata is not valid JSON: $($_.Exception.Message)"
+    }
+
+    if ($embedded.build.commit -ne $Previous.commit -or
+        [bool]$embedded.build.dirty -or
+        ([string]$embedded.build.artifactSHA256).ToLowerInvariant() -ne $actualHash -or
+        $embedded.manifest.appVersion -ne $Previous.appVersion -or
+        -not $embedded.manifest.currentStrategyVersion -or
+        -not $embedded.manifest.strategyConfigHash -or
+        $embedded.configHash -ne $embedded.manifest.strategyConfigHash) {
+        throw "Previous release pointer does not match its embedded release identity"
+    }
+
+    return [pscustomobject]@{
+        AppVersion = [string]$embedded.manifest.appVersion
+        Commit = [string]$embedded.build.commit
+        ArtifactSHA256 = $actualHash
+        MainSchemaVersion = [int]$embedded.manifest.mainSchemaVersion
+        MinuteSchemaVersion = [int]$embedded.manifest.minuteSchemaVersion
+        CurrentStrategyVersion = [string]$embedded.manifest.currentStrategyVersion
+        StrategyConfigHash = [string]$embedded.manifest.strategyConfigHash
+    }
+}
+
+function Wait-ExactPreviousReadiness {
+    param($Expected, [int]$ProcessId)
+    $lastResponse = "no response"
+    for ($attempt = 0; $attempt -lt $RollbackHealthAttempts; $attempt++) {
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
+            throw "Previous release process exited before exact readiness verification"
+        }
+        try {
+            $status = Invoke-RestMethod -Uri $ReadyURL -TimeoutSec 2
+            $lastResponse = $status | ConvertTo-Json -Depth 8 -Compress
+            if ($status.appVersion -eq $Expected.AppVersion -and
+                $status.commit -eq $Expected.Commit -and
+                ([string]$status.artifactSHA256).ToLowerInvariant() -eq $Expected.ArtifactSHA256 -and
+                [int]$status.mainSchemaVersion -eq $Expected.MainSchemaVersion -and
+                [int]$status.minuteSchemaVersion -eq $Expected.MinuteSchemaVersion -and
+                $status.currentStrategyVersion -eq $Expected.CurrentStrategyVersion -and
+                $status.strategyConfigHash -eq $Expected.StrategyConfigHash -and
+                $status.configHash -eq $Expected.StrategyConfigHash -and
+                -not [bool]$status.dirty -and
+                $status.strategyMode -eq "paused" -and
+                $status.readiness.strategyMode -eq "paused" -and
+                [bool]$status.readiness.migrations -and
+                [bool]$status.readiness.database -and
+                [bool]$status.readiness.services -and
+                [bool]$status.readiness.scheduler -and
+                [bool]$status.readiness.ready) {
+                return $status
+            }
+        } catch {
+            $lastResponse = $_.Exception.Message
+        }
+        Start-Sleep -Seconds 1
+    }
+    throw "Previous release readiness did not match its pointer and embedded manifest. Last response: $lastResponse"
 }
 
 function Wait-ExactReadiness {
@@ -506,6 +577,7 @@ function Deploy-Candidate {
     Invoke-DatabaseCommand $Context.Binary $rehearsalMainDB $rehearsalMinuteDB @("db", "verify")
 
     $previous = Get-PreviousReleasePointer
+    $previousReadiness = if ($previous) { Get-PreviousReadinessExpectation $previous } else { $null }
     if ($previous -and -not (Test-Path -LiteralPath $CurrentPointer)) {
         Write-ReleasePointer $previous
     }
@@ -545,11 +617,11 @@ function Deploy-Candidate {
             } elseif ($liveMutationStarted) {
                 throw "Live database mutation started without a complete rollback backup: $backupDir"
             }
-            if (-not $previous) { throw "No previous release is available to restart" }
+            if (-not $previous -or -not $previousReadiness) { throw "No verifiable previous release is available to restart" }
             Write-ReleasePointer $previous
             if ($oldServiceStopped) {
                 $previousProcess = Start-Candidate $previous.binary
-                Wait-WebHealth $previousProcess.Id
+                Wait-ExactPreviousReadiness $previousReadiness $previousProcess.Id | Out-Null
                 Assert-SingleListener $previousProcess.Id
             } else {
                 throw "Old service stop did not complete; refusing to start a duplicate previous process"
@@ -606,12 +678,13 @@ function Deploy-Candidate {
 function Invoke-Rollback {
     if (-not $RollbackReceipt) { throw "-RollbackReceipt is required" }
     $receipt = Get-Content -LiteralPath $RollbackReceipt -Raw | ConvertFrom-Json
+    if (-not $receipt.previous) { throw "Deployment receipt has no previous release pointer" }
+    $previousReadiness = Get-PreviousReadinessExpectation $receipt.previous
     Restore-Backup $receipt.backupDir $receipt.current.binary
     Invoke-DatabaseCommand $receipt.current.binary $MainDB $MinuteDB @("db", "verify", "--quick-only")
-    if (-not $receipt.previous) { throw "Deployment receipt has no previous release pointer" }
     Write-ReleasePointer $receipt.previous
     $process = Start-Candidate $receipt.previous.binary
-    Wait-WebHealth $process.Id
+    Wait-ExactPreviousReadiness $previousReadiness $process.Id | Out-Null
     Assert-SingleListener $process.Id
 }
 
