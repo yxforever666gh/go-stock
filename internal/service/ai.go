@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"time"
 
 	"go-stock/backend/models"
 )
@@ -75,56 +74,8 @@ func (s AIService) NewSummaryStockNewsStream(ctx context.Context, aiConfigID int
 	return s.operations.NewSummaryStockNewsStream(ctx, aiConfigID, question, sysPromptID, think)
 }
 
-func (s AIService) NewSummaryStockNewsStreamPhased(ctx context.Context, aiConfigID int, question string, sysPromptID *int, think bool) <-chan map[string]any {
-	return s.operations.NewSummaryStockNewsStreamPhased(ctx, aiConfigID, question, sysPromptID, think)
-}
-
-func (s AIService) GenerateMarketSummarySupplementTable(ctx context.Context, aiConfigID int, req models.MarketSummarySupplementRequest) (string, string, string, error) {
-	return s.operations.GenerateMarketSummarySupplementTable(ctx, aiConfigID, req)
-}
-
 func (s AIService) NormalizeMarketSummaryQuestion(question string) string {
 	return s.operations.NormalizeMarketSummaryQuestion(question)
-}
-
-func (s AIService) ResolveMarketSummaryRecommendationCountPolicy(question string) MarketSummaryRecommendationCountPolicy {
-	return s.operations.ResolveMarketSummaryRecommendationCountPolicy(question)
-}
-
-func (s AIService) PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time.Time, outputLimit int) (string, MarketSummaryReportPrepareStats, error) {
-	return s.operations.PrepareMarketSummaryReportForPersistence(summaryText, startedAt, outputLimit)
-}
-
-func (s AIService) RunMorningOpeningReview(now time.Time) (string, error) {
-	return s.operations.RunMorningOpeningReview(now)
-}
-
-func (s AIService) MergeMarketSummarySupplementReport(baseText, supplementText string, acceptedCodes []string, maximumOutput int) (string, MarketSummaryReportMergeStats) {
-	return s.operations.MergeMarketSummarySupplementReport(baseText, supplementText, acceptedCodes, maximumOutput)
-}
-
-func (s AIService) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
-	return s.operations.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
-}
-
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
-	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName, startedAt, verifiedCandidates)
-}
-
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
-	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName, startedAt, verifiedCandidates, productionLimit)
-}
-
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot, outputLimit, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
-	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verifiedCandidates, outputLimit, productionLimit)
-}
-
-func (s AIService) EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verifiedCandidates []models.MarketSummaryVerifiedCandidateSnapshot, options models.MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
-	return s.operations.EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName, startedAt, verifiedCandidates, options)
-}
-
-func (s AIService) EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
-	return s.operations.EnsureMarketSummaryYieldOverridesSaved(summaryText, startedAt)
 }
 
 func (s AIService) SendYieldEmailTestMessage() error {

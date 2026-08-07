@@ -19,7 +19,7 @@ func (unsupportedMarketSummaryDecision) MarketSummaryDecisionVersion() string { 
 
 var _ recommendation.FrozenDecision = unsupportedMarketSummaryDecision{}
 
-func TestRecommendationCompatibilityAdapterPersistsAIResponseReports(t *testing.T) {
+func TestRecommendationCompatibilityAdapterCreatesAIResponseReports(t *testing.T) {
 	database := openSchedulerCompatibilityTestDB(t)
 	adapter := compatibilityServiceAdapter{main: database}
 	report := &models.AIResponseResult{StockCode: "market-summary", Content: "initial"}
@@ -30,15 +30,11 @@ func TestRecommendationCompatibilityAdapterPersistsAIResponseReports(t *testing.
 	if report.ID == 0 {
 		t.Fatal("created AI response report did not receive an ID")
 	}
-	report.Content = "updated"
-	if err := adapter.PersistAIResponseReport(context.Background(), report); err != nil {
-		t.Fatalf("persist AI response report: %v", err)
-	}
 	var persisted models.AIResponseResult
 	if err := database.First(&persisted, report.ID).Error; err != nil {
 		t.Fatalf("read AI response report: %v", err)
 	}
-	if persisted.Content != "updated" {
+	if persisted.Content != "initial" {
 		t.Fatalf("persisted content = %q", persisted.Content)
 	}
 }

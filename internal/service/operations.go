@@ -73,19 +73,7 @@ type AIOperations interface {
 	ResolveAIModelName(int) string
 	NewChatStream(context.Context, string, string, string, int, *int, []models.Tool, bool) <-chan map[string]any
 	NewSummaryStockNewsStream(context.Context, int, string, *int, bool) <-chan map[string]any
-	NewSummaryStockNewsStreamPhased(context.Context, int, string, *int, bool) <-chan map[string]any
-	GenerateMarketSummarySupplementTable(context.Context, int, models.MarketSummarySupplementRequest) (string, string, string, error)
 	NormalizeMarketSummaryQuestion(string) string
-	ResolveMarketSummaryRecommendationCountPolicy(string) MarketSummaryRecommendationCountPolicy
-	PrepareMarketSummaryReportForPersistence(string, time.Time, int) (string, MarketSummaryReportPrepareStats, error)
-	RunMorningOpeningReview(time.Time) (string, error)
-	MergeMarketSummarySupplementReport(string, string, []string, int) (string, MarketSummaryReportMergeStats)
-	EnsureMarketSummaryRecommendStocksSaved(string, string, string, time.Time) (int, error)
-	EnsureMarketSummaryRecommendStocksSavedWithResult(string, string, string, time.Time, []models.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error)
-	EnsureMarketSummaryRecommendStocksSavedWithResultLimit(string, string, string, time.Time, []models.MarketSummaryVerifiedCandidateSnapshot, int) (*models.MarketSummaryRecommendSaveResult, error)
-	EnsureMarketSummaryRecommendStocksSavedWithResultLimits(string, string, string, time.Time, []models.MarketSummaryVerifiedCandidateSnapshot, int, int) (*models.MarketSummaryRecommendSaveResult, error)
-	EnsureMarketSummaryRecommendStocksSavedWithResultOptions(string, string, string, time.Time, []models.MarketSummaryVerifiedCandidateSnapshot, models.MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error)
-	EnsureMarketSummaryYieldOverridesSaved(string, time.Time) (int, error)
 	SendYieldEmailTestMessage() error
 	SendYieldEmailXLSXNow() (int, error)
 	SendLatestAIAnalysisReportEmail() (*models.AIResponseResult, error)
@@ -175,7 +163,6 @@ type RecommendOperations interface {
 	EncodeMarketSummaryBlockedReasons([]models.MarketSummaryBlockedReasonItem) string
 	SaveMarketSummaryRunDiagnostic(*models.MarketSummaryRunDiagnostic) error
 	CreateAIResponseReport(context.Context, *models.AIResponseResult) error
-	PersistAIResponseReport(context.Context, *models.AIResponseResult) error
 	GetAIResponseResultList(models.AIResponseResultQuery) (*models.AIResponseResultPageData, error)
 	GetEmailSendLogList(models.EmailSendLogQuery) (*models.EmailSendLogPageData, error)
 	DeleteAIResponseResult(uint) error

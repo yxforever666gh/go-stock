@@ -14,7 +14,6 @@ import (
 	"go-stock/backend/recommendation"
 	"go-stock/backend/strategy/v150"
 	cliports "go-stock/internal/cli/ports"
-	"go-stock/internal/service"
 
 	"github.com/cloudwego/eino/schema"
 	"gorm.io/gorm"
@@ -232,74 +231,8 @@ func (*compatibilityServiceAdapter) NewSummaryStockNewsStream(ctx context.Contex
 	return data.NewDeepSeekOpenAi(ctx, aiConfigID).NewSummaryStockNewsStream(question, sysPromptID, think)
 }
 
-func (*compatibilityServiceAdapter) NewSummaryStockNewsStreamPhased(ctx context.Context, aiConfigID int, question string, sysPromptID *int, think bool) <-chan map[string]any {
-	openAI := data.NewDeepSeekOpenAi(ctx, aiConfigID)
-	data.BindMarketSummaryV150EventVerifier(openAI, &marketSummaryEventVerifierCompatibilityAdapter{openAI: openAI})
-	return openAI.NewSummaryStockNewsStreamPhased(question, sysPromptID, think)
-}
-
-func (*compatibilityServiceAdapter) GenerateMarketSummarySupplementTable(ctx context.Context, aiConfigID int, req models.MarketSummarySupplementRequest) (string, string, string, error) {
-	return data.NewDeepSeekOpenAi(ctx, aiConfigID).GenerateMarketSummarySupplementTable(req)
-}
-
 func (*compatibilityServiceAdapter) NormalizeMarketSummaryQuestion(question string) string {
 	return data.NormalizeMarketSummaryQuestion(question)
-}
-
-func (*compatibilityServiceAdapter) ResolveMarketSummaryRecommendationCountPolicy(question string) service.MarketSummaryRecommendationCountPolicy {
-	policy := data.ResolveMarketSummaryRecommendationCountPolicy(question)
-	return service.MarketSummaryRecommendationCountPolicy{
-		MinimumOutput: policy.MinimumOutput, MaximumOutput: policy.MaximumOutput, ProductionTarget: policy.ProductionTarget,
-		RequestedMinimum: policy.RequestedMinimum, RequestedMaximum: policy.RequestedMaximum, Source: policy.Source,
-		Custom: policy.Custom, Clamped: policy.Clamped,
-	}
-}
-
-func (*compatibilityServiceAdapter) PrepareMarketSummaryReportForPersistence(summaryText string, startedAt time.Time, outputLimit int) (string, service.MarketSummaryReportPrepareStats, error) {
-	prepared, stats, err := data.PrepareMarketSummaryReportForPersistenceWithLimit(summaryText, startedAt, outputLimit)
-	return prepared, service.MarketSummaryReportPrepareStats{
-		RowsSeen: stats.RowsSeen, DuplicateRowsOmit: stats.DuplicateRowsOmit, OutputRowsOmit: stats.OutputRowsOmit,
-		AnalysisOnlyRows: stats.AnalysisOnlyRows, RecommendationRows: stats.RecommendationRows,
-	}, err
-}
-
-func (*compatibilityServiceAdapter) RunMorningOpeningReview(now time.Time) (string, error) {
-	return data.RunMorningOpeningReview(now)
-}
-
-func (*compatibilityServiceAdapter) MergeMarketSummarySupplementReport(baseText, supplementText string, acceptedCodes []string, maximumOutput int) (string, service.MarketSummaryReportMergeStats) {
-	merged, stats := data.MergeMarketSummarySupplementReport(baseText, supplementText, acceptedCodes, maximumOutput)
-	return merged, service.MarketSummaryReportMergeStats{
-		BaseTableFound: stats.BaseTableFound, SupplementTableFound: stats.SupplementTableFound, MaximumOutput: stats.MaximumOutput,
-		AcceptedCodeCount: stats.AcceptedCodeCount, BaseRecommendationRows: stats.BaseRecommendationRows, SupplementRecommendationRows: stats.SupplementRecommendationRows,
-		DuplicateRowsOmitted: stats.DuplicateRowsOmitted, UnconfirmedRowsOmitted: stats.UnconfirmedRowsOmitted, OutputRowsOmitted: stats.OutputRowsOmitted,
-		ReplacedCodes: append([]string(nil), stats.ReplacedCodes...), AppendedCodes: append([]string(nil), stats.AppendedCodes...), VisibleCodes: append([]string(nil), stats.VisibleCodes...),
-		UnconfirmedCodes: append([]string(nil), stats.UnconfirmedCodes...), MissingAcceptedCodes: append([]string(nil), stats.MissingAcceptedCodes...), OmittedByLimitCodes: append([]string(nil), stats.OmittedByLimitCodes...),
-	}
-}
-
-func (*compatibilityServiceAdapter) EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName string, startedAt time.Time) (int, error) {
-	return data.EnsureMarketSummaryRecommendStocksSaved(summaryText, providerName, modelName, startedAt)
-}
-
-func (*compatibilityServiceAdapter) EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName string, startedAt time.Time, verified []models.MarketSummaryVerifiedCandidateSnapshot) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResult(summaryText, providerName, modelName, startedAt, verified)
-}
-
-func (*compatibilityServiceAdapter) EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName string, startedAt time.Time, verified []models.MarketSummaryVerifiedCandidateSnapshot, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResultLimit(summaryText, providerName, modelName, startedAt, verified, productionLimit)
-}
-
-func (*compatibilityServiceAdapter) EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName string, startedAt time.Time, verified []models.MarketSummaryVerifiedCandidateSnapshot, outputLimit, productionLimit int) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResultLimits(summaryText, providerName, modelName, startedAt, verified, outputLimit, productionLimit)
-}
-
-func (*compatibilityServiceAdapter) EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName string, startedAt time.Time, verified []models.MarketSummaryVerifiedCandidateSnapshot, options models.MarketSummaryRecommendSaveOptions) (*models.MarketSummaryRecommendSaveResult, error) {
-	return data.EnsureMarketSummaryRecommendStocksSavedWithResultOptions(summaryText, providerName, modelName, startedAt, verified, options)
-}
-
-func (*compatibilityServiceAdapter) EnsureMarketSummaryYieldOverridesSaved(summaryText string, startedAt time.Time) (int, error) {
-	return data.EnsureMarketSummaryYieldOverridesSaved(summaryText, startedAt)
 }
 
 func (*compatibilityServiceAdapter) SendYieldEmailTestMessage() error {
@@ -413,19 +346,6 @@ func (a *compatibilityServiceAdapter) CreateAIResponseReport(ctx context.Context
 		ctx = context.Background()
 	}
 	return a.main.WithContext(ctx).Create(result).Error
-}
-
-func (a *compatibilityServiceAdapter) PersistAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
-	if a.main == nil {
-		return errors.New("main database is not initialized")
-	}
-	if result == nil {
-		return errors.New("AI response result is required")
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return a.main.WithContext(ctx).Save(result).Error
 }
 
 func (a *compatibilityServiceAdapter) PublishDecision(

@@ -71,10 +71,6 @@ func (s RecommendService) CreateAIResponseReport(ctx context.Context, result *mo
 	return s.operations.CreateAIResponseReport(ctx, result)
 }
 
-func (s RecommendService) PersistAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
-	return s.operations.PersistAIResponseReport(ctx, result)
-}
-
 func (s RecommendService) GetAIResponseResultList(query models.AIResponseResultQuery) (*models.AIResponseResultPageData, error) {
 	return s.operations.GetAIResponseResultList(query)
 }
