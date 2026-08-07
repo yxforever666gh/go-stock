@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
@@ -22,15 +23,67 @@ var loadMarketSummaryV150DailyBarsWithCache = loadDailyBarsWithCache
 var loadMarketSummaryV150RealtimeQuotesForRefresh = loadMarketSummaryV150RealtimeQuotes
 var marketSummaryV150QuoteRefreshNow = time.Now
 
+type marketSummaryV150DailyBarsLoader func(string, string, time.Time, time.Time, int64) ([]dailyBar, error)
+
+// marketSummaryV150Clock is the local data-package view of time. Explicit
+// compatibility adapters may satisfy it with recommendation.Clock without
+// making deprecated data internals import the new recommendation boundary.
+type marketSummaryV150Clock interface {
+	Now() time.Time
+}
+
 func prepareMarketSummaryV150ForPhase(input marketSummaryDiscoveryInput, startedAt time.Time, logState *marketSummaryRouteLog) (*MarketSummaryV150RunSnapshot, error) {
+	return prepareMarketSummaryV150ForPhaseScoped(
+		context.Background(), input, startedAt, logState, nil, loadMarketSummaryV150DailyBarsWithCache,
+	)
+}
+
+func prepareMarketSummaryV150ForPhaseScoped(
+	ctx context.Context,
+	input marketSummaryDiscoveryInput,
+	startedAt time.Time,
+	logState *marketSummaryRouteLog,
+	clock marketSummaryV150Clock,
+	dailyBarsLoader marketSummaryV150DailyBarsLoader,
+) (*MarketSummaryV150RunSnapshot, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("market summary preparation context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if dailyBarsLoader == nil {
+		return nil, fmt.Errorf("market summary daily-bar reader is required")
+	}
 	indicators := input.AllIndicatorCandidates
 	if len(indicators) == 0 {
 		indicators = input.IndicatorCandidates
 	}
 	asOf := time.Now()
-	benchmark, benchmarkSource, benchmarkBars := loadMarketSummaryV150BenchmarkWithBars(asOf)
-	candidates, sources := loadMarketSummaryV150CandidateInputs(indicators, input, asOf, benchmark, benchmarkSource, benchmarkBars)
+	if clock != nil {
+		var err error
+		asOf, err = marketSummaryV150RunnerClockAt(clock, "deterministic preparation", startedAt)
+		if err != nil {
+			return nil, err
+		}
+	}
+	benchmark, benchmarkSource, benchmarkBars := loadMarketSummaryV150BenchmarkWithBarsUsing(asOf, dailyBarsLoader)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	candidates, sources, quoteAvailableAt, err := loadMarketSummaryV150CandidateInputsScoped(
+		ctx, indicators, input, asOf, benchmark, benchmarkSource, benchmarkBars, clock, dailyBarsLoader,
+	)
+	if err != nil {
+		return nil, err
+	}
 	dataCutoffAt := time.Now()
+	if clock != nil {
+		dataCutoffAt, err = marketSummaryV150RunnerClockAt(clock, "deterministic preparation cutoff", quoteAvailableAt)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if !benchmarkSource.Complete || !marketSummaryV150EvidenceTimelineValid([]MarketSummaryV150EvidenceTiming{benchmarkSource.Timing}, dataCutoffAt) {
 		benchmark.Stale = true
 	}
@@ -66,6 +119,9 @@ func prepareMarketSummaryV150ForPhase(input marketSummaryDiscoveryInput, started
 		}
 	}
 	run.Warnings = dedupeNonEmptyStrings(run.Warnings, 256)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return run, nil
 }
 
@@ -86,6 +142,33 @@ func loadMarketSummaryV150CandidateInputs(
 	benchmarkSource MarketSummaryV150BenchmarkSource,
 	benchmarkBars []dailyBar,
 ) ([]v150.Candidate, map[string]MarketSummaryV150SourceCandidate) {
+	candidates, sources, _, _ := loadMarketSummaryV150CandidateInputsScoped(
+		context.Background(), indicators, input, asOf, benchmark, benchmarkSource, benchmarkBars,
+		nil, loadMarketSummaryV150DailyBarsWithCache,
+	)
+	return candidates, sources
+}
+
+func loadMarketSummaryV150CandidateInputsScoped(
+	ctx context.Context,
+	indicators []marketSummaryIndicatorCandidate,
+	input marketSummaryDiscoveryInput,
+	asOf time.Time,
+	benchmark v150.BenchmarkSnapshot,
+	benchmarkSource MarketSummaryV150BenchmarkSource,
+	benchmarkBars []dailyBar,
+	clock marketSummaryV150Clock,
+	dailyBarsLoader marketSummaryV150DailyBarsLoader,
+) ([]v150.Candidate, map[string]MarketSummaryV150SourceCandidate, time.Time, error) {
+	if ctx == nil {
+		return nil, nil, time.Time{}, fmt.Errorf("candidate preparation context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, time.Time{}, err
+	}
+	if dailyBarsLoader == nil {
+		return nil, nil, time.Time{}, fmt.Errorf("candidate daily-bar reader is required")
+	}
 	unique := make([]marketSummaryIndicatorCandidate, 0, len(indicators))
 	seen := make(map[string]bool, len(indicators))
 	for _, item := range indicators {
@@ -101,8 +184,21 @@ func loadMarketSummaryV150CandidateInputs(
 	sort.SliceStable(unique, func(i, j int) bool { return unique[i].StockCode < unique[j].StockCode })
 
 	basics := loadMarketSummaryV150StockBasics(unique)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, time.Time{}, err
+	}
 	quotes := loadMarketSummaryV150RealtimeQuotes(unique)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, time.Time{}, err
+	}
 	quoteAvailableAt := time.Now()
+	if clock != nil {
+		var err error
+		quoteAvailableAt, err = marketSummaryV150RunnerClockAt(clock, "candidate quotes", asOf)
+		if err != nil {
+			return nil, nil, time.Time{}, err
+		}
+	}
 	candidateAsOf := quoteAvailableAt
 	type loadedCandidate struct {
 		candidate v150.Candidate
@@ -115,17 +211,26 @@ func loadMarketSummaryV150CandidateInputs(
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
+			if ctx.Err() != nil {
+				return
+			}
 			semaphore <- struct{}{}
 			defer func() { <-semaphore }()
+			if ctx.Err() != nil {
+				return
+			}
 			item := unique[i]
 			symbol := normalizeRecommendStockCode(item.StockCode)
 			source := marketSummaryV150SourceFromIndicator(item)
 			basic := basics[symbol]
 			source.Security = marketSummaryV150SecuritySourceFromBasic(basic, candidateAsOf)
 			source.QuoteEvidence = marketSummaryV150QuoteEvidence(quotes[symbol], symbol, quoteAvailableAt)
-			bars, err := loadMarketSummaryV150DailyBarsWithCache(symbol, toQuoteCode(symbol), candidateAsOf.AddDate(0, 0, -180), candidateAsOf, 130)
+			bars, err := dailyBarsLoader(symbol, toQuoteCode(symbol), candidateAsOf.AddDate(0, 0, -180), candidateAsOf, 130)
 			if err != nil {
 				source.InputWarnings = append(source.InputWarnings, "daily_cache_error:"+strings.TrimSpace(err.Error()))
+			}
+			if ctx.Err() != nil {
+				return
 			}
 			dailySource := loadMarketSummaryV150CompletedDailyDataSource(symbol, bars, candidateAsOf)
 			source.DailyData = dailySource
@@ -148,6 +253,9 @@ func loadMarketSummaryV150CandidateInputs(
 		}(index)
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, time.Time{}, err
+	}
 
 	candidates := make([]v150.Candidate, 0, len(loaded))
 	sources := make(map[string]MarketSummaryV150SourceCandidate, len(loaded))
@@ -159,7 +267,7 @@ func loadMarketSummaryV150CandidateInputs(
 		candidates = append(candidates, item.candidate)
 		sources[symbol] = item.source
 	}
-	return candidates, sources
+	return candidates, sources, quoteAvailableAt, nil
 }
 
 // refreshMarketSummaryV150VerificationQuotes closes the potentially long gap
@@ -571,12 +679,22 @@ func loadMarketSummaryV150Benchmark(asOf time.Time) (v150.BenchmarkSnapshot, Mar
 }
 
 func loadMarketSummaryV150BenchmarkWithBars(asOf time.Time) (v150.BenchmarkSnapshot, MarketSummaryV150BenchmarkSource, []dailyBar) {
+	return loadMarketSummaryV150BenchmarkWithBarsUsing(asOf, loadMarketSummaryV150DailyBarsWithCache)
+}
+
+func loadMarketSummaryV150BenchmarkWithBarsUsing(
+	asOf time.Time,
+	dailyBarsLoader marketSummaryV150DailyBarsLoader,
+) (v150.BenchmarkSnapshot, MarketSummaryV150BenchmarkSource, []dailyBar) {
 	result := v150.BenchmarkSnapshot{Code: v150.BenchmarkCode, Stale: true}
 	source := MarketSummaryV150BenchmarkSource{
 		Timing:           MarketSummaryV150EvidenceTiming{EvidenceID: "benchmark-qfq:" + v150.BenchmarkCode + ":data_missing", EvidenceType: "benchmark_adjusted_daily_bar"},
 		AdjustmentSource: "data_missing",
 	}
-	bars, err := loadMarketSummaryV150DailyBarsWithCache(defaultBenchmarkModelCode, defaultBenchmarkCode, asOf.AddDate(0, 0, -180), asOf, 130)
+	if dailyBarsLoader == nil {
+		return result, source, nil
+	}
+	bars, err := dailyBarsLoader(defaultBenchmarkModelCode, defaultBenchmarkCode, asOf.AddDate(0, 0, -180), asOf, 130)
 	if err != nil {
 		return result, source, nil
 	}

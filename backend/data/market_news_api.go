@@ -987,11 +987,22 @@ func (m MarketNewsApi) IndustryResearchReport(industryCode string, days int) []a
 	return []any{}
 }
 func (m MarketNewsApi) StockResearchReport(stockCode string, days int) []any {
+	return m.stockResearchReportAtTimes(stockCode, days, time.Now(), time.Now())
+}
+
+func (m MarketNewsApi) StockResearchReportAt(stockCode string, days int, now time.Time) []any {
+	if now.IsZero() {
+		return []any{}
+	}
+	return m.stockResearchReportAtTimes(stockCode, days, now, now)
+}
+
+func (m MarketNewsApi) stockResearchReportAtTimes(stockCode string, days int, endAt, beginAt time.Time) []any {
 	beginDate := ""
-	endDate := time.Now().Format("2006-01-02")
+	endDate := endAt.Format("2006-01-02")
 	if strutil.ContainsAny(stockCode, []string{"."}) {
 		stockCode = strings.Split(stockCode, ".")[0]
-		beginDate = time.Now().Add(-time.Duration(days) * 365 * time.Hour).Format("2006-01-02")
+		beginDate = beginAt.Add(-time.Duration(days) * 365 * time.Hour).Format("2006-01-02")
 	} else {
 		stockCode = strutil.ReplaceWithMap(stockCode, map[string]string{
 			"sh":  "",
@@ -1000,7 +1011,7 @@ func (m MarketNewsApi) StockResearchReport(stockCode string, days int) []any {
 			"us":  "",
 			"us_": "",
 		})
-		beginDate = time.Now().Add(-time.Duration(days) * 365 * time.Hour).Format("2006-01-02")
+		beginDate = beginAt.Add(-time.Duration(days) * 365 * time.Hour).Format("2006-01-02")
 	}
 
 	logger.SugaredLogger.Infof("StockResearchReport-stockCode:%s", stockCode)

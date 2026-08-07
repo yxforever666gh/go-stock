@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -641,6 +642,26 @@ func renderMarketSummaryV150Report(run *MarketSummaryV150RunSnapshot) string {
 
 func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRouteBudget, logState *marketSummaryRouteLog) (marketSummaryDiscoveryInput, []models.LongTigerRankData, marketSummaryTimeWindow, error) {
 	now := time.Now()
+	return buildMarketSummaryDiscoveryInputScoped(context.Background(), question, budget, logState, now, nil)
+}
+
+func buildMarketSummaryDiscoveryInputScoped(
+	ctx context.Context,
+	question string,
+	budget marketSummaryRouteBudget,
+	logState *marketSummaryRouteLog,
+	now time.Time,
+	clock marketSummaryV150Clock,
+) (marketSummaryDiscoveryInput, []models.LongTigerRankData, marketSummaryTimeWindow, error) {
+	if ctx == nil {
+		return marketSummaryDiscoveryInput{}, nil, marketSummaryTimeWindow{}, errors.New("market summary discovery context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return marketSummaryDiscoveryInput{}, nil, marketSummaryTimeWindow{}, err
+	}
+	if now.IsZero() {
+		return marketSummaryDiscoveryInput{}, nil, marketSummaryTimeWindow{}, errors.New("market summary discovery time is required")
+	}
 	window := resolveMarketSummaryTimeWindowAt(now)
 	input := marketSummaryDiscoveryInput{
 		Question:    question,
@@ -669,12 +690,16 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 		hotStrategyRaw      map[string]any
 		longTigerRaw        []models.LongTigerRankData
 		indicatorCandidates []marketSummaryIndicatorCandidate
+		indicatorErr        error
 	)
 
 	var wg sync.WaitGroup
 	wg.Add(6)
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		newsWindow = runWithTimeout(4*time.Second, NewsWindowResult{
 			Items:   []*models.Telegraph{},
 			Status:  NewsWindowStatusFailed,
@@ -688,37 +713,71 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		calendar = runWithTimeout(4*time.Second, []any{}, func() []any {
 			return NewMarketNewsApi().ClsCalendar()
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		industryRank = runWithTimeout(4*time.Second, map[string]any{"data": []any{}}, func() map[string]any {
 			return NewMarketNewsApi().GetIndustryRank("0", 12)
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		hotStrategyRaw = runWithTimeout(4*time.Second, map[string]any{}, func() map[string]any {
 			return NewSearchStockApi("").HotStrategy()
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		longTigerRaw = runWithTimeout(4*time.Second, []models.LongTigerRankData(nil), func() []models.LongTigerRankData {
-			return fetchLatestLongTigerData()
+			if clock == nil {
+				return fetchLatestLongTigerData()
+			}
+			return fetchLatestLongTigerDataAt(now)
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		if marketSummaryCurrentVersion == marketSummaryVersion150 {
+		if ctx.Err() != nil {
+			return
+		}
+		if clock != nil {
+			indicatorCandidates, indicatorErr = buildMarketSummaryV150IndicatorCandidatePoolScoped(ctx, logState, clock, now)
+		} else if marketSummaryCurrentVersion == marketSummaryVersion150 {
 			indicatorCandidates = buildMarketSummaryV150IndicatorCandidatePool(logState)
 		} else {
 			indicatorCandidates = buildMarketSummaryIndicatorCandidatePool(marketSummaryIndicatorCandidateLimit, logState)
 		}
 	}()
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return marketSummaryDiscoveryInput{}, nil, marketSummaryTimeWindow{}, err
+	}
+	if indicatorErr != nil {
+		return marketSummaryDiscoveryInput{}, nil, marketSummaryTimeWindow{}, indicatorErr
+	}
+	discoveryAvailableAt := time.Time{}
+	if clock != nil {
+		var err error
+		discoveryAvailableAt, err = marketSummaryV150RunnerClockAt(clock, "discovery fetch", now)
+		if err != nil {
+			return marketSummaryDiscoveryInput{}, nil, marketSummaryTimeWindow{}, err
+		}
+	}
 	logState.NewsWindowStatus = newsWindow.Status
 	logState.NewsWindowWarning = strings.TrimSpace(newsWindow.Warning)
 	logState.addNote("market news window status=%s items=%d warning=%s", newsWindow.Status, len(newsWindow.Items), strings.TrimSpace(newsWindow.Warning))
@@ -784,7 +843,10 @@ func buildMarketSummaryDiscoveryInput(question string, budget marketSummaryRoute
 			if title == "" {
 				return true
 			}
-			calendarAvailableAt := time.Now()
+			calendarAvailableAt := discoveryAvailableAt
+			if clock == nil {
+				calendarAvailableAt = time.Now()
+			}
 			calendarSourceAt := ""
 			if parsed, ok := parseMarketSummaryWindowTime(date); ok {
 				calendarSourceAt = parsed.Format(time.RFC3339Nano)
@@ -963,7 +1025,7 @@ func resolveMarketSummaryPriceAnchorAt(auctionItems []diemengCallAuctionItem, mi
 	if stockData != nil && len(*stockData) > 0 {
 		item := (*stockData)[0]
 		anchor.CurrentPrice = strings.TrimSpace(item.Price)
-		anchor.CurrentPriceTime = strings.TrimSpace(firstNonEmptyText(item.Date+" "+item.Time, time.Now().Format(time.DateTime)))
+		anchor.CurrentPriceTime = strings.TrimSpace(firstNonEmptyText(item.Date+" "+item.Time, now.Format(time.DateTime)))
 	}
 
 	if shouldUseAuctionPriceAnchor(now, anchor.Auction) {
@@ -1092,11 +1154,25 @@ func splitDateTimeText(text string) (string, string) {
 }
 
 func fetchLatestLongTigerData() []models.LongTigerRankData {
-	candidates := []string{
+	return fetchLatestLongTigerDataForDates([]string{
 		time.Now().Format("2006-01-02"),
 		time.Now().Add(-24 * time.Hour).Format("2006-01-02"),
 		time.Now().Add(-48 * time.Hour).Format("2006-01-02"),
+	})
+}
+
+func fetchLatestLongTigerDataAt(now time.Time) []models.LongTigerRankData {
+	if now.IsZero() {
+		return nil
 	}
+	return fetchLatestLongTigerDataForDates([]string{
+		now.Format("2006-01-02"),
+		now.Add(-24 * time.Hour).Format("2006-01-02"),
+		now.Add(-48 * time.Hour).Format("2006-01-02"),
+	})
+}
+
+func fetchLatestLongTigerDataForDates(candidates []string) []models.LongTigerRankData {
 	for _, date := range candidates {
 		rows := NewMarketNewsApi().LongTiger(date)
 		if rows != nil && len(*rows) > 0 {
@@ -1319,8 +1395,27 @@ func normalizeMarketSummaryCandidate(item marketSummaryRouteCandidate) marketSum
 }
 
 func verifyMarketSummaryCandidates(input marketSummaryDiscoveryInput, discovery *marketSummaryDiscoveryResult, longTigerRaw []models.LongTigerRankData, budget marketSummaryRouteBudget, logState *marketSummaryRouteLog) []marketSummaryVerifiedCandidate {
+	verified, _ := verifyMarketSummaryCandidatesScoped(context.Background(), input, discovery, longTigerRaw, budget, logState, nil)
+	return verified
+}
+
+func verifyMarketSummaryCandidatesScoped(
+	ctx context.Context,
+	input marketSummaryDiscoveryInput,
+	discovery *marketSummaryDiscoveryResult,
+	longTigerRaw []models.LongTigerRankData,
+	budget marketSummaryRouteBudget,
+	logState *marketSummaryRouteLog,
+	clock marketSummaryV150Clock,
+) ([]marketSummaryVerifiedCandidate, error) {
+	if ctx == nil {
+		return nil, errors.New("market summary evidence context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if discovery == nil || len(discovery.CandidateStocks) == 0 {
-		return nil
+		return nil, nil
 	}
 	candidates := discovery.CandidateStocks
 	if len(candidates) > budget.VerificationStockLimit {
@@ -1330,16 +1425,50 @@ func verifyMarketSummaryCandidates(input marketSummaryDiscoveryInput, discovery 
 		candidates = candidates[:budget.VerificationStockLimit]
 	}
 	verified := make([]marketSummaryVerifiedCandidate, 0, len(candidates))
+	lastObservedAt := time.Time{}
 	for idx, item := range candidates {
-		verified = append(verified, verifySingleMarketSummaryCandidate(input, item, idx, longTigerRaw, logState))
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		verifyNow := time.Now().In(cnLocation())
+		if clock != nil {
+			var err error
+			verifyNow, err = marketSummaryV150RunnerClockAt(clock, "candidate factual evidence "+item.StockCode, lastObservedAt)
+			if err != nil {
+				return nil, err
+			}
+			verifyNow = verifyNow.In(cnLocation())
+		}
+		candidate, err := verifySingleMarketSummaryCandidateScoped(ctx, input, item, idx, longTigerRaw, logState, verifyNow, clock)
+		if err != nil {
+			return nil, err
+		}
+		lastObservedAt = candidate.VerifiedAt
+		verified = append(verified, candidate)
 	}
 	sort.SliceStable(verified, func(i, j int) bool {
 		return verified[i].StockCode < verified[j].StockCode
 	})
-	return verified
+	return verified, nil
 }
 
 func verifySingleMarketSummaryCandidate(input marketSummaryDiscoveryInput, candidate marketSummaryRouteCandidate, candidateIndex int, longTigerRaw []models.LongTigerRankData, logState *marketSummaryRouteLog) marketSummaryVerifiedCandidate {
+	result, _ := verifySingleMarketSummaryCandidateScoped(
+		context.Background(), input, candidate, candidateIndex, longTigerRaw, logState, time.Now().In(cnLocation()), nil,
+	)
+	return result
+}
+
+func verifySingleMarketSummaryCandidateScoped(
+	ctx context.Context,
+	input marketSummaryDiscoveryInput,
+	candidate marketSummaryRouteCandidate,
+	candidateIndex int,
+	longTigerRaw []models.LongTigerRankData,
+	logState *marketSummaryRouteLog,
+	verifyNow time.Time,
+	clock marketSummaryV150Clock,
+) (marketSummaryVerifiedCandidate, error) {
 	_ = candidateIndex
 	result := marketSummaryVerifiedCandidate{
 		StockName: candidate.StockName,
@@ -1347,6 +1476,15 @@ func verifySingleMarketSummaryCandidate(input marketSummaryDiscoveryInput, candi
 		Direction: candidate.Direction,
 		BkName:    candidate.BkName,
 		Reason:    candidate.Reason,
+	}
+	if ctx == nil {
+		return result, errors.New("candidate evidence context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	if verifyNow.IsZero() {
+		return result, errors.New("candidate evidence time is required")
 	}
 
 	refs := make([]aiEvidenceReference, 0, 8)
@@ -1381,7 +1519,6 @@ func verifySingleMarketSummaryCandidate(input marketSummaryDiscoveryInput, candi
 	logState.addCall("tech_verify")
 
 	priceCode := ConvertTushareCodeToStockCode(candidate.StockCode)
-	verifyNow := time.Now().In(cnLocation())
 	var (
 		interactive *models.InteractiveAnswer
 		notices     []any
@@ -1399,41 +1536,68 @@ func verifySingleMarketSummaryCandidate(input marketSummaryDiscoveryInput, candi
 	wg.Add(7)
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		interactive = runWithTimeout(3*time.Second, (*models.InteractiveAnswer)(nil), func() *models.InteractiveAnswer {
 			return NewMarketNewsApi().InteractiveAnswer(1, 20, candidate.StockName)
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		notices = runWithTimeout(3*time.Second, []any{}, func() []any {
 			return NewMarketNewsApi().StockNotice(candidate.StockCode)
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		reports = runWithTimeout(3*time.Second, []any{}, func() []any {
-			return NewMarketNewsApi().StockResearchReport(candidate.StockCode, 12)
+			if clock == nil {
+				return NewMarketNewsApi().StockResearchReport(candidate.StockCode, 12)
+			}
+			return NewMarketNewsApi().StockResearchReportAt(candidate.StockCode, 12, verifyNow)
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		klineData = runWithTimeout(4*time.Second, (*[]KLineData)(nil), func() *[]KLineData {
 			return NewStockDataApi().GetKLineData(priceCode, "240", 30)
 		})
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		minuteData, minuteDate = runStockMinuteWithTimeout(priceCode, 4*time.Second)
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		auctionData, auctionErr = runStockCallAuctionWithTimeout(candidate.StockCode, 4*time.Second, verifyNow)
 	}()
 	go func() {
 		defer wg.Done()
+		if ctx.Err() != nil {
+			return
+		}
 		stockData, stockErr = runStockRealtimeWithTimeout(priceCode, 4*time.Second)
 	}()
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
 
 	if interactive != nil {
 		count := 0
@@ -1674,8 +1838,19 @@ func verifySingleMarketSummaryCandidate(input marketSummaryDiscoveryInput, candi
 	result.PositiveSignals = dedupeNonEmptyStrings(positive, 6)
 	result.NegativeSignals = dedupeNonEmptyStrings(negative, 6)
 	result.VerdictHints = dedupeNonEmptyStrings(verdictHints, 4)
-	result.VerifiedAt = time.Now()
-	return result
+	if err := ctx.Err(); err != nil {
+		return result, err
+	}
+	verifiedAt := time.Now()
+	if clock != nil {
+		var err error
+		verifiedAt, err = marketSummaryV150RunnerClockAt(clock, "candidate factual evidence available "+candidate.StockCode, verifyNow)
+		if err != nil {
+			return result, err
+		}
+	}
+	result.VerifiedAt = verifiedAt
+	return result, nil
 }
 
 func summarizeFinancialByXueqiu(stockCode string) string {

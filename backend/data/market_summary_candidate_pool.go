@@ -1,6 +1,8 @@
 package data
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -65,6 +67,10 @@ var marketSummaryIndicatorTemplates = []marketSummaryIndicatorTemplate{
 	},
 }
 
+// V1.5.0 owns a startup-frozen copy so later legacy/app template mutation
+// cannot silently change this strategy cohort within a running process.
+var marketSummaryV150FrozenIndicatorTemplates = append([]marketSummaryIndicatorTemplate(nil), marketSummaryIndicatorTemplates...)
+
 func buildMarketSummaryIndicatorCandidatePool(limit int, logState *marketSummaryRouteLog) []marketSummaryIndicatorCandidate {
 	if limit <= 0 {
 		limit = marketSummaryIndicatorCandidateLimit
@@ -77,27 +83,83 @@ func buildMarketSummaryV150IndicatorCandidatePool(logState *marketSummaryRouteLo
 }
 
 func buildMarketSummaryIndicatorCandidatePoolMode(limit int, v150Mode bool, logState *marketSummaryRouteLog) []marketSummaryIndicatorCandidate {
+	items, _ := buildMarketSummaryIndicatorCandidatePoolModeScoped(context.Background(), limit, v150Mode, logState, nil, time.Time{})
+	return items
+}
+
+func buildMarketSummaryV150IndicatorCandidatePoolScoped(
+	ctx context.Context,
+	logState *marketSummaryRouteLog,
+	clock marketSummaryV150Clock,
+	notBefore time.Time,
+) ([]marketSummaryIndicatorCandidate, error) {
+	return buildMarketSummaryIndicatorCandidatePoolModeScoped(ctx, 0, true, logState, clock, notBefore)
+}
+
+func buildMarketSummaryIndicatorCandidatePoolModeScoped(
+	ctx context.Context,
+	limit int,
+	v150Mode bool,
+	logState *marketSummaryRouteLog,
+	clock marketSummaryV150Clock,
+	notBefore time.Time,
+) ([]marketSummaryIndicatorCandidate, error) {
+	if ctx == nil {
+		return nil, fmt.Errorf("indicator candidate pool context is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	type templateResult struct {
 		template    marketSummaryIndicatorTemplate
 		rows        []map[string]any
 		availableAt time.Time
 	}
-	results := make([]templateResult, len(marketSummaryIndicatorTemplates))
+	templates := marketSummaryIndicatorTemplates
+	if v150Mode && clock != nil {
+		templates = append([]marketSummaryIndicatorTemplate(nil), marketSummaryV150FrozenIndicatorTemplates...)
+	}
+	results := make([]templateResult, len(templates))
 	var wg sync.WaitGroup
-	for idx, tpl := range marketSummaryIndicatorTemplates {
+	for idx, tpl := range templates {
 		wg.Add(1)
 		go func(i int, item marketSummaryIndicatorTemplate) {
 			defer wg.Done()
+			if ctx.Err() != nil {
+				return
+			}
 			res := runWithTimeout(5*time.Second, map[string]any{}, func() map[string]any {
 				return NewSearchStockApi(item.Query).SearchStock(marketSummaryIndicatorSearchPageSize)
 			})
-			results[i] = templateResult{template: item, rows: extractSearchStockRows(res), availableAt: time.Now()}
+			availableAt := time.Time{}
+			if clock == nil {
+				// Preserve the historical phased path exactly. The run-scoped
+				// producer supplies an explicit clock and uses the deterministic
+				// post-fetch timestamp below instead.
+				availableAt = time.Now()
+			}
+			results[i] = templateResult{template: item, rows: extractSearchStockRows(res), availableAt: availableAt}
 		}(idx, tpl)
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 
 	index := map[string]*marketSummaryIndicatorCandidate{}
 	sectorStrength := loadMarketSummarySectorStrengthMap()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if clock != nil {
+		availableAt, err := marketSummaryV150RunnerClockAt(clock, "indicator candidate pool", notBefore)
+		if err != nil {
+			return nil, err
+		}
+		for index := range results {
+			results[index].availableAt = availableAt
+		}
+	}
 	var recentFailures map[string]int
 	if !v150Mode {
 		recentFailures = loadMarketSummaryRecentFailurePenaltyMap(10)
@@ -145,7 +207,7 @@ func buildMarketSummaryIndicatorCandidatePoolMode(limit int, v150Mode bool, logS
 	if logState != nil {
 		logState.addNote("indicator candidate pool size=%d v150Raw=%t", len(items), v150Mode)
 	}
-	return items
+	return items, nil
 }
 
 func finalizeMarketSummaryIndicatorCandidatePool(index map[string]*marketSummaryIndicatorCandidate, limit int, v150Mode bool, sectorStrength map[string]int) []marketSummaryIndicatorCandidate {
