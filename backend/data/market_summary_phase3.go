@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"sort"
 	"strconv"
@@ -230,7 +229,6 @@ type marketSummaryDiscoveryResult struct {
 
 type marketSummaryVerifiedCandidate = models.MarketSummaryVerifiedCandidateSnapshot
 type MarketSummaryVerifiedCandidateSnapshot = models.MarketSummaryVerifiedCandidateSnapshot
-type MarketSummarySupplementRequest = models.MarketSummarySupplementRequest
 type marketSummaryTechnicalMetrics = models.MarketSummaryTechnicalMetrics
 
 type marketSummaryAuctionSnapshot struct {
@@ -363,102 +361,6 @@ func (o *OpenAi) CompleteChat(messages []map[string]any, think bool) (string, st
 		return "", result.Id, result.Model, errors.New("empty content from model provider")
 	}
 	return content, result.Id, result.Model, nil
-}
-
-func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptId *int, think bool) <-chan map[string]any {
-	ch := make(chan map[string]any, 512)
-	go func() {
-		defer close(ch)
-		defer func() {
-			if err := recover(); err != nil {
-				logger.SugaredLogger.Errorf("NewSummaryStockNewsStreamPhased panic: %v", err)
-				ch <- map[string]any{"code": 0, "question": userQuestion, "content": fmt.Sprintf("phase3 route panic: %v", err)}
-			}
-		}()
-		if marketSummaryCurrentVersion == marketSummaryVersion150 {
-			err := fmt.Errorf("legacy phased summary route is disabled for strategy %s; use the typed recommendation runner", marketSummaryVersion150)
-			ch <- map[string]any{"code": 0, "question": userQuestion, "content": err.Error()}
-			return
-		}
-
-		displayQuestion := NormalizeMarketSummaryQuestion(userQuestion)
-		logState := newMarketSummaryRouteLog()
-		budget := logState.Budget
-		emitSummaryToolStatus(ch, "phase3.discovery.fetch", "running", nil, 0)
-		discoveryInput, longTigerRaw, window, err := buildMarketSummaryDiscoveryInput(displayQuestion, budget, logState)
-		if err != nil {
-			logState.addNote("discovery input failed: %v", err)
-			emitSummaryToolStatus(ch, "phase3.discovery.fetch", "error", err, 0)
-			ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
-			return
-		}
-		skippedReviewRecords, skipErr := loadYieldOverrideCandidatesForRecentTradeDays(3, time.Now())
-		if skipErr != nil {
-			logState.addNote("load skipped review candidates failed: %v", skipErr)
-		} else {
-			discoveryInput.SkippedReviews = buildMarketSummarySkippedReviewCandidates(skippedReviewRecords)
-			logState.addNote("skipped review candidates=%d", len(discoveryInput.SkippedReviews))
-		}
-		emitSummaryToolStatus(ch, "phase3.discovery.fetch", "success", nil, 0)
-
-		logState.addCall("discovery_model")
-		emitSummaryToolStatus(ch, "phase3.discovery.model", "running", nil, 0)
-		discoveryResult, chatID, modelName, err := o.runMarketSummaryDiscovery(discoveryInput)
-		if err != nil {
-			logState.addNote("discovery model failed: %v", err)
-			emitSummaryToolStatus(ch, "phase3.discovery.model", "error", err, 0)
-			ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
-			return
-		}
-		emitSummaryToolStatus(ch, "phase3.discovery.model", "success", nil, 0)
-		mergeMarketSummaryDiscoveryCandidates(discoveryResult, discoveryInput.IndicatorCandidates, budget.CandidateLimit)
-		logState.DiscoveryCandidateCt = len(discoveryResult.CandidateStocks)
-		logState.addNote("discovery candidates after indicator merge=%d indicatorPool=%d", len(discoveryResult.CandidateStocks), len(discoveryInput.IndicatorCandidates))
-
-		emitSummaryToolStatus(ch, "phase3.evidence.verify", "running", nil, 0)
-		verifiedCandidates := verifyMarketSummaryCandidates(discoveryInput, discoveryResult, longTigerRaw, budget, logState)
-		excludedTodayStocks, excludedTodayIndex, excludedErr := loadSameDayMarketSummaryExcludedStocks(time.Now())
-		if excludedErr != nil {
-			logState.addNote("load same-day excluded stocks failed: %v", excludedErr)
-		} else {
-			logState.ExcludedCandidateCt = len(excludedTodayStocks)
-			logState.addNote("same-day excluded stocks=%d", len(excludedTodayStocks))
-		}
-		finalCandidateLimit := resolveMarketSummaryFinalCandidateLimit(displayQuestion)
-		if finalCandidateLimit < marketSummaryFinalCandidateLimit {
-			logState.addNote("recommendation count policy limits final verified candidates=%d", finalCandidateLimit)
-		}
-		verifiedCandidates = selectMarketSummaryFinalCandidates(verifiedCandidates, excludedTodayIndex, window, logState, finalCandidateLimit)
-		logState.VerifiedCandidateCt = len(verifiedCandidates)
-		emitSummaryToolStatus(ch, "phase3.evidence.verify", "success", nil, 0)
-
-		sysPrompt := ""
-		if sysPromptId == nil || *sysPromptId == 0 {
-			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
-		} else {
-			sysPrompt = RenderMarketSummaryTemplate(NewPromptTemplateApi().GetPromptTemplateByID(*sysPromptId))
-		}
-		if sysPrompt == "" {
-			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
-		}
-		messages := buildPhase3FinalMessages(sysPrompt, displayQuestion, discoveryInput, discoveryResult, verifiedCandidates, excludedTodayStocks, discoveryInput.SkippedReviews, logState)
-		logState.addCall("generate_model")
-		emitSummaryToolStatus(ch, "phase3.generate", "running", nil, 0)
-		AskAi(o, messages, ch, displayQuestion, think)
-		emitSummaryToolStatus(ch, "phase3.generate", "success", nil, 0)
-		logState.finish()
-		ch <- map[string]any{
-			"event":              "summaryStockNewsMeta",
-			"code":               1,
-			"routeLog":           logState,
-			"verifiedCandidates": verifiedCandidates,
-		}
-		logger.SugaredLogger.Infof("market summary phase3 route completed: %s", mustJSON(logState))
-		if chatID != "" && modelName != "" {
-			logger.SugaredLogger.Infof("market summary phase3 discovery meta chatId=%s model=%s", chatID, modelName)
-		}
-	}()
-	return ch
 }
 
 func renderMarketSummaryV150Report(run *MarketSummaryV150RunSnapshot) string {
@@ -1083,104 +985,6 @@ func (o *OpenAi) runMarketSummaryDiscovery(input marketSummaryDiscoveryInput) (*
 	}
 	sanitizeMarketSummaryDiscoveryResult(result)
 	return result, chatID, modelName, nil
-}
-
-func (o *OpenAi) GenerateMarketSummarySupplementTable(req MarketSummarySupplementRequest) (string, string, string, error) {
-	req.RemainingVerified = filterMarketSummaryVerifiedCandidates(req.RemainingVerified, req.ExcludedToday)
-	if len(req.RemainingVerified) == 0 && len(req.RepairableFailures) == 0 {
-		return "", "", "", nil
-	}
-	if len(req.RemainingVerified) > 24 {
-		req.RemainingVerified = req.RemainingVerified[:24]
-	}
-	if req.TargetProduction <= 0 {
-		req.TargetProduction = marketSummaryMaxProductionCandidates
-	}
-	if req.TargetProduction > marketSummaryMaxProductionCandidates {
-		req.TargetProduction = marketSummaryMaxProductionCandidates
-	}
-	if req.CurrentProduction < 0 {
-		req.CurrentProduction = 0
-	}
-	if req.CurrentProduction >= req.TargetProduction {
-		return "", "", "", nil
-	}
-	payload := mustJSON(req)
-	messages := buildMarketSummarySupplementMessages(payload, req.TargetProduction, req.CurrentProduction)
-	return o.CompleteChat(messages, false)
-}
-
-func filterMarketSummaryVerifiedCandidates(candidates []MarketSummaryVerifiedCandidateSnapshot, excludedCodes []string) []MarketSummaryVerifiedCandidateSnapshot {
-	if len(candidates) == 0 {
-		return nil
-	}
-	excluded := make(map[string]struct{}, len(excludedCodes))
-	for _, raw := range excludedCodes {
-		code := normalizeRecommendStockCode(raw)
-		if code != "" {
-			excluded[code] = struct{}{}
-		}
-	}
-	result := make([]MarketSummaryVerifiedCandidateSnapshot, 0, len(candidates))
-	seen := map[string]struct{}{}
-	for _, item := range candidates {
-		code := normalizeRecommendStockCode(item.StockCode)
-		if code == "" {
-			continue
-		}
-		if _, ok := excluded[code]; ok {
-			continue
-		}
-		if _, ok := seen[code]; ok {
-			continue
-		}
-		item.StockCode = code
-		result = append(result, item)
-		seen[code] = struct{}{}
-	}
-	return result
-}
-
-func buildMarketSummarySupplementMessages(payload string, targetProduction, currentProduction int) []map[string]any {
-	remainingProductionSlots := targetProduction - currentProduction
-	if remainingProductionSlots < 0 {
-		remainingProductionSlots = 0
-	}
-	messages := []map[string]any{
-		{
-			"role": "system",
-			"content": strings.TrimSpace("你是A股市场总结推荐补位层。你的职责只是在第一轮保存后生产候选不足时，从剩余 verified candidates 或可修正失败计划中输出补位交易计划表格。\n" +
-				"不要重写市场总结全文，不要新增候选，不要绕过硬规则。"),
-		},
-		{
-			"role": "user",
-			"content": strings.TrimSpace("请只输出 Markdown，包含两个一级标题：\n\n" +
-				"# 推荐股票池\n\n" +
-				"使用标准表格，表头必须为：\n" +
-				"| 股票（代码） | 所属方向 | 核心催化 | 关键证据 | 价格锚点 | 买入区间 | 止盈区间 | 止损位 | 买入依据 | 失效条件 | 风险点 | 预期周期 | 事件强度 | 资金确认度 | 基本面匹配度 | 技术面匹配度 | 操作备注 |\n\n" +
-				"# 补位说明\n\n" +
-				"要求：\n" +
-				"1. 只允许使用输入里的 remainingVerified 候选或 repairableFailures 对应股票，禁止使用二者之外的股票；repairableFailures 只能按后文 V1.4.2 约束修正一次；\n" +
-				"2. excludedToday 中的股票禁止输出；但同一代码若同时出现在 repairableFailures 中，可作为唯一例外，仅按修正规则输出一次；\n" +
-				fmt.Sprintf("3. 总生产目标为%d只，当前已有%d只，本轮最多新增%d只可交易生产候选；严格核验不足时允许少于该数量甚至0只，不得为了凑数降低质量；\n", targetProduction, currentProduction, remainingProductionSlots) +
-				"4. 价格锚点优先使用 auctionPrice，其次 minutePrice，再次 currentPrice；\n" +
-				"5. 买入区间、止盈区间、止损位必须与价格锚点同一数量级，偏离超过20%必须放弃；\n" +
-				"6. 买入依据必须写成“价格触发：...；量能触发：...”；\n" +
-				"7. 失效条件必须写成“时间失效：...；价格失效：...”；\n" +
-				"8. 缺少激活规则、价格锚点或量能证据的候选只能写为仅分析，并在操作备注里说明；\n" +
-				"9. 输出会继续进入保存前硬校验，硬规则不过不会入库，不要声称已通过。\n\n" +
-				"输入JSON：" + payload),
-		},
-	}
-	messages = append(messages, map[string]any{"role": "user", "content": strings.TrimSpace(`
-V1.4.2 补位和计划修正约束：
-1. remainingVerified 中优先使用 feasiblePlans.passHardGate=true 的候选；只有这些路径允许作为 conditional/生产补位。
-2. 无 passHardGate=true 路径的候选只能 analysis_only。
-3. repairableFailures 只允许修正一次，修正范围限于收窄买入区间、上移止盈或微调止损，且修正后必须满足 rewardRisk>=0.80；V1.4.2 不再设置 downsidePct 上限。
-4. rewardRisk<0.50 的失败计划不得修正为生产候选；downsidePct 仍必须输出，但只用于诊断和排序参考。
-5. 操作备注末尾必须追加 hardGateSelfCheck=pass/fail; worstEntry=数值; rewardRisk=数值; downsidePct=数值。
-`)})
-	return messages
 }
 
 func sanitizeMarketSummaryDiscoveryResult(result *marketSummaryDiscoveryResult) {

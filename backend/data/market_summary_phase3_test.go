@@ -7,37 +7,6 @@ import (
 	"time"
 )
 
-func TestNewSummaryStockNewsStreamPhasedFailsClosedBeforeV150Work(t *testing.T) {
-	if marketSummaryCurrentVersion != marketSummaryVersion150 {
-		t.Fatalf("current strategy version = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion150)
-	}
-
-	var messages []map[string]any
-	for message := range (*OpenAi)(nil).NewSummaryStockNewsStreamPhased("original question", nil, false) {
-		messages = append(messages, message)
-	}
-
-	if len(messages) != 1 {
-		t.Fatalf("phased V1.5 route emitted %d messages, want exactly one fail-closed error: %#v", len(messages), messages)
-	}
-	message := messages[0]
-	if code, ok := message["code"].(int); !ok || code != 0 {
-		t.Fatalf("phased V1.5 code = %#v, want integer 0", message["code"])
-	}
-	if got := fmt.Sprint(message["question"]); got != "original question" {
-		t.Fatalf("phased V1.5 question = %q, want unchanged input", got)
-	}
-	if content := fmt.Sprint(message["content"]); !strings.Contains(content, "typed recommendation runner") {
-		t.Fatalf("phased V1.5 error = %q, want typed-runner direction", content)
-	}
-	if _, exists := message["v150Run"]; exists {
-		t.Fatalf("phased V1.5 response must not expose v150Run: %#v", message)
-	}
-	if _, exists := message["event"]; exists {
-		t.Fatalf("phased V1.5 route must fail before discovery or tool-status events: %#v", message)
-	}
-}
-
 func TestExtractJSONPayloadFromCodeFence(t *testing.T) {
 	text := "这里是解释\n```json\n{\"candidateStocks\":[{\"stockName\":\"中际旭创\",\"stockCode\":\"300308.SZ\"}]}\n```"
 	got := extractJSONPayload(text)
@@ -181,40 +150,6 @@ func TestBuildPhase3FinalMessagesHonorsExplicitRecommendationCount(t *testing.T)
 	}
 	if strings.Count(allMessages, "本次“推荐股票池”目标输出") != 1 {
 		t.Fatalf("expected one authoritative custom recommendation count policy, got: %s", allMessages)
-	}
-}
-
-func TestBuildMarketSummarySupplementMessagesUsesDynamicProductionTarget(t *testing.T) {
-	tests := []struct {
-		name              string
-		targetProduction  int
-		currentProduction int
-		want              string
-	}{
-		{name: "default target", targetProduction: 2, currentProduction: 1, want: "总生产目标为2只，当前已有1只，本轮最多新增1只可交易生产候选"},
-		{name: "custom target", targetProduction: 3, currentProduction: 1, want: "总生产目标为3只，当前已有1只，本轮最多新增2只可交易生产候选"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			messages := buildMarketSummarySupplementMessages(`{"remainingVerified":[]}`, tt.targetProduction, tt.currentProduction)
-			allMessages := marketSummaryMessagesText(messages)
-			if !strings.Contains(allMessages, tt.want) {
-				t.Fatalf("expected dynamic supplement target %q, got: %s", tt.want, allMessages)
-			}
-			if strings.Contains(allMessages, "最多 6 只") {
-				t.Fatalf("expected supplement prompt to drop legacy fixed six-stock limit: %s", allMessages)
-			}
-			if !strings.Contains(allMessages, "严格核验不足时允许少于该数量甚至0只") {
-				t.Fatalf("expected supplement prompt to prohibit padding: %s", allMessages)
-			}
-			if !strings.Contains(allMessages, "remainingVerified 候选或 repairableFailures 对应股票") {
-				t.Fatalf("expected supplement prompt to allow both remaining and repairable candidates: %s", allMessages)
-			}
-			if strings.Contains(allMessages, "只允许使用输入里的 remainingVerified 候选，禁止新增股票") {
-				t.Fatalf("supplement prompt must not exclude repairableFailures: %s", allMessages)
-			}
-		})
 	}
 }
 
