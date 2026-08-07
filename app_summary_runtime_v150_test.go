@@ -10,7 +10,6 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/backend/strategy/v150"
-	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 )
 
@@ -43,27 +42,11 @@ func (p *recordingAppMarketSummaryV150Producer) Produce(
 	return p.result, p.err
 }
 
-type failOnLegacyPhasedSummaryOperations struct {
+type summaryDeliveryAIOperations struct {
 	service.AIOperations
-	t           *testing.T
-	phasedCalls int
 }
 
-func (o *failOnLegacyPhasedSummaryOperations) NewSummaryStockNewsStreamPhased(
-	context.Context,
-	int,
-	string,
-	*int,
-	bool,
-) <-chan map[string]any {
-	o.phasedCalls++
-	o.t.Fatal("V1.5 routed through the legacy phased AI stream")
-	ch := make(chan map[string]any)
-	close(ch)
-	return ch
-}
-
-func (*failOnLegacyPhasedSummaryOperations) HumanizeMarketSummaryReport(raw string) string {
+func (*summaryDeliveryAIOperations) HumanizeMarketSummaryReport(raw string) string {
 	return raw
 }
 
@@ -94,9 +77,6 @@ type emptyAppSummaryConfigOperations struct {
 func (*emptyAppSummaryConfigOperations) GetConfig() *models.SettingConfig { return nil }
 
 func TestV150SummaryResultRequiresFrozenBackendDecision(t *testing.T) {
-	if !marketSummaryRequiresV150Backend() {
-		t.Fatalf("current summary version = %s, want 1.5.0 backend enforcement", releaseinfo.Manifest().CurrentStrategyVersion)
-	}
 	plain := summaryRunResult{text: "legacy markdown"}
 	if usableMarketSummaryRunResult(plain) {
 		t.Fatal("plain model text bypassed the V1.5 backend decision")
@@ -157,29 +137,26 @@ func TestV150SummaryUsesTypedProducerAndNeverLegacyPhasedAI(t *testing.T) {
 		SaveResult:      &models.MarketSummaryRecommendSaveResult{SavedCount: 1, ProductionCount: 1},
 	}
 	producer := &recordingAppMarketSummaryV150Producer{result: want}
-	legacyAI := &failOnLegacyPhasedSummaryOperations{t: t}
+	deliveryAI := &summaryDeliveryAIOperations{}
 	app := &App{
 		ctx: context.Background(),
 		services: service.AppServices{
-			AI: service.NewAIService(legacyAI),
+			AI: service.NewAIService(deliveryAI),
 			Recommend: service.NewRecommendService(
 				&blockingSummaryRecommendOperations{}, nil, nil, v150.StrategyVersion, producer,
 			),
 		},
 	}
 
-	got := app.runSummaryWithFallback(7, "question", &sysPromptID, true, true, startedAt)
+	got := app.runMarketSummaryV150Once(7, "question", &sysPromptID, true, startedAt)
 	if producer.calls != 1 {
 		t.Fatalf("typed producer calls = %d, want 1", producer.calls)
-	}
-	if legacyAI.phasedCalls != 0 {
-		t.Fatalf("legacy phased AI calls = %d, want 0", legacyAI.phasedCalls)
 	}
 	if producer.ctx != app.ctx || producer.request.AIConfigID != 7 || producer.request.Question != "question" ||
 		producer.request.SysPromptID != &sysPromptID || !producer.request.Think || !producer.request.StartedAt.Equal(startedAt) {
 		t.Fatalf("typed production request changed: %+v", producer.request)
 	}
-	if got.v150Production != want || got.text != want.ReportText || got.chatID != want.RunID || got.modelName != want.ModelName {
+	if got.v150Production != want || got.text != want.ReportText || got.modelName != want.ModelName {
 		t.Fatalf("typed production result changed: %+v", got)
 	}
 	if !usableMarketSummaryRunResult(got) || shouldSummaryFailover(got) {
@@ -190,7 +167,7 @@ func TestV150SummaryUsesTypedProducerAndNeverLegacyPhasedAI(t *testing.T) {
 func TestV150PublishedResultHasDeliverySideEffectsWithoutRepublishing(t *testing.T) {
 	startedAt := time.Date(2026, 8, 7, 9, 40, 0, 0, time.FixedZone("CST", 8*60*60))
 	delivery := &recordingAppSummaryDeliveryOperations{}
-	ai := &failOnLegacyPhasedSummaryOperations{t: t}
+	ai := &summaryDeliveryAIOperations{}
 	production := &service.MarketSummaryV150ProductionResult{
 		RunID:           "already-published-run",
 		StrategyVersion: v150.StrategyVersion,
@@ -212,7 +189,7 @@ func TestV150PublishedResultHasDeliverySideEffectsWithoutRepublishing(t *testing
 		},
 	}
 	res := summaryRunResult{
-		aiConfigId: 1, text: production.ReportText, chatID: production.RunID,
+		aiConfigId: 1, text: production.ReportText,
 		modelName: production.ModelName, finalQuestion: "question", v150Production: production,
 	}
 
@@ -235,6 +212,15 @@ func TestV150AppSourceCannotCallDecisionPublisher(t *testing.T) {
 	}
 	if strings.Contains(string(source), "DecodeMarketSummaryV150DecisionEnvelope") || strings.Contains(string(source), `msg["v150Run"]`) {
 		t.Fatal("App delivery source still restores an opaque V1.5 decision payload")
+	}
+	for _, forbidden := range []string{
+		"NewSummaryStockNewsStreamPhased", "PrepareMarketSummaryReportForPersistence",
+		"EnsureMarketSummaryRecommendStocksSaved", "GenerateMarketSummarySupplementTable",
+		"EnsureMarketSummaryYieldOverridesSaved", "RunMorningOpeningReview", "PersistAIResponseReport",
+	} {
+		if strings.Contains(string(source), forbidden) {
+			t.Fatalf("App V1.5 source still references retired legacy write path %s", forbidden)
+		}
 	}
 }
 

@@ -88,12 +88,3 @@ func TestRunMarketSummaryOnce(t *testing.T) {
 		int(time.Since(startedAt).Seconds()),
 	)
 }
-
-func TestV150DisablesQuantityDrivenSecondModelRound(t *testing.T) {
-	if shouldRunMarketSummaryModelSupplement("1.5.0") {
-		t.Fatal("V1.5.0 must not start a second model round to manufacture candidates")
-	}
-	if !shouldRunMarketSummaryModelSupplement("1.4.2") {
-		t.Fatal("historical V1.4.2 runtime behavior must remain frozen")
-	}
-}

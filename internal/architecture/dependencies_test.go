@@ -54,6 +54,21 @@ var deprecatedDataCompatibilityAdapters = map[string]bool{
 
 var globalDBImportDebt = map[string]bool{}
 
+var forbiddenDeliveryStrategyCalls = map[string]string{
+	"NewSummaryStockNewsStreamPhased":                          "legacy phased recommendation route",
+	"EnsureMarketSummaryRecommendStocksSaved":                  "Markdown recommendation writer",
+	"EnsureMarketSummaryRecommendStocksSavedWithResult":        "Markdown recommendation writer",
+	"EnsureMarketSummaryRecommendStocksSavedWithResultLimit":   "Markdown recommendation writer",
+	"EnsureMarketSummaryRecommendStocksSavedWithResultLimits":  "Markdown recommendation writer",
+	"EnsureMarketSummaryRecommendStocksSavedWithResultOptions": "Markdown recommendation writer",
+	"EnsureMarketSummaryYieldOverridesSaved":                   "yield-override writer",
+	"RunMorningOpeningReview":                                  "opening-review writer",
+	"GenerateMarketSummarySupplementTable":                     "model supplement route",
+	"MergeMarketSummarySupplementReport":                       "legacy supplement route",
+	"tryRunMarketSummarySupplement":                            "legacy supplement route",
+	"PersistAIResponseReport":                                  "legacy report rewrite",
+}
+
 func TestBoundaryPackagesHaveExplicitDependencyDirection(t *testing.T) {
 	root := repositoryRoot(t)
 	for relative, allowed := range boundaryImports {
@@ -155,6 +170,87 @@ func TestDeliveryAndUseCaseGlobalDBImportsCannotIncrease(t *testing.T) {
 			t.Errorf("stale backend/db debt entry %s; remove it after injecting storage", filename)
 		}
 	}
+}
+
+func TestDeliverySurfacesCannotCallLegacyStrategyProduction(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, excluded := range []string{
+		"backend/data/legacy_structured_rule_replay.go",
+		"internal/bootstrap/legacy_replay.go",
+		"internal/bootstrap/service_compat_ai.go",
+	} {
+		if isStrategyDeliverySource(excluded) {
+			t.Fatalf("read-only replay or compatibility source %s must remain outside the delivery write boundary", excluded)
+		}
+	}
+
+	set := token.NewFileSet()
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if !isStrategyDeliverySource(relative) {
+			return nil
+		}
+		file, err := parser.ParseFile(set, path, nil, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			selector, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			reason, forbidden := forbiddenDeliveryStrategyCalls[selector.Sel.Name]
+			if forbidden {
+				position := set.Position(call.Pos())
+				t.Errorf("%s:%d calls forbidden %s (%s)", relative, position.Line, selector.Sel.Name, reason)
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func isStrategyDeliverySource(relative string) bool {
+	relative = filepath.ToSlash(strings.TrimSpace(relative))
+	if relative == "" || strings.HasSuffix(relative, "_test.go") {
+		return false
+	}
+	if !strings.Contains(relative, "/") {
+		base := filepath.Base(relative)
+		return base == "app.go" || strings.HasPrefix(base, "app_") || strings.HasPrefix(base, "web_")
+	}
+	for _, prefix := range []string{
+		"cmd/",
+		"internal/agent/",
+		"internal/cli/",
+		"internal/cron/",
+		"internal/web/",
+	} {
+		if strings.HasPrefix(relative, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func permittedGlobalDBOwner(filename string) bool {
