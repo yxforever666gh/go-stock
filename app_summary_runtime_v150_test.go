@@ -238,6 +238,29 @@ func TestV150AppSourceCannotCallDecisionPublisher(t *testing.T) {
 	}
 }
 
+func TestScheduledV150SummaryUsesPublishedRunAsSuccess(t *testing.T) {
+	source, err := os.ReadFile("app_cron_runtime.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if strings.Contains(text, "strings.TrimSpace(res.text)") {
+		t.Fatal("scheduled V1.5 summary still treats presentation text as the production success signal")
+	}
+	if strings.Count(text, "usableMarketSummaryRunResult(res)") != 2 {
+		t.Fatal("scheduled and one-minute V1.5 tasks do not each use one typed publication success check")
+	}
+	if strings.Count(text, "runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true") != 2 {
+		t.Fatal("scheduled and one-minute entry points should each invoke one typed production attempt")
+	}
+	if strings.Contains(text, "taskRun.Attempts = 2") {
+		t.Fatal("scheduled V1.5 summary still reruns the whole production chain with an ineffective thinking flag")
+	}
+	if strings.Contains(text, "LatestAIResponseSince(") {
+		t.Fatal("one-minute V1.5 task still infers production success from a presentation row")
+	}
+}
+
 func TestSummaryProductionUsesInjectedStrategyRuntimeGate(t *testing.T) {
 	gateErr := errors.New("strategy paused by test")
 	operations := &blockingSummaryRecommendOperations{err: gateErr}

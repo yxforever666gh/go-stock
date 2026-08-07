@@ -229,13 +229,11 @@ func (a *App) runSummaryStockNewsTestOnce() {
 	a.createCronTaskRun(taskRun)
 
 	marketSummaryQuestion := a.services.AI.NormalizeMarketSummaryQuestion(setting.QuestionTemplate)
-	a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
-
-	latest, _ := a.services.Scheduler.LatestAIResponseSince(a.ctx, "市场资讯", marketSummaryQuestion, start)
+	res := a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
 
 	status := "failed"
-	errMsg := "未生成可保存的总结内容"
-	if latest.ID != 0 && strings.TrimSpace(latest.Content) != "" {
+	errMsg := summarizeSummaryRunError(res)
+	if usableMarketSummaryRunResult(res) {
 		status = "success"
 		errMsg = ""
 	}
@@ -320,19 +318,10 @@ func (a *App) runScheduledSummaryStockNews() {
 	res := a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, false)
 
 	status := "failed"
-	errMsg := ""
-	if strings.TrimSpace(res.text) != "" {
+	errMsg := summarizeSummaryRunError(res)
+	if usableMarketSummaryRunResult(res) {
 		status = "success"
 		errMsg = ""
-	} else {
-		taskRun.Attempts = 2
-		a.updateCronTaskRun(taskRun, taskRun.Status, taskRun.ErrorMessage)
-		res = a.runSummaryStockNewsTask(marketSummaryQuestion, aiConfigId, nil, true, true)
-		errMsg = summarizeSummaryRunError(res)
-		if strings.TrimSpace(res.text) != "" {
-			status = "success"
-			errMsg = ""
-		}
 	}
 
 	a.updateCronTaskRun(taskRun, status, errMsg)
