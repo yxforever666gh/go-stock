@@ -6,17 +6,10 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/backend/portfolio"
-	"go-stock/backend/recommendation"
 )
-
-// MarketSummaryDecisionSnapshot is the consumer-owned boundary for publishing
-// a frozen strategy decision. Compatibility adapters may accept their concrete
-// snapshot type, but the use-case layer does not depend on backend/data.
-type MarketSummaryDecisionSnapshot = recommendation.FrozenDecision
 
 type RecommendService struct {
 	operations             RecommendOperations
-	production             recommendation.ProductionService[*models.MarketSummaryRecommendSaveResult]
 	v150Producer           MarketSummaryV150Producer
 	currentRecommendations portfolio.CurrentRecommendationReader
 	clock                  Clock
@@ -25,7 +18,6 @@ type RecommendService struct {
 
 func NewRecommendService(
 	operations RecommendOperations,
-	publisher recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult],
 	currentRecommendations portfolio.CurrentRecommendationReader,
 	clock Clock,
 	currentStrategyVersion string,
@@ -37,7 +29,6 @@ func NewRecommendService(
 	}
 	return RecommendService{
 		operations:             operations,
-		production:             recommendation.NewProductionService(publisher),
 		v150Producer:           producer,
 		currentRecommendations: currentRecommendations,
 		clock:                  clock,
@@ -82,14 +73,6 @@ func (s RecommendService) CreateAIResponseReport(ctx context.Context, result *mo
 
 func (s RecommendService) PersistAIResponseReport(ctx context.Context, result *models.AIResponseResult) error {
 	return s.operations.PersistAIResponseReport(ctx, result)
-}
-
-func (s RecommendService) PersistMarketSummaryV150Decision(
-	ctx context.Context,
-	decision MarketSummaryDecisionSnapshot,
-	providerName, modelName string,
-) (*models.MarketSummaryRecommendSaveResult, error) {
-	return s.production.PublishDecision(ctx, decision, providerName, modelName)
 }
 
 func (s RecommendService) GetAIResponseResultList(query models.AIResponseResultQuery) (*models.AIResponseResultPageData, error) {

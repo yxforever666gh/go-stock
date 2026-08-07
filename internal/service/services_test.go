@@ -2,13 +2,11 @@ package service
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
 	"go-stock/backend/models"
-	"go-stock/backend/recommendation"
 )
 
 type recordingStockOperations struct {
@@ -48,13 +46,6 @@ type recordingRecommendOperations struct {
 	persisted   *models.AIResponseResult
 }
 
-type recordingRecommendationPublisher struct {
-	decision     recommendation.FrozenDecision
-	providerName string
-	modelName    string
-	result       *models.MarketSummaryRecommendSaveResult
-}
-
 type recordingMarketSummaryV150Producer struct {
 	calls   int
 	context context.Context
@@ -87,21 +78,6 @@ func (o *recordingRecommendOperations) PersistAIResponseReport(_ context.Context
 	o.persisted = result
 	return nil
 }
-
-func (p *recordingRecommendationPublisher) PublishDecision(
-	_ context.Context,
-	decision recommendation.FrozenDecision,
-	providerName, modelName string,
-) (*models.MarketSummaryRecommendSaveResult, error) {
-	p.decision = decision
-	p.providerName = providerName
-	p.modelName = modelName
-	return p.result, nil
-}
-
-type recordingDecisionSnapshot struct{ version string }
-
-func (d recordingDecisionSnapshot) MarketSummaryDecisionVersion() string { return d.version }
 
 func (o *recordingAIOperations) TestAIConfig(_ context.Context, configID int) *models.AIModelTestResult {
 	o.configID = configID
@@ -204,7 +180,7 @@ func TestAIServiceDelegatesMarketSummaryPresentationThroughInjectedPort(t *testi
 	}
 }
 
-func TestDecodeMarketSummaryRuntimeEnvelopes(t *testing.T) {
+func TestDecodeMarketSummaryRouteLog(t *testing.T) {
 	route, err := DecodeMarketSummaryRouteLog(map[string]any{
 		"runSlot": "close", "indicatorCandidateCount": 18, "indicatorAIInputCount": 12,
 		"discoveryCandidateCount": 9, "verifiedCandidateCount": 3, "notes": []string{"fresh"},
@@ -212,38 +188,13 @@ func TestDecodeMarketSummaryRuntimeEnvelopes(t *testing.T) {
 	if err != nil || route.RunSlot != "close" || route.VerifiedCandidateCt != 3 || len(route.Notes) != 1 {
 		t.Fatalf("route=%#v err=%v", route, err)
 	}
-
-	decision, err := DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
-		"runContext": map[string]any{"runId": "run-1", "strategyVersion": "1.5.0"},
-		"candidates": []map[string]any{{"symbol": "000001.SZ"}, {"symbol": "600000.SH"}},
-		"production": []map[string]any{{"symbol": "000001.SZ"}}, "noTradeReason": "",
-	})
-	if err != nil || decision.RunID != "run-1" || decision.MarketSummaryDecisionVersion() != "1.5.0" || decision.CandidateCount != 2 || decision.ProductionCount != 1 || len(decision.RawJSON) == 0 {
-		t.Fatalf("decision=%#v err=%v", decision, err)
-	}
 }
 
-func TestDecodeMarketSummaryV150DecisionEnvelopeRejectsMalformedOrIncompletePayload(t *testing.T) {
-	for _, raw := range []any{
-		nil,
-		map[string]any{"runContext": map[string]any{"strategyVersion": "1.5.0"}},
-		map[string]any{"runContext": map[string]any{"runId": "run-1"}},
-		json.RawMessage(`{`),
-	} {
-		if decision, err := DecodeMarketSummaryV150DecisionEnvelope(raw); err == nil || decision != nil {
-			t.Fatalf("raw=%#v decision=%#v err=%v, want rejection", raw, decision, err)
-		}
-	}
-}
-
-func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
+func TestRecommendServiceDelegatesMarketSummaryReportPorts(t *testing.T) {
 	result := &models.AIResponseResult{}
-	publication := &models.MarketSummaryRecommendSaveResult{SavedCount: 2}
 	operations := &recordingRecommendOperations{}
-	publisher := &recordingRecommendationPublisher{result: publication}
-	service := NewRecommendService(operations, publisher, nil, nil, "")
+	service := NewRecommendService(operations, nil, nil, "")
 	ctx := context.WithValue(context.Background(), struct{}{}, "summary")
-	decision := recordingDecisionSnapshot{version: "1.5.0"}
 
 	if err := service.RequireStrategyLive(ctx, "1.5.0"); err != nil {
 		t.Fatalf("RequireStrategyLive: %v", err)
@@ -262,13 +213,6 @@ func TestRecommendServiceDelegatesMarketSummaryPublicationPorts(t *testing.T) {
 	}
 	if operations.persisted != result {
 		t.Fatal("persist report was not delegated")
-	}
-	got, err := service.PersistMarketSummaryV150Decision(ctx, decision, "provider", "model")
-	if err != nil {
-		t.Fatalf("PersistMarketSummaryV150Decision: %v", err)
-	}
-	if got != publication || publisher.decision != decision || publisher.providerName != "provider" || publisher.modelName != "model" {
-		t.Fatalf("publication delegation mismatch: result=%p decision=%#v provider=%q model=%q", got, publisher.decision, publisher.providerName, publisher.modelName)
 	}
 }
 
@@ -302,7 +246,7 @@ func TestRecommendServiceDelegatesTypedMarketSummaryV150Production(t *testing.T)
 	wantErr := errors.New("producer returned result with error")
 	producer := &recordingMarketSummaryV150Producer{result: wantResult, err: wantErr}
 	operations := &recordingRecommendOperations{}
-	service := NewRecommendService(operations, nil, nil, nil, "1.5.0", producer)
+	service := NewRecommendService(operations, nil, nil, "1.5.0", producer)
 
 	gotResult, gotErr := service.RunMarketSummaryV150(ctx, request)
 
@@ -332,7 +276,7 @@ func TestRecommendServiceBlocksTypedMarketSummaryV150ProductionWhilePaused(t *te
 	wantErr := errors.New("strategy is paused")
 	operations := &recordingRecommendOperations{gateErr: wantErr}
 	producer := &recordingMarketSummaryV150Producer{}
-	service := NewRecommendService(operations, nil, nil, nil, "1.5.0", producer)
+	service := NewRecommendService(operations, nil, nil, "1.5.0", producer)
 
 	result, err := service.RunMarketSummaryV150(context.Background(), MarketSummaryV150ProductionRequest{})
 
@@ -349,8 +293,8 @@ func TestRecommendServiceRejectsMissingMarketSummaryV150Producer(t *testing.T) {
 
 	var typedNil *recordingMarketSummaryV150Producer
 	services := []RecommendService{
-		NewRecommendService(nil, nil, nil, nil, "1.5.0"),
-		NewRecommendService(nil, nil, nil, nil, "1.5.0", typedNil),
+		NewRecommendService(nil, nil, nil, "1.5.0"),
+		NewRecommendService(nil, nil, nil, "1.5.0", typedNil),
 	}
 	for index, service := range services {
 		result, err := service.RunMarketSummaryV150(context.Background(), MarketSummaryV150ProductionRequest{})

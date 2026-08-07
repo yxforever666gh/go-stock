@@ -50,7 +50,7 @@ func TestRecommendServiceCurrentListUsesFrozenReaderAndBuildsCompatibilityPage(t
 		currentRecommendationServiceFixture("rule-middle", "000002.SZ", "middle", "bank", now.Add(-90*time.Minute), portfolio.RecommendationExpired, 0),
 	}}
 	legacyOperations := &recordingRecommendationListOperations{}
-	service := NewRecommendService(legacyOperations, nil, reader, currentRecommendationTestClock{now: now}, "1.5.0")
+	service := NewRecommendService(legacyOperations, reader, currentRecommendationTestClock{now: now}, "1.5.0")
 
 	page, err := service.GetAiRecommendStocksList(&models.AiRecommendStocksQuery{
 		StrategyCohort: "current", StartDate: "2026-08-01", EndDate: "2026-08-07", Page: 1, PageSize: 2,
@@ -91,7 +91,7 @@ func TestRecommendServiceExactCurrentVersionFiltersBeforePagination(t *testing.T
 		currentRecommendationServiceFixture("rule-a", "000001.SZ", "alpha", "bank", now.Add(-time.Hour), portfolio.RecommendationPending, 1),
 		currentRecommendationServiceFixture("rule-b", "600000.SH", "beta", "energy", now.Add(-2*time.Hour), portfolio.RecommendationHolding, 2),
 	}}
-	service := NewRecommendService(&recordingRecommendationListOperations{}, nil, reader, currentRecommendationTestClock{now: now}, "1.5.0")
+	service := NewRecommendService(&recordingRecommendationListOperations{}, reader, currentRecommendationTestClock{now: now}, "1.5.0")
 
 	page, err := service.GetAiRecommendStocksList(&models.AiRecommendStocksQuery{
 		StrategyCohort: "1.5.0", StockCode: "600000", StockName: "BETA", Page: 1, PageSize: 1,
@@ -112,7 +112,7 @@ func TestRecommendServiceCurrentListRequiresEveryFilterToMatch(t *testing.T) {
 	reader := &recordingCurrentRecommendationReader{rows: []portfolio.CurrentRecommendation{
 		currentRecommendationServiceFixture("rule-a", "000001.SZ", "alpha", "bank", now.Add(-time.Hour), portfolio.RecommendationPending, 1),
 	}}
-	service := NewRecommendService(&recordingRecommendationListOperations{}, nil, reader, currentRecommendationTestClock{now: now}, "1.5.0")
+	service := NewRecommendService(&recordingRecommendationListOperations{}, reader, currentRecommendationTestClock{now: now}, "1.5.0")
 
 	for _, query := range []models.AiRecommendStocksQuery{
 		{StrategyCohort: "current", StockCode: "000001", StockName: "missing"},
@@ -133,7 +133,7 @@ func TestRecommendServiceCurrentVersionAcceptsCanonicalAliases(t *testing.T) {
 	for _, cohort := range []string{"1.5.0", "v1.5.0", " V1.5.0 "} {
 		t.Run(cohort, func(t *testing.T) {
 			reader := &recordingCurrentRecommendationReader{}
-			service := NewRecommendService(&recordingRecommendationListOperations{}, nil, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
+			service := NewRecommendService(&recordingRecommendationListOperations{}, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
 			if _, err := service.GetAiRecommendStocksList(&models.AiRecommendStocksQuery{StrategyCohort: cohort}); err != nil {
 				t.Fatal(err)
 			}
@@ -150,7 +150,7 @@ func TestRecommendServiceLegacyListContinuesThroughOperations(t *testing.T) {
 		t.Run(cohort, func(t *testing.T) {
 			reader := &recordingCurrentRecommendationReader{}
 			operations := &recordingRecommendationListOperations{page: want}
-			service := NewRecommendService(operations, nil, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
+			service := NewRecommendService(operations, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
 			query := &models.AiRecommendStocksQuery{StrategyCohort: cohort}
 			got, err := service.GetAiRecommendStocksList(query)
 			if err != nil {
@@ -168,7 +168,7 @@ func TestRecommendServiceRecommendationListRejectsMixedAndUnknownCohorts(t *test
 		t.Run(cohort, func(t *testing.T) {
 			reader := &recordingCurrentRecommendationReader{}
 			operations := &recordingRecommendationListOperations{}
-			service := NewRecommendService(operations, nil, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
+			service := NewRecommendService(operations, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
 			_, err := service.GetAiRecommendStocksList(&models.AiRecommendStocksQuery{StrategyCohort: cohort})
 			if !errors.Is(err, ErrInvalidStrategyCohort) {
 				t.Fatalf("error = %v, want ErrInvalidStrategyCohort", err)
@@ -178,7 +178,7 @@ func TestRecommendServiceRecommendationListRejectsMixedAndUnknownCohorts(t *test
 			}
 		})
 	}
-	service := NewRecommendService(&recordingRecommendationListOperations{}, nil, &recordingCurrentRecommendationReader{}, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
+	service := NewRecommendService(&recordingRecommendationListOperations{}, &recordingCurrentRecommendationReader{}, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
 	if _, err := service.GetAiRecommendStocksList(nil); !errors.Is(err, ErrInvalidRecommendationListQuery) {
 		t.Fatalf("nil query error = %v, want ErrInvalidRecommendationListQuery", err)
 	}
@@ -188,7 +188,7 @@ func TestRecommendServiceCurrentListPropagatesFrozenReaderErrorAndKeepsNoSnapsho
 	now := time.Date(2026, 8, 7, 10, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
 	sealedErr := errors.New("snapshot seal mismatch")
 	reader := &recordingCurrentRecommendationReader{err: sealedErr}
-	service := NewRecommendService(&recordingRecommendationListOperations{}, nil, reader, currentRecommendationTestClock{now: now}, "1.5.0")
+	service := NewRecommendService(&recordingRecommendationListOperations{}, reader, currentRecommendationTestClock{now: now}, "1.5.0")
 	_, err := service.GetAiRecommendStocksList(&models.AiRecommendStocksQuery{StrategyCohort: "current"})
 	if err != sealedErr {
 		t.Fatalf("error = %v, want frozen reader error", err)
@@ -206,7 +206,7 @@ func TestRecommendServiceCurrentListPropagatesFrozenReaderErrorAndKeepsNoSnapsho
 
 func TestRecommendServiceCurrentListRejectsInvalidDateWindowBeforeRead(t *testing.T) {
 	reader := &recordingCurrentRecommendationReader{}
-	service := NewRecommendService(&recordingRecommendationListOperations{}, nil, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
+	service := NewRecommendService(&recordingRecommendationListOperations{}, reader, currentRecommendationTestClock{now: time.Now()}, "1.5.0")
 	for _, query := range []*models.AiRecommendStocksQuery{
 		{StrategyCohort: "current", StartDate: "invalid"},
 		{StrategyCohort: "current", StartDate: "2026-08-08", EndDate: "2026-08-07"},

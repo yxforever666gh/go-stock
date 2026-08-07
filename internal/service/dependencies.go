@@ -11,7 +11,6 @@ import (
 	"go-stock/backend/legacy"
 	"go-stock/backend/marketdata"
 	"go-stock/backend/marketintel"
-	"go-stock/backend/models"
 	"go-stock/backend/news"
 	"go-stock/backend/portfolio"
 	"go-stock/backend/recommendation"
@@ -52,7 +51,6 @@ type Dependencies struct {
 	Initializer                 ApplicationInitializer
 	Providers                   ProviderSet
 	Operations                  ServiceOperations
-	RecommendationPublisher     recommendation.DecisionPublisher[*models.MarketSummaryRecommendSaveResult]
 	MarketSummaryV150Producer   MarketSummaryV150Producer
 	ExecutionMonitor            execution.Monitor
 	PortfolioReader             PortfolioAccountReader
@@ -72,9 +70,6 @@ func (d Dependencies) Validate() error {
 	}
 	if err := d.Operations.Validate(); err != nil {
 		return errors.Join(ErrInvalidDependencies, err)
-	}
-	if d.RecommendationPublisher == nil {
-		return errors.Join(ErrInvalidDependencies, errors.New("recommendation publisher is required"))
 	}
 	if isNilMarketSummaryV150Producer(d.MarketSummaryV150Producer) {
 		return errors.Join(ErrInvalidDependencies, errors.New("market summary V1.5 producer is required"))

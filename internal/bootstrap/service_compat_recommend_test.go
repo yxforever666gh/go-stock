@@ -9,15 +9,15 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/governance"
 	"go-stock/backend/models"
+	"go-stock/backend/recommendation"
 	"go-stock/backend/strategy/v150"
-	"go-stock/internal/service"
 )
 
 type unsupportedMarketSummaryDecision struct{}
 
 func (unsupportedMarketSummaryDecision) MarketSummaryDecisionVersion() string { return "1.5.0" }
 
-var _ service.MarketSummaryDecisionSnapshot = unsupportedMarketSummaryDecision{}
+var _ recommendation.FrozenDecision = unsupportedMarketSummaryDecision{}
 
 func TestRecommendationCompatibilityAdapterPersistsAIResponseReports(t *testing.T) {
 	database := openSchedulerCompatibilityTestDB(t)
@@ -121,45 +121,10 @@ func TestRecommendationCompatibilityAdapterRejectsInvalidTypedSnapshotBeforePers
 	}
 }
 
-func TestMarketSummaryV150SnapshotFromEnvelopeRestoresFrozenJSON(t *testing.T) {
-	envelope, err := service.DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
-		"runContext": map[string]any{
-			"runId": "run-restore", "strategyVersion": v150.StrategyVersion,
-			"configHash": v150.FixedStrategyV150ConfigHash(),
-		},
-		"candidates":    []map[string]any{{"candidate": map[string]any{"symbol": "000001.SZ"}}},
-		"production":    []map[string]any{{"symbol": "000001.SZ"}},
-		"noTradeReason": "",
-	})
-	if err != nil {
-		t.Fatalf("decode envelope: %v", err)
-	}
-	run, err := marketSummaryV150SnapshotFromDecision(envelope)
-	if err != nil {
-		t.Fatalf("restore envelope: %v", err)
-	}
-	if run.RunContext.RunID != envelope.RunID || run.RunContext.StrategyVersion != envelope.StrategyVersion || len(run.Candidates) != envelope.CandidateCount || len(run.Production) != envelope.ProductionCount {
-		t.Fatalf("restored snapshot does not preserve envelope identity: %#v", run)
-	}
-}
-
 func validMarketSummaryV150PublicationSnapshot(runID string) *data.MarketSummaryV150RunSnapshot {
 	return &data.MarketSummaryV150RunSnapshot{RunContext: v150.RunContext{
 		RunID:           runID,
 		StrategyVersion: v150.StrategyVersion,
 		ConfigHash:      v150.FixedStrategyV150ConfigHash(),
 	}}
-}
-
-func TestMarketSummaryV150SnapshotFromEnvelopeRejectsPayloadMismatch(t *testing.T) {
-	envelope, err := service.DecodeMarketSummaryV150DecisionEnvelope(map[string]any{
-		"runContext": map[string]any{"runId": "run-mismatch", "strategyVersion": "1.5.0"},
-	})
-	if err != nil {
-		t.Fatalf("decode envelope: %v", err)
-	}
-	envelope.ProductionCount = 1
-	if run, err := marketSummaryV150SnapshotFromEnvelope(envelope); err == nil || run != nil {
-		t.Fatalf("run=%#v err=%v, want envelope mismatch", run, err)
-	}
 }

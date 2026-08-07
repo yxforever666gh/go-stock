@@ -59,7 +59,6 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 			Clock:                       fixedClock{now: now},
 			Initializer:                 initializer,
 			Operations:                  newCompatibilityServiceOperations(mainDB),
-			RecommendationPublisher:     publisher,
 			MarketSummaryV150Producer:   newMarketSummaryV150CompatibilityProducer(mainDB, fixedClock{now: now}, publisher),
 			Providers:                   service.ProviderSet{Quotes: unavailableQuoteReader{}},
 			PortfolioReader:             portfolio.NewReader(nil),
@@ -140,7 +139,7 @@ func TestAssembleRuntimeRejectsMissingRequiredDependencies(t *testing.T) {
 			},
 		},
 		{
-			name: "recommendation publisher",
+			name: "market summary producer",
 			deps: RuntimeDependencies{
 				Storage: Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}},
 				Services: service.Dependencies{
@@ -166,12 +165,12 @@ func TestCompatibilityDependenciesInjectAllProviderNeutralPorts(t *testing.T) {
 	providers := deps.Providers
 	if providers.DailyBars == nil || providers.MinuteBars == nil || providers.Quotes == nil || providers.Securities == nil ||
 		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil ||
-		deps.RecommendationPublisher == nil || deps.MarketSummaryV150Producer == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentRecommendationReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
+		deps.MarketSummaryV150Producer == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentRecommendationReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
 		deps.PortfolioInitialCash != 100000 || deps.PortfolioMaxQuoteAge != 5*time.Minute {
 		t.Fatalf("compatibility provider set has an unconfigured port: %+v", providers)
 	}
 	producer, ok := deps.MarketSummaryV150Producer.(*marketSummaryV150CompatibilityProducer)
-	if !ok || producer.publisher != deps.RecommendationPublisher {
-		t.Fatal("V1.5 typed producer does not share the composition root's atomic publisher")
+	if !ok || producer.publisher == nil {
+		t.Fatal("V1.5 typed producer does not own the composition root's atomic publisher")
 	}
 }

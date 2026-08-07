@@ -55,7 +55,6 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 		Clock:                       clock,
 		Initializer:                 legacyApplicationInitializer{},
 		Operations:                  newCompatibilityServiceOperations(storage.Main),
-		RecommendationPublisher:     recommendationAdapter,
 		MarketSummaryV150Producer:   newMarketSummaryV150CompatibilityProducer(storage.Main, clock, recommendationAdapter),
 		ExecutionMonitor:            data.NewCompatibilityExecutionMonitor(orderEvents, execution.Evaluator{}),
 		PortfolioReader:             portfolio.NewReader(ledger),

@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 )
 
@@ -15,25 +14,6 @@ type MarketSummaryRouteLog struct {
 	DiscoveryCandidateCt int
 	VerifiedCandidateCt  int
 	Notes                []string
-}
-
-// MarketSummaryV150DecisionEnvelope carries a frozen decision across the
-// delivery boundary without exposing the compatibility implementation type.
-// RawJSON is retained so bootstrap can restore the exact persisted payload.
-type MarketSummaryV150DecisionEnvelope struct {
-	RunID           string
-	StrategyVersion string
-	CandidateCount  int
-	ProductionCount int
-	NoTradeReason   string
-	RawJSON         json.RawMessage
-}
-
-func (e *MarketSummaryV150DecisionEnvelope) MarketSummaryDecisionVersion() string {
-	if e == nil {
-		return ""
-	}
-	return strings.TrimSpace(e.StrategyVersion)
 }
 
 func DecodeMarketSummaryRouteLog(raw any) (*MarketSummaryRouteLog, error) {
@@ -59,41 +39,5 @@ func DecodeMarketSummaryRouteLog(raw any) (*MarketSummaryRouteLog, error) {
 		DiscoveryCandidateCt: wire.DiscoveryCandidateCt,
 		VerifiedCandidateCt:  wire.VerifiedCandidateCt,
 		Notes:                append([]string(nil), wire.Notes...),
-	}, nil
-}
-
-func DecodeMarketSummaryV150DecisionEnvelope(raw any) (*MarketSummaryV150DecisionEnvelope, error) {
-	if raw == nil {
-		return nil, errors.New("market summary V1.5 decision is required")
-	}
-	b, err := json.Marshal(raw)
-	if err != nil {
-		return nil, err
-	}
-	var wire struct {
-		RunContext struct {
-			RunID           string `json:"runId"`
-			StrategyVersion string `json:"strategyVersion"`
-		} `json:"runContext"`
-		Candidates    []json.RawMessage `json:"candidates"`
-		Production    []json.RawMessage `json:"production"`
-		NoTradeReason string            `json:"noTradeReason"`
-	}
-	if err := json.Unmarshal(b, &wire); err != nil {
-		return nil, err
-	}
-	if strings.TrimSpace(wire.RunContext.RunID) == "" {
-		return nil, errors.New("market summary V1.5 decision run id is required")
-	}
-	if strings.TrimSpace(wire.RunContext.StrategyVersion) == "" {
-		return nil, errors.New("market summary V1.5 decision strategy version is required")
-	}
-	return &MarketSummaryV150DecisionEnvelope{
-		RunID:           strings.TrimSpace(wire.RunContext.RunID),
-		StrategyVersion: strings.TrimSpace(wire.RunContext.StrategyVersion),
-		CandidateCount:  len(wire.Candidates),
-		ProductionCount: len(wire.Production),
-		NoTradeReason:   strings.TrimSpace(wire.NoTradeReason),
-		RawJSON:         append(json.RawMessage(nil), b...),
 	}, nil
 }

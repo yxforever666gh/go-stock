@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"go-stock/backend/models"
-	"go-stock/backend/recommendation"
 	"go-stock/backend/strategy/v150"
 	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
@@ -66,20 +65,6 @@ func (o *failOnLegacyPhasedSummaryOperations) NewSummaryStockNewsStreamPhased(
 
 func (*failOnLegacyPhasedSummaryOperations) HumanizeMarketSummaryReport(raw string) string {
 	return raw
-}
-
-type recordingAppRecommendationPublisher struct {
-	calls int
-}
-
-func (p *recordingAppRecommendationPublisher) PublishDecision(
-	context.Context,
-	recommendation.FrozenDecision,
-	string,
-	string,
-) (*models.MarketSummaryRecommendSaveResult, error) {
-	p.calls++
-	return nil, errors.New("App must not publish an already-published V1.5 decision")
 }
 
 type recordingAppSummaryDeliveryOperations struct {
@@ -178,7 +163,7 @@ func TestV150SummaryUsesTypedProducerAndNeverLegacyPhasedAI(t *testing.T) {
 		services: service.AppServices{
 			AI: service.NewAIService(legacyAI),
 			Recommend: service.NewRecommendService(
-				&blockingSummaryRecommendOperations{}, nil, nil, nil, v150.StrategyVersion, producer,
+				&blockingSummaryRecommendOperations{}, nil, nil, v150.StrategyVersion, producer,
 			),
 		},
 	}
@@ -204,7 +189,6 @@ func TestV150SummaryUsesTypedProducerAndNeverLegacyPhasedAI(t *testing.T) {
 
 func TestV150PublishedResultHasDeliverySideEffectsWithoutRepublishing(t *testing.T) {
 	startedAt := time.Date(2026, 8, 7, 9, 40, 0, 0, time.FixedZone("CST", 8*60*60))
-	publisher := &recordingAppRecommendationPublisher{}
 	delivery := &recordingAppSummaryDeliveryOperations{}
 	ai := &failOnLegacyPhasedSummaryOperations{t: t}
 	production := &service.MarketSummaryV150ProductionResult{
@@ -223,7 +207,7 @@ func TestV150PublishedResultHasDeliverySideEffectsWithoutRepublishing(t *testing
 			AI:     service.NewAIService(ai),
 			Config: service.NewConfigService(&emptyAppSummaryConfigOperations{}),
 			Recommend: service.NewRecommendService(
-				delivery, publisher, nil, nil, v150.StrategyVersion,
+				delivery, nil, nil, v150.StrategyVersion,
 			),
 		},
 	}
@@ -233,9 +217,6 @@ func TestV150PublishedResultHasDeliverySideEffectsWithoutRepublishing(t *testing
 	}
 
 	app.persistSummaryRunResult(res, startedAt)
-	if publisher.calls != 0 {
-		t.Fatalf("App publisher calls after typed production = %d, want 0", publisher.calls)
-	}
 	if delivery.report == nil || delivery.report.ChatId != production.RunID || delivery.report.Content != production.ReportText {
 		t.Fatalf("delivery report = %+v", delivery.report)
 	}
@@ -263,7 +244,7 @@ func TestSummaryProductionUsesInjectedStrategyRuntimeGate(t *testing.T) {
 	app := &App{
 		ctx: context.Background(),
 		services: service.AppServices{
-			Recommend: service.NewRecommendService(operations, nil, nil, nil, ""),
+			Recommend: service.NewRecommendService(operations, nil, nil, ""),
 		},
 	}
 

@@ -34,7 +34,6 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 		History: NewHistoryService(dependencies.Operations.History),
 		Recommend: NewRecommendService(
 			dependencies.Operations.Recommend,
-			dependencies.RecommendationPublisher,
 			dependencies.CurrentRecommendationReader,
 			dependencies.Clock,
 			dependencies.CurrentStrategyVersion,
