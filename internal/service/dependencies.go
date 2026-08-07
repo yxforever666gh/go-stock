@@ -76,6 +76,9 @@ func (d Dependencies) Validate() error {
 	if d.RecommendationPublisher == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("recommendation publisher is required"))
 	}
+	if isNilMarketSummaryV150Producer(d.MarketSummaryV150Producer) {
+		return errors.Join(ErrInvalidDependencies, errors.New("market summary V1.5 producer is required"))
+	}
 	if d.PortfolioReader == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("portfolio reader is required"))
 	}

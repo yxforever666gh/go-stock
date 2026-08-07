@@ -42,6 +42,8 @@ func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) err
 // the bootstrap compatibility adapter makes the composition root explicit
 // while the old package is being retired.
 func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
+	clock := systemClock{}
+	recommendationAdapter := &compatibilityServiceAdapter{main: storage.Main}
 	marketData := data.NewCompatibilityMarketDataReader(storage.Main, storage.Minute)
 	newsReader := data.NewCompatibilityNewsReader()
 	ledger := data.NewCompatibilityPortfolioLedger(storage.Main)
@@ -50,10 +52,11 @@ func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
 	orderEvents := persistence.NewGORMOrderEventStore(storage.Main)
 	strategyConfig := v150.FixedStrategyV150Config()
 	return service.Dependencies{
-		Clock:                       systemClock{},
+		Clock:                       clock,
 		Initializer:                 legacyApplicationInitializer{},
 		Operations:                  newCompatibilityServiceOperations(storage.Main),
-		RecommendationPublisher:     &compatibilityServiceAdapter{main: storage.Main},
+		RecommendationPublisher:     recommendationAdapter,
+		MarketSummaryV150Producer:   newMarketSummaryV150CompatibilityProducer(storage.Main, clock, recommendationAdapter),
 		ExecutionMonitor:            data.NewCompatibilityExecutionMonitor(orderEvents, execution.Evaluator{}),
 		PortfolioReader:             portfolio.NewReader(ledger),
 		LegacyReader:                legacy.NewService(legacyRepository, marketData),

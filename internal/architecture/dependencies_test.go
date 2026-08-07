@@ -42,13 +42,14 @@ var v150AllowedProductionImports = map[string]bool{
 var deprecatedDataImportDebt = map[string]bool{}
 
 var deprecatedDataCompatibilityAdapters = map[string]bool{
-	"internal/bootstrap/agent_tools_compat.go":         true,
-	"internal/bootstrap/agent_configuration_compat.go": true,
-	"internal/bootstrap/service_compat_ai.go":          true,
-	"internal/bootstrap/service_compat_market.go":      true,
-	"internal/bootstrap/service_compat_stock.go":       true,
-	"internal/bootstrap/legacy_replay.go":              true,
-	"internal/bootstrap/runtime_compat.go":             true,
+	"internal/bootstrap/agent_tools_compat.go":                  true,
+	"internal/bootstrap/agent_configuration_compat.go":          true,
+	"internal/bootstrap/service_compat_ai.go":                   true,
+	"internal/bootstrap/service_compat_market.go":               true,
+	"internal/bootstrap/service_compat_stock.go":                true,
+	"internal/bootstrap/market_summary_v150_producer_compat.go": true,
+	"internal/bootstrap/legacy_replay.go":                       true,
+	"internal/bootstrap/runtime_compat.go":                      true,
 }
 
 var globalDBImportDebt = map[string]bool{}

@@ -51,6 +51,7 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 	mainDB := &gorm.DB{}
 	minuteDB := &gorm.DB{}
 	initializer := &recordingInitializer{}
+	publisher := &compatibilityServiceAdapter{main: mainDB}
 
 	runtime, err := AssembleRuntime(appconfig.AppConfig{}, RuntimeDependencies{
 		Storage: Storage{Main: mainDB, Minute: minuteDB},
@@ -58,7 +59,8 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 			Clock:                       fixedClock{now: now},
 			Initializer:                 initializer,
 			Operations:                  newCompatibilityServiceOperations(mainDB),
-			RecommendationPublisher:     &compatibilityServiceAdapter{main: mainDB},
+			RecommendationPublisher:     publisher,
+			MarketSummaryV150Producer:   newMarketSummaryV150CompatibilityProducer(mainDB, fixedClock{now: now}, publisher),
 			Providers:                   service.ProviderSet{Quotes: unavailableQuoteReader{}},
 			PortfolioReader:             portfolio.NewReader(nil),
 			LegacyReader:                legacy.NewService(nil, nil),
@@ -88,6 +90,14 @@ func TestAssembleRuntimeInjectsStorageClockAndLifecycle(t *testing.T) {
 func TestCompatibilityDependenciesRequireCurrentRecommendationReader(t *testing.T) {
 	deps := newCompatibilityServiceDependencies(Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}})
 	deps.CurrentRecommendationReader = nil
+	if err := deps.Validate(); !errors.Is(err, service.ErrInvalidDependencies) {
+		t.Fatalf("error = %v, want ErrInvalidDependencies", err)
+	}
+}
+
+func TestCompatibilityDependenciesRequireMarketSummaryV150Producer(t *testing.T) {
+	deps := newCompatibilityServiceDependencies(Storage{Main: &gorm.DB{}, Minute: &gorm.DB{}})
+	deps.MarketSummaryV150Producer = nil
 	if err := deps.Validate(); !errors.Is(err, service.ErrInvalidDependencies) {
 		t.Fatalf("error = %v, want ErrInvalidDependencies", err)
 	}
@@ -156,8 +166,12 @@ func TestCompatibilityDependenciesInjectAllProviderNeutralPorts(t *testing.T) {
 	providers := deps.Providers
 	if providers.DailyBars == nil || providers.MinuteBars == nil || providers.Quotes == nil || providers.Securities == nil ||
 		providers.News == nil || providers.MarketIntel == nil || providers.Ledger == nil || providers.Legacy == nil ||
-		deps.RecommendationPublisher == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentRecommendationReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
+		deps.RecommendationPublisher == nil || deps.MarketSummaryV150Producer == nil || deps.PortfolioReader == nil || deps.LegacyReader == nil || deps.CurrentRecommendationReader == nil || deps.CurrentStrategyVersion != "1.5.0" ||
 		deps.PortfolioInitialCash != 100000 || deps.PortfolioMaxQuoteAge != 5*time.Minute {
 		t.Fatalf("compatibility provider set has an unconfigured port: %+v", providers)
+	}
+	producer, ok := deps.MarketSummaryV150Producer.(*marketSummaryV150CompatibilityProducer)
+	if !ok || producer.publisher != deps.RecommendationPublisher {
+		t.Fatal("V1.5 typed producer does not share the composition root's atomic publisher")
 	}
 }
