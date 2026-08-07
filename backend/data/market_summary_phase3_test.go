@@ -7,6 +7,37 @@ import (
 	"time"
 )
 
+func TestNewSummaryStockNewsStreamPhasedFailsClosedBeforeV150Work(t *testing.T) {
+	if marketSummaryCurrentVersion != marketSummaryVersion150 {
+		t.Fatalf("current strategy version = %q, want %q", marketSummaryCurrentVersion, marketSummaryVersion150)
+	}
+
+	var messages []map[string]any
+	for message := range (*OpenAi)(nil).NewSummaryStockNewsStreamPhased("original question", nil, false) {
+		messages = append(messages, message)
+	}
+
+	if len(messages) != 1 {
+		t.Fatalf("phased V1.5 route emitted %d messages, want exactly one fail-closed error: %#v", len(messages), messages)
+	}
+	message := messages[0]
+	if code, ok := message["code"].(int); !ok || code != 0 {
+		t.Fatalf("phased V1.5 code = %#v, want integer 0", message["code"])
+	}
+	if got := fmt.Sprint(message["question"]); got != "original question" {
+		t.Fatalf("phased V1.5 question = %q, want unchanged input", got)
+	}
+	if content := fmt.Sprint(message["content"]); !strings.Contains(content, "typed recommendation runner") {
+		t.Fatalf("phased V1.5 error = %q, want typed-runner direction", content)
+	}
+	if _, exists := message["v150Run"]; exists {
+		t.Fatalf("phased V1.5 response must not expose v150Run: %#v", message)
+	}
+	if _, exists := message["event"]; exists {
+		t.Fatalf("phased V1.5 route must fail before discovery or tool-status events: %#v", message)
+	}
+}
+
 func TestExtractJSONPayloadFromCodeFence(t *testing.T) {
 	text := "这里是解释\n```json\n{\"candidateStocks\":[{\"stockName\":\"中际旭创\",\"stockCode\":\"300308.SZ\"}]}\n```"
 	got := extractJSONPayload(text)

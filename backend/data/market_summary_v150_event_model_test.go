@@ -247,7 +247,7 @@ func TestVerifyMarketSummaryV150EventsBatchFailureCanDegradeWithoutStoppingRun(t
 	o := BindMarketSummaryV150EventVerifier(&OpenAi{Model: "model-x"}, verifier)
 	err := o.verifyMarketSummaryV150Events(run, []marketSummaryVerifiedCandidate{{StockCode: "600000.SH"}})
 	if err != nil {
-		// runMarketSummaryV150Phase owns the batch-level downgrade so that this
+		// The typed Runner pipeline owns the batch-level downgrade so that this
 		// helper remains explicit about provider failure.
 		degradeMarketSummaryV150EventCandidates(run, run.VerificationSymbols, "model_batch_failed:"+err.Error())
 	}

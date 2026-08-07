@@ -5,10 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
-	"go-stock/backend/strategy/v150"
 	"sort"
 	"strconv"
 	"strings"
@@ -377,6 +375,11 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 				ch <- map[string]any{"code": 0, "question": userQuestion, "content": fmt.Sprintf("phase3 route panic: %v", err)}
 			}
 		}()
+		if marketSummaryCurrentVersion == marketSummaryVersion150 {
+			err := fmt.Errorf("legacy phased summary route is disabled for strategy %s; use the typed recommendation runner", marketSummaryVersion150)
+			ch <- map[string]any{"code": 0, "question": userQuestion, "content": err.Error()}
+			return
+		}
 
 		displayQuestion := NormalizeMarketSummaryQuestion(userQuestion)
 		logState := newMarketSummaryRouteLog()
@@ -397,15 +400,6 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 			logState.addNote("skipped review candidates=%d", len(discoveryInput.SkippedReviews))
 		}
 		emitSummaryToolStatus(ch, "phase3.discovery.fetch", "success", nil, 0)
-
-		// V1.5 is a backend-owned deterministic strategy. The complete indicator
-		// universe is ranked before the top-18 evidence pass and the legacy final
-		// recommendation model is deliberately not invoked. Consequently model
-		// prose cannot alter scores, targets, execution state, or candidate order.
-		if marketSummaryCurrentVersion == marketSummaryVersion150 {
-			o.runMarketSummaryV150Phase(ch, displayQuestion, discoveryInput, longTigerRaw, logState)
-			return
-		}
 
 		logState.addCall("discovery_model")
 		emitSummaryToolStatus(ch, "phase3.discovery.model", "running", nil, 0)
@@ -465,141 +459,6 @@ func (o *OpenAi) NewSummaryStockNewsStreamPhased(userQuestion string, sysPromptI
 		}
 	}()
 	return ch
-}
-
-func (o *OpenAi) runMarketSummaryV150Phase(
-	ch chan map[string]any,
-	displayQuestion string,
-	input marketSummaryDiscoveryInput,
-	longTigerRaw []models.LongTigerRankData,
-	logState *marketSummaryRouteLog,
-) {
-	emitSummaryToolStatus(ch, "v150.deterministic.rank", "running", nil, 0)
-	run, err := prepareMarketSummaryV150ForPhase(input, parseMarketSummaryRouteStartedAt(logState), logState)
-	if err != nil {
-		logState.addNote("v1.5 preparation failed: %v", err)
-		emitSummaryToolStatus(ch, "v150.deterministic.rank", "error", err, 0)
-		ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
-		return
-	}
-	routes := buildMarketSummaryV150VerificationRoutes(run)
-	logState.DiscoveryCandidateCt = len(run.Candidates)
-	logState.addNote("v1.5 backend rank complete candidates=%d eligibleTop18=%d", len(run.Candidates), len(routes))
-	emitSummaryToolStatus(ch, "v150.deterministic.rank", "success", nil, 0)
-
-	verified := make([]marketSummaryVerifiedCandidate, 0, len(routes))
-	if run.Regime.NoTrade {
-		logState.addNote("v1.5 risk_off: evidence fetch skipped and structured no_trade will be persisted")
-	} else if len(routes) > 0 {
-		emitSummaryToolStatus(ch, "v150.evidence.verify", "running", nil, 0)
-		// The verifier fetches factual evidence/price snapshots only. It is not an
-		// LLM ranking or recommendation pass and it receives the already-fixed
-		// top-18 order from the strategy package.
-		verificationInput := input
-		verificationDiscovery := &marketSummaryDiscoveryResult{CandidateStocks: routes}
-		verified = verifyMarketSummaryCandidates(verificationInput, verificationDiscovery, longTigerRaw, input.Budget, logState)
-		emitSummaryToolStatus(ch, "v150.evidence.verify", "success", nil, 0)
-	}
-	logState.VerifiedCandidateCt = len(verified)
-
-	runEventModel, eventGateReason := applyMarketSummaryV150NewsEventGate(run, logState.NewsWindowStatus)
-	if !run.Regime.NoTrade && !runEventModel {
-		status := strings.TrimPrefix(eventGateReason, "news_")
-		warning := errors.New("event model skipped because news window status is " + status)
-		logState.addNote("v1.5 event evidence degraded: %s", eventGateReason)
-		emitSummaryToolStatus(ch, "v150.event.model", "warning", warning, 0)
-	} else if runEventModel {
-		emitSummaryToolStatus(ch, "v150.event.model", "running", nil, 0)
-		logState.addCall("event_model")
-		if err := o.verifyMarketSummaryV150Events(run, verified); err != nil {
-			// Event-model failure is candidate-local degradation: every selected
-			// candidate receives event score 0, while deterministic technical
-			// eligibility and the rest of the batch continue.
-			degradeMarketSummaryV150EventCandidates(run, run.VerificationSymbols, "model_batch_failed:"+strings.TrimSpace(err.Error()))
-			logState.addNote("v1.5 event model degraded: %v", err)
-			emitSummaryToolStatus(ch, "v150.event.model", "warning", err, 0)
-		} else {
-			emitSummaryToolStatus(ch, "v150.event.model", "success", nil, 0)
-		}
-	}
-	if !run.Regime.NoTrade && len(run.VerificationSymbols) > 0 {
-		emitSummaryToolStatus(ch, "v150.quote.refresh", "running", nil, 0)
-		refreshed, failed := refreshMarketSummaryV150VerificationQuotes(run)
-		logState.addNote("v1.5 final quote refresh refreshed=%d failed=%d", refreshed, failed)
-		if failed > 0 {
-			emitSummaryToolStatus(ch, "v150.quote.refresh", "warning", fmt.Errorf("%d final quotes missing or stale", failed), 0)
-		} else {
-			emitSummaryToolStatus(ch, "v150.quote.refresh", "success", nil, 0)
-		}
-	}
-
-	portfolio, portfolioErr := loadMarketSummaryV150PortfolioState(db.Dao, time.Now())
-	if portfolioErr != nil {
-		warning := "portfolio_state_degraded:" + strings.TrimSpace(portfolioErr.Error())
-		run.Warnings = append(run.Warnings, warning)
-		logState.addNote("v1.5 %s", warning)
-		run.PortfolioStateStatus = "failed"
-		portfolio = cloneV150PortfolioState(v150.PortfolioState{})
-	} else {
-		run.PortfolioStateStatus = "ok"
-	}
-	// Evidence and portfolio state fetched above are part of the frozen input.
-	// Advance the cutoff only after both are locally available; ranking remains
-	// tied to the earlier RunContext.AsOf snapshot.
-	run.RunContext.DataCutoffAt = time.Now()
-	run.PortfolioBefore = cloneV150PortfolioState(portfolio)
-	decisionAt := time.Now()
-	if err := finalizeMarketSummaryV150Run(run, verified, portfolio, decisionAt); err != nil {
-		logState.addNote("v1.5 decision failed: %v", err)
-		emitSummaryToolStatus(ch, "v150.decision", "error", err, 0)
-		ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
-		return
-	}
-	if err := refreshMarketSummaryV150DataHash(run); err != nil {
-		logState.addNote("v1.5 data hash refresh failed: %v", err)
-		emitSummaryToolStatus(ch, "v150.decision", "error", err, 0)
-		ch <- map[string]any{"code": 0, "question": displayQuestion, "content": err.Error()}
-		return
-	}
-	run.Warnings = dedupeNonEmptyStrings(run.Warnings, 256)
-	for _, warning := range run.Warnings {
-		logState.addNote("health_warning:%s", warning)
-	}
-	logState.addNote(
-		"v1.5 decision complete production=%d noTrade=%s configHash=%s dataHash=%s modelHash=%s promptHash=%s warnings=%d",
-		len(run.Production), run.NoTradeReason, run.RunContext.ConfigHash, run.DataHash, run.ModelHash, run.PromptHash, len(run.Warnings),
-	)
-	emitSummaryToolStatus(ch, "v150.decision", "success", nil, 0)
-
-	report := renderMarketSummaryV150Report(run)
-	logState.finish()
-	ch <- map[string]any{
-		"code":     1,
-		"question": displayQuestion,
-		"content":  report,
-		"chatId":   run.RunContext.RunID,
-		"model":    firstNonEmptyText(strings.TrimSpace(o.Model), marketSummaryV150LocalModelSpec),
-	}
-	ch <- map[string]any{
-		"event":              "summaryStockNewsMeta",
-		"code":               1,
-		"routeLog":           logState,
-		"verifiedCandidates": verified,
-		"v150Run":            run,
-	}
-	logger.SugaredLogger.Infof("market summary v1.5 route completed: %s", mustJSON(logState))
-}
-
-func parseMarketSummaryRouteStartedAt(logState *marketSummaryRouteLog) time.Time {
-	if logState != nil {
-		if value, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(logState.StartedAt)); err == nil && !value.IsZero() {
-			return value
-		}
-		if value, err := time.ParseInLocation(time.DateTime, strings.TrimSpace(logState.StartedAt), cnLocation()); err == nil && !value.IsZero() {
-			return value
-		}
-	}
-	return time.Now()
 }
 
 func renderMarketSummaryV150Report(run *MarketSummaryV150RunSnapshot) string {
