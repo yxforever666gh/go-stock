@@ -28,6 +28,21 @@ function Invoke-Checked {
     if ($exitCode -ne 0) { throw "$Failure (exit $exitCode)" }
 }
 
+function Get-SHA256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "")
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Get-Context {
     if (-not (Test-Path -LiteralPath $ManifestPath)) { throw "Missing release manifest: $ManifestPath" }
     $manifest = Get-Content -LiteralPath $ManifestPath -Raw | ConvertFrom-Json
@@ -68,9 +83,9 @@ function New-Pointer {
         minuteSchemaVersion = [int]$Context.Manifest.minuteSchemaVersion
         commit = [string]$Context.Commit
         binary = [System.IO.Path]::GetFullPath($Context.Binary)
-        artifactSHA256 = (Get-FileHash -LiteralPath $Context.Binary -Algorithm SHA256).Hash.ToLowerInvariant()
+        artifactSHA256 = Get-SHA256 -Path $Context.Binary
         zoneInfo = [System.IO.Path]::GetFullPath($Context.ZoneInfo)
-        zoneInfoSHA256 = (Get-FileHash -LiteralPath $Context.ZoneInfo -Algorithm SHA256).Hash.ToLowerInvariant()
+        zoneInfoSHA256 = Get-SHA256 -Path $Context.ZoneInfo
         deployedAt = [DateTime]::UtcNow.ToString("o")
     }
 }
@@ -161,7 +176,7 @@ function Invoke-Rollback {
     foreach ($field in @("appVersion", "mainSchemaVersion", "minuteSchemaVersion", "commit", "binary", "artifactSHA256", "zoneInfo", "zoneInfoSHA256")) {
         if ([string]::IsNullOrWhiteSpace([string]$pointer.$field)) { throw "Rollback receipt is missing $field" }
     }
-    if ((Get-FileHash -LiteralPath $pointer.binary -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pointer.artifactSHA256) { throw "Rollback binary hash mismatch" }
+    if ((Get-SHA256 -Path $pointer.binary) -ne $pointer.artifactSHA256) { throw "Rollback binary hash mismatch" }
     Stop-Current
     Write-JSONAtomic $CurrentPointer $pointer
     Start-Pointer $pointer

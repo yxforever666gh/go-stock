@@ -23,6 +23,21 @@ function Write-Log {
     $line | Tee-Object -FilePath (Join-Path $LogDir "monitor.windows.log") -Append
 }
 
+function Get-SHA256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $stream = [System.IO.File]::OpenRead($Path)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            return (($sha256.ComputeHash($stream) | ForEach-Object { $_.ToString("x2") }) -join "")
+        } finally {
+            $sha256.Dispose()
+        }
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 function Show-Usage {
     @"
 Usage:
@@ -54,8 +69,8 @@ function Resolve-Pointer {
             throw "Release pointer path is outside runtime releases: $resolved"
         }
     }
-    $binaryHash = (Get-FileHash -LiteralPath $pointer.binary -Algorithm SHA256).Hash.ToLowerInvariant()
-    $zoneHash = (Get-FileHash -LiteralPath $pointer.zoneInfo -Algorithm SHA256).Hash.ToLowerInvariant()
+    $binaryHash = Get-SHA256 -Path $pointer.binary
+    $zoneHash = Get-SHA256 -Path $pointer.zoneInfo
     if ($binaryHash -ne ([string]$pointer.artifactSHA256).ToLowerInvariant()) { throw "Release binary SHA256 mismatch" }
     if ($zoneHash -ne ([string]$pointer.zoneInfoSHA256).ToLowerInvariant()) { throw "Release zoneinfo SHA256 mismatch" }
 
