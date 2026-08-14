@@ -75,3 +75,15 @@ func TestMinuteSchemaRemainsVersion2(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestPublishedMinuteMigrationChecksumsRemainFrozen(t *testing.T) {
+	want := map[int]string{
+		1: "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec",
+		2: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0",
+	}
+	for _, item := range minuteMigrations {
+		if got := item.checksum(); got != want[item.id] {
+			t.Fatalf("minute migration %d checksum = %s, want %s", item.id, got, want[item.id])
+		}
+	}
+}

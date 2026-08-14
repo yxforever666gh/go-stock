@@ -23,8 +23,9 @@ $PidFile = Join-Path $RuntimeRoot "go-stock-web.pid"
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments, [string]$Failure)
-    & $Program @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$Failure (exit $LASTEXITCODE)" }
+    & $Program @Arguments | Out-Host
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) { throw "$Failure (exit $exitCode)" }
 }
 
 function Get-Context {
@@ -89,7 +90,9 @@ function Invoke-Build {
     Copy-Item -LiteralPath (Get-ZoneInfoSource) -Destination $context.ZoneInfo -Force
     $pointer = New-Pointer $context
     Write-JSONAtomic (Join-Path $context.ReleaseDir "build.json") $pointer
-    Write-Output "Built App $($pointer.appVersion): $($pointer.binary)"
+    # Invoke-Build is captured by Invoke-Deploy. Host output must not become
+    # part of the returned pointer object.
+    Write-Host "Built App $($pointer.appVersion): $($pointer.binary)"
     return $pointer
 }
 

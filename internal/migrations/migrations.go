@@ -99,8 +99,14 @@ var mainMigrations = []migration{
 }
 
 var minuteMigrations = []migration{
-	{id: 1, name: "baseline_minute_bar_schema", description: "Published minute-bar baseline.", apply: func(tx *gorm.DB) error { return tx.Exec(minuteBarSchemaSQL).Error }},
-	{id: 2, name: "lock_minute_bar_schema_definition", description: "Locks the minute-bar DDL.", definition: func() string { return minuteBarSchemaSQL }, apply: func(tx *gorm.DB) error {
+	{
+		id:                1,
+		name:              "baseline_minute_bar_schema",
+		description:       "App 1.5.1 minute_bar WITHOUT ROWID baseline and trade_time index.",
+		publishedChecksum: "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec",
+		apply:             func(tx *gorm.DB) error { return tx.Exec(minuteBarSchemaSQL).Error },
+	},
+	{id: 2, name: "lock_minute_bar_schema_definition", description: "App 1.5.1 locks the complete minute_bar DDL without rewriting the published baseline migration.", publishedChecksum: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0", definition: func() string { return minuteBarSchemaSQL }, apply: func(tx *gorm.DB) error {
 		if err := tx.Exec(minuteBarSchemaSQL).Error; err != nil {
 			return err
 		}
