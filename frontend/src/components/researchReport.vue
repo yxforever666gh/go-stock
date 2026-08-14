@@ -1,14 +1,21 @@
 <script setup>
-import {h, onMounted, ref} from 'vue'
-import {NButton, NTag, NText, useMessage} from 'naive-ui'
+import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
+import {NButton, NTag, useMessage} from 'naive-ui'
 import {MdPreview} from 'md-editor-v3'
-import {GetAIAnalysisReport, ListAIAnalysisReports} from '../services/app-api'
+import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/app-api'
 
 const message = useMessage()
 const loading = ref(false)
 const rows = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
+const starting = ref(false)
+let waitingForManualRun = false
+let manualBaselineRunID = ''
+let pollTimer = null
+
+const hasRunningReport = computed(() => rows.value.some(row => row.status === 'running'))
+const analysisBusy = computed(() => starting.value || hasRunningReport.value)
 
 const statusLabels = {
   running: '分析中', success: '已推荐', no_recommendation: '空仓', failed: '失败',
@@ -36,26 +43,95 @@ function sourceSummary(value) {
   }
 }
 
+function summarySourceStatus(row) {
+  const total = Number(row?.sourceCount || 0)
+  const failed = Number(row?.failedSourceCount || 0)
+  return `${total} 个来源，${failed} 个失败`
+}
+
+function sourceRows(value) {
+  try {
+    const rows = JSON.parse(value || '[]')
+    return Array.isArray(rows) ? rows.map(item => ({
+      sourceId: item.sourceId,
+      sourceName: item.sourceName,
+      category: item.category,
+      collectedAt: item.collectedAt,
+      status: item.error ? '失败' : '成功',
+      error: item.error || '',
+    })) : []
+  } catch (_) {
+    return []
+  }
+}
+
+const sourceColumns = [
+  {title: '编号', key: 'sourceId', width: 90},
+  {title: '来源', key: 'sourceName', minWidth: 150},
+  {title: '分类', key: 'category', width: 110},
+  {title: '采集时间', key: 'collectedAt', width: 170, render: row => dateTime(row.collectedAt)},
+  {title: '状态', key: 'status', width: 80, render: row => h(NTag, {type: row.error ? 'error' : 'success', bordered: false}, {default: () => row.status})},
+  {title: '失败原因', key: 'error', minWidth: 220, ellipsis: {tooltip: true}, render: row => row.error || '--'},
+]
+
 const columns = [
   {title: '计划时间', key: 'scheduledFor', width: 170, render: row => dateTime(row.scheduledFor)},
   {title: '完成时间', key: 'completedAt', width: 170, render: row => dateTime(row.completedAt)},
   {title: 'Provider / 模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
   {title: '状态', key: 'status', width: 130, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
   {title: '推荐数', key: 'recommendationCount', width: 90},
-  {title: '来源状态', key: 'sourceStatusJson', minWidth: 150, render: row => sourceSummary(row.sourceStatusJson)},
+  {title: '来源状态', key: 'sourceCount', minWidth: 150, render: row => summarySourceStatus(row)},
   {title: '空仓/失败原因', key: 'failureReason', minWidth: 210, ellipsis: {tooltip: true}, render: row => row.failureReason || '--'},
   {title: '操作', key: 'actions', width: 110, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => '查看报告'})},
 ]
 
-async function refresh() {
+function stopPolling() {
+  if (pollTimer !== null) {
+    clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+function schedulePolling() {
+  stopPolling()
+  if (!hasRunningReport.value && !waitingForManualRun) return
+  pollTimer = setTimeout(() => refresh(true), 2000)
+}
+
+async function refresh(silent = false) {
+  if (loading.value) return
   loading.value = true
   try {
     rows.value = await ListAIAnalysisReports(100, 0) || []
+		const newest = rows.value[0]
+		const manualRunObserved = waitingForManualRun && newest && newest.runId !== manualBaselineRunID
+		if (manualRunObserved && newest.status !== 'running') {
+			waitingForManualRun = false
+			starting.value = false
+			message.success('AI 分析报告已生成')
+		}
   } catch (error) {
-    message.error(error?.message || String(error))
+		if (!silent) message.error(error?.message || String(error))
   } finally {
     loading.value = false
+		schedulePolling()
   }
+}
+
+async function startAnalysis() {
+	if (analysisBusy.value) return
+	manualBaselineRunID = rows.value[0]?.runId || ''
+	starting.value = true
+	waitingForManualRun = true
+	try {
+		await StartAIAnalysis()
+		message.success('AI 分析已开始')
+		await refresh(true)
+	} catch (error) {
+		waitingForManualRun = false
+		starting.value = false
+		message.error(error?.message || String(error))
+	}
 }
 
 async function showDetail(row) {
@@ -69,13 +145,16 @@ async function showDetail(row) {
 }
 
 onMounted(refresh)
+onBeforeUnmount(stopPolling)
 </script>
 
 <template>
   <n-space vertical>
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">分级 AI 分析自动运行；页面不提供手动运行入口。</n-text>
-      <n-button :loading="loading" @click="refresh">刷新</n-button>
+			<n-button type="primary" :disabled="analysisBusy" :loading="analysisBusy" @click="startAnalysis">
+				{{ analysisBusy ? 'AI 分析中…' : '开始 AI 分析' }}
+			</n-button>
+			<n-button :loading="loading" @click="refresh(false)">刷新</n-button>
     </n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1300" :row-key="row => row.runId"/>
   </n-space>
@@ -96,7 +175,9 @@ onMounted(refresh)
               <n-collapse-item title="大盘层" name="market"><MdPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
               <n-collapse-item title="板块层" name="sector"><MdPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
               <n-collapse-item title="个股层" name="stock"><MdPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
-              <n-collapse-item title="来源状态" name="sources"><pre class="source-json">{{ JSON.stringify(JSON.parse(detail.sourceStatusJson || '[]'), null, 2) }}</pre></n-collapse-item>
+              <n-collapse-item title="来源状态" name="sources">
+                <n-data-table :columns="sourceColumns" :data="sourceRows(detail.sourceStatusJson)" :scroll-x="900" size="small"/>
+              </n-collapse-item>
             </n-collapse>
           </template>
         </n-spin>
@@ -104,7 +185,3 @@ onMounted(refresh)
     </n-card>
   </n-modal>
 </template>
-
-<style scoped>
-.source-json { white-space: pre-wrap; word-break: break-word; }
-</style>

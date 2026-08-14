@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 const finalReportTableHeader = "| 股票名称 | 股票代码 | AI分析摘要 | 激活条件 | 主要风险 | 来源编号 |"
@@ -48,6 +49,10 @@ type AnalysisRunner struct {
 
 func NewAnalysisRunner(service *Service, collector SourceCollector) *AnalysisRunner {
 	return &AnalysisRunner{service: service, collector: collector}
+}
+
+func (r *AnalysisRunner) completeAI(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
+	return r.service.ai.Complete(ctx, request)
 }
 
 func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (AnalysisRun, error) {
@@ -102,13 +107,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	}
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
-	marketResult, err := r.service.ai.Complete(ctx, CompletionRequest{Phase: "market_analysis", Prompt: marketStagePrompt(now, filterSources(allSources, "market"))})
+	marketResult, err := r.completeAI(ctx, CompletionRequest{Phase: "market_analysis", Prompt: marketStagePrompt(now, filterSources(allSources, "market"))})
 	if err != nil {
 		return finishFailure(fmt.Errorf("大盘层失败: %w", err))
 	}
 	run.MarketReport = strings.TrimSpace(marketResult.Content)
 
-	sectorResult, err := r.service.ai.Complete(ctx, CompletionRequest{Phase: "sector_analysis", Prompt: sectorStagePrompt(now, run.MarketReport, filterSources(allSources, "sector"))})
+	sectorResult, err := r.completeAI(ctx, CompletionRequest{Phase: "sector_analysis", Prompt: sectorStagePrompt(now, run.MarketReport, filterSources(allSources, "sector"))})
 	if err != nil {
 		return finishFailure(fmt.Errorf("板块层失败: %w", err))
 	}
@@ -137,7 +142,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		}
 		allSources = dedupeSources(append(allSources, stockSources...))
 		run.SourceStatusJSON = sourceStatusJSON(allSources)
-		batchResult, callErr := r.service.ai.Complete(ctx, CompletionRequest{Phase: "stock_analysis", Prompt: stockStagePrompt(now, run.MarketReport, run.SectorReport, batch, stockSources)})
+		batchResult, callErr := r.completeAI(ctx, CompletionRequest{Phase: "stock_analysis", Prompt: stockStagePrompt(now, run.MarketReport, run.SectorReport, batch, stockSources)})
 		if callErr != nil {
 			allSources = append(allSources, failedSource("stock", fmt.Sprintf("个股分析批次%d", start/10+1), now, callErr))
 			continue
@@ -158,13 +163,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	run.StockReport = strings.Join(stockReports, "\n\n")
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
-	finalResult, err := r.service.ai.Complete(ctx, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(now, run.MarketReport, run.SectorReport, run.StockReport, shortlist)})
+	finalResult, err := r.completeAI(ctx, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(now, run.MarketReport, run.SectorReport, run.StockReport, shortlist)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("决策层失败: %w", err))
 	}
 	rows, parseErr := parseFinalReport(finalResult.Content)
 	if parseErr != nil {
-		repairResult, repairErr := r.service.ai.Complete(ctx, CompletionRequest{Phase: "final_report_repair", Prompt: repairFinalReportPrompt(finalResult.Content, parseErr)})
+		repairResult, repairErr := r.completeAI(ctx, CompletionRequest{Phase: "final_report_repair", Prompt: repairFinalReportPrompt(finalResult.Content, parseErr)})
 		if repairErr != nil {
 			return finishFailure(fmt.Errorf("报告修复失败: %w", repairErr))
 		}
@@ -416,18 +421,80 @@ func dedupeSources(source []SourceDocument) []SourceDocument {
 }
 
 func sourceCorpus(sources []SourceDocument, maxBytes int) string {
-	var builder strings.Builder
+	if len(sources) == 0 || maxBytes <= 0 {
+		return ""
+	}
+	type corpusEntry struct {
+		prefix  string
+		content string
+	}
+	entries := make([]corpusEntry, 0, len(sources))
+	fixedBytes := 0
 	for _, source := range sources {
-		line := fmt.Sprintf("[%s][%s][%s][%s] %s\n", source.SourceID, source.SourceName, source.Category, source.CollectedAt.Format(time.RFC3339), source.Content)
+		entry := corpusEntry{
+			prefix:  fmt.Sprintf("[%s][%s][%s][%s] ", source.SourceID, source.SourceName, source.Category, source.CollectedAt.Format(time.RFC3339)),
+			content: source.Content,
+		}
 		if source.Error != "" {
-			line = fmt.Sprintf("[%s][%s][失败] %s\n", source.SourceID, source.SourceName, source.Error)
+			entry.prefix = fmt.Sprintf("[%s][%s][失败] ", source.SourceID, source.SourceName)
+			entry.content = source.Error
 		}
-		if builder.Len()+len(line) > maxBytes {
-			break
+		entries = append(entries, entry)
+		fixedBytes += len(entry.prefix) + 1
+	}
+	if fixedBytes > maxBytes {
+		// Extreme budgets cannot carry metadata, but retain every source ID and
+		// failure marker whenever that is mathematically possible.
+		fixedBytes = 0
+		for index := range entries {
+			status := ""
+			if sources[index].Error != "" {
+				status = "[失败]"
+			}
+			entries[index].prefix = fmt.Sprintf("[%s]%s ", sources[index].SourceID, status)
+			fixedBytes += len(entries[index].prefix) + 1
 		}
-		builder.WriteString(line)
+	}
+	if fixedBytes > maxBytes {
+		return truncateUTF8(strings.Join(func() []string {
+			ids := make([]string, 0, len(sources))
+			for _, source := range sources {
+				ids = append(ids, "["+source.SourceID+"]")
+			}
+			return ids
+		}(), ""), maxBytes)
+	}
+	contentBudget := (maxBytes - fixedBytes) / len(entries)
+	var builder strings.Builder
+	for _, entry := range entries {
+		builder.WriteString(entry.prefix)
+		builder.WriteString(truncateUTF8(entry.content, contentBudget))
+		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func truncateUTF8(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	const marker = "…"
+	if maxBytes < len(marker) {
+		for end := maxBytes; end > 0; end-- {
+			if utf8.ValidString(value[:end]) {
+				return value[:end]
+			}
+		}
+		return ""
+	}
+	end := maxBytes - len(marker)
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end] + marker
 }
 
 func sourceStatusJSON(sources []SourceDocument) string {

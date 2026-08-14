@@ -2,10 +2,12 @@ package research
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 type fixedCollector struct{}
@@ -101,8 +103,62 @@ func TestCandidateAndSourceBounds(t *testing.T) {
 	if len(sources) != 1 || sources[0].SourceID == "" {
 		t.Fatalf("sources=%+v", sources)
 	}
-	if corpus := sourceCorpus(sources, 4); strings.TrimSpace(corpus) != "" {
-		t.Fatalf("corpus should respect hard byte cap: %q", corpus)
+	if corpus := sourceCorpus(sources, 64); len(corpus) > 64 || !strings.Contains(corpus, sources[0].SourceID) {
+		t.Fatalf("corpus should respect cap and retain id: %q", corpus)
+	}
+}
+
+func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Now()
+	run := AnalysisRun{
+		RunID: "summary-run", ScheduledFor: now, StartedAt: now, Status: "failed",
+		MarketReport: strings.Repeat("full report", 100), SourceStatusJSON: sourceStatusJSON([]SourceDocument{
+			{SourceID: "S001", SourceName: "成功来源", Category: "market", CollectedAt: now, Content: "large payload"},
+			{SourceID: "S002", SourceName: "失败来源", Category: "sector", CollectedAt: now, Error: "timeout"},
+		}),
+	}
+	if err := repo.CreateAnalysis(context.Background(), &run); err != nil {
+		t.Fatal(err)
+	}
+	summaries, err := repo.ListAnalysis(context.Background(), 10, 0)
+	if err != nil || len(summaries) != 1 {
+		t.Fatalf("summaries=%+v err=%v", summaries, err)
+	}
+	if summaries[0].SourceCount != 2 || summaries[0].FailedSourceCount != 1 || summaries[0].RunID != run.RunID {
+		t.Fatalf("summary=%+v", summaries[0])
+	}
+}
+
+func TestSourceCorpusBalancesEverySourceAndTruncatesUTF8Safely(t *testing.T) {
+	now := time.Now()
+	sources := []SourceDocument{
+		{SourceID: "S001", SourceName: "大来源", Category: "market", CollectedAt: now, Content: strings.Repeat("行情很好", 500)},
+		{SourceID: "S002", SourceName: "后置来源", Category: "market", CollectedAt: now, Content: strings.Repeat("资金", 500)},
+		{SourceID: "S003", SourceName: "失败来源", Category: "market", CollectedAt: now, Error: "Upstream request failed"},
+	}
+	corpus := sourceCorpus(sources, 600)
+	if len(corpus) > 600 || !utf8.ValidString(corpus) {
+		t.Fatalf("invalid corpus bytes=%d valid=%v", len(corpus), utf8.ValidString(corpus))
+	}
+	for _, source := range sources {
+		if !strings.Contains(corpus, "["+source.SourceID+"]") {
+			t.Fatalf("missing source %s in %q", source.SourceID, corpus)
+		}
+	}
+	if !strings.Contains(corpus, "失败") || !strings.Contains(corpus, "Upstream request failed") {
+		t.Fatalf("failed source was not retained: %q", corpus)
+	}
+}
+
+func TestAnalysisRunnerDoesNotMultiplyProviderRetries(t *testing.T) {
+	ai := &scriptedAI{errors: []error{errors.New("Upstream request failed")}}
+	runner := NewAnalysisRunner(&Service{ai: ai}, nil)
+	if _, err := runner.completeAI(context.Background(), CompletionRequest{Phase: "sector_analysis", Prompt: "test"}); err == nil {
+		t.Fatal("expected provider error")
+	}
+	if len(ai.requests) != 1 {
+		t.Fatalf("analysis calls=%d, want 1; retry belongs to provider fallback client", len(ai.requests))
 	}
 }
 

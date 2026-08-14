@@ -7,6 +7,7 @@ export namespace models {
 	    // Go type: time
 	    UpdatedAt: any;
 	    sort: number;
+	    disabled: boolean;
 	    name: string;
 	    baseUrl: string;
 	    apiKey: string;
@@ -28,6 +29,7 @@ export namespace models {
 	        this.CreatedAt = this.convertValues(source["CreatedAt"], null);
 	        this.UpdatedAt = this.convertValues(source["UpdatedAt"], null);
 	        this.sort = source["sort"];
+	        this.disabled = source["disabled"];
 	        this.name = source["name"];
 	        this.baseUrl = source["baseUrl"];
 	        this.apiKey = source["apiKey"];
@@ -1039,6 +1041,59 @@ export namespace research {
 	        this.recommendationCount = source["recommendationCount"];
 	        this.createdAt = this.convertValues(source["createdAt"], null);
 	        this.updatedAt = this.convertValues(source["updatedAt"], null);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AnalysisRunSummary {
+	    runId: string;
+	    // Go type: time
+	    scheduledFor: any;
+	    // Go type: time
+	    startedAt: any;
+	    // Go type: time
+	    completedAt?: any;
+	    status: string;
+	    providerName: string;
+	    modelName: string;
+	    recommendationCount: number;
+	    failureReason: string;
+	    sourceCount: number;
+	    failedSourceCount: number;
+
+	    static createFrom(source: any = {}) {
+	        return new AnalysisRunSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.runId = source["runId"];
+	        this.scheduledFor = this.convertValues(source["scheduledFor"], null);
+	        this.startedAt = this.convertValues(source["startedAt"], null);
+	        this.completedAt = this.convertValues(source["completedAt"], null);
+	        this.status = source["status"];
+	        this.providerName = source["providerName"];
+	        this.modelName = source["modelName"];
+	        this.recommendationCount = source["recommendationCount"];
+	        this.failureReason = source["failureReason"];
+	        this.sourceCount = source["sourceCount"];
+	        this.failedSourceCount = source["failedSourceCount"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

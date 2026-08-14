@@ -53,6 +53,8 @@ Thumbs.db
 data.test
 /test-results/
 /.playwright-mcp/
+/.playwright-cli/
+/output/
 
 # Local workspace
 .claude/settings.local.json

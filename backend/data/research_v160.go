@@ -10,25 +10,65 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"go-stock/backend/db"
+	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
 )
 
-type ResearchAIClient struct{ configID int }
+type researchProviderCompletion func(context.Context, *models.AIConfig, []map[string]any, string) (string, string, string, error)
+
+type ResearchAIClient struct {
+	configID         int
+	loadSetting      func() *SettingConfig
+	completeProvider researchProviderCompletion
+	attemptTimeout   time.Duration
+	maxAttempts      int
+}
+
+const (
+	researchModelAttemptTimeout = 30 * time.Second
+	researchModelMaxAttempts    = 5
+)
 
 func NewResearchAIClient(configID int) *ResearchAIClient {
 	return &ResearchAIClient{configID: configID}
 }
 
-func (client *ResearchAIClient) Complete(ctx context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
-	setting := GetSettingConfig()
-	configID := client.configID
-	if configID <= 0 && setting != nil && setting.Settings != nil {
-		configID = int(setting.AIAnalysisConfigID)
+func (client *ResearchAIClient) modelAttemptTimeout() time.Duration {
+	if client.attemptTimeout > 0 {
+		return client.attemptTimeout
 	}
-	provider := NewDeepSeekOpenAi(ctx, configID)
+	return researchModelAttemptTimeout
+}
+
+func (client *ResearchAIClient) modelMaxAttempts() int {
+	if client.maxAttempts > 0 {
+		return client.maxAttempts
+	}
+	return researchModelMaxAttempts
+}
+
+func (client *ResearchAIClient) completeModelAttempt(ctx context.Context, config *models.AIConfig, messages []map[string]any, previousResponseID string) (string, string, string, error) {
+	if client.completeProvider != nil {
+		return client.completeProvider(ctx, config, messages, previousResponseID)
+	}
+	provider := NewOpenAiWithConfig(ctx, config)
+	provider.TimeOut = int(client.modelAttemptTimeout() / time.Second)
+	provider.DisableRequestRetries = true
+	return provider.CompleteResearch(ctx, messages, previousResponseID)
+}
+
+func (client *ResearchAIClient) Complete(ctx context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	setting := GetSettingConfig()
+	if client.loadSetting != nil {
+		setting = client.loadSetting()
+	}
 	messages := make([]map[string]any, 0, len(request.Messages)+1)
 	if len(request.Messages) > 0 {
 		for _, message := range request.Messages {
@@ -41,11 +81,71 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 	} else {
 		messages = append(messages, map[string]any{"role": "user", "content": request.Prompt})
 	}
-	content, responseID, model, err := provider.CompleteResearch(ctx, messages, request.PreviousResponseID)
-	if err != nil {
-		return research.CompletionResult{}, err
+	// Research always follows the settings table from top to bottom. The
+	// constructor's config ID is retained only for callers that still record the
+	// primary row; it must not override the user-visible fallback order.
+	order := ResolveAIFallbackOrder(setting, 0)
+	if len(order) == 0 {
+		return research.CompletionResult{}, errors.New("没有已启用的 AI 模型")
 	}
-	return research.CompletionResult{Content: content, ResponseID: responseID, Model: model}, nil
+	configs := make(map[int]*models.AIConfig, len(setting.AiConfigs))
+	for _, config := range setting.AiConfigs {
+		if config != nil {
+			configs[int(config.ID)] = config
+		}
+	}
+	attemptErrors := make([]error, 0, len(order))
+	attemptTimeout := client.modelAttemptTimeout()
+	maxAttempts := client.modelMaxAttempts()
+	for index, configID := range order {
+		config := configs[configID]
+		if config == nil || config.Disabled {
+			continue
+		}
+		label := strings.TrimSpace(config.Name)
+		if label == "" {
+			label = DisplayAIProviderName(config)
+		}
+		var lastErr error
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return research.CompletionResult{}, err
+			}
+			attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
+			content, responseID, model, err := client.completeModelAttempt(attemptCtx, config, messages, request.PreviousResponseID)
+			attemptTimedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
+			cancel()
+			if err == nil {
+				return research.CompletionResult{Content: content, ResponseID: responseID, Model: model}, nil
+			}
+			if parentErr := ctx.Err(); parentErr != nil {
+				return research.CompletionResult{}, parentErr
+			}
+			lastErr = err
+			if attemptTimedOut {
+				lastErr = fmt.Errorf("单次调用超过 %s: %w", attemptTimeout, context.DeadlineExceeded)
+			}
+			if attempt < maxAttempts {
+				logger.SugaredLogger.Warnf("研究中心 AI 调用失败，重试当前模型。phase=%s model=%s/%s attempt=%d/%d timeout=%s error=%v",
+					request.Phase, label, strings.TrimSpace(config.ModelName), attempt, maxAttempts, attemptTimeout, lastErr)
+			}
+		}
+		attemptErrors = append(attemptErrors, fmt.Errorf("%s/%s 连续 %d 次失败（单次超时 %s）: %w",
+			label, strings.TrimSpace(config.ModelName), maxAttempts, attemptTimeout, lastErr))
+		if index+1 < len(order) {
+			next := configs[order[index+1]]
+			nextLabel := "下一模型"
+			if next != nil {
+				nextLabel = strings.TrimSpace(next.Name) + "/" + strings.TrimSpace(next.ModelName)
+			}
+			logger.SugaredLogger.Warnf("研究中心 AI 连续 %d 次调用失败，按回退顺序切换。phase=%s from=%s/%s to=%s timeout=%s error=%v",
+				maxAttempts, request.Phase, label, strings.TrimSpace(config.ModelName), nextLabel, attemptTimeout, lastErr)
+		}
+	}
+	if len(attemptErrors) == 0 {
+		return research.CompletionResult{}, errors.New("没有已启用的 AI 模型")
+	}
+	return research.CompletionResult{}, fmt.Errorf("所有已启用模型均调用失败: %w", errors.Join(attemptErrors...))
 }
 
 type ResearchQuoteProvider struct{ stocks *StockDataApi }
@@ -296,11 +396,26 @@ func researchDocument(name, category string, now time.Time, value any) research.
 		document.Error = err.Error()
 		return document
 	}
-	if len(data) > 16000 {
-		data = append(data[:16000], []byte(`...<truncated>`)...)
-	}
-	document.Content = string(data)
+	document.Content = truncateResearchSourceJSON(string(data), 16000)
 	return document
+}
+
+func truncateResearchSourceJSON(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	const marker = `...<truncated>`
+	end := maxBytes - len(marker)
+	if end < 0 {
+		end = 0
+	}
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end] + marker
 }
 
 func shanghaiDataLocation() *time.Location {
@@ -333,27 +448,9 @@ func ResolveAIAnalysisConfig(setting *SettingConfig) (*models.AIConfig, error) {
 	if setting == nil {
 		setting = GetSettingConfig()
 	}
-	if setting == nil || len(setting.AiConfigs) == 0 {
-		return nil, errors.New("未配置 AI 模型")
-	}
-	requested := uint(0)
-	if setting.Settings != nil {
-		requested = setting.AIAnalysisConfigID
-	}
-	for _, config := range setting.AiConfigs {
-		if config != nil && requested != 0 && config.ID == requested {
-			return config, nil
-		}
-	}
-	// First-run preference is the existing wawa / gpt-5.6-sol Responses config.
-	for _, config := range setting.AiConfigs {
-		if config != nil && strings.EqualFold(strings.TrimSpace(config.Name), "wawa") && strings.EqualFold(strings.TrimSpace(config.ModelName), "gpt-5.6-sol") && NormalizeAIAPIProtocol(config.ApiProtocol) == AIAPIProtocolOpenAIResponses {
-			return config, nil
-		}
-	}
 	config := SelectPrimaryAIConfig(setting.AiConfigs)
 	if config == nil {
-		return nil, fmt.Errorf("未找到可用 AI 配置")
+		return nil, errors.New("没有已启用的 AI 模型")
 	}
 	return config, nil
 }

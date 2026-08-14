@@ -63,6 +63,7 @@ type AIConfig struct {
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	Sort             int     `json:"sort" gorm:"index"`
+	Disabled         bool    `json:"disabled"`
 	Name             string  `json:"name"`
 	BaseUrl          string  `json:"baseUrl"`
 	ApiKey           string  `json:"apiKey" `

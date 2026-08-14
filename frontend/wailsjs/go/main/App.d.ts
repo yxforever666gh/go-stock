@@ -92,7 +92,7 @@ export function InitializeGroupSort():Promise<boolean>;
 
 export function InvestCalendarTimeLine(arg1:string):Promise<Array<any>>;
 
-export function ListAIAnalysisReports(arg1:number,arg2:number):Promise<Array<research.AnalysisRun>>;
+export function ListAIAnalysisReports(arg1:number,arg2:number):Promise<Array<research.AnalysisRunSummary>>;
 
 export function ListAIRecommendations(arg1:number,arg2:number):Promise<Array<research.Recommendation>>;
 
@@ -137,6 +137,8 @@ export function ShareAnalysis(arg1:string,arg2:string):Promise<string>;
 export function StockNotice(arg1:string):Promise<Array<any>>;
 
 export function StockResearchReport(arg1:string):Promise<Array<any>>;
+
+export function StartAIAnalysis():Promise<boolean>;
 
 export function TestAIConfig(arg1:number):Promise<models.AIModelTestResult>;
 

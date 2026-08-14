@@ -109,8 +109,13 @@ function normalizeAiConfigs(configs) {
   return (configs || []).map((item, index) => ({
     ...item,
     sort: index + 1,
+    disabled: item?.disabled === true,
     apiProtocol: normalizeAiProtocol(item?.apiProtocol),
   }))
+}
+
+function primaryAiConfigId(configs = formValue.value.openAI.aiConfigs) {
+  return (configs || []).find(item => item?.disabled !== true)?.ID || 0
 }
 
 function applyConfigToForm(config) {
@@ -158,7 +163,7 @@ function applyConfigToForm(config) {
   formValue.value.forceNoProxyForFetch = config?.forceNoProxyForFetch !== false
   formValue.value.aiAnalysis = {
     enabled: config?.aiAnalysisEnabled !== false,
-    configId: config?.aiAnalysisConfigId || normalizedAiConfigs[0]?.ID || null,
+    configId: primaryAiConfigId(normalizedAiConfigs) || null,
     times: config?.aiAnalysisTimes || '09:30,11:30,14:30',
   }
   formValue.value.qgqpBId = config?.qgqpBId || ''
@@ -189,6 +194,7 @@ function renumberAiConfigSorts() {
 function addAiConfig() {
   formValue.value.openAI.aiConfigs.push(new models.AIConfig({
     sort: formValue.value.openAI.aiConfigs.length + 1,
+    disabled: false,
     name: '',
     baseUrl: 'https://api.deepseek.com',
     apiKey: '',
@@ -308,7 +314,9 @@ function buildConfigPayload() {
     httpProxyEnabled:formValue.value.httpProxyEnabled,
     forceNoProxyForFetch: formValue.value.forceNoProxyForFetch,
     aiAnalysisEnabled: formValue.value.aiAnalysis.enabled,
-    aiAnalysisConfigId: formValue.value.aiAnalysis.configId || 0,
+    // The first enabled row is the primary model; the remaining enabled rows
+    // are attempted from top to bottom as fallbacks.
+    aiAnalysisConfigId: primaryAiConfigId(),
     aiAnalysisTimes: formValue.value.aiAnalysis.times,
     qgqpBId: formValue.value.qgqpBId
   })
@@ -707,15 +715,7 @@ function deletePrompt(ID) {
             <n-form-item-gi :span="4" label="启用：" path="aiAnalysis.enabled">
               <n-switch v-model:value="formValue.aiAnalysis.enabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="9" label="AI 配置：" path="aiAnalysis.configId">
-              <n-select
-                  v-model:value="formValue.aiAnalysis.configId"
-                  :options="formValue.openAI.aiConfigs.map(item => ({ label: `${item.name || '未命名'} / ${item.modelName || '-'}`, value: item.ID }))"
-                  placeholder="选择用于分级分析和生命周期判断的配置"
-                  @update:value="handleImmediateFieldChange"
-              />
-            </n-form-item-gi>
-            <n-form-item-gi :span="11" label="分析时间：" path="aiAnalysis.times">
+            <n-form-item-gi :span="20" label="分析时间：" path="aiAnalysis.times">
               <n-input
                   v-model:value="formValue.aiAnalysis.times"
                   placeholder="09:30,11:30,14:30"
@@ -723,7 +723,7 @@ function deletePrompt(ID) {
               />
             </n-form-item-gi>
             <n-gi :span="24">
-              <n-text depth="3">仅沪深交易日自动运行；有未卖出持仓时跳过新分析。这里不提供手动运行，也不会复制 API Key。</n-text>
+              <n-text depth="3">模型按上方“回退顺序”从上到下调用，关闭的模型会直接跳过。仅沪深交易日自动运行；有未卖出持仓时跳过新分析。</n-text>
             </n-gi>
           </n-grid>
         </n-card>

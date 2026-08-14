@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"go-stock/backend/models"
 	"go-stock/backend/research"
 
 	"github.com/glebarez/sqlite"
@@ -60,6 +61,37 @@ func TestSchema3CreatesIndependentResearchTablesAndAccount(t *testing.T) {
 	}
 	run := research.AnalysisRun{RunID: "run-1", ScheduledFor: time.Now(), StartedAt: time.Now(), Status: "running"}
 	if err := repository.CreateAnalysis(ctx, &run); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSchema4EnablesExistingAIConfigsByDefault(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := database.Exec(`CREATE TABLE ai_config (
+id integer PRIMARY KEY AUTOINCREMENT,
+sort integer,
+name text
+);
+INSERT INTO ai_config(sort, name) VALUES (1, 'primary'), (2, 'fallback');`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyAIConfigModelSwitchFallbackOrder(database); err != nil {
+		t.Fatal(err)
+	}
+	if !database.Migrator().HasColumn(&models.AIConfig{}, "Disabled") {
+		t.Fatal("ai_config.disabled was not created")
+	}
+	var callableCount int64
+	if err := database.Raw("SELECT COUNT(*) FROM ai_config WHERE disabled = 0").Scan(&callableCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if callableCount != 2 {
+		t.Fatalf("callable rows = %d, want 2", callableCount)
+	}
+	if err := database.Exec("INSERT INTO ai_config(sort, name) VALUES (3, 'later')").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyMainSchema4Runtime(database); err != nil {
 		t.Fatal(err)
 	}
 }

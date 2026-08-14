@@ -96,6 +96,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV3Definition,
 		apply:       applyResearchV160Schema,
 	},
+	{
+		id: 4, name: "ai_config_model_switch_fallback_order",
+		description: "App 1.6.0 adds a per-model call switch while retaining ai_config.sort as the single fallback order.",
+		definition:  func() string { return "ai_config.disabled NOT NULL DEFAULT 0\nai_config.sort is fallback order" },
+		apply:       applyAIConfigModelSwitchFallbackOrder,
+	},
 }
 
 var minuteMigrations = []migration{
@@ -143,6 +149,24 @@ func applyResearchV160Schema(tx *gorm.DB) error {
 	account := research.SimulatedAccount{ID: 1, InitialCash: research.InitialCash, Cash: research.InitialCash}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
 		return fmt.Errorf("initialize 1.6.0 simulated account: %w", err)
+	}
+	return nil
+}
+
+func applyAIConfigModelSwitchFallbackOrder(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if !tx.Migrator().HasTable(&models.AIConfig{}) {
+		return errors.New("ai_config table is unavailable")
+	}
+	if !tx.Migrator().HasColumn(&models.AIConfig{}, "Disabled") {
+		if err := tx.Exec("ALTER TABLE ai_config ADD COLUMN disabled numeric NOT NULL DEFAULT 0").Error; err != nil {
+			return fmt.Errorf("add ai_config.disabled: %w", err)
+		}
+	}
+	if err := tx.Exec("UPDATE ai_config SET disabled = 0 WHERE disabled IS NULL").Error; err != nil {
+		return fmt.Errorf("backfill ai_config.disabled: %w", err)
 	}
 	return nil
 }
@@ -306,6 +330,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 4 {
+		if err := verifyMainSchema4Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -329,6 +358,20 @@ func verifyMainSchema3Runtime(database *gorm.DB) error {
 	}
 	if triggerCount != 0 {
 		return fmt.Errorf("main schema 3 still has %d legacy strategy guard triggers", triggerCount)
+	}
+	return nil
+}
+
+func verifyMainSchema4Runtime(database *gorm.DB) error {
+	if !database.Migrator().HasColumn(&models.AIConfig{}, "Disabled") {
+		return errors.New("main schema 4 ai_config.disabled is missing")
+	}
+	var nullCount int64
+	if err := database.Raw("SELECT COUNT(*) FROM ai_config WHERE disabled IS NULL").Scan(&nullCount).Error; err != nil {
+		return err
+	}
+	if nullCount != 0 {
+		return fmt.Errorf("main schema 4 has %d ai_config rows without call-switch state", nullCount)
 	}
 	return nil
 }

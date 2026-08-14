@@ -137,7 +137,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.6.0：研究中心采用分级 AI 分析、独立生命周期会话、T+1 模拟交易与统一净收益口径；旧策略及 AI 智能体链路已退出。"
+		content = "1.6.1：研究中心采用分级 AI 分析、模型顺序回退、独立生命周期会话、T+1 模拟交易与统一净收益口径；旧策略及 AI 智能体链路已退出。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

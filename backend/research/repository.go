@@ -2,6 +2,7 @@ package research
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -23,6 +24,12 @@ func (r *Repository) EnsureAccount(ctx context.Context) error {
 func (r *Repository) HasOpenPosition(ctx context.Context) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&Position{}).Where("status = ?", "open").Count(&count).Error
+	return count > 0, err
+}
+
+func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
+	var count int64
+	err := r.db.WithContext(ctx).Model(&AnalysisRun{}).Where("status = ?", "running").Count(&count).Error
 	return count > 0, err
 }
 
@@ -206,10 +213,34 @@ func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Qu
 	})
 }
 
-func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]AnalysisRun, error) {
-	var result []AnalysisRun
-	err := r.db.WithContext(ctx).Order("started_at DESC, id DESC").Limit(limit).Offset(offset).Find(&result).Error
-	return result, err
+func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {
+	var runs []AnalysisRun
+	err := r.db.WithContext(ctx).
+		Select("run_id", "scheduled_for", "started_at", "completed_at", "status", "provider_name", "model_name", "recommendation_count", "failure_reason", "source_status_json").
+		Order("started_at DESC, id DESC").Limit(limit).Offset(offset).Find(&runs).Error
+	if err != nil {
+		return nil, err
+	}
+	result := make([]AnalysisRunSummary, 0, len(runs))
+	for _, run := range runs {
+		var sources []struct {
+			Error string `json:"error"`
+		}
+		_ = json.Unmarshal([]byte(run.SourceStatusJSON), &sources)
+		failed := 0
+		for _, source := range sources {
+			if source.Error != "" {
+				failed++
+			}
+		}
+		result = append(result, AnalysisRunSummary{
+			RunID: run.RunID, ScheduledFor: run.ScheduledFor, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
+			Status: run.Status, ProviderName: run.ProviderName, ModelName: run.ModelName,
+			RecommendationCount: run.RecommendationCount, FailureReason: run.FailureReason,
+			SourceCount: len(sources), FailedSourceCount: failed,
+		})
+	}
+	return result, nil
 }
 
 func (r *Repository) Analysis(ctx context.Context, runID string) (AnalysisRun, error) {

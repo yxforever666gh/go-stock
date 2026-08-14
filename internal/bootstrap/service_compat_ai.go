@@ -141,7 +141,7 @@ func (*compatibilityServiceAdapter) GetAIConfigs() []*models.AIConfig {
 	if cfg == nil {
 		return []*models.AIConfig{}
 	}
-	return cfg.AiConfigs
+	return data.EnabledAIConfigs(cfg.AiConfigs)
 }
 func (*compatibilityServiceAdapter) ResolveDefaultAIConfigID() int {
 	return data.SelectPrimaryAIConfigID(data.GetSettingConfig())

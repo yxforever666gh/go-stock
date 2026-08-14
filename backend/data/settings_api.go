@@ -66,8 +66,12 @@ func UpdateConfig(s *SettingConfig) string {
 		return "保存失败: AI 分析启用时请至少填写一个分析时间，例如 09:30,11:30,14:30"
 	}
 	s.AIAnalysisTimes = strings.Join(normalizedAnalysisTimes, ",")
-	if s.AIAnalysisEnabled && s.AIAnalysisConfigID == 0 {
-		return "保存失败: AI 分析启用时请选择 AI 配置"
+	if s.AiConfigs != nil {
+		if primary := SelectPrimaryAIConfig(s.AiConfigs); primary != nil {
+			s.AIAnalysisConfigID = primary.ID
+		} else {
+			s.AIAnalysisConfigID = 0
+		}
 	}
 	if s.MinuteProviderMode == "private" {
 		if !s.PrivateMinuteEnabled {
@@ -186,9 +190,7 @@ func updateAiConfigs(tx *gorm.DB, aiConfigs []*AIConfig) error {
 		if e != nil {
 			return
 		}
-		if item.Sort <= 0 {
-			item.Sort = index + 1
-		}
+		item.Sort = index + 1
 		item.ApiProtocol = NormalizeAIAPIProtocol(item.ApiProtocol)
 		if !idMap[item.ID] {
 			addAiConfigs = append(addAiConfigs, item)
@@ -196,6 +198,7 @@ func updateAiConfigs(tx *gorm.DB, aiConfigs []*AIConfig) error {
 			notDeleteIds = append(notDeleteIds, item.ID)
 			e = tx.Model(&AIConfig{}).Where("id=?", item.ID).Updates(map[string]interface{}{
 				"sort":               item.Sort,
+				"disabled":           item.Disabled,
 				"name":               item.Name,
 				"base_url":           item.BaseUrl,
 				"api_key":            item.ApiKey,
@@ -271,10 +274,10 @@ func GetSettingConfig() *SettingConfig {
 	}
 	settingConfig.Settings = settings
 	settingConfig.AiConfigs = aiConfigs
-	if settings.AIAnalysisConfigID == 0 {
-		if preferred, resolveErr := ResolveAIAnalysisConfig(settingConfig); resolveErr == nil {
-			settings.AIAnalysisConfigID = preferred.ID
-		}
+	if preferred := SelectPrimaryAIConfig(aiConfigs); preferred != nil {
+		settings.AIAnalysisConfigID = preferred.ID
+	} else {
+		settings.AIAnalysisConfigID = 0
 	}
 	applyRuntimeOverrideFromSettings(settings)
 
@@ -547,10 +550,25 @@ func applyRuntimeOverrideFromSettings(settings *Settings) {
 	appconfig.SetRuntimeOverride(override)
 }
 
-// SelectPrimaryAIConfig returns the first AI config in current saved order.
+// EnabledAIConfigs returns the callable AI configs in current saved order.
+// The settings table order is the fallback order; disabled rows are retained
+// for editing and testing but never enter an automatic call chain.
+func EnabledAIConfigs(aiConfigs []*AIConfig) []*AIConfig {
+	enabled := make([]*AIConfig, 0, len(aiConfigs))
+	for _, config := range aiConfigs {
+		if config != nil && !config.Disabled {
+			enabled = append(enabled, config)
+		}
+	}
+	return enabled
+}
+
+// SelectPrimaryAIConfig returns the first enabled AI config in saved order.
 func SelectPrimaryAIConfig(aiConfigs []*AIConfig) *AIConfig {
-	if len(aiConfigs) >= 1 {
-		return aiConfigs[0]
+	for _, config := range aiConfigs {
+		if config != nil && !config.Disabled {
+			return config
+		}
 	}
 	return nil
 }
@@ -572,14 +590,12 @@ func SelectPrimaryAIConfigID(setting *SettingConfig) int {
 // configs are appended in current saved order without duplicates.
 func ResolveAIFallbackOrder(setting *SettingConfig, requestedAIConfigID int) []int {
 	if setting == nil || len(setting.AiConfigs) == 0 {
-		if requestedAIConfigID > 0 {
-			return []int{requestedAIConfigID}
-		}
 		return nil
 	}
 
-	ordered := make([]int, 0, len(setting.AiConfigs))
-	seen := make(map[int]struct{}, len(setting.AiConfigs))
+	enabled := EnabledAIConfigs(setting.AiConfigs)
+	ordered := make([]int, 0, len(enabled))
+	seen := make(map[int]struct{}, len(enabled))
 	appendID := func(id int) {
 		if id <= 0 {
 			return
@@ -592,13 +608,14 @@ func ResolveAIFallbackOrder(setting *SettingConfig, requestedAIConfigID int) []i
 	}
 
 	if requestedAIConfigID > 0 {
-		appendID(requestedAIConfigID)
-	}
-	appendID(SelectPrimaryAIConfigID(setting))
-	for _, cfg := range setting.AiConfigs {
-		if cfg == nil {
-			continue
+		for _, cfg := range enabled {
+			if int(cfg.ID) == requestedAIConfigID {
+				appendID(requestedAIConfigID)
+				break
+			}
 		}
+	}
+	for _, cfg := range enabled {
 		appendID(int(cfg.ID))
 	}
 	return ordered

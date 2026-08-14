@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.0
-  description: Local-only 1.6.0 API for market data and the AI research lifecycle.
+  version: 1.6.1
+  description: Local-only 1.6.1 API for market data and the AI research lifecycle.
 servers:
   - url: http://127.0.0.1:34115
 paths:
@@ -36,7 +36,7 @@ paths:
     get:
       operationId: listAnalysisRuns
       responses:
-        "200": {description: Analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AnalysisRun"}}}}}
+        "200": {description: Analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AnalysisRunSummary"}}}}}
   /api/v1/research/analysis-run:
     get:
       operationId: getAnalysisRun
@@ -128,6 +128,21 @@ components:
         sourceStatusJson: {type: string}
         failureReason: {type: string}
         recommendationCount: {type: integer}
+    AnalysisRunSummary:
+      type: object
+      required: [runId, scheduledFor, startedAt, status, recommendationCount, sourceCount, failedSourceCount]
+      properties:
+        runId: {type: string}
+        scheduledFor: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+        status: {type: string}
+        providerName: {type: string}
+        modelName: {type: string}
+        recommendationCount: {type: integer}
+        failureReason: {type: string}
+        sourceCount: {type: integer}
+        failedSourceCount: {type: integer}
     Recommendation:
       type: object
       required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, status]

@@ -270,6 +270,10 @@ export function StockResearchReport(arg1) {
   return window['go']['main']['App']['StockResearchReport'](arg1);
 }
 
+export function StartAIAnalysis() {
+  return window['go']['main']['App']['StartAIAnalysis']();
+}
+
 export function TestAIConfig(arg1) {
   return window['go']['main']['App']['TestAIConfig'](arg1);
 }

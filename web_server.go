@@ -24,7 +24,10 @@ import (
 	"go-stock/internal/releaseinfo"
 )
 
-var contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
+var (
+	contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
+	errorType   = reflect.TypeOf((*error)(nil)).Elem()
+)
 
 const (
 	maxRPCRequestBodyBytes    int64 = 4 << 20
@@ -381,20 +384,21 @@ func invokeAppMethod(app *App, methodName string, args []json.RawMessage) (any, 
 		argIndex++
 	}
 
-	results := method.Call(in)
+	return normalizeMethodResults(methodType, method.Call(in))
+}
+
+func normalizeMethodResults(methodType reflect.Type, results []reflect.Value) (any, error) {
 	if len(results) == 0 {
 		return nil, nil
 	}
 	if len(results) == 1 {
 		return normalizeResult(results[0]), nil
 	}
-	if len(results) == 2 {
-		if errVal, ok := results[1].Interface().(error); ok {
-			if errVal != nil {
-				return nil, errVal
-			}
+	if len(results) == 2 && methodType.NumOut() == 2 && methodType.Out(1).Implements(errorType) {
+		if results[1].IsNil() {
 			return normalizeResult(results[0]), nil
 		}
+		return nil, results[1].Interface().(error)
 	}
 	out := make([]any, 0, len(results))
 	for _, item := range results {
@@ -470,6 +474,7 @@ var rpcMethodAllowlist = map[string]struct{}{
 	"ShareAnalysis":                  {},
 	"StockNotice":                    {},
 	"StockResearchReport":            {},
+	"StartAIAnalysis":                {},
 	"ListAIAnalysisReports":          {},
 	"GetAIAnalysisReport":            {},
 	"ListAIRecommendations":          {},

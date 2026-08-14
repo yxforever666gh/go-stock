@@ -47,6 +47,10 @@ type OpenAi struct {
 	BrowserPath      string  `json:"browser_path"`
 	HttpProxy        string  `json:"httpProxy"`
 	HttpProxyEnabled bool    `json:"httpProxyEnabled"`
+	// DisableRequestRetries lets orchestrators own retry and fallback ordering.
+	// It is enabled by the 1.6.0 research workflow so one logical attempt maps
+	// to one provider request instead of being multiplied by Resty retries.
+	DisableRequestRetries bool `json:"-"`
 }
 
 var runtimeEventEmitter struct {
@@ -664,19 +668,21 @@ func (o *OpenAi) newAIClientWithProxy(enableProxy bool) *resty.Client {
 	client.SetHeader("Authorization", "Bearer "+o.ApiKey)
 	client.SetHeader("Content-Type", "application/json")
 	client.SetTimeout(time.Duration(timeoutSeconds) * time.Second)
-	client.SetRetryCount(2)
-	client.SetRetryWaitTime(1 * time.Second)
-	client.SetRetryMaxWaitTime(6 * time.Second)
-	client.AddRetryCondition(func(r *resty.Response, err error) bool {
-		if shouldRetryAIRequest(err) {
-			return true
-		}
-		if r == nil {
-			return false
-		}
-		statusCode := r.StatusCode()
-		return statusCode == 408 || statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
-	})
+	if !o.DisableRequestRetries {
+		client.SetRetryCount(2)
+		client.SetRetryWaitTime(1 * time.Second)
+		client.SetRetryMaxWaitTime(6 * time.Second)
+		client.AddRetryCondition(func(r *resty.Response, err error) bool {
+			if shouldRetryAIRequest(err) {
+				return true
+			}
+			if r == nil {
+				return false
+			}
+			statusCode := r.StatusCode()
+			return statusCode == 408 || statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+		})
+	}
 	if enableProxy && o.HttpProxyEnabled && o.HttpProxy != "" {
 		client.SetProxy(o.HttpProxy)
 	}
@@ -712,19 +718,21 @@ func (o *OpenAi) newAnthropicClient() *resty.Client {
 	client.SetHeader("anthropic-version", "2023-06-01")
 	client.SetHeader("Content-Type", "application/json")
 	client.SetTimeout(time.Duration(o.requestTimeoutSeconds()) * time.Second)
-	client.SetRetryCount(2)
-	client.SetRetryWaitTime(1 * time.Second)
-	client.SetRetryMaxWaitTime(6 * time.Second)
-	client.AddRetryCondition(func(r *resty.Response, err error) bool {
-		if shouldRetryAIRequest(err) {
-			return true
-		}
-		if r == nil {
-			return false
-		}
-		statusCode := r.StatusCode()
-		return statusCode == 408 || statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
-	})
+	if !o.DisableRequestRetries {
+		client.SetRetryCount(2)
+		client.SetRetryWaitTime(1 * time.Second)
+		client.SetRetryMaxWaitTime(6 * time.Second)
+		client.AddRetryCondition(func(r *resty.Response, err error) bool {
+			if shouldRetryAIRequest(err) {
+				return true
+			}
+			if r == nil {
+				return false
+			}
+			statusCode := r.StatusCode()
+			return statusCode == 408 || statusCode == 429 || statusCode == 500 || statusCode == 502 || statusCode == 503 || statusCode == 504
+		})
+	}
 	if o.HttpProxyEnabled && o.HttpProxy != "" {
 		client.SetProxy(o.HttpProxy)
 	}
@@ -1129,7 +1137,7 @@ func (o *OpenAi) CompleteResearch(ctx context.Context, messages []map[string]any
 	case AIAPIProtocolOpenAIResponses:
 		return o.completeOpenAIResponsesWithContext(ctx, messages, previousResponseID)
 	case AIAPIProtocolAnthropicMessage:
-		return o.completeAnthropicMessages(messages)
+		return o.completeAnthropicMessages(ctx, messages)
 	default:
 		return o.completeChatCompletions(ctx, messages)
 	}
@@ -1164,14 +1172,14 @@ func (o *OpenAi) completeChatCompletions(ctx context.Context, messages []map[str
 	return strings.TrimSpace(result.Choices[0].Message.Content), result.Id, result.Model, nil
 }
 
-func (o *OpenAi) completeAnthropicMessages(messages []map[string]any) (string, string, string, error) {
+func (o *OpenAi) completeAnthropicMessages(ctx context.Context, messages []map[string]any) (string, string, string, error) {
 	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
 		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
 	}
-	resp, err := o.newAnthropicClient().R().SetBody(o.anthropicMessagesBody(interfaceMessages, false)).Post("/messages")
+	resp, err := o.newAnthropicClient().R().SetContext(ctx).SetBody(o.anthropicMessagesBody(interfaceMessages, false)).Post("/messages")
 	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
-		resp, err = o.newAnthropicClientWithProxy(false).R().SetBody(o.anthropicMessagesBody(interfaceMessages, false)).Post("/messages")
+		resp, err = o.newAnthropicClientWithProxy(false).R().SetContext(ctx).SetBody(o.anthropicMessagesBody(interfaceMessages, false)).Post("/messages")
 	}
 	if err != nil {
 		return "", "", "", err

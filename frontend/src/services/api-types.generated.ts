@@ -46,6 +46,20 @@ export type AnalysisRun = {
   stockReport?: string
 }
 
+export type AnalysisRunSummary = {
+  completedAt?: string
+  failedSourceCount: number
+  failureReason?: string
+  modelName?: string
+  providerName?: string
+  recommendationCount: number
+  runId: string
+  scheduledFor: string
+  sourceCount: number
+  startedAt: string
+  status: string
+}
+
 export type DecisionEvent = {
   decidedAt?: string
   decisionType?: string

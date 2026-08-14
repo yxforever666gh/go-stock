@@ -31,12 +31,8 @@ func (a *App) getResearchRuntime() (*data.ResearchRuntime, error) {
 	if runtime != nil {
 		return runtime, nil
 	}
-	config := a.services.Config.GetConfig()
-	selected, err := data.ResolveAIAnalysisConfig(config)
-	if err != nil {
-		return nil, err
-	}
-	if err := a.replaceResearchRuntime(int(selected.ID)); err != nil {
+	// Read-only research pages remain available even when every model is off.
+	if err := a.replaceResearchRuntime(0); err != nil {
 		return nil, err
 	}
 	a.researchRuntimeMu.RLock()
@@ -57,7 +53,11 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 	}
 	selected, err := data.ResolveAIAnalysisConfig(setting)
 	if err != nil {
-		a.recordSchedulerRegistrationError("AIAnalysis", setting.AIAnalysisTimes, err)
+		if replaceErr := a.replaceResearchRuntime(0); replaceErr != nil {
+			a.recordSchedulerRegistrationError("AIAnalysisRuntime", setting.AIAnalysisTimes, replaceErr)
+			return
+		}
+		logger.SugaredLogger.Infof("AI 分析没有已启用模型，定时任务不注册: %v", err)
 		return
 	}
 	if err := a.replaceResearchRuntime(int(selected.ID)); err != nil {
@@ -88,30 +88,65 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 }
 
 func (a *App) runScheduledAIAnalysis() {
+	if err := a.startAIAnalysis("scheduled"); err != nil {
+		logger.SugaredLogger.Errorf("AI 分析启动失败: %v", err)
+	}
+}
+
+func (a *App) startAIAnalysis(origin string) error {
+	a.aiAnalysisRunMu.Lock()
+	defer a.aiAnalysisRunMu.Unlock()
+	if a.aiAnalysisRunning {
+		return errors.New("已有 running 状态的 AI 分析，本次运行被拒绝")
+	}
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析运行时不可用: %v", err)
-		return
+		return fmt.Errorf("AI 分析运行时不可用: %w", err)
+	}
+	running, err := runtime.Repository.HasRunningAnalysis(context.Background())
+	if err != nil {
+		return fmt.Errorf("检查运行中分析失败: %w", err)
+	}
+	if running {
+		return errors.New("已有 running 状态的 AI 分析，本次运行被拒绝")
 	}
 	setting := a.services.Config.GetConfig()
 	if setting == nil || setting.Settings == nil || !setting.AIAnalysisEnabled {
-		return
+		return errors.New("AI 分析当前未启用")
 	}
 	selected, err := data.ResolveAIAnalysisConfig(setting)
 	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析配置不可用: %v", err)
-		return
+		return fmt.Errorf("AI 分析配置不可用: %w", err)
 	}
 	now := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
-	defer cancel()
-	run, err := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: now, AIConfigID: selected.ID,
-		ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName})
-	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析失败 run=%s: %v", run.RunID, err)
-		return
+	a.aiAnalysisRunning = true
+	go func() {
+		defer func() {
+			a.aiAnalysisRunMu.Lock()
+			a.aiAnalysisRunning = false
+			a.aiAnalysisRunMu.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
+		defer cancel()
+		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: now, AIConfigID: selected.ID,
+			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName})
+		if runErr != nil {
+			logger.SugaredLogger.Errorf("AI 分析失败 origin=%s run=%s: %v", origin, run.RunID, runErr)
+			return
+		}
+		logger.SugaredLogger.Infof("AI 分析完成 origin=%s run=%s status=%s recommendations=%d", origin, run.RunID, run.Status, run.RecommendationCount)
+	}()
+	return nil
+}
+
+// StartAIAnalysis starts one formal research run in the background. The UI
+// follows the persisted running report and only enables the button again after
+// that report reaches a terminal status.
+func (a *App) StartAIAnalysis() (bool, error) {
+	if err := a.startAIAnalysis("manual"); err != nil {
+		return false, err
 	}
-	logger.SugaredLogger.Infof("AI 分析完成 run=%s status=%s recommendations=%d", run.RunID, run.Status, run.RecommendationCount)
+	return true, nil
 }
 
 func (a *App) processDueAILifecycle() {
@@ -140,7 +175,7 @@ func normalizedPage(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-func (a *App) ListAIAnalysisReports(limit, offset int) ([]research.AnalysisRun, error) {
+func (a *App) ListAIAnalysisReports(limit, offset int) ([]research.AnalysisRunSummary, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return nil, err

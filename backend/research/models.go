@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion       = "1.6.0"
+	AppVersion       = "1.6.1"
 	InitialCash      = 100000.0
 	MaxCashPerTrade  = 50000.0
 	DefaultCheckMins = 15
@@ -31,6 +31,22 @@ type AnalysisRun struct {
 }
 
 func (AnalysisRun) TableName() string { return "research_v160_analysis_runs" }
+
+// AnalysisRunSummary is the lightweight list representation. Full stage reports
+// and source documents are only returned by the detail endpoint.
+type AnalysisRunSummary struct {
+	RunID               string     `json:"runId"`
+	ScheduledFor        time.Time  `json:"scheduledFor"`
+	StartedAt           time.Time  `json:"startedAt"`
+	CompletedAt         *time.Time `json:"completedAt"`
+	Status              string     `json:"status"`
+	ProviderName        string     `json:"providerName"`
+	ModelName           string     `json:"modelName"`
+	RecommendationCount int        `json:"recommendationCount"`
+	FailureReason       string     `json:"failureReason"`
+	SourceCount         int        `json:"sourceCount"`
+	FailedSourceCount   int        `json:"failedSourceCount"`
+}
 
 type Recommendation struct {
 	ID                  uint       `json:"id" gorm:"primaryKey"`

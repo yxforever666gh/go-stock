@@ -33,6 +33,8 @@ type App struct {
 	schedulerErrors   []error
 	researchRuntimeMu sync.RWMutex
 	researchRuntime   *data.ResearchRuntime
+	aiAnalysisRunMu   sync.Mutex
+	aiAnalysisRunning bool
 }
 
 const aiAnalysisEntryPrefix = "AIAnalysisCustom_"

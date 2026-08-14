@@ -1,7 +1,8 @@
 param(
     [ValidateSet("start", "stop", "restart", "rebuild", "status", "open", "help")]
     [string]$Command = "restart",
-    [switch]$OpenBrowser
+    [switch]$OpenBrowser,
+    [switch]$ResearchCenter
 )
 
 $ErrorActionPreference = "Stop"
@@ -15,6 +16,12 @@ $WebAddr = if ($env:GO_STOCK_WEB_ADDR) { $env:GO_STOCK_WEB_ADDR } else { "127.0.
 $Port = [int]($WebAddr.Split(":")[-1])
 $ReadyURL = "http://$WebAddr/readyz"
 $AppURL = "http://$WebAddr/"
+$ResearchCenterURL = "http://$WebAddr/#/research?name=AI%E5%88%86%E6%9E%90%E6%8A%A5%E5%91%8A"
+
+function Get-OpenURL {
+    if ($ResearchCenter) { return $ResearchCenterURL }
+    return $AppURL
+}
 
 function Write-Log {
     param([string]$Message)
@@ -97,17 +104,54 @@ function Get-ListenerProcess {
     $ids = Get-ListenerProcessIds
     if ($ids.Count -eq 0) { return $null }
     if ($ids.Count -ne 1) { throw "Expected one listener on $WebAddr, found $($ids.Count)" }
-    return Get-CimInstance Win32_Process -Filter "ProcessId = $($ids[0])" -ErrorAction Stop
+    $listenerProcessId = [int]$ids[0]
+    $processName = ""
+    $executablePath = ""
+
+    try {
+        $nativeProcess = Get-Process -Id $listenerProcessId -ErrorAction Stop
+        $processName = [string]$nativeProcess.ProcessName
+        try { $executablePath = [string]$nativeProcess.Path } catch {}
+        if ([string]::IsNullOrWhiteSpace($executablePath)) {
+            try { $executablePath = [string]$nativeProcess.MainModule.FileName } catch {}
+        }
+    } catch {}
+
+    if ([string]::IsNullOrWhiteSpace($executablePath) -or [string]::IsNullOrWhiteSpace($processName)) {
+        try {
+            $cimProcess = Get-CimInstance Win32_Process -Filter "ProcessId = $listenerProcessId" -ErrorAction Stop
+            if ([string]::IsNullOrWhiteSpace($processName)) { $processName = [string]$cimProcess.Name }
+            if ([string]::IsNullOrWhiteSpace($executablePath)) { $executablePath = [string]$cimProcess.ExecutablePath }
+        } catch {}
+    }
+
+    return [pscustomobject]@{
+        ProcessId = $listenerProcessId
+        ProcessName = [System.IO.Path]::GetFileNameWithoutExtension($processName)
+        ExecutablePath = $executablePath
+    }
 }
 
 function Assert-ListenerMatchesPointer {
     param($Pointer, $Process)
-    if (-not $Process -or -not $Process.ExecutablePath) { throw "Cannot resolve listener executable" }
-    $actual = [System.IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+    if (-not $Process) { throw "Cannot resolve listener process" }
     $expected = [System.IO.Path]::GetFullPath([string]$Pointer.binary)
-    if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
-        throw "Listener PID $($Process.ProcessId) is not the pointer artifact: $actual"
+    if (-not [string]::IsNullOrWhiteSpace([string]$Process.ExecutablePath)) {
+        $actual = [System.IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+        if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Listener PID $($Process.ProcessId) is not the pointer artifact: $actual"
+        }
+        return
     }
+
+    $expectedProcessName = [System.IO.Path]::GetFileNameWithoutExtension($expected)
+    if (-not ([string]$Process.ProcessName).Equals($expectedProcessName, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Cannot verify listener PID $($Process.ProcessId): executable path is unavailable and process name is '$($Process.ProcessName)'"
+    }
+    if (-not (Test-ExactReadiness $Pointer)) {
+        throw "Cannot verify listener PID $($Process.ProcessId): executable path is unavailable and exact readiness failed"
+    }
+    Write-Log "Listener executable path is unavailable; exact release identity verified for PID $($Process.ProcessId)"
 }
 
 function Wait-PortReleased {
@@ -170,7 +214,7 @@ function Start-ServiceProcess {
         Assert-ListenerMatchesPointer $pointer $listener
         if (-not (Test-ExactReadiness $pointer)) { throw "Pointer process is listening but exact readiness failed" }
         Write-Log "Pointer service is already ready: $ReadyURL"
-        if ($OpenBrowser) { Start-Process $AppURL }
+        if ($OpenBrowser) { Start-Process (Get-OpenURL) }
         return
     }
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -191,7 +235,7 @@ function Start-ServiceProcess {
     $process.Id | Set-Content -LiteralPath $PidFile
     Write-Log "Started pointer artifact PID: $($process.Id)"
     Wait-ExactReadiness $pointer $process.Id
-    if ($OpenBrowser) { Start-Process $AppURL }
+    if ($OpenBrowser) { Start-Process (Get-OpenURL) }
 }
 
 function Show-Status {
