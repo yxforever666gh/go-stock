@@ -3,13 +3,11 @@ package data
 import (
 	"encoding/json"
 	"go-stock/backend/logger"
-	"go-stock/backend/models"
 	"go-stock/backend/util"
 	"math"
 	"testing"
 
 	"github.com/duke-git/lancet/v2/convertor"
-	"github.com/duke-git/lancet/v2/mathutil"
 	"github.com/duke-git/lancet/v2/random"
 )
 
@@ -76,34 +74,4 @@ func TestGetStockHolderNum(t *testing.T) {
 	res := NewStockDataApi().GetStockHolderNum("600519.SH")
 	MD := util.MarkdownTableWithTitle("股票股东人数信息", res.Result.Data)
 	logger.SugaredLogger.Infof("res:\n%s", MD)
-}
-
-func TestSearchStockApi_HotStrategy(t *testing.T) {
-	requireIntegration(t)
-	initDatabaseForTest(t, "../../data/stock.db")
-	res := NewSearchStockApi("").HotStrategy()
-	bytes, err := json.Marshal(res)
-	if err != nil {
-		return
-	}
-	strategy := &models.HotStrategy{}
-	if err := json.Unmarshal(bytes, strategy); err != nil {
-		t.Fatalf("unmarshal strategy failed: %v", err)
-	}
-	for _, data := range strategy.Data {
-		data.Chg = mathutil.RoundToFloat(100*data.Chg, 2)
-	}
-	markdownTable := util.MarkdownTable(strategy.Data)
-	logger.SugaredLogger.Infof("res:%s", markdownTable)
-	//dataList := res["data"].([]any)
-	//for _, v := range dataList {
-	//	d := v.(map[string]any)
-	//	logger.SugaredLogger.Infof("v:%+v", d)
-	//}
-}
-func TestSearchStockApi_HotStrategyTable(t *testing.T) {
-	requireIntegration(t)
-	initDatabaseForTest(t, "../../data/stock.db")
-	res := NewSearchStockApi("").StrategySquare()
-	logger.SugaredLogger.Infof("res:%+v", res)
 }

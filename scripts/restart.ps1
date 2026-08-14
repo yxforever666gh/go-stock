@@ -5,21 +5,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
+$RuntimeRoot = Join-Path $ProjectRoot "runtime"
+$CurrentPointer = Join-Path $RuntimeRoot "current.json"
 $LogDir = Join-Path $ProjectRoot "logs"
-$PidFile = Join-Path $LogDir "web-mode.windows.pid"
-$BinaryPath = Join-Path $ProjectRoot "go-stock-web.exe"
+$PidFile = Join-Path $RuntimeRoot "go-stock-web.pid"
 $WebAddr = if ($env:GO_STOCK_WEB_ADDR) { $env:GO_STOCK_WEB_ADDR } else { "127.0.0.1:34115" }
 $Port = [int]($WebAddr.Split(":")[-1])
-$HealthUrl = "http://$WebAddr/healthz"
-$AppUrl = "http://$WebAddr/"
-$DevPort = 5173
+$ReadyURL = "http://$WebAddr/readyz"
+$AppURL = "http://$WebAddr/"
 
 function Write-Log {
     param([string]$Message)
-
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Message
     $line | Tee-Object -FilePath (Join-Path $LogDir "monitor.windows.log") -Append
@@ -28,306 +26,175 @@ function Write-Log {
 function Show-Usage {
     @"
 Usage:
-  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 start
-  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 stop
-  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 restart
-  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 rebuild
-  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 status
-  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 open
+  powershell -ExecutionPolicy Bypass -File scripts\restart.ps1 start|stop|restart|status|open
 
-Commands:
-  start    Start existing go-stock-web.exe without rebuilding
-  stop     Stop the current web service
-  restart  Stop then start existing go-stock-web.exe
-  rebuild  Build frontend, build webonly backend, then restart
-  status   Show listener and process status
-  open     Start service and open browser
-
-Env:
-  GO_STOCK_WEB_ADDR       Default: 127.0.0.1:34115
-  GOTOOLCHAIN             Default for this script: go1.25.0
-  GO_STOCK_DB_LOG_LEVEL   Default: silent
-  GO_STOCK_LOG_LEVEL      Default: warn
+All service operations use the exact immutable artifact recorded in runtime\current.json.
+The rebuild command is intentionally disabled; use scripts\release.ps1 build/deploy.
 "@
 }
 
-function Get-ProcessFromPidFile {
-    if (-not (Test-Path -LiteralPath $PidFile)) {
-        return $null
+function Resolve-Pointer {
+    if (-not (Test-Path -LiteralPath $CurrentPointer)) {
+        throw "Release pointer is missing: $CurrentPointer"
     }
-
-    $rawPid = (Get-Content -LiteralPath $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1).Trim()
-    if (-not $rawPid) {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-        return $null
+    try { $pointer = Get-Content -LiteralPath $CurrentPointer -Raw | ConvertFrom-Json }
+    catch { throw "Release pointer is invalid JSON: $($_.Exception.Message)" }
+    foreach ($field in @("appVersion", "mainSchemaVersion", "minuteSchemaVersion", "commit", "binary", "artifactSHA256", "zoneInfo", "zoneInfoSHA256")) {
+        if ($null -eq $pointer.$field -or [string]::IsNullOrWhiteSpace([string]$pointer.$field)) {
+            throw "Release pointer is missing $field"
+        }
     }
-
-    $pidValue = 0
-    if (-not [int]::TryParse($rawPid, [ref]$pidValue)) {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-        return $null
+    foreach ($path in @([string]$pointer.binary, [string]$pointer.zoneInfo)) {
+        if (-not [System.IO.Path]::IsPathRooted($path) -or -not (Test-Path -LiteralPath $path)) {
+            throw "Release pointer path is unavailable: $path"
+        }
+        $releaseRoot = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "releases")).TrimEnd('\') + '\'
+        $resolved = [System.IO.Path]::GetFullPath((Resolve-Path -LiteralPath $path).Path)
+        if (-not $resolved.StartsWith($releaseRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Release pointer path is outside runtime releases: $resolved"
+        }
     }
+    $binaryHash = (Get-FileHash -LiteralPath $pointer.binary -Algorithm SHA256).Hash.ToLowerInvariant()
+    $zoneHash = (Get-FileHash -LiteralPath $pointer.zoneInfo -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($binaryHash -ne ([string]$pointer.artifactSHA256).ToLowerInvariant()) { throw "Release binary SHA256 mismatch" }
+    if ($zoneHash -ne ([string]$pointer.zoneInfoSHA256).ToLowerInvariant()) { throw "Release zoneinfo SHA256 mismatch" }
 
-    $process = Get-Process -Id $pidValue -ErrorAction SilentlyContinue
-    if (-not $process) {
-        Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-        return $null
+    $inspectOutput = @(& $pointer.binary "release" "inspect" 2>&1)
+    if ($LASTEXITCODE -ne 0) { throw "release inspect failed for pointer binary" }
+    try { $inspect = (($inspectOutput | ForEach-Object { [string]$_ }) -join [Environment]::NewLine) | ConvertFrom-Json }
+    catch { throw "release inspect returned invalid JSON" }
+    if ($inspect.manifest.appVersion -ne $pointer.appVersion -or
+        [int]$inspect.manifest.mainSchemaVersion -ne [int]$pointer.mainSchemaVersion -or
+        [int]$inspect.manifest.minuteSchemaVersion -ne [int]$pointer.minuteSchemaVersion -or
+        $inspect.build.commit -ne $pointer.commit -or
+        ([string]$inspect.build.artifactSHA256).ToLowerInvariant() -ne $binaryHash -or
+        [bool]$inspect.build.dirty) {
+        throw "Release pointer does not match embedded release identity"
     }
-
-    return $process
+    return $pointer
 }
 
 function Get-ListenerProcessIds {
-    param([int]$TargetPort = $Port)
-
-    $connections = Get-NetTCPConnection -LocalPort $TargetPort -State Listen -ErrorAction SilentlyContinue
-    if (-not $connections) {
-        return @()
-    }
-
-    return @($connections | Select-Object -ExpandProperty OwningProcess -Unique)
+    return @(Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
 }
 
-function Get-WebProcessIds {
-    $ids = New-Object System.Collections.Generic.HashSet[int]
-
-    $fileProcess = Get-ProcessFromPidFile
-    if ($fileProcess) {
-        [void]$ids.Add([int]$fileProcess.Id)
-    }
-
-    foreach ($id in (Get-ListenerProcessIds)) {
-        if ($id -gt 0) {
-            [void]$ids.Add([int]$id)
-        }
-    }
-
-    $query = "Name = 'go-stock-web.exe' OR Name = 'go-stock.exe'"
-    foreach ($proc in (Get-CimInstance Win32_Process -Filter $query -ErrorAction SilentlyContinue)) {
-        if ($proc.CommandLine -and $proc.CommandLine -like "*--web*") {
-            [void]$ids.Add([int]$proc.ProcessId)
-        }
-    }
-
-    return @($ids)
+function Get-ListenerProcess {
+    $ids = Get-ListenerProcessIds
+    if ($ids.Count -eq 0) { return $null }
+    if ($ids.Count -ne 1) { throw "Expected one listener on $WebAddr, found $($ids.Count)" }
+    return Get-CimInstance Win32_Process -Filter "ProcessId = $($ids[0])" -ErrorAction Stop
 }
 
-function Stop-DevServerProcess {
-    $devIds = Get-ListenerProcessIds -TargetPort $DevPort
-    foreach ($id in $devIds) {
-        $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $id" -ErrorAction SilentlyContinue
-        if (-not $proc) {
-            continue
-        }
-        if ($proc.CommandLine -and ($proc.CommandLine -like "*vite*" -or $proc.CommandLine -like "*npm*run*dev*")) {
-            Write-Log "Stopping frontend dev server PID: $id"
-            Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-        }
+function Assert-ListenerMatchesPointer {
+    param($Pointer, $Process)
+    if (-not $Process -or -not $Process.ExecutablePath) { throw "Cannot resolve listener executable" }
+    $actual = [System.IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+    $expected = [System.IO.Path]::GetFullPath([string]$Pointer.binary)
+    if (-not $actual.Equals($expected, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Listener PID $($Process.ProcessId) is not the pointer artifact: $actual"
     }
+}
+
+function Wait-PortReleased {
+    param([int]$StoppedProcessId, [int]$TimeoutMilliseconds = 10000)
+    $deadline = [DateTime]::UtcNow.AddMilliseconds($TimeoutMilliseconds)
+    do {
+        $listenerIds = @(Get-ListenerProcessIds)
+        if ($listenerIds.Count -eq 0) { return }
+        $unknownIds = @($listenerIds | Where-Object { [int]$_ -ne $StoppedProcessId })
+        if ($unknownIds.Count -gt 0) {
+            throw "Port $Port was claimed by unknown listener PID(s): $($unknownIds -join ', ')"
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Port $Port did not release after stopping pointer PID $StoppedProcessId"
 }
 
 function Stop-ServiceProcess {
-    $ids = Get-WebProcessIds
-    if (-not $ids -or $ids.Count -eq 0) {
-        Write-Log "Service is not running on http://$WebAddr"
+    $pointer = Resolve-Pointer
+    $listener = Get-ListenerProcess
+    if (-not $listener) {
         Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
+        Write-Log "Service is not running on http://$WebAddr"
         return
     }
-
-    foreach ($id in $ids) {
-        $process = Get-Process -Id $id -ErrorAction SilentlyContinue
-        if (-not $process) {
-            continue
-        }
-
-        Write-Log "Stopping process PID: $id"
-        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
-    }
-
+    Assert-ListenerMatchesPointer $pointer $listener
+    Write-Log "Stopping pointer process PID: $($listener.ProcessId)"
+    Stop-Process -Id $listener.ProcessId -Force
+    Wait-PortReleased -StoppedProcessId $listener.ProcessId
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
-    Write-Log "Service stopped"
 }
 
-function Test-Health {
+function Test-ExactReadiness {
+    param($Pointer)
     try {
-        $response = Invoke-WebRequest -UseBasicParsing -Uri $HealthUrl -TimeoutSec 2
-        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300)
-    } catch {
-        return $false
-    }
+        $status = Invoke-RestMethod -Uri $ReadyURL -TimeoutSec 2
+        return ($status.appVersion -eq $Pointer.appVersion -and
+            $status.commit -eq $Pointer.commit -and
+            ([string]$status.artifactSHA256).ToLowerInvariant() -eq ([string]$Pointer.artifactSHA256).ToLowerInvariant() -and
+            [int]$status.mainSchemaVersion -eq [int]$Pointer.mainSchemaVersion -and
+            [int]$status.minuteSchemaVersion -eq [int]$Pointer.minuteSchemaVersion -and
+            [bool]$status.readiness.ready)
+    } catch { return $false }
 }
 
-function Wait-Healthy {
-    param([int]$ProcessId)
-
-    for ($i = 0; $i -lt 60; $i++) {
-        if (Test-Health) {
-            Write-Log "Health check passed: $HealthUrl"
-            return
-        }
-
-        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) {
-            Write-Log "Service process exited. Check logs\web-mode.windows.out and logs\web-mode.windows.err"
-            throw "Service failed to start"
-        }
-
+function Wait-ExactReadiness {
+    param($Pointer, [int]$ProcessId)
+    for ($attempt = 0; $attempt -lt 60; $attempt++) {
+        if (Test-ExactReadiness $Pointer) { Write-Log "Exact readiness passed: $ReadyURL"; return }
+        if (-not (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)) { throw "Pointer process exited during startup" }
         Start-Sleep -Seconds 1
     }
-
-    Write-Log "Service startup timed out. Check logs\web-mode.windows.out and logs\web-mode.windows.err"
-    throw "Service startup timed out"
-}
-
-function Ensure-Binary {
-    if (-not (Test-Path -LiteralPath $BinaryPath)) {
-        Write-Log "Missing binary: $BinaryPath"
-        Build-Service
-    }
-}
-
-function Build-Service {
-    Push-Location $ProjectRoot
-    try {
-        Write-Log "Building frontend static assets..."
-        Push-Location (Join-Path $ProjectRoot "frontend")
-        try {
-            & npm.cmd run build
-            if ($LASTEXITCODE -ne 0) {
-                throw "Frontend build failed"
-            }
-        } finally {
-            Pop-Location
-        }
-
-        Write-Log "Building webonly backend binary..."
-        $previousToolchain = $env:GOTOOLCHAIN
-        if (-not $env:GOTOOLCHAIN) {
-            $env:GOTOOLCHAIN = "go1.25.0"
-        }
-
-        try {
-            & go build -tags webonly -o $BinaryPath .
-            if ($LASTEXITCODE -ne 0) {
-                throw "Go build failed"
-            }
-        } finally {
-            $env:GOTOOLCHAIN = $previousToolchain
-        }
-    } finally {
-        Pop-Location
-    }
+    throw "Pointer process readiness did not match runtime/current.json"
 }
 
 function Start-ServiceProcess {
-    Ensure-Binary
-    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
-    Stop-DevServerProcess
-
-    if (Test-Health) {
-        Write-Log "Service is already healthy: $HealthUrl"
-        if ($OpenBrowser) {
-            Start-Process $AppUrl
-        }
+    $pointer = Resolve-Pointer
+    $listener = Get-ListenerProcess
+    if ($listener) {
+        Assert-ListenerMatchesPointer $pointer $listener
+        if (-not (Test-ExactReadiness $pointer)) { throw "Pointer process is listening but exact readiness failed" }
+        Write-Log "Pointer service is already ready: $ReadyURL"
+        if ($OpenBrowser) { Start-Process $AppURL }
         return
     }
-
-    $existing = Get-WebProcessIds
-    if ($existing -and $existing.Count -gt 0) {
-        Write-Log "Found stale web process or occupied port. Stopping before start..."
-        Stop-ServiceProcess
-    }
-
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
     $outLog = Join-Path $LogDir "web-mode.windows.out"
     $errLog = Join-Path $LogDir "web-mode.windows.err"
-
-    $previousWebAddr = $env:GO_STOCK_WEB_ADDR
-    $previousDBLogLevel = $env:GO_STOCK_DB_LOG_LEVEL
-    $previousLogLevel = $env:GO_STOCK_LOG_LEVEL
-
+    $oldWebAddr, $oldZoneInfo = $env:GO_STOCK_WEB_ADDR, $env:ZONEINFO
+    $oldDBLog, $oldLog = $env:GO_STOCK_DB_LOG_LEVEL, $env:GO_STOCK_LOG_LEVEL
     $env:GO_STOCK_WEB_ADDR = $WebAddr
-    if (-not $env:GO_STOCK_DB_LOG_LEVEL) {
-        $env:GO_STOCK_DB_LOG_LEVEL = "silent"
-    }
-    if (-not $env:GO_STOCK_LOG_LEVEL) {
-        $env:GO_STOCK_LOG_LEVEL = "warn"
-    }
-
+    $env:ZONEINFO = (Resolve-Path -LiteralPath $pointer.zoneInfo).Path
+    if (-not $env:GO_STOCK_DB_LOG_LEVEL) { $env:GO_STOCK_DB_LOG_LEVEL = "silent" }
+    if (-not $env:GO_STOCK_LOG_LEVEL) { $env:GO_STOCK_LOG_LEVEL = "warn" }
     try {
-        $process = Start-Process `
-            -FilePath $BinaryPath `
-            -ArgumentList "--web" `
-            -WorkingDirectory $ProjectRoot `
-            -WindowStyle Hidden `
-            -RedirectStandardOutput $outLog `
-            -RedirectStandardError $errLog `
-            -PassThru
+        $process = Start-Process -FilePath $pointer.binary -ArgumentList "--web" -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     } finally {
-        $env:GO_STOCK_WEB_ADDR = $previousWebAddr
-        $env:GO_STOCK_DB_LOG_LEVEL = $previousDBLogLevel
-        $env:GO_STOCK_LOG_LEVEL = $previousLogLevel
+        $env:GO_STOCK_WEB_ADDR, $env:ZONEINFO = $oldWebAddr, $oldZoneInfo
+        $env:GO_STOCK_DB_LOG_LEVEL, $env:GO_STOCK_LOG_LEVEL = $oldDBLog, $oldLog
     }
-
     $process.Id | Set-Content -LiteralPath $PidFile
-
-    Write-Log "Service started, PID: $($process.Id)"
-    Wait-Healthy -ProcessId $process.Id
-    if ($OpenBrowser) {
-        Start-Process $AppUrl
-    }
+    Write-Log "Started pointer artifact PID: $($process.Id)"
+    Wait-ExactReadiness $pointer $process.Id
+    if ($OpenBrowser) { Start-Process $AppURL }
 }
 
 function Show-Status {
-    $listenerIds = Get-ListenerProcessIds
-    if (Test-Health) {
-        Write-Log "Service is healthy: $HealthUrl"
-    } else {
-        Write-Log "Service is not healthy: $HealthUrl"
-    }
-
-    if ($listenerIds -and $listenerIds.Count -gt 0) {
-        foreach ($id in $listenerIds) {
-            $proc = Get-CimInstance Win32_Process -Filter "ProcessId = $id" -ErrorAction SilentlyContinue
-            if ($proc) {
-                Write-Output "PID ${id}: $($proc.CommandLine)"
-            } else {
-                Write-Output "PID $id is listening on port $Port"
-            }
-        }
-    } else {
-        Write-Output "No process is listening on port $Port"
-    }
+    $pointer = Resolve-Pointer
+    $listener = Get-ListenerProcess
+    if (-not $listener) { Write-Output "No process is listening on port $Port"; return }
+    Assert-ListenerMatchesPointer $pointer $listener
+    Write-Output "PID $($listener.ProcessId): $($listener.ExecutablePath)"
+    if (Test-ExactReadiness $pointer) { Write-Log "Pointer service is ready: $ReadyURL" }
+    else { throw "Pointer listener failed exact readiness" }
 }
 
 switch ($Command) {
-    "start" {
-        Write-Log "Starting service without rebuild..."
-        Start-ServiceProcess
-    }
-    "stop" {
-        Write-Log "Stopping service..."
-        Stop-ServiceProcess
-        Stop-DevServerProcess
-    }
-    "restart" {
-        Write-Log "Restarting service without rebuild..."
-        Stop-ServiceProcess
-        Start-ServiceProcess
-    }
-    "rebuild" {
-        Write-Log "Rebuilding and restarting service..."
-        Stop-ServiceProcess
-        Build-Service
-        Start-ServiceProcess
-    }
-    "status" {
-        Show-Status
-    }
-    "open" {
-        Write-Log "Starting service and opening browser..."
-        $OpenBrowser = $true
-        Start-ServiceProcess
-    }
-    "help" {
-        Show-Usage
-    }
+    "start" { Start-ServiceProcess }
+    "stop" { Stop-ServiceProcess }
+    "restart" { Stop-ServiceProcess; Start-ServiceProcess }
+    "rebuild" { throw "Direct production rebuild is disabled. Use scripts\release.ps1 build, then scripts\release.ps1 deploy." }
+    "status" { Show-Status }
+    "open" { $OpenBrowser = $true; Start-ServiceProcess }
+    "help" { Show-Usage }
 }

@@ -26,14 +26,6 @@ export function AnalyzeSentimentWithFreqWeight(arg1) {
   return window['go']['main']['App']['AnalyzeSentimentWithFreqWeight'](arg1);
 }
 
-export function BatchDeleteAIResponseResult(arg1) {
-  return window['go']['main']['App']['BatchDeleteAIResponseResult'](arg1);
-}
-
-export function ChatWithAgent(arg1, arg2, arg3, arg4) {
-  return window['go']['main']['App']['ChatWithAgent'](arg1, arg2, arg3, arg4);
-}
-
 export function CheckStockBaseInfo(arg1) {
   return window['go']['main']['App']['CheckStockBaseInfo'](arg1);
 }
@@ -46,24 +38,8 @@ export function ClsCalendar() {
   return window['go']['main']['App']['ClsCalendar']();
 }
 
-export function CreateAgentSession(arg1) {
-  return window['go']['main']['App']['CreateAgentSession'](arg1);
-}
-
 export function DelPrompt(arg1) {
   return window['go']['main']['App']['DelPrompt'](arg1);
-}
-
-export function DeleteAIResponseResult(arg1) {
-  return window['go']['main']['App']['DeleteAIResponseResult'](arg1);
-}
-
-export function DeleteAgentSession(arg1) {
-  return window['go']['main']['App']['DeleteAgentSession'](arg1);
-}
-
-export function DeleteAiRecommendStocks(arg1) {
-  return window['go']['main']['App']['DeleteAiRecommendStocks'](arg1);
 }
 
 export function EMDictCode(arg1) {
@@ -82,60 +58,28 @@ export function FollowFund(arg1) {
   return window['go']['main']['App']['FollowFund'](arg1);
 }
 
+export function GetAIAnalysisReport(arg1) {
+  return window['go']['main']['App']['GetAIAnalysisReport'](arg1);
+}
+
+export function GetAIRecommendation(arg1) {
+  return window['go']['main']['App']['GetAIRecommendation'](arg1);
+}
+
 export function GetAIResponseResult(arg1) {
   return window['go']['main']['App']['GetAIResponseResult'](arg1);
 }
 
-export function GetAIResponseResultList(arg1) {
-  return window['go']['main']['App']['GetAIResponseResultList'](arg1);
-}
-
-export function GetAgentSessionList() {
-  return window['go']['main']['App']['GetAgentSessionList']();
-}
-
-export function GetAgentSessionMessages(arg1) {
-  return window['go']['main']['App']['GetAgentSessionMessages'](arg1);
+export function GetAISimulatedAccount() {
+  return window['go']['main']['App']['GetAISimulatedAccount']();
 }
 
 export function GetAiConfigs() {
   return window['go']['main']['App']['GetAiConfigs']();
 }
 
-export function GetAiRecommendStocksDateRange() {
-  return window['go']['main']['App']['GetAiRecommendStocksDateRange']();
-}
-
-export function GetAiRecommendStocksList(arg1) {
-  return window['go']['main']['App']['GetAiRecommendStocksList'](arg1);
-}
-
-export function GetAiRecommendStocksYieldList(arg1) {
-  return window['go']['main']['App']['GetAiRecommendStocksYieldList'](arg1);
-}
-
-export function GetAiRecommendYieldDailyOverview(arg1) {
-  return window['go']['main']['App']['GetAiRecommendYieldDailyOverview'](arg1);
-}
-
-export function GetAiRecommendYieldErrorLogs(arg1) {
-  return window['go']['main']['App']['GetAiRecommendYieldErrorLogs'](arg1);
-}
-
-export function GetAiRecommendYieldMinuteChart(arg1) {
-  return window['go']['main']['App']['GetAiRecommendYieldMinuteChart'](arg1);
-}
-
-export function GetAiRecommendYieldTaskStatus() {
-  return window['go']['main']['App']['GetAiRecommendYieldTaskStatus']();
-}
-
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
-}
-
-export function GetEmailSendLogList(arg1) {
-  return window['go']['main']['App']['GetEmailSendLogList'](arg1);
 }
 
 export function GetFollowList(arg1) {
@@ -154,32 +98,12 @@ export function GetGroupStockList(arg1) {
   return window['go']['main']['App']['GetGroupStockList'](arg1);
 }
 
-export function GetHotStrategy() {
-  return window['go']['main']['App']['GetHotStrategy']();
-}
-
 export function GetIndustryMoneyRankSina(arg1, arg2) {
   return window['go']['main']['App']['GetIndustryMoneyRankSina'](arg1, arg2);
 }
 
 export function GetIndustryRank(arg1, arg2) {
   return window['go']['main']['App']['GetIndustryRank'](arg1, arg2);
-}
-
-export function GetMarketSummaryBlockedReasonTop(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryBlockedReasonTop'](arg1);
-}
-
-export function GetMarketSummaryEmptyRunCount(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryEmptyRunCount'](arg1);
-}
-
-export function GetMarketSummaryProductionDowngradeReasonTop(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryProductionDowngradeReasonTop'](arg1);
-}
-
-export function GetMarketSummaryRunDiagnostics(arg1) {
-  return window['go']['main']['App']['GetMarketSummaryRunDiagnostics'](arg1);
 }
 
 export function GetMoneyRankSina(arg1) {
@@ -254,6 +178,14 @@ export function InvestCalendarTimeLine(arg1) {
   return window['go']['main']['App']['InvestCalendarTimeLine'](arg1);
 }
 
+export function ListAIAnalysisReports(arg1, arg2) {
+  return window['go']['main']['App']['ListAIAnalysisReports'](arg1, arg2);
+}
+
+export function ListAIRecommendations(arg1, arg2) {
+  return window['go']['main']['App']['ListAIRecommendations'](arg1, arg2);
+}
+
 export function LongTigerRank(arg1) {
   return window['go']['main']['App']['LongTigerRank'](arg1);
 }
@@ -280,10 +212,6 @@ export function RemoveGroup(arg1) {
 
 export function RemoveStockGroup(arg1, arg2, arg3) {
   return window['go']['main']['App']['RemoveStockGroup'](arg1, arg2, arg3);
-}
-
-export function ResetAgentSession(arg1) {
-  return window['go']['main']['App']['ResetAgentSession'](arg1);
 }
 
 export function SaveAIResponseResult(arg1, arg2, arg3, arg4, arg5, arg6) {
@@ -314,22 +242,6 @@ export function SendDingDingMessageByType(arg1, arg2, arg3) {
   return window['go']['main']['App']['SendDingDingMessageByType'](arg1, arg2, arg3);
 }
 
-export function SendLatestAIAnalysisReportNow() {
-  return window['go']['main']['App']['SendLatestAIAnalysisReportNow']();
-}
-
-export function SendMarketSummaryEmailNow(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['SendMarketSummaryEmailNow'](arg1, arg2, arg3, arg4, arg5);
-}
-
-export function SendYieldEmailTestMessage() {
-  return window['go']['main']['App']['SendYieldEmailTestMessage']();
-}
-
-export function SendYieldEmailXLSXNow() {
-  return window['go']['main']['App']['SendYieldEmailXLSXNow']();
-}
-
 export function SetAlarmChangePercent(arg1, arg2, arg3) {
   return window['go']['main']['App']['SetAlarmChangePercent'](arg1, arg2, arg3);
 }
@@ -350,24 +262,12 @@ export function ShareAnalysis(arg1, arg2) {
   return window['go']['main']['App']['ShareAnalysis'](arg1, arg2);
 }
 
-export function StartAiRecommendMinuteDownload() {
-  return window['go']['main']['App']['StartAiRecommendMinuteDownload']();
-}
-
 export function StockNotice(arg1) {
   return window['go']['main']['App']['StockNotice'](arg1);
 }
 
 export function StockResearchReport(arg1) {
   return window['go']['main']['App']['StockResearchReport'](arg1);
-}
-
-export function SummarizeAgentSessionTitle(arg1) {
-  return window['go']['main']['App']['SummarizeAgentSessionTitle'](arg1);
-}
-
-export function SummaryStockNews(arg1, arg2, arg3, arg4, arg5) {
-  return window['go']['main']['App']['SummaryStockNews'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function TestAIConfig(arg1) {

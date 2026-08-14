@@ -17,16 +17,6 @@ type Settings struct {
 	LocalPushEnable          bool   `json:"localPushEnable"`
 	DingPushEnable           bool   `json:"dingPushEnable"`
 	DingRobot                string `json:"dingRobot"`
-	YieldEmailEnable         bool   `json:"yieldEmailEnable"`
-	YieldEmailTo             string `json:"yieldEmailTo"`
-	YieldEmailFrom           string `json:"yieldEmailFrom"`
-	YieldEmailSMTPHost       string `json:"yieldEmailSmtpHost"`
-	YieldEmailSMTPPort       int    `json:"yieldEmailSmtpPort"`
-	YieldEmailSMTPUsername   string `json:"yieldEmailSmtpUsername"`
-	YieldEmailSMTPPassword   string `json:"yieldEmailSmtpPassword"`
-	YieldEmailCronEnabled    bool   `json:"yieldEmailCronEnabled"`
-	YieldEmailCronTimes      string `json:"yieldEmailCronTimes"`
-	MarketSummaryEmailEnable bool   `json:"marketSummaryEmailEnabled"`
 	UpdateBasicInfoOnStart   bool   `json:"updateBasicInfoOnStart"`
 	RefreshInterval          int64  `json:"refreshInterval"`
 	OpenAiEnable             bool   `json:"openAiEnable"`
@@ -46,10 +36,10 @@ type Settings struct {
 	HttpProxy                string `json:"httpProxy"`
 	HttpProxyEnabled         bool   `json:"httpProxyEnabled"`
 	ForceNoProxyForFetch     bool   `json:"forceNoProxyForFetch" gorm:"default:true"`
-	EnableAgent              bool   `json:"enableAgent"`
 	QgqpBId                  string `json:"qgqpBId" gorm:"column:qgqp_b_id"`
-	MarketSummaryCronEnabled bool   `json:"marketSummaryCronEnabled" gorm:"default:true"`
-	MarketSummaryCronTimes   string `json:"marketSummaryCronTimes" gorm:"default:'09:40,11:30,14:30'"`
+	AIAnalysisEnabled        bool   `json:"aiAnalysisEnabled" gorm:"default:true"`
+	AIAnalysisConfigID       uint   `json:"aiAnalysisConfigId"`
+	AIAnalysisTimes          string `json:"aiAnalysisTimes" gorm:"default:'09:30,11:30,14:30'"`
 	MinuteProviderMode       string `json:"minuteProviderMode" gorm:"default:'public'"`
 	MinuteLongHistoryHint    bool   `json:"minuteLongHistoryHintEnabled" gorm:"column:minute_long_history_hint_enabled;default:true"`
 	PrivateMinuteEnabled     bool   `json:"privateMinuteEnabled"`
@@ -314,111 +304,4 @@ type KLineData struct {
 	Low    string `json:"low"`
 	Close  string `json:"close"`
 	Volume string `json:"volume"`
-}
-
-type AIEvidenceReference struct {
-	Type         string `json:"type"`
-	Summary      string `json:"summary"`
-	SourceName   string `json:"sourceName,omitempty"`
-	SourceType   string `json:"sourceType,omitempty"`
-	TrustLevel   string `json:"trustLevel,omitempty"`
-	LatencyLevel string `json:"latencyLevel,omitempty"`
-	Title        string `json:"title,omitempty"`
-	URL          string `json:"url,omitempty"`
-	PublishedAt  string `json:"publishedAt,omitempty"`
-	EntityType   string `json:"entityType,omitempty"`
-	EntityCode   string `json:"entityCode,omitempty"`
-	DedupeKey    string `json:"dedupeKey,omitempty"`
-	RawHash      string `json:"rawHash,omitempty"`
-}
-
-type MarketSummaryTechnicalMetrics struct {
-	DayAmount           string `json:"dayAmount,omitempty"`
-	DayVolume           string `json:"dayVolume,omitempty"`
-	VolumeRatio         string `json:"volumeRatio,omitempty"`
-	TurnoverRate        string `json:"turnoverRate,omitempty"`
-	Ma5                 string `json:"ma5,omitempty"`
-	Ma10                string `json:"ma10,omitempty"`
-	Ma20                string `json:"ma20,omitempty"`
-	High3d              string `json:"high3d,omitempty"`
-	Low3d               string `json:"low3d,omitempty"`
-	High5d              string `json:"high5d,omitempty"`
-	Low5d               string `json:"low5d,omitempty"`
-	High20d             string `json:"high20d,omitempty"`
-	Low20d              string `json:"low20d,omitempty"`
-	MinuteVolumeVsAvg5  string `json:"minuteVolumeVsAvg5,omitempty"`
-	MinuteVolumeVsAvg10 string `json:"minuteVolumeVsAvg10,omitempty"`
-	PriceAboveMa5       bool   `json:"priceAboveMa5,omitempty"`
-	PriceAboveMa10      bool   `json:"priceAboveMa10,omitempty"`
-	Breakout3dHigh      bool   `json:"breakout3dHigh,omitempty"`
-	Breakout5dHigh      bool   `json:"breakout5dHigh,omitempty"`
-	PullbackNearMa5     bool   `json:"pullbackNearMa5,omitempty"`
-}
-
-type MarketSummaryFeasiblePlan struct {
-	Path          string  `json:"path"`
-	EntryRange    string  `json:"entryRange,omitempty"`
-	WorstEntry    float64 `json:"worstEntry"`
-	StopLoss      float64 `json:"stopLoss"`
-	TakeProfit    float64 `json:"takeProfit"`
-	RewardRisk    float64 `json:"rewardRisk"`
-	DownsidePct   float64 `json:"downsidePct"`
-	PassHardGate  bool    `json:"passHardGate"`
-	FailureReason string  `json:"failureReason,omitempty"`
-}
-
-type MarketSummaryVerifiedCandidateSnapshot struct {
-	StockName         string                        `json:"stockName"`
-	StockCode         string                        `json:"stockCode"`
-	Direction         string                        `json:"direction,omitempty"`
-	BkName            string                        `json:"bkName,omitempty"`
-	Reason            string                        `json:"reason,omitempty"`
-	CurrentPrice      string                        `json:"currentPrice,omitempty"`
-	CurrentPriceTime  string                        `json:"currentPriceTime,omitempty"`
-	MinutePrice       string                        `json:"minutePrice,omitempty"`
-	MinuteAmount      string                        `json:"minuteAmount,omitempty"`
-	MinuteVolume      string                        `json:"minuteVolume,omitempty"`
-	MinuteTime        string                        `json:"minuteTime,omitempty"`
-	MinuteDate        string                        `json:"minuteDate,omitempty"`
-	PriceAnchorSource string                        `json:"priceAnchorSource,omitempty"`
-	AuctionPrice      string                        `json:"auctionPrice,omitempty"`
-	AuctionAmount     string                        `json:"auctionAmount,omitempty"`
-	AuctionVolume     string                        `json:"auctionVolume,omitempty"`
-	AuctionTime       string                        `json:"auctionTime,omitempty"`
-	AuctionDate       string                        `json:"auctionDate,omitempty"`
-	AuctionOpen       string                        `json:"auctionOpen,omitempty"`
-	AuctionHigh       string                        `json:"auctionHigh,omitempty"`
-	AuctionLow        string                        `json:"auctionLow,omitempty"`
-	AuctionPreClose   string                        `json:"auctionPreClose,omitempty"`
-	AuctionTurnover   string                        `json:"auctionTurnoverRate,omitempty"`
-	AuctionCommittee  string                        `json:"auctionCommitteeRatio,omitempty"`
-	AuctionVolumeRate string                        `json:"auctionVolumeRatio,omitempty"`
-	AuctionBidPrice   []string                      `json:"auctionBidPrice,omitempty"`
-	AuctionAskPrice   []string                      `json:"auctionAskPrice,omitempty"`
-	AuctionBidVol     []string                      `json:"auctionBidVol,omitempty"`
-	AuctionAskVol     []string                      `json:"auctionAskVol,omitempty"`
-	TechnicalMetrics  MarketSummaryTechnicalMetrics `json:"technicalMetrics,omitempty"`
-	TechnicalSnapshot string                        `json:"technicalSnapshot,omitempty"`
-	EvidenceSources   []AIEvidenceReference         `json:"evidenceSources,omitempty"`
-	PositiveSignals   []string                      `json:"positiveSignals,omitempty"`
-	NegativeSignals   []string                      `json:"negativeSignals,omitempty"`
-	VerdictHints      []string                      `json:"verdictHints,omitempty"`
-	FeasiblePlans     []MarketSummaryFeasiblePlan   `json:"feasiblePlans,omitempty"`
-	VerifiedAt        time.Time                     `json:"verifiedAt"`
-}
-
-type MarketSummarySupplementRequest struct {
-	FailureSummary     []MarketSummaryBlockedReasonItem         `json:"failureSummary,omitempty"`
-	RemainingVerified  []MarketSummaryVerifiedCandidateSnapshot `json:"remainingVerified,omitempty"`
-	ExcludedToday      []string                                 `json:"excludedToday,omitempty"`
-	RepairableFailures []MarketSummaryTradePlanRepairCandidate  `json:"repairableFailures,omitempty"`
-	TargetProduction   int                                      `json:"targetProduction,omitempty"`
-	CurrentProduction  int                                      `json:"currentProduction,omitempty"`
-}
-
-type MarketSummaryRecommendSaveOptions struct {
-	NewRecordLimit        int
-	ProductionLimit       int
-	RepairableFailures    []MarketSummaryTradePlanRepairCandidate
-	RequireVerifiedRepair bool
 }

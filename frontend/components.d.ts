@@ -9,17 +9,9 @@ export {}
 declare module 'vue' {
   export interface GlobalComponents {
     About: typeof import('./src/components/about.vue')['default']
-    AgentChat: typeof import('./src/components/agent-chat.vue')['default']
-    AgentChat_bk: typeof import('./src/components/agent-chat_bk.vue')['default']
     AiConfigSettings: typeof import('./src/components/settings/AiConfigSettings.vue')['default']
-    AiRecommendStocksList: typeof import('./src/components/aiRecommendStocksList.vue')['default']
-    AiRecommendStocksYieldList: typeof import('./src/components/aiRecommendStocksYieldList.vue')['default']
-    AiRecommendYieldDailyOverviewChart: typeof import('./src/components/AiRecommendYieldDailyOverviewChart.vue')['default']
-    AiRecommendYieldMinuteReplayChart: typeof import('./src/components/AiRecommendYieldMinuteReplayChart.vue')['default']
-    AiRecommendYieldStats: typeof import('./src/components/aiRecommendYieldStats.vue')['default']
     AnalyzeMartket: typeof import('./src/components/AnalyzeMartket.vue')['default']
     ClsCalendarTimeLine: typeof import('./src/components/ClsCalendarTimeLine.vue')['default']
-    EmailSettings: typeof import('./src/components/settings/EmailSettings.vue')['default']
     EmbeddedUrl: typeof import('./src/components/EmbeddedUrl.vue')['default']
     Fund: typeof import('./src/components/fund.vue')['default']
     HotEvents: typeof import('./src/components/HotEvents.vue')['default']
@@ -36,7 +28,9 @@ declare module 'vue' {
     NewsList: typeof import('./src/components/newsList.vue')['default']
     RankTable: typeof import('./src/components/rankTable.vue')['default']
     ResearchIndex: typeof import('./src/components/researchIndex.vue')['default']
+    ResearchRecommendations: typeof import('./src/components/researchRecommendations.vue')['default']
     ResearchReport: typeof import('./src/components/researchReport.vue')['default']
+    ResearchYield: typeof import('./src/components/researchYield.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SelectStock: typeof import('./src/components/SelectStock.vue')['default']
@@ -46,10 +40,5 @@ declare module 'vue' {
     StockNoticeList: typeof import('./src/components/StockNoticeList.vue')['default']
     StockResearchReportList: typeof import('./src/components/StockResearchReportList.vue')['default']
     StockSparkLine: typeof import('./src/components/stockSparkLine.vue')['default']
-    TChat: typeof import('@tdesign-vue-next/chat')['Chat']
-    TChatAction: typeof import('@tdesign-vue-next/chat')['ChatAction']
-    TChatContent: typeof import('@tdesign-vue-next/chat')['ChatContent']
-    TChatLoading: typeof import('@tdesign-vue-next/chat')['ChatLoading']
-    TChatSender: typeof import('@tdesign-vue-next/chat')['ChatSender']
   }
 }

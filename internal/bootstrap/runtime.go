@@ -21,7 +21,7 @@ type AppRuntime struct {
 	Services  service.AppServices
 }
 
-func InitApplication(cfg appconfig.AppConfig) (AppRuntime, error) {
+func InitApplication(cfg appconfig.AppConfig, seed ...StockMasterSeedLoader) (AppRuntime, error) {
 	EnsureRuntimeDirs(cfg)
 	db.Init(cfg.DB.Path)
 	storage := Storage{Main: db.Dao, Minute: db.MinuteDao}
@@ -29,7 +29,7 @@ func InitApplication(cfg appconfig.AppConfig) (AppRuntime, error) {
 		releaseinfo.MarkNotReady(err)
 		return AppRuntime{}, err
 	}
-	runtime, err := AssembleRuntime(cfg, productionRuntimeDependencies(storage))
+	runtime, err := AssembleRuntime(cfg, productionRuntimeDependencies(storage, seed...))
 	if err != nil {
 		releaseinfo.MarkNotReady(err)
 		return AppRuntime{}, err

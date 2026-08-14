@@ -100,7 +100,16 @@ func openSchedulerCompatibilityTestDB(t *testing.T) *gorm.DB {
 		t.Fatalf("access scheduler database handle: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := database.AutoMigrate(&models.CronTaskRun{}, &models.AIResponseResult{}); err != nil {
+	if err := database.AutoMigrate(
+		&models.CronTaskRun{},
+		&models.AIResponseResult{},
+		&models.Telegraph{},
+		&models.Tags{},
+		&models.TelegraphTags{},
+		&models.StockBasic{},
+		&models.StockInfoHK{},
+		&models.StockInfoUS{},
+	); err != nil {
 		t.Fatalf("migrate scheduler tables: %v", err)
 	}
 	return database

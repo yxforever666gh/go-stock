@@ -12,8 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"go-stock/backend/strategy/v150"
 )
 
 // These values are replaced by the Windows release build through -ldflags.
@@ -27,11 +25,9 @@ var (
 var manifestJSON []byte
 
 type ReleaseManifest struct {
-	AppVersion             string `json:"appVersion"`
-	CurrentStrategyVersion string `json:"currentStrategyVersion"`
-	StrategyConfigHash     string `json:"strategyConfigHash"`
-	MainSchemaVersion      int    `json:"mainSchemaVersion"`
-	MinuteSchemaVersion    int    `json:"minuteSchemaVersion"`
+	AppVersion          string `json:"appVersion"`
+	MainSchemaVersion   int    `json:"mainSchemaVersion"`
+	MinuteSchemaVersion int    `json:"minuteSchemaVersion"`
 }
 
 type BuildInfo struct {
@@ -42,29 +38,24 @@ type BuildInfo struct {
 }
 
 type ReadinessStatus struct {
-	Migrations   bool   `json:"migrations"`
-	Database     bool   `json:"database"`
-	Services     bool   `json:"services"`
-	Scheduler    bool   `json:"scheduler"`
-	StrategyMode string `json:"strategyMode"`
-	Ready        bool   `json:"ready"`
-	Error        string `json:"error,omitempty"`
+	Migrations bool   `json:"migrations"`
+	Database   bool   `json:"database"`
+	Services   bool   `json:"services"`
+	Scheduler  bool   `json:"scheduler"`
+	Ready      bool   `json:"ready"`
+	Error      string `json:"error,omitempty"`
 }
 
 type VersionStatus struct {
-	AppVersion             string          `json:"appVersion"`
-	Commit                 string          `json:"commit"`
-	BuildTime              string          `json:"buildTime"`
-	ArtifactSHA256         string          `json:"artifactSHA256"`
-	Dirty                  bool            `json:"dirty"`
-	MainSchemaVersion      int             `json:"mainSchemaVersion"`
-	MinuteSchemaVersion    int             `json:"minuteSchemaVersion"`
-	CurrentStrategyVersion string          `json:"currentStrategyVersion"`
-	StrategyConfigHash     string          `json:"strategyConfigHash"`
-	ConfigHash             string          `json:"configHash"`
-	StartedAt              time.Time       `json:"startedAt"`
-	StrategyMode           string          `json:"strategyMode"`
-	Readiness              ReadinessStatus `json:"readiness"`
+	AppVersion          string          `json:"appVersion"`
+	Commit              string          `json:"commit"`
+	BuildTime           string          `json:"buildTime"`
+	ArtifactSHA256      string          `json:"artifactSHA256"`
+	Dirty               bool            `json:"dirty"`
+	MainSchemaVersion   int             `json:"mainSchemaVersion"`
+	MinuteSchemaVersion int             `json:"minuteSchemaVersion"`
+	StartedAt           time.Time       `json:"startedAt"`
+	Readiness           ReadinessStatus `json:"readiness"`
 }
 
 var state = struct {
@@ -78,12 +69,6 @@ var state = struct {
 func init() {
 	if err := json.Unmarshal(manifestJSON, &state.manifest); err != nil {
 		panic(fmt.Sprintf("invalid embedded release manifest: %v", err))
-	}
-	if state.manifest.CurrentStrategyVersion != v150.StrategyVersion {
-		panic(fmt.Sprintf("release manifest strategy %s does not match strategy package %s", state.manifest.CurrentStrategyVersion, v150.StrategyVersion))
-	}
-	if state.manifest.StrategyConfigHash != v150.FixedStrategyV150ConfigHash() {
-		panic(fmt.Sprintf("release manifest strategy config hash %s does not match strategy package %s", state.manifest.StrategyConfigHash, v150.FixedStrategyV150ConfigHash()))
 	}
 	state.build = BuildInfo{
 		Commit:    strings.TrimSpace(Commit),
@@ -166,49 +151,34 @@ func MarkNotReady(err error) {
 	}
 }
 
-func Readiness() ReadinessStatus {
-	return readinessForMode("")
-}
+func Readiness() ReadinessStatus { return readinessStatus() }
 
-func SystemVersion(strategyMode string) VersionStatus {
+func SystemVersion() VersionStatus {
 	state.RLock()
 	manifest := state.manifest
 	build := state.build
 	startedAt := state.startedAt
 	state.RUnlock()
-	readiness := readinessForMode(strategyMode)
+	readiness := readinessStatus()
 	return VersionStatus{
-		AppVersion:             manifest.AppVersion,
-		Commit:                 build.Commit,
-		BuildTime:              build.BuildTime,
-		ArtifactSHA256:         build.ArtifactSHA256,
-		Dirty:                  build.Dirty,
-		MainSchemaVersion:      manifest.MainSchemaVersion,
-		MinuteSchemaVersion:    manifest.MinuteSchemaVersion,
-		CurrentStrategyVersion: manifest.CurrentStrategyVersion,
-		StrategyConfigHash:     manifest.StrategyConfigHash,
-		ConfigHash:             manifest.StrategyConfigHash,
-		StartedAt:              startedAt,
-		StrategyMode:           normalizeMode(strategyMode),
-		Readiness:              readiness,
+		AppVersion:          manifest.AppVersion,
+		Commit:              build.Commit,
+		BuildTime:           build.BuildTime,
+		ArtifactSHA256:      build.ArtifactSHA256,
+		Dirty:               build.Dirty,
+		MainSchemaVersion:   manifest.MainSchemaVersion,
+		MinuteSchemaVersion: manifest.MinuteSchemaVersion,
+		StartedAt:           startedAt,
+		Readiness:           readiness,
 	}
 }
 
-func readinessForMode(strategyMode string) ReadinessStatus {
+func readinessStatus() ReadinessStatus {
 	state.RLock()
 	status := state.readiness
 	state.RUnlock()
-	status.StrategyMode = normalizeMode(strategyMode)
 	status.Ready = status.Migrations && status.Database && status.Services && status.Scheduler && status.Error == ""
 	return status
-}
-
-func normalizeMode(mode string) string {
-	mode = strings.ToLower(strings.TrimSpace(mode))
-	if mode != "live" {
-		return "paused"
-	}
-	return mode
 }
 
 func parseBoolDefault(raw string, fallback bool) bool {

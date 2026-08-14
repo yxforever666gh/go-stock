@@ -9,7 +9,7 @@ import {
 import { onBeforeMount, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { darkTheme, dateZhCN, zhCN } from 'naive-ui'
-import { GetConfig, GetGroupList, GetVersionInfo, apiClient } from './services/app-api'
+import { GetConfig, GetGroupList, GetVersionInfo } from './services/app-api'
 import {
   applyFeatureMenuVisibility,
   createMenuOptions,
@@ -22,7 +22,6 @@ const loading = ref(true)
 const loadingMsg = ref('加载数据中...')
 const contentStyle = ref('')
 const enableFund = ref(false)
-const enableAgent = ref(false)
 const enableDarkTheme = ref(null)
 const content = ref('数据来源于网络，仅供参考；投资有风险，入市需谨慎')
 const isFullscreen = ref(false)
@@ -34,21 +33,7 @@ const officialStatement = ref('')
 const menuOptions = ref([])
 const shuttingDown = ref(false)
 const shutdownMessage = ref('')
-const strategyRuntime = ref(null)
 let cleanupRuntimeEvents = () => {}
-let strategyRuntimeTimer = null
-
-async function refreshStrategyRuntime() {
-  try {
-    strategyRuntime.value = await apiClient.strategy.runtime()
-  } catch (error) {
-    strategyRuntime.value = {
-      mode: 'paused',
-      ready: false,
-      reason: error instanceof Error ? error.message : '运行状态不可用',
-    }
-  }
-}
 
 function toggleFullscreen(e) {
   activeKey.value = 'full'
@@ -82,17 +67,12 @@ function toggleFullscreen(e) {
 
 onBeforeUnmount(() => {
   cleanupRuntimeEvents()
-  if (strategyRuntimeTimer) {
-    window.clearInterval(strategyRuntimeTimer)
-  }
 })
 
 function syncFeatureFlags(res) {
   enableFund.value = res.enableFund
-  enableAgent.value = res.enableAgent
   applyFeatureMenuVisibility(menuOptions.value, {
     enableFund: res.enableFund,
-    enableAgent: res.enableAgent,
   })
   enableDarkTheme.value = res.darkTheme ? darkTheme : null
 }
@@ -130,7 +110,6 @@ onBeforeMount(() => {
     router,
     activeKey,
     enableFund,
-    enableAgent,
     realtimeProfit,
     isFullscreen,
     toggleFullscreen,
@@ -156,7 +135,6 @@ onBeforeMount(() => {
   GetConfig().then((res) => {
     syncFeatureFlags(res)
   })
-  refreshStrategyRuntime()
 })
 
 onMounted(() => {
@@ -165,7 +143,6 @@ onMounted(() => {
   GetConfig().then((res) => {
     syncFeatureFlags(res)
   })
-  strategyRuntimeTimer = window.setInterval(refreshStrategyRuntime, 30000)
 })
 </script>
 <template>
@@ -216,15 +193,6 @@ onMounted(() => {
                               :options="menuOptions"
                               responsive
                       />
-                        <n-tag
-                            data-testid="strategy-runtime-status"
-                            size="small"
-                            :type="strategyRuntime?.mode === 'live' && strategyRuntime?.ready ? 'success' : 'warning'"
-                            :title="strategyRuntime?.reason || ''"
-                            class="strategy-runtime-status"
-                        >
-                          策略 {{ strategyRuntime?.mode === 'live' && strategyRuntime?.ready ? '运行中' : '已暂停' }}
-                        </n-tag>
                         <n-button
                             tertiary
                             type="error"
@@ -262,11 +230,6 @@ onMounted(() => {
 .app-exit-button {
   flex: 0 0 auto;
   margin-right: 12px;
-}
-
-.strategy-runtime-status {
-  flex: 0 0 auto;
-  white-space: nowrap;
 }
 
 .app-shutdown-message {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	log "go-stock/backend/logger"
 	"os"
@@ -14,7 +15,11 @@ func (a *App) updateBasicInfo() {
 		return
 	}
 	if config.UpdateBasicInfoOnStart {
-		go a.services.Stock.RefreshStockBaseInfo()
+		go func() {
+			if _, err := a.services.Stock.RefreshStockBaseInfo(context.Background()); err != nil {
+				log.SugaredLogger.Warnf("refresh stock master on startup: %v", err)
+			}
+		}()
 		go a.services.Stock.RefreshIndexBaseInfo()
 	}
 }

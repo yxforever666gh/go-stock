@@ -1,609 +1,110 @@
 <script setup>
-import {computed, h, onBeforeMount, onMounted, reactive, ref, watch} from 'vue'
-import {GetAIResponseResultList, GetConfig, SaveAsMarkdown, ShareAnalysis,DeleteAIResponseResult} from "../services/app-api";
-import {NAvatar, NButton, NEllipsis, NText, useMessage} from "naive-ui";
-import {MdEditor, MdPreview} from 'md-editor-v3';
-import { useSharedResearchDateRange } from "../composables/useSharedResearchDateRange";
+import {h, onMounted, ref} from 'vue'
+import {NButton, NTag, NText, useMessage} from 'naive-ui'
+import {MdPreview} from 'md-editor-v3'
+import {GetAIAnalysisReport, ListAIAnalysisReports} from '../services/app-api'
 
-
-const { researchDateRangeModel, researchDateRangeKey, initSharedResearchDateRange } = useSharedResearchDateRange()
-const rangeReadyRef = ref(false)
-const aiConfigsRef = ref([])
-
-onBeforeMount(()=> {
-  GetConfig().then(result => {
-    aiConfigsRef.value = Array.isArray(result.aiConfigs) ? result.aiConfigs : []
-    if (result.darkTheme) {
-      editorDataRef.darkTheme = true
-    }
-  })
-})
-onMounted(async () => {
-  await initSharedResearchDateRange()
-  rangeReadyRef.value = true
-  await refreshReports(1)
-})
 const message = useMessage()
-const mdPreviewRef = ref(null)
-const mdEditorRef = ref(null)
-const editorDataRef = reactive({
-  show: false,
-  loading: false,
-  darkTheme: false,
-  chatId: "",
-  providerName: "",
-  modelName: "",
-  CreatedAt: "",
-  stockName: "",
-  stockCode: "",
-  question: "",
-  content: "",
-})
-const dataRef = ref([])
-const loadingRef = ref(true)
-const tableScrollX = 1100
-const aiConfigNameSet = computed(() => {
-  return new Set(aiConfigsRef.value.map((item) => String(item?.name || "").trim()).filter(Boolean))
-})
-const aiConfigNamesByModel = computed(() => {
-  const result = new Map()
-  aiConfigsRef.value.forEach((item) => {
-    const model = String(item?.modelName || "").trim()
-    const name = String(item?.name || "").trim()
-    if (!model || !name) {
-      return
-    }
-    if (!result.has(model)) {
-      result.set(model, new Set())
-    }
-    result.get(model).add(name)
-  })
-  return result
-})
-function resolveProviderDisplayName(providerName, modelName) {
-  const provider = String(providerName || "").trim()
-  const model = String(modelName || "").trim()
-  if (provider && aiConfigNameSet.value.has(provider)) {
-    return provider
-  }
-  const names = model ? Array.from(aiConfigNamesByModel.value.get(model) || []) : []
-  if (names.length === 1) {
-    return names[0]
-  }
-  return provider
-}
-function formatProviderModelLabel(providerName, modelName) {
-  const provider = resolveProviderDisplayName(providerName, modelName)
-  const model = String(modelName || "").trim()
-  if (provider && model) {
-    return `${provider} / ${model}`
-  }
-  return provider || model || "--"
-}
-const columnsRef = ref([
-  {
-    title: '分析时间',
-    key: 'CreatedAt',
-    render(row, index) {
-      //2026-01-14T22:13:27.2693252+08:00 格式化为常用时间格式
-      return row.CreatedAt.substring(0, 19).replace('T', ' ')
-    }
-  },
-  {
-    title: 'Provider / 模型',
-    key: 'modelName',
-    render(row) {
-      return formatProviderModelLabel(row.providerName, row.modelName)
-    }
-  },
-  {
-    title: '分析对象',
-    key: 'stockName'
-  },
-  {
-    title: '提示词',
-    key: 'question',
-    render(row, index) {
-      return h(NEllipsis, { tooltip: true ,style: "max-width: 240px;"}, {default: () => h(NText,{type: "info"},{default: () => row.question}),})
-    }
-  },
-  {
-    title: '操作',
-    render(row, index) {
-      return [h(
-          NButton,
-          {
-            strong: true,
-            tertiary: true,
-            size: 'small',
-            type: 'warning', // 橙色按钮
-            style: 'font-size: 14px; padding: 0 10px;', // 稍微大一点的按钮
-            onClick: () => showReport(row)
-          },
-          { default: () => '查看分析报告' }
-      ),
-      h(
-          NButton,
-          {
-            strong: true,
-            tertiary: true,
-            size: 'small',
-            type: 'error', // 橙色按钮
-            style: 'font-size: 14px; padding: 0 10px;', // 稍微大一点的按钮
-            onClick: () => deleteAIResponseResult(row.ID)
-          },
-          { default: () => '删除' }
-      ),
-      ]
-    }
-  },
-])
-const paginationReactive = reactive({
-  page: 1,
-  pageCount: 1,
-  pageSize: 12,
-  itemCount: 0,
-  keyword: "",
-  startDate:"",
-  prefix({ itemCount }) {
-    return `${itemCount} 条记录`
-  }
-})
-const theme = computed(() => {
-  return editorDataRef.darkTheme ? 'dark' : 'light'
-})
-const reportTitle = computed(() => {
-  const stockName = String(editorDataRef.stockName || "").trim()
-  const stockCode = String(editorDataRef.stockCode || "").trim()
-  if (stockName && stockCode) {
-    return `${stockName} [${stockCode}] AI分析报告`
-  }
-  if (stockName) {
-    return `${stockName} AI分析报告`
-  }
-  if (stockCode) {
-    return `${stockCode} AI分析报告`
-  }
-  return "AI分析报告"
-})
-const reportModelLabel = computed(() => {
-  return formatProviderModelLabel(editorDataRef.providerName, editorDataRef.modelName)
-})
+const loading = ref(false)
+const rows = ref([])
+const detailVisible = ref(false)
+const detail = ref(null)
 
-function showReport(row) {
-
-  editorDataRef.show = true
-  editorDataRef.chatId = row.chatId
-  editorDataRef.providerName = row.providerName
-  editorDataRef.modelName = row.modelName
-  editorDataRef.CreatedAt = row.CreatedAt.substring(0, 19).replace('T', ' ')
-  editorDataRef.stockName = row.stockName
-  editorDataRef.stockCode = row.stockCode
-  editorDataRef.question = row.question
-  editorDataRef.content = row.content
-  editorDataRef.loading = false
+const statusLabels = {
+  running: '分析中', success: '已推荐', no_recommendation: '空仓', failed: '失败',
+  skipped_non_trading_day: '非交易日跳过', skipped_open_position: '持仓中跳过',
 }
 
-function query({
-                 page,
-                 pageSize = 10,
-                 order = 'desc',
-                 keyword = "",
-                 startDate = "",
-                 endDate = ""
-               }) {
-  return new Promise((resolve) => {
-
-    GetAIResponseResultList({
-      "page": page,
-      "pageSize": pageSize,
-      "modelName":keyword,
-      "question":keyword,
-      "stockName":keyword,
-      "stockCode":keyword,
-      "startDate":startDate,
-      "endDate":endDate
-    }).then((res) => {
-      const pagedData =res.list
-      const total = res.total
-      const pageCount =res.totalPages
-      resolve({
-        pageCount,
-        data: pagedData,
-        total
-      })
-    })
-  })
+function dateTime(value) {
+  return value ? String(value).slice(0, 19).replace('T', ' ') : '--'
 }
 
-function currentRangeParams() {
-  const range = researchDateRangeModel.value || []
-  return {
-    startDate: formatDate(range[0]),
-    endDate: formatDate(range[1])
-  }
+function statusType(status) {
+  if (status === 'success') return 'success'
+  if (status === 'failed') return 'error'
+  if (status === 'running') return 'warning'
+  return 'info'
 }
 
-async function refreshReports(page) {
-  loadingRef.value = true
-  const { startDate, endDate } = currentRangeParams()
-  const data = await query({
-    page,
-    pageSize: paginationReactive.pageSize,
-    order: "desc",
-    keyword: paginationReactive.keyword,
-    startDate,
-    endDate
-  })
-  dataRef.value = data.data
-  paginationReactive.page = page
-  paginationReactive.pageCount = data.pageCount
-  paginationReactive.itemCount = data.total
-  loadingRef.value = false
-}
-
-watch(researchDateRangeKey, async (nextKey, prevKey) => {
-  if (!rangeReadyRef.value || !prevKey || nextKey === prevKey) {
-    return
-  }
-  await refreshReports(1)
-})
-
-function handlePageChange(currentPage) {
-  if (loadingRef.value) {
-    return
-  }
-  refreshReports(currentPage)
-}
-function handleSearch() {
-  if (loadingRef.value) {
-    return
-  }
-  refreshReports(1)
-}
-function share(code, name) {
-  ShareAnalysis(code, name).then(msg => {
-    //message.info(msg)
-    notify.info({
-      avatar: () =>
-          h(NAvatar, {
-            size: 'small',
-            round: false,
-            src: icon.value
-          }),
-      title: '分享到社区',
-      duration: 1000 * 30,
-      content: () => {
-        return h('div', {
-          style: {
-            'text-align': 'left',
-            'font-size': '14px',
-          }
-        }, {default: () => msg})
-      },
-    })
-  })
-}
-
-function saveAsMarkdown(code,name) {
-  SaveAsMarkdown(code, name).then(result => {
-    if(result !== ""){
-      message.success(result)
-    }
-  })
-}
-async function copyToClipboard() {
+function sourceSummary(value) {
   try {
-    await navigator.clipboard.writeText(editorDataRef.content);
-    message.success('分析结果已复制到剪切板');
-  } catch (err) {
-    message.error('复制失败: ' + err);
+    const sources = JSON.parse(value || '[]')
+    const failed = sources.filter(item => item.error)
+    return `${sources.length} 个来源，${failed.length} 个失败`
+  } catch (_) {
+    return '--'
   }
 }
-function formatDate(dateString) {
-  const date = new Date(dateString)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  // const hours = String(date.getHours()).padStart(2, '0')
-  // const minutes = String(date.getMinutes()).padStart(2, '0')
-  // const seconds = String(date.getSeconds()).padStart(2, '0')
-  //return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-  return `${year}-${month}-${day}`
+
+const columns = [
+  {title: '计划时间', key: 'scheduledFor', width: 170, render: row => dateTime(row.scheduledFor)},
+  {title: '完成时间', key: 'completedAt', width: 170, render: row => dateTime(row.completedAt)},
+  {title: 'Provider / 模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
+  {title: '状态', key: 'status', width: 130, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
+  {title: '推荐数', key: 'recommendationCount', width: 90},
+  {title: '来源状态', key: 'sourceStatusJson', minWidth: 150, render: row => sourceSummary(row.sourceStatusJson)},
+  {title: '空仓/失败原因', key: 'failureReason', minWidth: 210, ellipsis: {tooltip: true}, render: row => row.failureReason || '--'},
+  {title: '操作', key: 'actions', width: 110, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => '查看报告'})},
+]
+
+async function refresh() {
+  loading.value = true
+  try {
+    rows.value = await ListAIAnalysisReports(100, 0) || []
+  } catch (error) {
+    message.error(error?.message || String(error))
+  } finally {
+    loading.value = false
+  }
 }
 
-function deleteAIResponseResult(id){
-  DeleteAIResponseResult(id).then(result => {
-    if(result !== ""){
-      message.success(result)
-    }
-    handleSearch()
-  })
+async function showDetail(row) {
+  detailVisible.value = true
+  detail.value = null
+  try {
+    detail.value = await GetAIAnalysisReport(row.runId)
+  } catch (error) {
+    message.error(error?.message || String(error))
+  }
 }
+
+onMounted(refresh)
 </script>
 
 <template>
-  <div class="report-toolbar">
-    <n-date-picker v-model:value="researchDateRangeModel" type="daterange" class="report-toolbar-date"/>
-    <n-input clearable placeholder="输入关键词搜索" v-model:value="paginationReactive.keyword" class="report-toolbar-keyword"/>
-    <n-button type="primary" ghost @click="handleSearch" @input="handleSearch" class="report-toolbar-button">
-      搜索
-    </n-button>
-  </div>
+  <n-space vertical>
+    <n-flex justify="space-between" align="center">
+      <n-text depth="3">分级 AI 分析自动运行；页面不提供手动运行入口。</n-text>
+      <n-button :loading="loading" @click="refresh">刷新</n-button>
+    </n-flex>
+    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1300" :row-key="row => row.runId"/>
+  </n-space>
 
-  <n-data-table
-      remote
-      size="small"
-      :columns="columnsRef"
-      :data="dataRef"
-      :loading="loadingRef"
-      :pagination="paginationReactive"
-      :scroll-x="tableScrollX"
-      :row-key="(rowData)=>rowData.ID"
-      @update:page="handlePageChange"
-      flex-height
-      class="report-table"
-  />
-
-  <n-modal
-      transform-origin="center"
-      v-model:show="editorDataRef.show"
-      class="report-modal"
-      :mask-closable="true"
-  >
-    <div class="report-modal-shell">
-      <div class="report-modal-header">
-        <div class="report-modal-heading">
-          <div class="report-modal-title">{{ reportTitle }}</div>
-          <div class="report-modal-meta">
-            <n-tag v-if="reportModelLabel !== '--'" type="warning" round :bordered="false">
-              {{ reportModelLabel }}
-            </n-tag>
-            <span v-if="editorDataRef.CreatedAt">{{ editorDataRef.CreatedAt }}</span>
-            <span v-if="editorDataRef.question" class="report-modal-question" :title="editorDataRef.question">
-              {{ editorDataRef.question }}
-            </span>
-          </div>
-        </div>
-        <n-button quaternary @click="editorDataRef.show = false">关闭</n-button>
-      </div>
-
-      <n-spin size="small" :show="editorDataRef.loading" class="report-modal-spin">
-        <div class="report-modal-body">
-          <div class="report-preview-wrap">
-            <MdPreview
-                ref="mdPreviewRef"
-                :modelValue="editorDataRef.content"
-                :theme="theme"
-                class="report-preview"
-            />
-          </div>
-        </div>
-      </n-spin>
-
-      <div class="report-modal-footer">
-        <div class="report-modal-note">
-          *AI分析结果仅供参考，请以实际行情为准。投资需谨慎，风险自担。
-        </div>
-        <div class="report-modal-actions">
-          <n-button size="small" type="success" @click="copyToClipboard">复制到剪切板</n-button>
-          <n-button size="small" type="primary" @click="saveAsMarkdown(editorDataRef.stockCode,editorDataRef.stockName)">保存为Markdown文件</n-button>
-          <n-button size="small" type="error" @click="share(editorDataRef.stockCode,editorDataRef.stockName)">分享到项目社区</n-button>
-        </div>
-      </div>
-    </div>
+  <n-modal v-model:show="detailVisible">
+    <n-card style="width:min(1180px, 94vw); max-height:90vh" title="AI 分析报告" closable @close="detailVisible = false">
+      <n-scrollbar style="max-height:78vh">
+        <n-spin :show="!detail">
+          <template v-if="detail">
+            <n-descriptions bordered :column="3" size="small">
+              <n-descriptions-item label="运行状态">{{ statusLabels[detail.status] || detail.status }}</n-descriptions-item>
+              <n-descriptions-item label="模型">{{ detail.providerName }} / {{ detail.modelName }}</n-descriptions-item>
+              <n-descriptions-item label="来源">{{ sourceSummary(detail.sourceStatusJson) }}</n-descriptions-item>
+            </n-descriptions>
+            <n-divider title-placement="left">完整决策报告</n-divider>
+            <MdPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
+            <n-collapse>
+              <n-collapse-item title="大盘层" name="market"><MdPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="板块层" name="sector"><MdPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="个股层" name="stock"><MdPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="来源状态" name="sources"><pre class="source-json">{{ JSON.stringify(JSON.parse(detail.sourceStatusJson || '[]'), null, 2) }}</pre></n-collapse-item>
+            </n-collapse>
+          </template>
+        </n-spin>
+      </n-scrollbar>
+    </n-card>
   </n-modal>
 </template>
 
 <style scoped>
-.report-toolbar {
-  display: grid;
-  grid-template-columns: minmax(320px, 1.3fr) minmax(220px, 1fr) auto;
-  gap: 12px;
-  align-items: center;
-}
-
-.report-toolbar-date,
-.report-toolbar-keyword {
-  min-width: 0;
-}
-
-.report-toolbar-button {
-  min-width: 96px;
-}
-
-.report-table {
-  height: calc(100vh - 210px);
-  margin-top: 12px;
-}
-
-.report-modal {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.report-modal-shell {
-  width: min(1280px, 94vw);
-  max-height: 90vh;
-  background: linear-gradient(180deg, #fffdfa 0%, #f8f5ef 100%);
-  border-radius: 20px;
-  box-shadow: 0 28px 90px rgba(20, 29, 47, 0.28);
-  overflow: hidden;
-  display: flex;
-  flex-direction: column;
-}
-
-.report-modal-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 22px 24px 18px;
-  border-bottom: 1px solid rgba(32, 44, 67, 0.08);
-  background: linear-gradient(135deg, rgba(250, 244, 232, 0.92) 0%, rgba(255, 255, 255, 0.96) 100%);
-}
-
-.report-modal-heading {
-  min-width: 0;
-  flex: 1;
-}
-
-.report-modal-title {
-  font-size: 22px;
-  line-height: 1.3;
-  font-weight: 700;
-  color: #1d2736;
-}
-
-.report-modal-meta {
-  margin-top: 10px;
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-  align-items: center;
-  font-size: 13px;
-  color: #5f6b7b;
-}
-
-.report-modal-question {
-  max-width: 100%;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.report-modal-spin {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  overflow: hidden;
-}
-
-.report-modal-body {
-  flex: 1;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  padding: 0 24px;
-  overflow: hidden;
-}
-
-.report-preview-wrap {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  overflow: auto;
-  padding: 20px 0 24px;
-}
-
-:deep(.report-modal-spin .n-spin-container),
-:deep(.report-modal-spin .n-spin-content) {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.report-modal-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding: 16px 24px 20px;
-  border-top: 1px solid rgba(32, 44, 67, 0.08);
-  background: rgba(255, 255, 255, 0.96);
-}
-
-.report-modal-note {
-  flex: 1;
-  min-width: 260px;
-  color: #9c4331;
-  line-height: 1.6;
-  font-size: 13px;
-}
-
-.report-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-:deep(.report-preview) {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  text-align: left;
-  background: transparent;
-  overflow: hidden;
-  box-sizing: border-box;
-}
-
-:deep(.report-preview .md-editor-preview-wrapper) {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  padding: 0;
-  background: transparent;
-  overflow: auto;
-  box-sizing: border-box;
-}
-
-:deep(.report-preview .md-editor-preview) {
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
-}
-
-:deep(.report-preview table) {
-  display: block;
-  width: 100%;
-  overflow-x: auto;
-}
-
-:deep(.report-preview pre) {
-  overflow-x: auto;
-}
-
-@media (max-width: 900px) {
-  .report-toolbar {
-    grid-template-columns: 1fr;
-  }
-
-  .report-toolbar-button {
-    width: 100%;
-  }
-
-  .report-table {
-    height: calc(100vh - 260px);
-  }
-
-  .report-modal-shell {
-    width: 100vw;
-    height: 100vh;
-    max-height: 100vh;
-    border-radius: 0;
-  }
-
-  .report-modal-header,
-  .report-modal-body,
-  .report-modal-footer {
-    padding-left: 16px;
-    padding-right: 16px;
-  }
-
-  .report-modal-title {
-    font-size: 18px;
-  }
-
-  .report-modal-question {
-    white-space: normal;
-  }
-}
-
+.source-json { white-space: pre-wrap; word-break: break-word; }
 </style>

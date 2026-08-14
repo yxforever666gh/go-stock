@@ -59,10 +59,6 @@ func main() {
 		os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	cfg := appconfig.Load()
-	if len(os.Args) > 1 && os.Args[1] == "migrate-minute-db" {
-		runMinuteDBMigration(cfg)
-		return
-	}
 	webMode := flag.Bool("web", false, "run localhost web mode")
 	webListenAddr := flag.String("web-addr", cfg.Web.ListenAddr, "web mode listen address")
 	flag.Parse()
@@ -75,7 +71,7 @@ func main() {
 		}
 	}()
 
-	appRuntime, err := bootstrap.InitApplication(cfg)
+	appRuntime, err := bootstrap.InitApplication(cfg, embeddedDomesticStockMaster)
 	if err != nil {
 		log.SugaredLogger.Fatalf("application initialization failed: %v", err)
 	}
@@ -87,7 +83,7 @@ func main() {
 	//log.SugaredLogger.Infof("build key: %s", BuildKey)
 
 	// Create an instance of the app structure
-	app := NewAppWithServices(appRuntime.Services, bootstrap.NewProductionAgentToolDataProvider(), bootstrap.NewProductionAgentConfigurationProvider())
+	app := NewAppWithServices(appRuntime.Services)
 	if *webMode {
 		log.SugaredLogger.Infof("starting web mode at http://%s", cfg.Web.ListenAddr)
 		setRuntimeEventsEnabled(false)
@@ -106,13 +102,4 @@ func main() {
 	if err := runDesktopApp(app); err != nil {
 		log.SugaredLogger.Fatal(err)
 	}
-}
-
-func runMinuteDBMigration(cfg appconfig.AppConfig) {
-	bootstrap.EnsureRuntimeDirs(cfg)
-	summary, err := bootstrap.MigrateLegacyMinuteCache(cfg.DB.Path)
-	if err != nil {
-		log.SugaredLogger.Fatalf("minute db migration failed: %v", err)
-	}
-	log.SugaredLogger.Infof("minute db migration completed: legacyRows=%d minuteDBRows=%d migratedRows=%d stockCount=%d", summary.LegacyRows, summary.MinuteDBRows, summary.MigratedRows, summary.StockCount)
 }

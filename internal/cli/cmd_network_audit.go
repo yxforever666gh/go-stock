@@ -459,29 +459,6 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 		}
 		return map[string]any{"count": len(rows), "keyword": "芯片"}, trimSample(rows[0].Code + " " + rows[0].Name), nil
 	})
-	r.runProbe("search", "eastmoney_hot_strategy", "https://np-ipick.eastmoney.com/recommend/stock/heat/ranking", false, func() (map[string]any, string, error) {
-		res := searchAPI.HotStrategy()
-		list := nestedAnySlice(res, "data", "list")
-		if len(list) == 0 {
-			list = anySliceFromMap(res, "data")
-		}
-		if len(list) == 0 {
-			return map[string]any{"raw": res}, "", errors.New("热门策略返回空数据")
-		}
-		return map[string]any{"count": len(list)}, trimSample(stringifyAny(list[0])), nil
-	})
-	r.runProbe("search", "ths_strategy_square", "https://backtest.10jqka.com.cn/strategysquare/list", false, func() (map[string]any, string, error) {
-		res := searchAPI.StrategySquare()
-		list := nestedAnySlice(res, "data", "list")
-		if len(list) == 0 {
-			list = anySliceFromMap(res, "data")
-		}
-		if len(list) == 0 {
-			return map[string]any{"raw": res}, "", errors.New("同花顺策略广场返回空数据")
-		}
-		return map[string]any{"count": len(list)}, trimSample(stringifyAny(list[0])), nil
-	})
-
 	r.runProbe("fund", "eastmoney_fund_list", "https://fund.eastmoney.com", false, func() (map[string]any, string, error) {
 		return probeHTTPResource("https://fund.eastmoney.com/allfund.html", httpProbeOptions{
 			Timeout:              crawlTimeout,
@@ -894,17 +871,6 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 			return meta, trimSample(strings.Join(okProviders, ", ")), errors.New("部分 AI Provider 调用失败")
 		}
 		return meta, trimSample(strings.Join(okProviders, ", ")), nil
-	})
-
-	r.runProbe("email", "smtp_test_mail", "smtp", true, func() (map[string]any, string, error) {
-		if !cfg.YieldEmailEnable {
-			return nil, "", skipAudit("yield_email_enable=0")
-		}
-		err := r.provider.SendYieldEmailTestMessage()
-		if err != nil {
-			return map[string]any{"recipients": splitCSV(cfg.YieldEmailTo)}, "", err
-		}
-		return map[string]any{"recipients": splitCSV(cfg.YieldEmailTo)}, trimSample(cfg.YieldEmailTo), nil
 	})
 
 	r.runProbe("notify", "dingding_robot", strings.TrimSpace(cfg.DingRobot), true, func() (map[string]any, string, error) {
@@ -1386,58 +1352,51 @@ func buildNetworkAuditEnvironment(cfg *models.SettingConfig, provider cliports.M
 		"timezone": loc.String(),
 		"runtime":  cfg != nil,
 		"config": map[string]any{
-			"httpProxyEnabled":          cfg.HttpProxyEnabled,
-			"forceNoProxyForFetch":      cfg.ForceNoProxyForFetch,
-			"minuteProviderMode":        cfg.MinuteProviderMode,
-			"privateMinuteEnabled":      cfg.PrivateMinuteEnabled,
-			"akshareEnabled":            cfg.AkshareEnabled,
-			"sinaMinuteEnabled":         cfg.SinaMinuteEnabled,
-			"tencentMinuteEnabled":      cfg.TencentMinuteEnabled,
-			"eastmoneyMinuteEnabled":    cfg.EastmoneyMinuteEnabled,
-			"marketSummaryCronTimes":    cfg.MarketSummaryCronTimes,
-			"marketSummaryCronEnabled":  cfg.MarketSummaryCronEnabled,
-			"yieldEmailEnable":          cfg.YieldEmailEnable,
-			"marketSummaryEmailEnable":  cfg.MarketSummaryEmailEnable,
-			"openAIEnable":              cfg.OpenAiEnable,
-			"qgqpBidConfigured":         strings.TrimSpace(cfg.QgqpBId) != "",
-			"tushareTokenConfigured":    strings.TrimSpace(cfg.TushareToken) != "",
-			"dingRobotConfigured":       strings.TrimSpace(cfg.DingRobot) != "",
-			"shareUploadURLConfigured":  shareUploadEndpoint() != "",
-			"releaseCheckURL":           latestReleaseEndpoint(),
-			"privateMinuteBaseURL":      provider.DiemengBaseURL(),
-			"privateMinuteTimeoutSec":   cfg.PrivateMinuteTimeoutSec,
-			"akshareMinuteSourceMode":   cfg.AkshareMinuteSourceMode,
-			"browserPath":               cfg.BrowserPath,
-			"yieldEmailRecipientCount":  len(splitCSV(cfg.YieldEmailTo)),
-			"marketSummaryEmailEnabled": cfg.MarketSummaryEmailEnable,
+			"httpProxyEnabled":         cfg.HttpProxyEnabled,
+			"forceNoProxyForFetch":     cfg.ForceNoProxyForFetch,
+			"minuteProviderMode":       cfg.MinuteProviderMode,
+			"privateMinuteEnabled":     cfg.PrivateMinuteEnabled,
+			"akshareEnabled":           cfg.AkshareEnabled,
+			"sinaMinuteEnabled":        cfg.SinaMinuteEnabled,
+			"tencentMinuteEnabled":     cfg.TencentMinuteEnabled,
+			"eastmoneyMinuteEnabled":   cfg.EastmoneyMinuteEnabled,
+			"aiAnalysisTimes":          cfg.AIAnalysisTimes,
+			"aiAnalysisEnabled":        cfg.AIAnalysisEnabled,
+			"openAIEnable":             cfg.OpenAiEnable,
+			"qgqpBidConfigured":        strings.TrimSpace(cfg.QgqpBId) != "",
+			"tushareTokenConfigured":   strings.TrimSpace(cfg.TushareToken) != "",
+			"dingRobotConfigured":      strings.TrimSpace(cfg.DingRobot) != "",
+			"shareUploadURLConfigured": shareUploadEndpoint() != "",
+			"releaseCheckURL":          latestReleaseEndpoint(),
+			"privateMinuteBaseURL":     provider.DiemengBaseURL(),
+			"privateMinuteTimeoutSec":  cfg.PrivateMinuteTimeoutSec,
+			"akshareMinuteSourceMode":  cfg.AkshareMinuteSourceMode,
+			"browserPath":              cfg.BrowserPath,
 		},
 	}
 }
 
 func buildNetworkAuditSettings(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) map[string]any {
 	return map[string]any{
-		"yieldEmailEnable":         cfg.YieldEmailEnable,
-		"yieldEmailTo":             splitCSV(cfg.YieldEmailTo),
-		"marketSummaryEmailEnable": cfg.MarketSummaryEmailEnable,
-		"dingPushEnable":           cfg.DingPushEnable,
-		"dingRobotConfigured":      strings.TrimSpace(cfg.DingRobot) != "",
-		"openAIEnable":             cfg.OpenAiEnable,
-		"httpProxyEnabled":         cfg.HttpProxyEnabled,
-		"forceNoProxyForFetch":     cfg.ForceNoProxyForFetch,
-		"marketSummaryCronEnabled": cfg.MarketSummaryCronEnabled,
-		"marketSummaryCronTimes":   splitCSV(cfg.MarketSummaryCronTimes),
-		"minuteProviderMode":       cfg.MinuteProviderMode,
-		"privateMinuteEnabled":     cfg.PrivateMinuteEnabled,
-		"privateMinuteBaseURL":     provider.DiemengBaseURL(),
-		"privateMinuteTimeoutSec":  cfg.PrivateMinuteTimeoutSec,
-		"akshareEnabled":           cfg.AkshareEnabled,
-		"sinaMinuteEnabled":        cfg.SinaMinuteEnabled,
-		"tencentMinuteEnabled":     cfg.TencentMinuteEnabled,
-		"eastmoneyMinuteEnabled":   cfg.EastmoneyMinuteEnabled,
-		"akshareMinuteSourceMode":  cfg.AkshareMinuteSourceMode,
-		"browserPath":              cfg.BrowserPath,
-		"qgqpBidConfigured":        strings.TrimSpace(cfg.QgqpBId) != "",
-		"tushareTokenConfigured":   strings.TrimSpace(cfg.TushareToken) != "",
+		"dingPushEnable":          cfg.DingPushEnable,
+		"dingRobotConfigured":     strings.TrimSpace(cfg.DingRobot) != "",
+		"openAIEnable":            cfg.OpenAiEnable,
+		"httpProxyEnabled":        cfg.HttpProxyEnabled,
+		"forceNoProxyForFetch":    cfg.ForceNoProxyForFetch,
+		"aiAnalysisEnabled":       cfg.AIAnalysisEnabled,
+		"aiAnalysisTimes":         splitCSV(cfg.AIAnalysisTimes),
+		"minuteProviderMode":      cfg.MinuteProviderMode,
+		"privateMinuteEnabled":    cfg.PrivateMinuteEnabled,
+		"privateMinuteBaseURL":    provider.DiemengBaseURL(),
+		"privateMinuteTimeoutSec": cfg.PrivateMinuteTimeoutSec,
+		"akshareEnabled":          cfg.AkshareEnabled,
+		"sinaMinuteEnabled":       cfg.SinaMinuteEnabled,
+		"tencentMinuteEnabled":    cfg.TencentMinuteEnabled,
+		"eastmoneyMinuteEnabled":  cfg.EastmoneyMinuteEnabled,
+		"akshareMinuteSourceMode": cfg.AkshareMinuteSourceMode,
+		"browserPath":             cfg.BrowserPath,
+		"qgqpBidConfigured":       strings.TrimSpace(cfg.QgqpBId) != "",
+		"tushareTokenConfigured":  strings.TrimSpace(cfg.TushareToken) != "",
 	}
 }
 

@@ -67,7 +67,7 @@
   <text x="454" y="466" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Email Reporting</text>
 
   <rect x="108" y="516" width="184" height="44" rx="22" fill="#0F766E"/>
-  <text x="137" y="546" fill="#F8FAFC" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="700">PUBLIC 1.2.4</text>
+  <text x="137" y="546" fill="#F8FAFC" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="700">PUBLIC 1.6.0</text>
 
   <rect x="308" y="516" width="220" height="44" rx="22" fill="#FFEDD5"/>
   <text x="336" y="546" fill="#C2410C" font-family="DejaVu Sans, sans-serif" font-size="24" font-weight="700">OPEN SOURCE SNAPSHOT</text>

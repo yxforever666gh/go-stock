@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
+	"go-stock/backend/data"
 	"go-stock/backend/db"
-	"go-stock/backend/governance"
 	"go-stock/backend/models"
 	"go-stock/internal/service"
 
@@ -56,48 +56,41 @@ func (a *compatibilityServiceAdapter) EarliestTaskRun(ctx context.Context, taskN
 }
 
 type compatibilityServiceAdapter struct {
-	main *gorm.DB
+	main            *gorm.DB
+	stockMasterSeed func() ([]models.StockBasic, models.StockMasterRefreshResult, error)
 }
 
-func (a *compatibilityServiceAdapter) StrategyRuntime(ctx context.Context, strategyVersion string) governance.StrategyRuntimeStatus {
-	return governance.GetStrategyRuntimeStatus(ctx, a.main, strategyVersion)
+func (a *compatibilityServiceAdapter) StockMasterHealth(ctx context.Context) (models.StockMasterHealth, error) {
+	return data.EvaluateStockMasterHealth(ctx, a.main, time.Now().UTC())
 }
 
-func (a *compatibilityServiceAdapter) LatestMarketSummary(ctx context.Context) (models.AIResponseResult, error) {
-	var latest models.AIResponseResult
-	err := a.main.WithContext(ctx).
-		Model(&models.AIResponseResult{}).
-		Where("stock_name = ? OR stock_code = ?", "市场资讯", "市场资讯").
-		Order("id desc").
-		Limit(1).
-		Find(&latest).Error
-	return latest, err
-}
-
-func newCompatibilityServiceOperations(main *gorm.DB) service.ServiceOperations {
+func newCompatibilityServiceOperations(main *gorm.DB, seed ...func() ([]models.StockBasic, models.StockMasterRefreshResult, error)) service.ServiceOperations {
 	adapter := &compatibilityServiceAdapter{main: main}
+	if len(seed) > 0 {
+		adapter.stockMasterSeed = seed[0]
+	}
 	return service.ServiceOperations{
-		AI:        adapter,
-		Config:    adapter,
-		Fund:      adapter,
-		Group:     adapter,
-		History:   adapter,
-		Market:    adapter,
-		Notify:    adapter,
-		Recommend: adapter,
-		Scheduler: adapter,
-		Stock:     adapter,
-		System:    adapter,
+		AI:     adapter,
+		Config: adapter,
+		Fund:   adapter,
+		Group:  adapter,
+		Market: adapter,
+		Notify: adapter,
+		Stock:  adapter,
 	}
 }
 
 // productionRuntimeDependencies is the compatibility assembly used until all
 // callers consume the injected ports directly. Database handles are supplied
 // by the composition root instead of being discovered here.
-func productionRuntimeDependencies(storage Storage) RuntimeDependencies {
+func productionRuntimeDependencies(storage Storage, seed ...StockMasterSeedLoader) RuntimeDependencies {
+	var seedLoaders []func() ([]models.StockBasic, models.StockMasterRefreshResult, error)
+	if len(seed) > 0 && seed[0] != nil {
+		seedLoaders = append(seedLoaders, seed[0])
+	}
 	return RuntimeDependencies{
 		Storage:  storage,
-		Services: newCompatibilityServiceDependencies(storage),
+		Services: newCompatibilityServiceDependenciesWithOperations(storage, newCompatibilityServiceOperations(storage.Main, seedLoaders...)),
 	}
 }
 

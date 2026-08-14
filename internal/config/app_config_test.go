@@ -40,12 +40,6 @@ func TestLoadDefaults(t *testing.T) {
 		"GO_STOCK_DIEMENG_MIN_INTERVAL_MS",
 		"GO_STOCK_DIEMENG_PROXY_MODE",
 		"GO_STOCK_DIEMENG_LEVEL",
-		"GO_STOCK_YIELD_DOWNLOAD_WORKERS",
-		"GO_STOCK_YIELD_CALC_WORKERS",
-		"GO_STOCK_YIELD_RECENT_WINDOW_TRADE_DAYS",
-		"GO_STOCK_YIELD_HEDGE_DELAY_TENCENT_MS",
-		"GO_STOCK_YIELD_HEDGE_DELAY_DIEMENG_MS",
-		"GO_STOCK_YIELD_AKSHARE_FALLBACK",
 		"GO_STOCK_BROWSER_PATH",
 	} {
 		t.Setenv(key, "")
@@ -79,9 +73,6 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Diemeng.BaseURL != DefaultDiemengBaseURL || cfg.Diemeng.Level != DefaultDiemengLevel {
 		t.Fatalf("unexpected diemeng config: %+v", cfg.Diemeng)
 	}
-	if cfg.Yield.DefaultMode != DefaultAiRecommendYieldMode || cfg.Yield.DownloadWorkers != DefaultYieldDownloadWorkers || cfg.Yield.CalcWorkers != DefaultYieldCalcWorkers || cfg.Yield.RecentWindowTradeDays != DefaultYieldRecentTradeDays || cfg.Yield.HedgeTencentDelayMS != DefaultYieldHedgeTencentMS || cfg.Yield.HedgeDiemengDelayMS != DefaultYieldHedgeDiemengMS || cfg.Yield.AkshareFallback != DefaultYieldAkshareFallback {
-		t.Fatalf("unexpected yield config: %+v", cfg.Yield)
-	}
 }
 
 func TestLoadOverridesAndFallbacks(t *testing.T) {
@@ -110,12 +101,6 @@ func TestLoadOverridesAndFallbacks(t *testing.T) {
 	t.Setenv("GO_STOCK_DIEMENG_MIN_INTERVAL_MS", "1400")
 	t.Setenv("GO_STOCK_DIEMENG_PROXY_MODE", "settings")
 	t.Setenv("GO_STOCK_DIEMENG_LEVEL", "5min")
-	t.Setenv("GO_STOCK_YIELD_DOWNLOAD_WORKERS", "12")
-	t.Setenv("GO_STOCK_YIELD_CALC_WORKERS", "7")
-	t.Setenv("GO_STOCK_YIELD_RECENT_WINDOW_TRADE_DAYS", "9")
-	t.Setenv("GO_STOCK_YIELD_HEDGE_DELAY_TENCENT_MS", "120")
-	t.Setenv("GO_STOCK_YIELD_HEDGE_DELAY_DIEMENG_MS", "560")
-	t.Setenv("GO_STOCK_YIELD_AKSHARE_FALLBACK", "false")
 	t.Setenv("GO_STOCK_BROWSER_PATH", "/usr/bin/chromium")
 
 	cfg := Load()
@@ -149,9 +134,6 @@ func TestLoadOverridesAndFallbacks(t *testing.T) {
 	}
 	if cfg.Diemeng.APIKey != "secret-key" || cfg.Diemeng.BaseURL != "https://example.com/api" || cfg.Diemeng.TimeoutSec != 88 || cfg.Diemeng.MinIntervalMS != 1400 || cfg.Diemeng.ProxyMode != "settings" || cfg.Diemeng.Level != "5min" {
 		t.Fatalf("unexpected diemeng config: %+v", cfg.Diemeng)
-	}
-	if cfg.Yield.DefaultMode != DefaultAiRecommendYieldMode || cfg.Yield.DownloadWorkers != 12 || cfg.Yield.CalcWorkers != 7 || cfg.Yield.RecentWindowTradeDays != 9 || cfg.Yield.HedgeTencentDelayMS != 120 || cfg.Yield.HedgeDiemengDelayMS != 560 || cfg.Yield.AkshareFallback {
-		t.Fatalf("unexpected yield config: %+v", cfg.Yield)
 	}
 	if cfg.Browser.Path != "/usr/bin/chromium" {
 		t.Fatalf("unexpected browser path: %s", cfg.Browser.Path)
@@ -191,12 +173,6 @@ func TestLoadInvalidValuesFallbackToDefaults(t *testing.T) {
 	t.Setenv("GO_STOCK_AKSHARE_TIMEOUT_SEC", "0")
 	t.Setenv("GO_STOCK_DIEMENG_TIMEOUT_SEC", "0")
 	t.Setenv("GO_STOCK_DIEMENG_LEVEL", "2min")
-	t.Setenv("GO_STOCK_YIELD_DOWNLOAD_WORKERS", "0")
-	t.Setenv("GO_STOCK_YIELD_CALC_WORKERS", "-2")
-	t.Setenv("GO_STOCK_YIELD_RECENT_WINDOW_TRADE_DAYS", "99")
-	t.Setenv("GO_STOCK_YIELD_HEDGE_DELAY_TENCENT_MS", "-1")
-	t.Setenv("GO_STOCK_YIELD_HEDGE_DELAY_DIEMENG_MS", "90000")
-	t.Setenv("GO_STOCK_YIELD_AKSHARE_FALLBACK", "maybe")
 
 	cfg := Load()
 	if cfg.Minute.Provider != DefaultMinuteProvider || cfg.Minute.CoverTradeDays != DefaultMinuteCoverTradeDays || cfg.Minute.FallbackAkshare != DefaultMinuteFallbackAkshare || cfg.Minute.FallbackTencent != DefaultMinuteFallbackTencent || cfg.Minute.TencentMinIntervalMS != DefaultTencentMinIntervalMS {
@@ -207,9 +183,6 @@ func TestLoadInvalidValuesFallbackToDefaults(t *testing.T) {
 	}
 	if cfg.Diemeng.TimeoutSec != DefaultDiemengTimeoutSec || cfg.Diemeng.Level != DefaultDiemengLevel {
 		t.Fatalf("unexpected diemeng fallback config: %+v", cfg.Diemeng)
-	}
-	if cfg.Yield.DownloadWorkers != DefaultYieldDownloadWorkers || cfg.Yield.CalcWorkers != DefaultYieldCalcWorkers || cfg.Yield.RecentWindowTradeDays != DefaultYieldRecentTradeDays || cfg.Yield.HedgeTencentDelayMS != DefaultYieldHedgeTencentMS || cfg.Yield.HedgeDiemengDelayMS != DefaultYieldHedgeDiemengMS || cfg.Yield.AkshareFallback != DefaultYieldAkshareFallback {
-		t.Fatalf("unexpected yield fallback config: %+v", cfg.Yield)
 	}
 	if cfg.Update.SelfUpdateEnabled {
 		t.Fatalf("unexpected self update fallback: %+v", cfg.Update)

@@ -29,10 +29,6 @@ func (s MarketService) EnsureMarketDataSelfCheck(reason string) {
 	s.operations.EnsureMarketDataSelfCheck(reason)
 }
 
-func (s MarketService) NormalizeYieldEmailCronTimes(input string) ([]string, error) {
-	return s.operations.NormalizeYieldEmailCronTimes(input)
-}
-
 func (s MarketService) IsCNOpenTradeDay(day time.Time) bool {
 	return s.operations.IsCNOpenTradeDay(day)
 }

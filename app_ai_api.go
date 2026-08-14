@@ -5,9 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
-	aicontract "go-stock/backend/ai"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
@@ -67,116 +65,6 @@ func (a *App) SaveAIResponseResult(stockCode, stockName, result, chatId, questio
 
 func (a *App) GetAIResponseResult(stock string) *models.AIResponseResult {
 	return a.services.AI.GetAIResponseResult(a.ctx, stock)
-}
-
-func (a *App) SendYieldEmailTestMessage() string {
-	return a.withYieldEmailTaskLock("manual_test_email", func() string {
-		if err := a.services.AI.SendYieldEmailTestMessage(); err != nil {
-			return "发送失败: " + err.Error()
-		}
-		return "测试邮件已发送，请检查邮箱"
-	})
-}
-
-func (a *App) SendYieldEmailXLSXNow() string {
-	return a.withYieldEmailTaskLock("manual_yield_xlsx_email", func() string {
-		rowCount, err := a.services.AI.SendYieldEmailXLSXNow()
-		if err != nil {
-			return "发送失败: " + err.Error()
-		}
-		return fmt.Sprintf("收益率 XLSX 已发送，共 %d 条记录", rowCount)
-	})
-}
-
-func (a *App) SendLatestAIAnalysisReportNow() string {
-	return a.withYieldEmailTaskLock("manual_latest_ai_report_email", func() string {
-		result, err := a.services.AI.SendLatestAIAnalysisReportEmail()
-		if err != nil {
-			return "发送失败: " + err.Error()
-		}
-		if result == nil {
-			return "发送失败: 未生成可确认的发送结果"
-		}
-		title := "最新 AI 分析报告"
-		if name := strings.TrimSpace(result.StockName); name != "" && strings.TrimSpace(result.StockCode) != "" {
-			title = fmt.Sprintf("%s [%s]", name, strings.TrimSpace(result.StockCode))
-		} else if name != "" {
-			title = name
-		} else if code := strings.TrimSpace(result.StockCode); code != "" {
-			title = code
-		}
-		return fmt.Sprintf("最新 AI 分析报告已发送: %s", title)
-	})
-}
-
-func (a *App) SendMarketSummaryEmailNow(summaryText, question, modelName, summaryTime, errorMessage string) string {
-	return a.withYieldEmailTaskLock("manual_market_summary_email", func() string {
-		report := a.buildMarketSummaryEmailReport(
-			summaryText,
-			question,
-			a.resolveAIProviderName(0, modelName),
-			modelName,
-			summaryTime,
-		)
-		failureReason := strings.TrimSpace(errorMessage)
-		if report == nil && failureReason == "" {
-			return "发送失败: 当前没有可发送的 AI 总结内容"
-		}
-		if err := a.services.AI.SendMarketSummaryEmail("manual_summary", report, failureReason); err != nil {
-			return "发送失败: " + err.Error()
-		}
-		if failureReason != "" {
-			return "AI总结报错邮件已发送"
-		}
-		return "AI总结邮件已发送"
-	})
-}
-
-func (a *App) resolveAIProviderName(aiConfigID int, modelName string) string {
-	cfg := a.services.Config.GetConfig()
-	if cfg == nil {
-		return resolveAIProviderNameFromConfigs(nil, aiConfigID, modelName)
-	}
-	return resolveAIProviderNameFromConfigs(cfg.AiConfigs, aiConfigID, modelName)
-}
-
-func resolveAIProviderNameFromConfigs(aiConfigs []*models.AIConfig, aiConfigID int, modelName string) string {
-	if aiConfigID > 0 {
-		for _, item := range aiConfigs {
-			if item != nil && int(item.ID) == aiConfigID {
-				if provider := strings.TrimSpace(aicontract.DisplayProviderName(item.Name, item.BaseUrl, item.ModelName)); provider != "" {
-					return provider
-				}
-				break
-			}
-		}
-	}
-	return strings.TrimSpace(aicontract.DetectProviderName("", "", strings.TrimSpace(modelName)))
-}
-
-func (a *App) buildMarketSummaryEmailReport(summaryText, question, providerName, modelName, summaryTime string) *models.AIResponseResult {
-	content := a.services.AI.HumanizeMarketSummaryReport(summaryText)
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-	reportTime := time.Now()
-	for _, layout := range []string{time.DateTime, time.RFC3339, "2006-01-02T15:04"} {
-		if parsed, err := time.ParseInLocation(layout, strings.TrimSpace(summaryTime), time.Local); err == nil {
-			reportTime = parsed
-			break
-		}
-	}
-	report := &models.AIResponseResult{
-		ProviderName: strings.TrimSpace(providerName),
-		ModelName:    strings.TrimSpace(modelName),
-		StockCode:    "市场资讯",
-		StockName:    "市场资讯",
-		Question:     strings.TrimSpace(question),
-		Content:      content,
-	}
-	report.CreatedAt = reportTime
-	return report
 }
 
 func (a *App) ShareAnalysis(stockCode, stockName string) string {
@@ -249,7 +137,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.2.8：市场页分栏进一步拆开，收益率统计补齐独立的按交易日概览链路，运行时任务与发布工程同步收口，后续维护市场栏目和 strict 收益率链路更稳定。"
+		content = "1.6.0：研究中心采用分级 AI 分析、独立生命周期会话、T+1 模拟交易与统一净收益口径；旧策略及 AI 智能体链路已退出。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

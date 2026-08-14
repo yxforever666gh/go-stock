@@ -17,7 +17,7 @@ import {
   SparklesOutline,
   StarOutline,
 } from '@vicons/ionicons5'
-import { Dragon, FirefoxBrowser, Gripfire, Robot } from '@vicons/fa'
+import { Dragon, FirefoxBrowser, Gripfire } from '@vicons/fa'
 import { ReportAnalytics, ReportMoney, ReportSearch } from '@vicons/tabler'
 import { BoxSearch20Regular } from '@vicons/fluent'
 import { NotificationFilled, StockOutlined } from '@vicons/antd'
@@ -93,10 +93,9 @@ function createMarketChildren(activeKey) {
 
 function createResearchChildren(activeKey) {
   const researchTabs = [
-    ['research1', '股票收益率', ReportMoney, 0],
-    ['research2', '收益率统计', ReportSearch, 1],
-    ['research3', 'AI分析报告', ReportAnalytics, 2],
-    ['research4', '股票推荐记录', DiamondOutline, 3],
+    ['research1', 'AI分析报告', ReportAnalytics, 0],
+    ['research2', '股票推荐记录', DiamondOutline, 1],
+    ['research3', '股票收益率', ReportMoney, 2],
   ]
 
   return researchTabs.map(([key, name, icon, id]) => ({
@@ -139,7 +138,6 @@ export function createMenuOptions({
   router,
   activeKey,
   enableFund,
-  enableAgent,
   realtimeProfit,
   isFullscreen,
   toggleFullscreen,
@@ -210,29 +208,14 @@ export function createMenuOptions({
     },
     {
       label: createRouterLabel(
-        'Ai智能体',
-        {
-          name: 'agent',
-          query: { name: 'Ai智能体' },
-        },
-        () => {
-          activeKey.value = 'agent'
-        },
-      ),
-      key: 'agent',
-      show: enableAgent.value,
-      icon: renderIcon(Robot),
-    },
-    {
-      label: createRouterLabel(
         '研究中心',
         {
           name: 'research',
-          query: { name: '股票收益率' },
+          query: { name: 'AI分析报告' },
         },
         () => {
           activeKey.value = 'research'
-          emitLater('changeResearchTab', { ID: 0, name: '股票收益率' })
+          emitLater('changeResearchTab', { ID: 0, name: 'AI分析报告' })
         },
       ),
       key: 'research',
@@ -300,13 +283,10 @@ export function replaceStockGroupMenuOptions(menuOptions, router, groups) {
   stockMenu.children = [...fixedChildren, ...groupChildren]
 }
 
-export function applyFeatureMenuVisibility(menuOptions, { enableFund, enableAgent }) {
+export function applyFeatureMenuVisibility(menuOptions, { enableFund }) {
   menuOptions.forEach((item) => {
     if (item.key === 'fund') {
       item.show = enableFund
-    }
-    if (item.key === 'agent') {
-      item.show = enableAgent
     }
   })
 }

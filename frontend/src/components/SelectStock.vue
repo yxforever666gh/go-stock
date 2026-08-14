@@ -1,16 +1,13 @@
 <script setup lang="ts">
-import {h, onBeforeMount, onMounted, onUnmounted, ref} from 'vue'
-import {SearchStock, GetHotStrategy, OpenURL, Follow, GetFollowList} from "../services/app-api";
+import {h, ref} from 'vue'
+import {SearchStock, OpenURL, Follow} from "../services/app-api";
 import {useMessage, NText, NTag, NButton} from 'naive-ui'
 import {Environment} from "../services/browser-runtime.mjs"
-import {RefreshCircleSharp} from "@vicons/ionicons5";
-import {EventsEmit} from "../services/browser-runtime.mjs";
 
 const message = useMessage()
 const search = ref('')
 const columns = ref([])
 const dataList = ref([])
-const hotStrategy = ref([])
 const traceInfo = ref('')
 const tableScrollX = ref(2800) // 默认滚动宽度
 
@@ -153,25 +150,6 @@ function isNumeric(value) {
   return !isNaN(parseFloat(value)) && isFinite(value);
 }
 
-onBeforeMount(() => {
-  GetHotStrategy().then(res => {
-    console.log(res)
-    if (res.code == 1) {
-      hotStrategy.value = res.data
-      search.value = hotStrategy.value[0].question
-      Search()
-    }
-  }).catch(err => {
-    message.error(err)
-  })
-
-})
-
-function DoSearch(question) {
-  search.value = question
-  Search()
-}
-
 function openCenteredWindow(url, width, height) {
   const left = (window.screen.width - width) / 2;
   const top = (window.screen.height - height) / 2;
@@ -193,39 +171,8 @@ function openCenteredWindow(url, width, height) {
 </script>
 
 <template>
-  <n-grid :cols="24" style="max-height: calc(100vh - 165px)">
-    <n-gi :span="4">
-      <n-list bordered style="text-align: left;" hoverable clickable>
-        <n-scrollbar style="max-height: calc(100vh - 170px);">
-          <n-list-item v-for="item in hotStrategy" :key="item.rank" @click="DoSearch(item.question)">
-            <n-ellipsis line-clamp="1" :tooltip="true">
-              <n-tag size="small" :bordered="false" type="info">#{{ item.rank }}</n-tag>
-              <n-text type="warning">{{ item.question }}</n-text>
-              <template #tooltip>
-                <div style="text-align: center;max-width: 180px">
-                  <n-text type="warning">{{ item.question }}</n-text>
-                </div>
-              </template>
-            </n-ellipsis>
-          </n-list-item>
-        </n-scrollbar>
-      </n-list>
-
-      <!--        <n-virtual-list :items="hotStrategy" :item-size="hotStrategy.length">-->
-      <!--          <template #default="{ item, index }">-->
-      <!--                      <n-card :title="''" size="small">-->
-      <!--                        <template #header-extra>-->
-      <!--                          {{item.rank}}-->
-      <!--                        </template>-->
-      <!--                        <n-ellipsis expand-trigger="click" line-clamp="3" :tooltip="false" >-->
-      <!--                          <n-text type="warning">{{item.question	}}</n-text>-->
-      <!--                        </n-ellipsis>-->
-      <!--                      </n-card>-->
-
-      <!--          </template>-->
-      <!--      </n-virtual-list>-->
-    </n-gi>
-    <n-gi :span="20">
+  <n-grid :cols="1" style="max-height: calc(100vh - 165px)">
+    <n-gi>
       <n-flex style="--wails-draggable:no-drag">
         <n-input-group style="text-align: left">
           <n-input :rows="1" clearable v-model:value="search" placeholder="请输入选股指标或者要求"/>
@@ -243,8 +190,6 @@ function openCenteredWindow(url, width, height) {
             </div>
           </template>
         </n-ellipsis>
-
-        <!--    <n-button type="primary" size="small">保存策略</n-button>-->
       </n-flex>
       <n-data-table
           :striped="true"

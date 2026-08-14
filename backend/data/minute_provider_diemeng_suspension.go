@@ -3,7 +3,6 @@ package data
 import (
 	"fmt"
 	"go-stock/backend/logger"
-	"go-stock/backend/models"
 	"net/http"
 	"strings"
 	"sync"
@@ -148,7 +147,6 @@ func setCachedDiemengSuspensions(cacheKey string, items []diemengSuspensionItem,
 	}
 	diemengSuspensionCacheMu.Unlock()
 
-	clearMinuteCoverageStatsCache()
 }
 
 func clearDiemengSuspensionCache() {
@@ -156,11 +154,6 @@ func clearDiemengSuspensionCache() {
 	diemengSuspensionCache = map[string]diemengSuspensionCacheEntry{}
 	diemengSuspensionCacheMu.Unlock()
 
-	clearMinuteCoverageStatsCache()
-}
-
-func computeMinuteDownloadCoverageStatsWithSuspensionFetch(meta *models.AiRecommendYieldMeta, issueLimit int) (minuteCoverageStats, []minuteCoverageIssue) {
-	return computeMinuteDownloadCoverageStatsWithIssuesFresh(meta, issueLimit, true)
 }
 
 func minuteCoverageGapCoveredBySuspension(stockCode string, start, end time.Time) bool {
@@ -239,6 +232,65 @@ func sameDiemengSuspensionStock(want, got string) bool {
 		return true
 	}
 	return extractAShareSymbol(want) == extractAShareSymbol(got)
+}
+
+type minuteCoverageSession struct{ Start, End time.Time }
+
+func buildMinuteCoverageSessions(start, end time.Time) []minuteCoverageSession {
+	if start.IsZero() || end.IsZero() || start.After(end) {
+		return nil
+	}
+	loc := cnLocation()
+	start, end = normalizeMinuteTime(start.In(loc)), normalizeMinuteTime(end.In(loc))
+	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, loc)
+	var result []minuteCoverageSession
+	for day, guard := startDay, 0; !day.After(endDay) && guard < 370; day, guard = day.AddDate(0, 0, 1), guard+1 {
+		if !isCNOpenTradeDay(day) {
+			continue
+		}
+		for _, pair := range [][2]time.Time{
+			{time.Date(day.Year(), day.Month(), day.Day(), 9, 31, 0, 0, loc), time.Date(day.Year(), day.Month(), day.Day(), 11, 30, 0, 0, loc)},
+			{time.Date(day.Year(), day.Month(), day.Day(), 13, 1, 0, 0, loc), time.Date(day.Year(), day.Month(), day.Day(), 15, 0, 0, 0, loc)},
+		} {
+			a, b := pair[0], pair[1]
+			if b.Before(start) || a.After(end) {
+				continue
+			}
+			if a.Before(start) {
+				a = start
+			}
+			if b.After(end) {
+				b = end
+			}
+			if !a.After(b) {
+				result = append(result, minuteCoverageSession{normalizeMinuteTime(a), normalizeMinuteTime(b)})
+			}
+		}
+	}
+	return result
+}
+
+func normalizeRecommendStockCode(stockCode string) string {
+	code := strings.ToUpper(strings.TrimSpace(stockCode))
+	if code == "" {
+		return ""
+	}
+	if strings.Contains(code, ".") {
+		return code
+	}
+	lower := strings.ToLower(code)
+	if strings.HasPrefix(lower, "sh") || strings.HasPrefix(lower, "sz") {
+		return strings.ToUpper(ConvertStockCodeToTushareCode(lower))
+	}
+	digits := RemoveAllNonDigitChar(code)
+	if len(digits) != 6 {
+		return code
+	}
+	if strings.HasPrefix(digits, "6") || strings.HasPrefix(digits, "9") || strings.HasPrefix(digits, "5") {
+		return digits + ".SH"
+	}
+	return digits + ".SZ"
 }
 
 func diemengSuspensionWindow(item diemengSuspensionItem) (time.Time, time.Time, bool) {

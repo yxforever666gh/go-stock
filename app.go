@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"go-stock/backend/agent"
-	agenttools "go-stock/backend/agent/tools"
+	"go-stock/backend/data"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/internal/bootstrap"
@@ -21,34 +20,23 @@ import (
 
 // App struct
 type App struct {
-	ctx                context.Context
-	cache              *freecache.Cache
-	cron               *cron.Cron
-	cronEntrys         map[string]cron.EntryID
-	cronEntrysMu       sync.RWMutex
-	AiTools            []models.Tool
-	services           service.AppServices
-	agentToolData      agenttools.ToolDataProvider
-	agentConfiguration agent.ConfigurationProvider
-	agentSessions      map[string]*AgentSession
-	agentSessionsMu    sync.RWMutex
-	summaryTaskMu      sync.Mutex
-	summaryTaskBusy    bool
-	yieldEmailTaskMu   sync.Mutex
-	yieldEmailTaskBusy bool
-	yieldEmailCronMu   sync.Mutex
-	v150ExecutionOnce  sync.Once
-	v150ExecutionTask  *marketSummaryV150ExecutionRuntime
-	domReadyMu         sync.Mutex
-	domReadyDone       bool
-	schedulerErrorsMu  sync.Mutex
-	schedulerErrors    []error
+	ctx               context.Context
+	cache             *freecache.Cache
+	cron              *cron.Cron
+	cronEntrys        map[string]cron.EntryID
+	cronEntrysMu      sync.RWMutex
+	AiTools           []models.Tool
+	services          service.AppServices
+	domReadyMu        sync.Mutex
+	domReadyDone      bool
+	schedulerErrorsMu sync.Mutex
+	schedulerErrors   []error
+	researchRuntimeMu sync.RWMutex
+	researchRuntime   *data.ResearchRuntime
 }
 
-const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
-const summaryStockNewsEntryPrefix = "SummaryStockNewsCustom_"
-const summaryStockNewsTestEntryKey = "SummaryStockNewsTest_1min"
-const yieldEmailCronEntryPrefix = "YieldEmailCustom_"
+const aiAnalysisEntryPrefix = "AIAnalysisCustom_"
+const aiLifecycleEntryKey = "AIAnalysisLifecycleDue"
 
 // NewApp creates a new App application struct
 func NewApp() *App {
@@ -56,30 +44,21 @@ func NewApp() *App {
 	if err != nil {
 		panic(err)
 	}
-	return NewAppWithServices(services, bootstrap.NewProductionAgentToolDataProvider(), bootstrap.NewProductionAgentConfigurationProvider())
+	return NewAppWithServices(services)
 }
 
-func NewAppWithServices(services service.AppServices, agentToolData agenttools.ToolDataProvider, agentConfiguration agent.ConfigurationProvider) *App {
-	if agentToolData == nil {
-		panic("agent tool data provider is required")
-	}
-	if agentConfiguration == nil {
-		panic("agent configuration provider is required")
-	}
+func NewAppWithServices(services service.AppServices) *App {
 	cacheSize := 512 * 1024
 	cache := freecache.NewCache(cacheSize)
 	c := cron.New(cron.WithSeconds())
 	var tools []models.Tool
 	tools = AddTools(tools)
 	return &App{
-		cache:              cache,
-		cron:               c,
-		cronEntrys:         make(map[string]cron.EntryID),
-		AiTools:            tools,
-		services:           services,
-		agentToolData:      agentToolData,
-		agentConfiguration: agentConfiguration,
-		agentSessions:      make(map[string]*AgentSession),
+		cache:      cache,
+		cron:       c,
+		cronEntrys: make(map[string]cron.EntryID),
+		AiTools:    tools,
+		services:   services,
 	}
 }
 
@@ -100,7 +79,7 @@ func AddTools(tools []models.Tool) []models.Tool {
 				"例如:查看近期趋势：量比连续2天>1，主力连续2日净流入且递增，主力净额>3000万元，行业，股价在20日线上。按成交量从高到低排序。" +
 				"例如:当日成交量 ≥ 近 5 日平均成交量 ×1.5，收盘价 ≥ 20 日均线，20 日均线 ≥ 60 日均线，当日涨幅 3%-7%， 3日主力资金净流入累计≥5000 万元，当日换手率 5%-15%，筹码集中度（90% 筹码峰）≤15%，非创业板非科创板非ST非北交所，行业。按成交量从高到低排序。" +
 				"例如:查看有潜力的成交量爆发股：最近7日成交量量比大于3，出现过一次，非ST。按成交量从高到低排序。" +
-				"例如:超短线策略：当日成交量大于前一日成交量的1.8倍;当日最高价创60日新高当日收盘价大于5日均线;当日为阳线;股价小于200;" +
+				"例如:成交量筛选：当日成交量大于前一日成交量的1.8倍;当日最高价创60日新高;当日收盘价大于5日均线;当日为阳线;股价小于200;" +
 				"例1：创新药,半导体;PE<30;净利润增长率>50%。 按成交量从高到低排序。" +
 				"例2：上证指数,科创50。 " +
 				"例3：长电科技,上海贝岭。" +
@@ -126,7 +105,7 @@ func AddTools(tools []models.Tool) []models.Tool {
 							"例如:查看近期趋势：量比连续2天>1，主力连续2日净流入且递增，主力净额>3000万元，行业，股价在20日线上。按成交量从高到低排序。" +
 							"例如:当日成交量 ≥ 近 5 日平均成交量 ×1.5，收盘价 ≥ 20 日均线，20 日均线 ≥ 60 日均线，当日涨幅 3%-7%， 3日主力资金净流入累计≥5000 万元，当日换手率 5%-15%，筹码集中度（90% 筹码峰）≤15%，非创业板非科创板非ST非北交所，行业。按成交量从高到低排序。" +
 							"例如:查看有潜力的成交量爆发股：最近7日成交量量比大于3，出现过一次，非ST。按成交量从高到低排序。" +
-							"例如:超短线策略：当日成交量大于前一日成交量的1.8倍;当日最高价创60日新高当日收盘价大于5日均线;当日为阳线;股价小于200;" +
+							"例如:成交量筛选：当日成交量大于前一日成交量的1.8倍;当日最高价创60日新高;当日收盘价大于5日均线;当日为阳线;股价小于200;" +
 							"例1：创新药,半导体;PE<30;净利润增长率>50%。 按成交量从高到低排序。" +
 							"例2：上证指数,科创50。 " +
 							"例3：长电科技,上海贝岭。" +
@@ -317,14 +296,6 @@ func AddTools(tools []models.Tool) []models.Tool {
 	tools = append(tools, models.Tool{
 		Type: "function",
 		Function: models.ToolFunction{
-			Name:        "HotStrategyTable",
-			Description: "获取当前热门选股策略",
-		},
-	})
-
-	tools = append(tools, models.Tool{
-		Type: "function",
-		Function: models.ToolFunction{
 			Name:        "HotStockTable",
 			Description: "当前热门股票排名",
 			Parameters: &models.FunctionParameters{
@@ -406,291 +377,6 @@ func AddTools(tools []models.Tool) []models.Tool {
 					},
 				},
 				Required: []string{"stockCode"},
-			},
-		},
-	})
-
-	//CreateAiRecommendStocks
-	tools = append(tools, models.Tool{
-		Type: "function",
-		Function: models.ToolFunction{
-			Name:        "CreateAiRecommendStocks",
-			Description: "创建/保存AI推荐股票记录。必须优先输出结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...”，失效条件需明确为“时间失效：...；价格失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。只有满足至少两类证据且至少一条高信任证据时，才允许进入等待激活计划；证据不足或存在冲突时应直接回避。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
-			Parameters: &models.FunctionParameters{
-				Type: "object",
-				Properties: map[string]any{
-					"modelName": map[string]any{
-						"type":        "string",
-						"description": "模型名称",
-					},
-					"stockCode": map[string]any{
-						"type":        "string",
-						"description": "股票代码,如：601138.SH。注意 上海证券交易所股票以.SH结尾，深圳证券交易所股票以.SZ结尾，港股股票以.HK结尾，北交所股票以.BJ结尾，",
-					},
-					"stockName": map[string]any{
-						"type":        "string",
-						"description": "股票名称",
-					},
-					"bkCode": map[string]any{
-						"type":        "string",
-						"description": "板块/行业代码",
-					},
-					"bkName": map[string]any{
-						"type":        "string",
-						"description": "板块/概念/行业名称",
-					},
-					"stockPrice": map[string]any{
-						"type":        "string",
-						"description": "推荐时股票价格。AI总结场景下应优先填写当前价格锚点：集合竞价时优先auctionPrice，开盘后优先实时分钟线最新价；两者缺失时才回退到CurrentPrice/实时行情价。",
-					},
-					"stockPrePrice": map[string]any{
-						"type":        "string",
-						"description": "前一交易日股票价格",
-					},
-					"stockClosePrice": map[string]any{
-						"type":        "string",
-						"description": "推荐时股票收盘价格",
-					},
-					"recommendReason": map[string]any{
-						"type":        "string",
-						"description": "推荐理由/驱动因素。必须包含结构化交易计划文本，至少写出：买入依据：价格触发...；量能触发...。失效条件：时间失效...；价格失效...。禁止只写“放量/缩量/强势/承接/不追”等抽象词，必须写清价位、周期、比较基准、阈值。",
-					},
-					"recommendBuyPrice": map[string]any{
-						"type":        "string",
-						"description": "ai建议买入价区间最低价和最高价之间用`-`分隔。AI总结场景下必须围绕当前价格锚点生成：竞价时段围绕auctionPrice，开盘后围绕实时分钟线价格，不能明显偏离当前价。",
-					},
-					"recommendBuyPriceMax": map[string]any{
-						"type":        "number",
-						"description": "ai建议最高买入价",
-					},
-					"recommendBuyPriceMin": map[string]any{
-						"type":        "number",
-						"description": "ai建议最低买入价",
-					},
-					"recommendStopProfitPrice": map[string]any{
-						"type":        "string",
-						"description": "ai建议止盈价区间最低价和最高价之间用`-`分隔",
-					},
-					"recommendStopProfitPriceMax": map[string]any{
-						"type":        "number",
-						"description": "ai建议最高止盈价",
-					},
-					"recommendStopProfitPriceMin": map[string]any{
-						"type":        "number",
-						"description": "ai建议最低止盈价",
-					},
-
-					"recommendStopLossPrice": map[string]any{
-						"type":        "string",
-						"description": "ai建议止损价",
-					},
-					"recommendCategory": map[string]any{
-						"type":        "string",
-						"description": "推荐分类。未来新记录默认只允许 conditional/等待激活；若结论明确回避，才允许 avoid。",
-					},
-					"coreCatalyst": map[string]any{
-						"type":        "string",
-						"description": "核心催化，不能写空泛观点",
-					},
-					"keyEvidence": map[string]any{
-						"type":        "string",
-						"description": "关键证据，必须带证据标签，如：[市场资讯]... [个股新闻]... [行业研报]... [财报/财务]... [互动易]... [技术/资金/形态]... [一级披露]... [资金结构]... [股东/筹码]... [产业高频]... [海外风险]...",
-					},
-					"evidenceSources": map[string]any{
-						"type":        "string",
-						"description": "可选但强烈建议传入 JSON 字符串数组。每项至少包含 type 和 summary，建议补充 sourceName、sourceType(原始披露/聚合媒体/数据接口/高频指标)、trustLevel(high/medium/low)、latencyLevel(realtime/daily/periodic)、title、url、publishedAt。",
-					},
-					"invalidCondition": map[string]any{
-						"type":        "string",
-						"description": "失效条件。必须写成：时间失效：...；价格失效：...，不能只写“失效”“不及预期”等空泛表述。",
-					},
-					"observePrice": map[string]any{
-						"type":        "string",
-						"description": "观察价。AI总结场景下应优先等于或围绕当前价格锚点；竞价时段优先auctionPrice，开盘后优先实时分钟线最新价。",
-					},
-					"focusPrice": map[string]any{
-						"type":        "string",
-						"description": "关注位/建仓区间，建议与recommendBuyPrice保持一致。AI总结场景下应围绕当前价格锚点生成；竞价时段优先auctionPrice，开盘后优先实时分钟线最新价。",
-					},
-					"expectedCycle": map[string]any{
-						"type":        "string",
-						"description": "预期周期，如1-3天、1-2周",
-					},
-					"eventStrength": map[string]any{
-						"type":        "integer",
-						"description": "事件强度，0-100整数",
-					},
-					"capitalConfirmation": map[string]any{
-						"type":        "integer",
-						"description": "资金确认度，0-100整数",
-					},
-					"fundamentalFit": map[string]any{
-						"type":        "integer",
-						"description": "基本面匹配度，0-100整数",
-					},
-					"technicalFit": map[string]any{
-						"type":        "integer",
-						"description": "技术面匹配度，0-100整数",
-					},
-					"activationRuleJson": map[string]any{
-						"type":        "string",
-						"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，thresholdMax 表示区间上沿；若为突破触发，thresholdMax 表示最高可买价/追价上限且必须低于止盈区间下沿；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
-					},
-					"riskRemarks": map[string]any{
-						"type":        "string",
-						"description": "风险提示/风险点",
-					},
-					"remarks": map[string]any{
-						"type":        "string",
-						"description": "操作总结/备注",
-					},
-				},
-				Required: []string{"stockCode", "stockName", "bkName", "recommendCategory", "coreCatalyst", "keyEvidence", "riskRemarks", "invalidCondition", "observePrice", "focusPrice", "recommendBuyPrice", "recommendStopProfitPrice", "recommendStopLossPrice", "expectedCycle", "eventStrength", "capitalConfirmation", "fundamentalFit", "technicalFit", "activationRuleJson"},
-			},
-		},
-	})
-
-	//BatchCreateAiRecommendStocks
-	tools = append(tools, models.Tool{
-		Type: "function",
-		Function: models.ToolFunction{
-			Name:        "BatchCreateAiRecommendStocks",
-			Description: "批量创建/保存AI推荐股票记录。每条记录都必须包含结构化决策字段：分类、核心催化、关键证据、失效条件、观察价、关注位、止盈区间、止损位、预期周期、4维置信度。执行语义已统一为“等待激活”，不再允许输出立刻买入/低吸/右侧确认等标签。推荐理由里必须写出硬格式交易计划：买入依据需明确为“价格触发：...；量能触发：...”，失效条件需明确为“时间失效：...；价格失效：...”，并把量能条件量化到价位、周期、比较基准、阈值。第二阶段要求优先补充 evidenceSources JSON 字符串，标明来源名称、来源类型、信任级别、时效级别。证据不足或存在冲突时只能直接回避，不应混入观察标签；建议每次批量保存不超过5条。AI总结场景下若证据核验层提供了集合竞价或实时分钟线价格锚点，应围绕该价格锚点定价。",
-			Parameters: &models.FunctionParameters{
-				Type: "object",
-				Properties: map[string]any{
-					"stocks": map[string]any{
-						"type": "array",
-						"items": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"modelName": map[string]any{
-									"type":        "string",
-									"description": "模型名称",
-								},
-								"stockCode": map[string]any{
-									"type":        "string",
-									"description": "股票代码,如：601138.SH。注意 上海证券交易所股票以.SH结尾，深圳证券交易所股票以.SZ结尾，港股股票以.HK结尾，北交所股票以.BJ结尾，",
-								},
-								"stockName": map[string]any{
-									"type":        "string",
-									"description": "股票名称",
-								},
-								"bkCode": map[string]any{
-									"type":        "string",
-									"description": "板块/行业代码",
-								},
-								"bkName": map[string]any{
-									"type":        "string",
-									"description": "板块/概念/行业名称",
-								},
-								"stockPrice": map[string]any{
-									"type":        "string",
-									"description": "推荐时股票价格。AI总结场景下应优先填写当前价格锚点：集合竞价时优先auctionPrice，开盘后优先实时分钟线最新价；两者缺失时才回退到CurrentPrice/实时行情价。",
-								},
-								"stockPrePrice": map[string]any{
-									"type":        "string",
-									"description": "前一交易日股票价格",
-								},
-								"stockClosePrice": map[string]any{
-									"type":        "string",
-									"description": "推荐时股票收盘价格",
-								},
-								"recommendReason": map[string]any{
-									"type":        "string",
-									"description": "推荐理由/驱动因素。必须包含结构化交易计划文本，至少写出：买入依据：价格触发...；量能触发...。失效条件：时间失效...；价格失效...。禁止只写“放量/缩量/强势/承接/不追”等抽象词，必须写清价位、周期、比较基准、阈值。",
-								},
-								"recommendBuyPrice": map[string]any{
-									"type":        "string",
-									"description": "ai建议买入价区间最低价和最高价之间用`-`分隔。AI总结场景下必须围绕当前价格锚点生成：竞价时段围绕auctionPrice，开盘后围绕实时分钟线价格，不能明显偏离当前价。",
-								},
-								"recommendBuyPriceMin": map[string]any{
-									"type":        "number",
-									"description": "ai建议最低买入价",
-								},
-								"recommendBuyPriceMax": map[string]any{
-									"type":        "number",
-									"description": "ai建议最高买入价",
-								},
-								"recommendStopProfitPrice": map[string]any{
-									"type":        "string",
-									"description": "ai建议止盈价区间最低价和最高价之间用`-`分隔",
-								},
-								"recommendStopProfitPriceMin": map[string]any{
-									"type":        "number",
-									"description": "ai建议最低止盈价",
-								},
-								"recommendStopProfitPriceMax": map[string]any{
-									"type":        "number",
-									"description": "ai建议最高止盈价",
-								},
-								"recommendStopLossPrice": map[string]any{
-									"type":        "string",
-									"description": "ai建议止损价",
-								},
-								"recommendCategory": map[string]any{
-									"type":        "string",
-									"description": "推荐分类。未来新记录默认只允许 conditional/等待激活；若结论明确回避，才允许 avoid。",
-								},
-								"coreCatalyst": map[string]any{
-									"type":        "string",
-									"description": "核心催化，不能写空泛观点",
-								},
-								"keyEvidence": map[string]any{
-									"type":        "string",
-									"description": "关键证据，必须带证据标签，如：[市场资讯]... [个股新闻]... [行业研报]... [财报/财务]... [互动易]... [技术/资金/形态]... [一级披露]... [资金结构]... [股东/筹码]... [产业高频]... [海外风险]...",
-								},
-								"invalidCondition": map[string]any{
-									"type":        "string",
-									"description": "失效条件。必须写成：时间失效：...；价格失效：...，不能只写“失效”“不及预期”等空泛表述。",
-								},
-								"observePrice": map[string]any{
-									"type":        "string",
-									"description": "观察价。AI总结场景下应优先等于或围绕当前价格锚点；竞价时段优先auctionPrice，开盘后优先实时分钟线最新价。",
-								},
-								"focusPrice": map[string]any{
-									"type":        "string",
-									"description": "关注位/建仓区间，建议与recommendBuyPrice保持一致。AI总结场景下应围绕当前价格锚点生成；竞价时段优先auctionPrice，开盘后优先实时分钟线最新价。",
-								},
-								"expectedCycle": map[string]any{
-									"type":        "string",
-									"description": "预期周期，如1-3天、1-2周",
-								},
-								"eventStrength": map[string]any{
-									"type":        "integer",
-									"description": "事件强度，0-100整数",
-								},
-								"capitalConfirmation": map[string]any{
-									"type":        "integer",
-									"description": "资金确认度，0-100整数",
-								},
-								"fundamentalFit": map[string]any{
-									"type":        "integer",
-									"description": "基本面匹配度，0-100整数",
-								},
-								"technicalFit": map[string]any{
-									"type":        "integer",
-									"description": "技术面匹配度，0-100整数",
-								},
-								"activationRuleJson": map[string]any{
-									"type":        "string",
-									"description": "结构化激活规则 JSON，收益率 strict 模式只认这个字段。至少包含 signalType、evaluationWindow、baseline、operator、thresholdValue、confirmBars、expireTradeDays；若为区间触发，thresholdMax 表示区间上沿；若为突破触发，thresholdMax 表示最高可买价/追价上限且必须低于止盈区间下沿；若涉及量能阈值，还应包含 volumeRatio、volumeWindow、volumeMetric。",
-								},
-								"riskRemarks": map[string]any{
-									"type":        "string",
-									"description": "风险提示/风险点",
-								},
-								"remarks": map[string]any{
-									"type":        "string",
-									"description": "操作总结/备注",
-								},
-							},
-							"required": []string{"stockCode", "stockName", "bkName", "recommendCategory", "coreCatalyst", "keyEvidence", "riskRemarks", "invalidCondition", "observePrice", "focusPrice", "recommendBuyPrice", "recommendStopProfitPrice", "recommendStopLossPrice", "expectedCycle", "eventStrength", "capitalConfirmation", "fundamentalFit", "technicalFit", "activationRuleJson"},
-						},
-					},
-				},
-
-				Required: []string{"stocks"},
 			},
 		},
 	})
@@ -930,7 +616,15 @@ func shouldChatFailover(msgs []map[string]any) bool {
 	if len(errs) == 0 {
 		return true
 	}
-	return isLikelyRequestLevelFailure(errs)
+	for _, message := range errs {
+		lower := strings.ToLower(message)
+		for _, marker := range []string{"timeout", "connection", "429", "rate limit", "502", "503", "504", "unauthorized", "forbidden"} {
+			if strings.Contains(lower, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func chatAttemptHasVisibleContent(msgs []map[string]any) bool {

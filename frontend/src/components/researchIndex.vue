@@ -4,19 +4,17 @@ import { EventsOff, EventsOn } from "../services/browser-runtime.mjs";
 import { useRoute, useRouter } from 'vue-router'
 
 const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order'
-const AiRecommendStocksYieldList = defineAsyncComponent(() => import('./aiRecommendStocksYieldList.vue'))
-const AiRecommendYieldStats = defineAsyncComponent(() => import('./aiRecommendYieldStats.vue'))
+const ResearchYield = defineAsyncComponent(() => import('./researchYield.vue'))
 const ResearchReport = defineAsyncComponent(() => import('./researchReport.vue'))
-const AiRecommendStocksList = defineAsyncComponent(() => import('./aiRecommendStocksList.vue'))
+const ResearchRecommendations = defineAsyncComponent(() => import('./researchRecommendations.vue'))
 const defaultTabs = [
-  { name: "股票收益率", component: AiRecommendStocksYieldList },
-  { name: "收益率统计", component: AiRecommendYieldStats },
   { name: "AI分析报告", component: ResearchReport },
-  { name: "股票推荐记录", component: AiRecommendStocksList },
+  { name: "股票推荐记录", component: ResearchRecommendations },
+  { name: "股票收益率", component: ResearchYield },
 ]
 
 const tabs = ref([...defaultTabs])
-const nowTab = ref("股票收益率")
+const nowTab = ref("AI分析报告")
 const route = useRoute()
 const router = useRouter()
 const cardRef = ref(null)

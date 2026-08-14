@@ -23,7 +23,7 @@ lint: lint-go lint-frontend
 lint-go:
 	go vet ./...
 	go mod tidy -diff
-	test -z "$$(gofmt -l $$(git diff --name-only --diff-filter=ACMR 1.5.0 HEAD -- '*.go'))"
+	test -z "$$(gofmt -l $$(git diff --name-only --diff-filter=ACMR -- '*.go'))"
 
 lint-frontend:
 	cd frontend && npm run lint

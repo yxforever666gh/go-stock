@@ -9,9 +9,15 @@ func NewNotifyService(operations NotifyOperations) NotifyService {
 }
 
 func (s NotifyService) SendDingDingMessage(message string) string {
+	if s.operations == nil {
+		return "notification service unavailable"
+	}
 	return s.operations.SendDingDingMessage(message)
 }
 
 func (s NotifyService) SendAlert(title, subtitle, content, icon string) {
+	if s.operations == nil {
+		return
+	}
 	go s.operations.SendAlert(title, subtitle, content, icon)
 }

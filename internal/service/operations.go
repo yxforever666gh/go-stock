@@ -4,10 +4,8 @@ import (
 	"context"
 	"time"
 
-	"go-stock/backend/governance"
 	"go-stock/backend/models"
 
-	"github.com/cloudwego/eino/schema"
 	"github.com/coocood/freecache"
 )
 
@@ -15,17 +13,13 @@ import (
 // cases. Bootstrap supplies the concrete adapters; service code never reaches
 // into backend/data or global database handles.
 type ServiceOperations struct {
-	AI        AIOperations
-	Config    ConfigOperations
-	Fund      FundOperations
-	Group     GroupOperations
-	History   HistoryOperations
-	Market    MarketOperations
-	Notify    NotifyOperations
-	Recommend RecommendOperations
-	Scheduler SchedulerOperations
-	Stock     StockOperations
-	System    SystemOperations
+	AI     AIOperations
+	Config ConfigOperations
+	Fund   FundOperations
+	Group  GroupOperations
+	Market MarketOperations
+	Notify NotifyOperations
+	Stock  StockOperations
 }
 
 func (o ServiceOperations) Validate() error {
@@ -38,20 +32,12 @@ func (o ServiceOperations) Validate() error {
 		return operationRequiredError("fund")
 	case o.Group == nil:
 		return operationRequiredError("group")
-	case o.History == nil:
-		return operationRequiredError("history")
 	case o.Market == nil:
 		return operationRequiredError("market")
 	case o.Notify == nil:
 		return operationRequiredError("notify")
-	case o.Recommend == nil:
-		return operationRequiredError("recommend")
-	case o.Scheduler == nil:
-		return operationRequiredError("scheduler")
 	case o.Stock == nil:
 		return operationRequiredError("stock")
-	case o.System == nil:
-		return operationRequiredError("system")
 	default:
 		return nil
 	}
@@ -59,7 +45,6 @@ func (o ServiceOperations) Validate() error {
 
 type AIOperations interface {
 	TestAIConfig(context.Context, int) *models.AIModelTestResult
-	HumanizeMarketSummaryReport(string) string
 	AnalyzeSentiment(string) models.SentimentResult
 	AnalyzeSentimentWithFreqWeight(string) map[string]any
 	GetAIResponseResult(context.Context, string) *models.AIResponseResult
@@ -72,13 +57,6 @@ type AIOperations interface {
 	ResolveAIFallbackOrder(int) []int
 	ResolveAIModelName(int) string
 	NewChatStream(context.Context, string, string, string, int, *int, []models.Tool, bool) <-chan map[string]any
-	NewSummaryStockNewsStream(context.Context, int, string, *int, bool) <-chan map[string]any
-	NormalizeMarketSummaryQuestion(string) string
-	SendYieldEmailTestMessage() error
-	SendYieldEmailXLSXNow() (int, error)
-	SendLatestAIAnalysisReportEmail() (*models.AIResponseResult, error)
-	SendLatestAIAnalysisReportEmailForCron() (*models.AIResponseResult, error)
-	SendMarketSummaryEmail(string, *models.AIResponseResult, string) error
 }
 
 type ConfigOperations interface {
@@ -110,26 +88,10 @@ type GroupOperations interface {
 	RemoveGroup(int) bool
 }
 
-type HistoryOperations interface {
-	DeleteSession(string) error
-	EnsureSession(string, string, int, string) (*models.AgentChatSession, error)
-	TrimSessions(int) error
-	ListRecentSessions(int) ([]models.AgentChatSession, error)
-	ListSessionMessages(string, int) ([]models.AgentChatMessage, error)
-	GetSession(string) (*models.AgentChatSession, error)
-	FirstUserQuestion(string) (string, error)
-	UpdateSessionTitle(string, string) error
-	UpdateSessionModel(string, int, string) error
-	ListSessionMessagesForAgent(string, int) ([]*schema.Message, error)
-	AppendMessage(string, string, string, string) error
-	TrimSessionMessages(string, int) error
-}
-
 type MarketOperations interface {
 	PersistSyncedTelegraph(context.Context, *models.Telegraph, []string) (bool, error)
 	AnalyzeNews(string, bool)
 	EnsureMarketDataSelfCheck(string)
-	NormalizeYieldEmailCronTimes(string) ([]string, error)
 	IsCNOpenTradeDay(time.Time) bool
 	IsCNOpenTradeDayStrict(time.Time) (bool, error)
 	LongTigerRank(string) *[]models.LongTigerRankData
@@ -158,40 +120,9 @@ type NotifyOperations interface {
 	SendAlert(string, string, string, string)
 }
 
-type RecommendOperations interface {
-	RequireStrategyLive(context.Context, string) error
-	EncodeMarketSummaryBlockedReasons([]models.MarketSummaryBlockedReasonItem) string
-	SaveMarketSummaryRunDiagnostic(*models.MarketSummaryRunDiagnostic) error
-	CreateAIResponseReport(context.Context, *models.AIResponseResult) error
-	GetAIResponseResultList(models.AIResponseResultQuery) (*models.AIResponseResultPageData, error)
-	GetEmailSendLogList(models.EmailSendLogQuery) (*models.EmailSendLogPageData, error)
-	DeleteAIResponseResult(uint) error
-	BatchDeleteAIResponseResult([]uint) error
-	GetAiRecommendStocksList(*models.AiRecommendStocksQuery) (*models.AiRecommendStocksPageData, error)
-	GetAiRecommendStocksDateRange() (string, string, error)
-	GetAiRecommendStocksYieldList(*models.AiRecommendStocksQuery) (*models.AiRecommendStocksYieldPageData, error)
-	GetAiRecommendYieldMinuteChart(uint) (*models.AiRecommendYieldMinuteChartData, error)
-	GetAiRecommendYieldDailyOverview(*models.AiRecommendStocksQuery) (*models.AiRecommendYieldDailyOverviewData, error)
-	StartAiRecommendMinuteDownload() (map[string]any, error)
-	GetAiRecommendYieldTaskStatus() (*models.AiRecommendStocksYieldPageData, error)
-	GetAiRecommendYieldErrorLogs(int) ([]map[string]string, error)
-	GetMarketSummaryRunDiagnostics(models.MarketSummaryRunDiagnosticQuery) (models.MarketSummaryRunDiagnosticSummary, error)
-	GetMarketSummaryEmptyRunCount(models.MarketSummaryRunDiagnosticQuery) (int64, error)
-	GetMarketSummaryBlockedReasonTop(models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error)
-	GetMarketSummaryProductionDowngradeReasonTop(models.MarketSummaryRunDiagnosticQuery) ([]models.MarketSummaryBlockedReasonItem, error)
-	DeleteAiRecommendStocks(uint) error
-}
-
-type SchedulerOperations interface {
-	CreateTaskRun(context.Context, *models.CronTaskRun) error
-	UpdateTaskRun(context.Context, *models.CronTaskRun) error
-	LatestAIResponseSince(context.Context, string, string, time.Time) (models.AIResponseResult, error)
-	EarliestTaskRun(context.Context, string, time.Time, time.Time, []string) (models.CronTaskRun, error)
-}
-
 type StockOperations interface {
 	ReplaceStockBaseInfo(context.Context, []models.StockBasic, []models.StockInfoHK, []models.StockInfoUS) error
-	RefreshStockBaseInfo()
+	RefreshStockBaseInfo(context.Context) (models.StockMasterRefreshResult, error)
 	RefreshIndexBaseInfo()
 	Follow(string) string
 	UnFollow(string) string
@@ -211,11 +142,5 @@ type StockOperations interface {
 	GetStockMinutePriceLineData(string, string) map[string]any
 	SearchStock(string) map[string]any
 	SearchStockWithFingerprint(string, string, int) map[string]any
-	GetHotStrategy() map[string]any
 	GetStockCodeRealTimeData(...string) (*[]models.StockInfo, error)
-}
-
-type SystemOperations interface {
-	StrategyRuntime(context.Context, string) governance.StrategyRuntimeStatus
-	LatestMarketSummary(context.Context) (models.AIResponseResult, error)
 }

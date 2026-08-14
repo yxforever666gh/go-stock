@@ -28,7 +28,7 @@ func (a *App) UpdateConfig(settingConfig *models.SettingConfig) string {
 
 	res := a.services.Config.UpdateConfig(settingConfig)
 	if strings.Contains(res, "\u4fdd\u5b58\u6210\u529f") {
-		a.reloadSummaryStockNewsCron(settingConfig)
+		a.reloadAIAnalysisCron(settingConfig)
 	}
 	return res
 }

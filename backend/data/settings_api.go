@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/samber/lo"
 	"gorm.io/gorm"
@@ -28,9 +27,9 @@ type SettingsApi struct {
 	Config *SettingConfig
 }
 
-var strictYieldEmailCronTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
+var strictAnalysisTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
 
-const defaultMarketSummaryCronTimes = "09:40,11:30,14:30"
+const defaultAIAnalysisTimes = "09:30,11:30,14:30"
 const (
 	AIAPIProtocolChatCompletions  = models.AIAPIProtocolChatCompletions
 	AIAPIProtocolOpenAIResponses  = models.AIAPIProtocolOpenAIResponses
@@ -52,15 +51,6 @@ func UpdateConfig(s *SettingConfig) string {
 	if s == nil || s.Settings == nil {
 		return "保存失败: 配置为空"
 	}
-	normalizedRecipients, err := NormalizeYieldEmailRecipients(s.YieldEmailTo)
-	if err != nil {
-		return "保存失败: " + err.Error()
-	}
-	s.YieldEmailTo = normalizedRecipients
-	s.YieldEmailFrom = strings.TrimSpace(s.YieldEmailFrom)
-	s.YieldEmailSMTPHost = strings.TrimSpace(s.YieldEmailSMTPHost)
-	s.YieldEmailSMTPUsername = strings.TrimSpace(s.YieldEmailSMTPUsername)
-	s.YieldEmailSMTPPassword = strings.TrimSpace(s.YieldEmailSMTPPassword)
 	s.MinuteProviderMode = normalizeMinuteProviderMode(s.MinuteProviderMode)
 	s.PrivateMinuteBaseURL = strings.TrimSpace(s.PrivateMinuteBaseURL)
 	s.PrivateMinuteAPIKey = strings.TrimSpace(s.PrivateMinuteAPIKey)
@@ -68,22 +58,17 @@ func UpdateConfig(s *SettingConfig) string {
 	s.PrivateMinuteLevel = normalizePrivateMinuteLevel(s.PrivateMinuteLevel)
 	s.AkshareMinuteSourceMode = normalizeAkshareMinuteSourceMode(s.AkshareMinuteSourceMode)
 
-	normalizedCronTimes, err := NormalizeYieldEmailCronTimes(s.YieldEmailCronTimes)
+	normalizedAnalysisTimes, err := NormalizeAIAnalysisTimes(s.AIAnalysisTimes)
 	if err != nil {
 		return "保存失败: " + err.Error()
 	}
-	if s.YieldEmailCronEnabled && len(normalizedCronTimes) == 0 {
-		return "保存失败: 请至少填写一个定时发送时间，例如 09:30,15:05"
+	if s.AIAnalysisEnabled && len(normalizedAnalysisTimes) == 0 {
+		return "保存失败: AI 分析启用时请至少填写一个分析时间，例如 09:30,11:30,14:30"
 	}
-	s.YieldEmailCronTimes = strings.Join(normalizedCronTimes, ",")
-	normalizedSummaryCronTimes, err := NormalizeMarketSummaryCronTimes(s.MarketSummaryCronTimes)
-	if err != nil {
-		return "保存失败: " + err.Error()
+	s.AIAnalysisTimes = strings.Join(normalizedAnalysisTimes, ",")
+	if s.AIAnalysisEnabled && s.AIAnalysisConfigID == 0 {
+		return "保存失败: AI 分析启用时请选择 AI 配置"
 	}
-	if s.MarketSummaryCronEnabled && len(normalizedSummaryCronTimes) == 0 {
-		return "保存失败: 请至少填写一个市场资讯定时总结时间，例如 09:40,11:30,14:30"
-	}
-	s.MarketSummaryCronTimes = strings.Join(normalizedSummaryCronTimes, ",")
 	if s.MinuteProviderMode == "private" {
 		if !s.PrivateMinuteEnabled {
 			return "保存失败: 私人分钟线模式需要先启用私人分钟线来源"
@@ -109,16 +94,6 @@ func UpdateConfig(s *SettingConfig) string {
 		"local_push_enable":                s.LocalPushEnable,
 		"ding_push_enable":                 s.DingPushEnable,
 		"ding_robot":                       s.DingRobot,
-		"yield_email_enable":               s.YieldEmailEnable,
-		"yield_email_to":                   s.YieldEmailTo,
-		"yield_email_from":                 s.YieldEmailFrom,
-		"yield_email_smtp_host":            s.YieldEmailSMTPHost,
-		"yield_email_smtp_port":            s.YieldEmailSMTPPort,
-		"yield_email_smtp_username":        s.YieldEmailSMTPUsername,
-		"yield_email_smtp_password":        s.YieldEmailSMTPPassword,
-		"yield_email_cron_enabled":         s.YieldEmailCronEnabled,
-		"yield_email_cron_times":           s.YieldEmailCronTimes,
-		"market_summary_email_enable":      s.MarketSummaryEmailEnable,
 		"update_basic_info_on_start":       s.UpdateBasicInfoOnStart,
 		"refresh_interval":                 s.RefreshInterval,
 		"open_ai_enable":                   s.OpenAiEnable,
@@ -139,10 +114,10 @@ func UpdateConfig(s *SettingConfig) string {
 		"http_proxy":                       s.HttpProxy,
 		"http_proxy_enabled":               s.HttpProxyEnabled,
 		"force_no_proxy_for_fetch":         s.ForceNoProxyForFetch,
-		"enable_agent":                     s.EnableAgent,
 		"qgqp_b_id":                        s.QgqpBId,
-		"market_summary_cron_enabled":      s.MarketSummaryCronEnabled,
-		"market_summary_cron_times":        s.MarketSummaryCronTimes,
+		"ai_analysis_enabled":              s.AIAnalysisEnabled,
+		"ai_analysis_config_id":            s.AIAnalysisConfigID,
+		"ai_analysis_times":                s.AIAnalysisTimes,
 		"minute_provider_mode":             s.MinuteProviderMode,
 		"minute_long_history_hint_enabled": s.MinuteLongHistoryHint,
 		"private_minute_enabled":           s.PrivateMinuteEnabled,
@@ -180,68 +155,6 @@ func UpdateConfig(s *SettingConfig) string {
 	}
 
 	return "保存成功！"
-}
-
-func NormalizeYieldEmailRecipients(input string) (string, error) {
-	addrs, err := parseEmailList(input)
-	if err != nil {
-		return "", err
-	}
-	if len(addrs) == 0 {
-		return "", nil
-	}
-	seen := make(map[string]struct{}, len(addrs))
-	result := make([]string, 0, len(addrs))
-	for _, addr := range addrs {
-		key := strings.ToLower(strings.TrimSpace(addr))
-		if key == "" {
-			continue
-		}
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		result = append(result, strings.TrimSpace(addr))
-	}
-	return strings.Join(result, ","), nil
-}
-
-func NormalizeYieldEmailCronTimes(input string) ([]string, error) {
-	replacer := strings.NewReplacer("，", ",", "；", ",", ";", ",", "\n", ",", "\t", ",", " ", "")
-	raw := replacer.Replace(input)
-	if strings.TrimSpace(raw) == "" {
-		return nil, nil
-	}
-
-	seen := make(map[string]struct{})
-	times := make([]string, 0)
-	invalid := make([]string, 0)
-	for _, item := range strings.Split(raw, ",") {
-		item = strings.TrimSpace(item)
-		if item == "" {
-			continue
-		}
-		if !strictYieldEmailCronTimeRegexp.MatchString(item) {
-			invalid = append(invalid, item)
-			continue
-		}
-		t, err := time.Parse("15:04", item)
-		if err != nil {
-			invalid = append(invalid, item)
-			continue
-		}
-		key := t.Format("15:04")
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		times = append(times, key)
-	}
-	if len(invalid) > 0 {
-		return nil, fmt.Errorf("定时发送时间格式错误: %s（正确格式：HH:mm，多个时间请用英文逗号分隔）", strings.Join(invalid, ", "))
-	}
-	sort.Strings(times)
-	return times, nil
 }
 
 func updateAiConfigs(tx *gorm.DB, aiConfigs []*AIConfig) error {
@@ -358,6 +271,11 @@ func GetSettingConfig() *SettingConfig {
 	}
 	settingConfig.Settings = settings
 	settingConfig.AiConfigs = aiConfigs
+	if settings.AIAnalysisConfigID == 0 {
+		if preferred, resolveErr := ResolveAIAnalysisConfig(settingConfig); resolveErr == nil {
+			settings.AIAnalysisConfigID = preferred.ID
+		}
+	}
 	applyRuntimeOverrideFromSettings(settings)
 
 	return settingConfig
@@ -372,9 +290,6 @@ func applySettingDefaults(settings *Settings) {
 		return
 	}
 	applyPrivateMinuteSettingsFromEnv(settings)
-	if settings.YieldEmailSMTPPort <= 0 {
-		settings.YieldEmailSMTPPort = 465
-	}
 	if settings.RefreshInterval <= 0 {
 		settings.RefreshInterval = 1
 	}
@@ -400,9 +315,9 @@ func applySettingDefaults(settings *Settings) {
 	if settings.ID == 0 {
 		settings.ForceNoProxyForFetch = true
 	}
-	if strings.TrimSpace(settings.MarketSummaryCronTimes) == "" {
-		settings.MarketSummaryCronTimes = defaultMarketSummaryCronTimes
-		settings.MarketSummaryCronEnabled = true
+	if strings.TrimSpace(settings.AIAnalysisTimes) == "" {
+		settings.AIAnalysisTimes = defaultAIAnalysisTimes
+		settings.AIAnalysisEnabled = true
 	}
 	if settings.MinuteProviderMode == "" {
 		settings.MinuteProviderMode = "public"
@@ -471,7 +386,7 @@ func ensureSettingsRecord(tx *gorm.DB) (*Settings, error) {
 	return settings, nil
 }
 
-func NormalizeMarketSummaryCronTimes(input string) ([]string, error) {
+func NormalizeAIAnalysisTimes(input string) ([]string, error) {
 	replacer := strings.NewReplacer("，", ",", "；", ",", ";", ",", "\n", ",", "\t", ",")
 	raw := replacer.Replace(strings.TrimSpace(input))
 	if raw == "" {
@@ -485,8 +400,8 @@ func NormalizeMarketSummaryCronTimes(input string) ([]string, error) {
 		if text == "" {
 			continue
 		}
-		if !strictYieldEmailCronTimeRegexp.MatchString(text) {
-			return nil, fmt.Errorf("市场资讯定时总结时间格式无效：%s", text)
+		if !strictAnalysisTimeRegexp.MatchString(text) {
+			return nil, fmt.Errorf("AI 分析时间格式无效：%s", text)
 		}
 		if _, exists := seen[text]; exists {
 			continue

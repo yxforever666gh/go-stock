@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
+	"fmt"
 
 	"go-stock/backend/data"
 	"go-stock/backend/models"
@@ -37,8 +39,61 @@ func replaceAllRows[T any](tx *gorm.DB, rows []T) error {
 	return tx.CreateInBatches(&rows, 400).Error
 }
 
-func (*compatibilityServiceAdapter) RefreshStockBaseInfo() {
-	data.NewStockDataApi().GetStockBaseInfo()
+type stockMasterRefreshSource interface {
+	FetchValidatedStockMaster(context.Context) ([]models.StockBasic, models.StockMasterRefreshResult, error)
+	FetchValidatedPublicStockMaster(context.Context) ([]models.StockBasic, models.StockMasterRefreshResult, error)
+}
+
+func (a *compatibilityServiceAdapter) RefreshStockBaseInfo(ctx context.Context) (models.StockMasterRefreshResult, error) {
+	if a == nil || a.main == nil {
+		return models.StockMasterRefreshResult{}, fmt.Errorf("stock master database is unavailable")
+	}
+	return refreshStockBaseInfo(ctx, a.main, data.NewStockDataApi(), a.stockMasterSeed)
+}
+
+func refreshStockBaseInfo(
+	ctx context.Context,
+	database *gorm.DB,
+	source stockMasterRefreshSource,
+	seed func() ([]models.StockBasic, models.StockMasterRefreshResult, error),
+) (models.StockMasterRefreshResult, error) {
+	if database == nil {
+		return models.StockMasterRefreshResult{}, fmt.Errorf("stock master database is unavailable")
+	}
+	if source == nil {
+		return models.StockMasterRefreshResult{}, fmt.Errorf("stock master refresh source is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	rows, result, primaryErr := source.FetchValidatedStockMaster(ctx)
+	if primaryErr != nil {
+		var publicErr error
+		rows, result, publicErr = source.FetchValidatedPublicStockMaster(ctx)
+		if publicErr != nil {
+			var rowCount int64
+			if countErr := database.WithContext(ctx).Model(&models.StockBasic{}).Count(&rowCount).Error; countErr != nil {
+				return result, errors.Join(primaryErr, publicErr, countErr)
+			}
+			if rowCount != 0 || seed == nil {
+				return result, errors.Join(primaryErr, publicErr)
+			}
+			var seedErr error
+			rows, result, seedErr = seed()
+			if seedErr != nil {
+				return result, errors.Join(primaryErr, publicErr, seedErr)
+			}
+			result.Warnings = append(result.Warnings, "Tushare and controlled public stock master were unavailable; initialized empty database from embedded seed")
+		} else {
+			result.Warnings = append(result.Warnings, "Tushare stock master was unavailable; used controlled public source")
+		}
+	}
+	if err := data.ReplaceStockMasterWithMetadata(ctx, database, rows, result); err != nil {
+		return result, err
+	}
+	result.Replaced = true
+	return result, nil
 }
 
 func (*compatibilityServiceAdapter) RefreshIndexBaseInfo() {
@@ -166,10 +221,6 @@ func (*compatibilityServiceAdapter) SearchStock(words string) map[string]any {
 
 func (*compatibilityServiceAdapter) SearchStockWithFingerprint(words, fingerprint string, pageSize int) map[string]any {
 	return data.NewSearchStockApiWithFingerprint(words, fingerprint).SearchStock(pageSize)
-}
-
-func (*compatibilityServiceAdapter) GetHotStrategy() map[string]any {
-	return data.NewSearchStockApi("").HotStrategy()
 }
 
 func (*compatibilityServiceAdapter) GetStockCodeRealTimeData(stockCodes ...string) (*[]models.StockInfo, error) {

@@ -139,10 +139,25 @@ func TestGetHKStockInfo(t *testing.T) {
 }
 
 func TestParseTxStockData(t *testing.T) {
-	requireIntegration(t)
 	input := "v_sz002241=\"51~歌尔股份~002241~21.92~22.27~22.14~109872~40211~69642~21.91~25~21.90~961~21.89~257~21.88~748~21.87~665~21.92~86~21.93~168~21.94~556~21.95~171~21.96~85~~20250509094209~-0.35~-1.57~22.16~21.84~21.92/109872/241183171~109872~24118~0.36~27.78~~22.16~21.84~1.44~675.97~765.22~2.27~24.50~20.04~2.57~1590~21.95~40.80~28.71~~~1.24~24118.3171~0.0000~0~\n~GP-A~-15.07~5.13~1.11~8.18~3.39~30.63~15.70~5.23~15.67~-25.11~3083811231~3490989083~42.72~10.31~3083811231~~~37.23~0.18~~CNY~0~~21.85~1952\";"
-	info, _ := ParseTxStockData(input)
-	logger.SugaredLogger.Infof("%+#v", info)
+	info, err := ParseTxStockData(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Volume != "10987200" || info.Amount != "241183171" {
+		t.Fatalf("A-share turnover = %s/%s, want 10987200/241183171", info.Volume, info.Amount)
+	}
+}
+
+func TestParseTxStockDataHongKongTurnover(t *testing.T) {
+	input := "v_r_hk09660=\"100~HORIZONROBOT-W~09660~6.270~5.690~5.800~195083034.0~0~0~6.270~0~0~0~0~0~0~0~0~0~6.270~0~0~0~0~0~0~0~0~0~195083034.0~2025/04/29 13:45:41~0.580~10.19~6.450~5.710~6.270~195083034.0~1195673623.140~0~32.66\";"
+	info, err := ParseTxStockData(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Volume != "195083034" || info.Amount != "1195673623.140" {
+		t.Fatalf("HK turnover = %s/%s, want 195083034/1195673623.140", info.Volume, info.Amount)
+	}
 }
 
 func TestGetRealTimeStockPriceInfo(t *testing.T) {

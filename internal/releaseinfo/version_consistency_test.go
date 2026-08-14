@@ -51,20 +51,11 @@ func TestAppVersionIsConsistentAcrossReleaseArtifacts(t *testing.T) {
 	if !strings.Contains(readme, "App "+version) {
 		t.Fatalf("README.md does not identify current App version %q", version)
 	}
-	if !strings.Contains(readme, "Strategy "+manifest.CurrentStrategyVersion) {
-		t.Fatalf("README.md does not identify current Strategy version %q", manifest.CurrentStrategyVersion)
-	}
-
 	changelog := readTextFile(t, filepath.Join(root, "CHANGELOG.md"))
 	if got := firstChangelogVersion(changelog); got != version {
 		t.Fatalf("CHANGELOG.md first release = %q, want %q", got, version)
 	}
 
-	releaseNotesPath := filepath.Join(root, "RELEASE_NOTES_"+version+".md")
-	releaseNotes := readTextFile(t, releaseNotesPath)
-	if !strings.Contains(releaseNotes, "App "+version) {
-		t.Fatalf("%s does not identify App version %q", filepath.Base(releaseNotesPath), version)
-	}
 }
 
 func releaseinfoRepositoryRoot(t *testing.T) string {

@@ -23,8 +23,8 @@ func (s StockService) ReplaceStockBaseInfo(
 	return s.operations.ReplaceStockBaseInfo(ctx, domestic, hongKong, unitedStates)
 }
 
-func (s StockService) RefreshStockBaseInfo() {
-	s.operations.RefreshStockBaseInfo()
+func (s StockService) RefreshStockBaseInfo(ctx context.Context) (models.StockMasterRefreshResult, error) {
+	return s.operations.RefreshStockBaseInfo(ctx)
 }
 
 func (s StockService) RefreshIndexBaseInfo() {
@@ -101,10 +101,6 @@ func (s StockService) SearchStock(words string) map[string]any {
 
 func (s StockService) SearchStockWithFingerprint(words, fingerprint string, pageSize int) map[string]any {
 	return s.operations.SearchStockWithFingerprint(words, fingerprint, pageSize)
-}
-
-func (s StockService) GetHotStrategy() map[string]any {
-	return s.operations.GetHotStrategy()
 }
 
 func (s StockService) GetStockCodeRealTimeData(stockCodes ...string) (*[]models.StockInfo, error) {

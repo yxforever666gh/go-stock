@@ -33,7 +33,7 @@ Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists,
 - 建议上传仓库内已准备好的社交预览图：
   - `docs/assets/social-preview.png`
 - 这张图也已经用于 README 第一屏，风格与当前公开版文案保持一致
-- 社交图建议保留“PUBLIC 1.2.4”以及“Derived from ArvinLovegood/go-stock”这类信息，避免对外误认为原项目官方仓库
+- 社交图建议保留“PUBLIC 1.6.0”以及“Derived from ArvinLovegood/go-stock”这类信息，避免对外误认为原项目官方仓库
 
 ### Topics
 
@@ -60,7 +60,7 @@ Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists,
 
 - 确认 `README.md`、`CHANGELOG.md`、`LICENSE`、`SECURITY.md` 已是当前公开版内容
 - 确认 `main` 只保留当前单提交公开快照
-- 确认远端只保留标签 `1.2.4`
+- 确认远端发布标签与 App `1.6.0` 一致
 - 确认 Releases 页面没有旧的私有发布说明
 - 确认 Actions 历史日志里没有不适合公开的输出
 
@@ -68,5 +68,5 @@ Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists,
 
 - 仓库首页 `About` 文案是否显示正常
 - `Issues`、`Security`、`Contributing` 链接是否可正常访问
-- `Releases` 页面是否只展示 `1.2.4`
+- `Releases` 页面是否展示 `1.6.0` 发布说明
 - `README` 中的绝对路径跳转和截图引用是否正常

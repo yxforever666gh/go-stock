@@ -4,18 +4,14 @@ import {
   AddPrompt, DelPrompt,
   ExportConfig,
   GetConfig,
-  GetEmailSendLogList,
   GetPromptTemplates,
-  SendYieldEmailXLSXNow,
-  SendYieldEmailTestMessage,
   TestAIConfig,
   UpdateConfig
 } from "../services/app-api";
 import {NTag, useMessage} from "naive-ui";
-import {data, models} from "../../wailsjs/go/models";
+import {models} from "../../wailsjs/go/models";
 import {EventsEmit} from "../services/browser-runtime.mjs";
 import MinuteProviderSettings from "./settings/MinuteProviderSettings.vue";
-import EmailSettings from "./settings/EmailSettings.vue";
 import AiConfigSettings from "./settings/AiConfigSettings.vue";
 
 const message = useMessage()
@@ -24,15 +20,6 @@ const formRef = ref(null)
 const formValue = ref({
   ID: 1,
   tushareToken: '',
-  yieldEmail: {
-    enable: false,
-    to: '',
-    from: '',
-    smtpHost: '',
-    smtpPort: 465,
-    smtpUsername: '',
-    smtpPassword: '',
-  },
   updateBasicInfoOnStart: false,
   refreshInterval: 1,
   openAI: {
@@ -66,20 +53,14 @@ const formValue = ref({
   httpProxy:"",
   httpProxyEnabled:false,
   forceNoProxyForFetch: true,
-  enableAgent: false,
+  aiAnalysis: {
+    enabled: true,
+    configId: null,
+    times: '09:30,11:30,14:30',
+  },
   qgqpBId: '',
-  marketSummaryEmailEnabled: false,
-  marketSummaryCronEnabled: true,
-  marketSummaryCronTimes: '09:40,11:30,14:30',
 })
-const yieldEmailTestSending = ref(false)
-const yieldEmailXlsxSending = ref(false)
 const aiConfigTestStates = ref({})
-const emailSendLogsLoading = ref(false)
-const emailSendLogs = ref([])
-const emailSendLogPage = ref(1)
-const emailSendLogTotalPages = ref(1)
-const emailSendLogTotal = ref(0)
 const settingsLoaded = ref(false)
 const persistedConfig = ref({})
 const autoSaveState = ref('idle')
@@ -142,15 +123,6 @@ function applyConfigToForm(config) {
   }
   formValue.value.ID = config?.ID || formValue.value.ID
   formValue.value.tushareToken = config?.tushareToken || ''
-  formValue.value.yieldEmail = {
-    enable: config?.yieldEmailEnable === true,
-    to: config?.yieldEmailTo || '',
-    from: config?.yieldEmailFrom || '',
-    smtpHost: config?.yieldEmailSmtpHost || '',
-    smtpPort: config?.yieldEmailSmtpPort || 465,
-    smtpUsername: config?.yieldEmailSmtpUsername || '',
-    smtpPassword: config?.yieldEmailSmtpPassword || '',
-  }
   formValue.value.updateBasicInfoOnStart = config?.updateBasicInfoOnStart === true
   formValue.value.refreshInterval = config?.refreshInterval
   formValue.value.openAI = {
@@ -184,11 +156,12 @@ function applyConfigToForm(config) {
   formValue.value.httpProxy = config?.httpProxy || ''
   formValue.value.httpProxyEnabled = config?.httpProxyEnabled === true
   formValue.value.forceNoProxyForFetch = config?.forceNoProxyForFetch !== false
-  formValue.value.enableAgent = config?.enableAgent === true
+  formValue.value.aiAnalysis = {
+    enabled: config?.aiAnalysisEnabled !== false,
+    configId: config?.aiAnalysisConfigId || normalizedAiConfigs[0]?.ID || null,
+    times: config?.aiAnalysisTimes || '09:30,11:30,14:30',
+  }
   formValue.value.qgqpBId = config?.qgqpBId || ''
-  formValue.value.marketSummaryEmailEnabled = config?.marketSummaryEmailEnabled === true
-  formValue.value.marketSummaryCronEnabled = config?.marketSummaryCronEnabled !== false
-  formValue.value.marketSummaryCronTimes = config?.marketSummaryCronTimes || '09:40,11:30,14:30'
 }
 
 function aiConfigRowKey(aiConfig) {
@@ -214,7 +187,7 @@ function renumberAiConfigSorts() {
 
 // 添加一个新的AI配置到列表
 function addAiConfig() {
-  formValue.value.openAI.aiConfigs.push(new data.AIConfig({
+  formValue.value.openAI.aiConfigs.push(new models.AIConfig({
     sort: formValue.value.openAI.aiConfigs.length + 1,
     name: '',
     baseUrl: 'https://api.deepseek.com',
@@ -295,7 +268,6 @@ onMounted(() => {
   GetPromptTemplates("", "").then(res => {
     promptTemplates.value = res
   })
-  refreshEmailSendLogs()
 })
 onBeforeUnmount(() => {
   message.destroyAll()
@@ -303,16 +275,9 @@ onBeforeUnmount(() => {
 
 function buildConfigPayload() {
   renumberAiConfigSorts()
-  return new data.SettingConfig({
+  return new models.SettingConfig({
 	...persistedConfig.value,
     ID: formValue.value.ID,
-    yieldEmailEnable: formValue.value.yieldEmail.enable,
-    yieldEmailTo: formValue.value.yieldEmail.to,
-    yieldEmailFrom: formValue.value.yieldEmail.from,
-    yieldEmailSmtpHost: formValue.value.yieldEmail.smtpHost,
-    yieldEmailSmtpPort: formValue.value.yieldEmail.smtpPort,
-    yieldEmailSmtpUsername: formValue.value.yieldEmail.smtpUsername,
-    yieldEmailSmtpPassword: formValue.value.yieldEmail.smtpPassword,
     updateBasicInfoOnStart: formValue.value.updateBasicInfoOnStart,
     refreshInterval: formValue.value.refreshInterval,
     openAiEnable: formValue.value.openAI.enable,
@@ -342,11 +307,10 @@ function buildConfigPayload() {
     httpProxy:formValue.value.httpProxy,
     httpProxyEnabled:formValue.value.httpProxyEnabled,
     forceNoProxyForFetch: formValue.value.forceNoProxyForFetch,
-    enableAgent: formValue.value.enableAgent,
-    qgqpBId: formValue.value.qgqpBId,
-    marketSummaryEmailEnabled: formValue.value.marketSummaryEmailEnabled,
-    marketSummaryCronEnabled: formValue.value.marketSummaryCronEnabled,
-    marketSummaryCronTimes: formValue.value.marketSummaryCronTimes
+    aiAnalysisEnabled: formValue.value.aiAnalysis.enabled,
+    aiAnalysisConfigId: formValue.value.aiAnalysis.configId || 0,
+    aiAnalysisTimes: formValue.value.aiAnalysis.times,
+    qgqpBId: formValue.value.qgqpBId
   })
 }
 
@@ -410,34 +374,6 @@ async function testAiConfig(index) {
   }
 }
 
-function parseYieldEmailRecipients(input) {
-  return String(input || "")
-      .replace(/[；;，]/g, ",")
-      .split(",")
-      .map(item => item.trim())
-      .filter(Boolean)
-}
-
-function isValidEmailText(email) {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim())
-}
-
-function getYieldEmailConfigError() {
-  if (!formValue.value.yieldEmail.enable) {
-    return ""
-  }
-
-  const recipients = parseYieldEmailRecipients(formValue.value.yieldEmail.to)
-  if (recipients.length === 0) {
-    return "请至少填写一个收件邮箱"
-  }
-  const invalidRecipients = recipients.filter(item => !isValidEmailText(item))
-  if (invalidRecipients.length > 0) {
-    return `收件邮箱格式错误：${invalidRecipients.join(", ")}`
-  }
-  return ""
-}
-
 function getMinuteSourceConfigError() {
   if (formValue.value.minuteProviderMode === 'public') {
     if (!formValue.value.akshareEnabled && !formValue.value.sinaMinuteEnabled && !formValue.value.tencentMinuteEnabled) {
@@ -464,18 +400,6 @@ async function runPersist(options = {}) {
   const recordAutoSaveError = options.recordAutoSaveError === true
   if (recordAutoSaveError) {
     autoSaveError.value = ''
-  }
-
-  const yieldEmailError = getYieldEmailConfigError()
-  if (yieldEmailError) {
-    if (notifyError) {
-      message.error(yieldEmailError)
-    }
-    if (recordAutoSaveError) {
-      autoSaveError.value = yieldEmailError
-      autoSaveState.value = 'error'
-    }
-    return false
   }
 
   const minuteSourceError = getMinuteSourceConfigError()
@@ -555,85 +479,6 @@ async function saveCurrentConfig(options = {}) {
     autoSaveError.value = '自动保存失败'
   }
   return saved
-}
-
-async function sendYieldEmailTest() {
-  if (yieldEmailTestSending.value) {
-    return
-  }
-  yieldEmailTestSending.value = true
-  try {
-    const saved = await saveCurrentConfig({notifyError: true})
-    if (!saved) {
-      return
-    }
-    const res = await SendYieldEmailTestMessage()
-    if (String(res || '').includes('失败')) {
-      message.error(res)
-      await refreshEmailSendLogs(1)
-      return
-    }
-    message.success(res)
-    await refreshEmailSendLogs(1)
-  } finally {
-    yieldEmailTestSending.value = false
-  }
-}
-
-async function sendYieldEmailXLSXNowAction() {
-  if (yieldEmailXlsxSending.value) {
-    return
-  }
-  yieldEmailXlsxSending.value = true
-  try {
-    const saved = await saveCurrentConfig({notifyError: true})
-    if (!saved) {
-      return
-    }
-    const res = await SendYieldEmailXLSXNow()
-    if (String(res || '').includes('失败')) {
-      message.error(res)
-      await refreshEmailSendLogs(1)
-      return
-    }
-    message.success(res)
-    await refreshEmailSendLogs(1)
-  } finally {
-    yieldEmailXlsxSending.value = false
-  }
-}
-
-async function refreshEmailSendLogs(pageNo = emailSendLogPage.value) {
-  emailSendLogsLoading.value = true
-  try {
-    const page = await GetEmailSendLogList(new models.EmailSendLogQuery({
-      page: pageNo,
-      pageSize: 5
-    }))
-    emailSendLogs.value = Array.isArray(page?.list) ? page.list : []
-    emailSendLogPage.value = Number(page?.page || pageNo || 1)
-    emailSendLogTotalPages.value = Math.max(1, Number(page?.totalPages || 1))
-    emailSendLogTotal.value = Number(page?.total || 0)
-    if (emailSendLogPage.value > emailSendLogTotalPages.value) {
-      await refreshEmailSendLogs(emailSendLogTotalPages.value)
-    }
-  } finally {
-    emailSendLogsLoading.value = false
-  }
-}
-
-function prevEmailSendLogPage() {
-  if (emailSendLogPage.value <= 1 || emailSendLogsLoading.value) {
-    return
-  }
-  refreshEmailSendLogs(emailSendLogPage.value - 1)
-}
-
-function nextEmailSendLogPage() {
-  if (emailSendLogPage.value >= emailSendLogTotalPages.value || emailSendLogsLoading.value) {
-    return
-  }
-  refreshEmailSendLogs(emailSendLogPage.value + 1)
 }
 
 function exportConfig() {
@@ -748,9 +593,6 @@ function deletePrompt(ID) {
             <n-form-item-gi :span="10" label="浏览器安装路径：" path="browserPath">
               <n-input type="text" placeholder="浏览器安装路径" v-model:value="formValue.browserPath" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="3" label="AI智能体：" path="enableAgent">
-              <n-switch v-model:value="formValue.enableAgent" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
             <n-form-item-gi :span="11" label="东财唯一标识：" path="qgqpBId">
               <n-input type="text" placeholder="东财唯一标识" v-model:value="formValue.qgqpBId" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
@@ -765,24 +607,6 @@ function deletePrompt(ID) {
             :private-minute-level-options="privateMinuteLevelOptions"
             @immediate-change="handleImmediateFieldChange"
             @text-blur="handleTextFieldBlur"
-        />
-
-        <EmailSettings
-            :form-value="formValue"
-            :yield-email-test-sending="yieldEmailTestSending"
-            :yield-email-xlsx-sending="yieldEmailXlsxSending"
-            :email-send-logs-loading="emailSendLogsLoading"
-            :email-send-logs="emailSendLogs"
-            :email-send-log-page="emailSendLogPage"
-            :email-send-log-total-pages="emailSendLogTotalPages"
-            :email-send-log-total="emailSendLogTotal"
-            @immediate-change="handleImmediateFieldChange"
-            @text-blur="handleTextFieldBlur"
-            @send-test="sendYieldEmailTest"
-            @send-xlsx="sendYieldEmailXLSXNowAction"
-            @refresh-logs="refreshEmailSendLogs"
-            @prev-page="prevEmailSendLogPage"
-            @next-page="nextEmailSendLogPage"
         />
 
         <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => 'AI设置')" size="small">
@@ -875,6 +699,32 @@ function deletePrompt(ID) {
               </n-space>
             </n-gi>
 
+          </n-grid>
+        </n-card>
+
+        <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => 'AI 分析')" size="small">
+          <n-grid :cols="24" :x-gap="24" style="text-align: left">
+            <n-form-item-gi :span="4" label="启用：" path="aiAnalysis.enabled">
+              <n-switch v-model:value="formValue.aiAnalysis.enabled" @update:value="handleImmediateFieldChange"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="9" label="AI 配置：" path="aiAnalysis.configId">
+              <n-select
+                  v-model:value="formValue.aiAnalysis.configId"
+                  :options="formValue.openAI.aiConfigs.map(item => ({ label: `${item.name || '未命名'} / ${item.modelName || '-'}`, value: item.ID }))"
+                  placeholder="选择用于分级分析和生命周期判断的配置"
+                  @update:value="handleImmediateFieldChange"
+              />
+            </n-form-item-gi>
+            <n-form-item-gi :span="11" label="分析时间：" path="aiAnalysis.times">
+              <n-input
+                  v-model:value="formValue.aiAnalysis.times"
+                  placeholder="09:30,11:30,14:30"
+                  @blur="handleTextFieldBlur"
+              />
+            </n-form-item-gi>
+            <n-gi :span="24">
+              <n-text depth="3">仅沪深交易日自动运行；有未卖出持仓时跳过新分析。这里不提供手动运行，也不会复制 API Key。</n-text>
+            </n-gi>
           </n-grid>
         </n-card>
       </n-space>

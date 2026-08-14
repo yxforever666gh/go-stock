@@ -1,43 +1,21 @@
 import { API_PATHS } from './api-types.generated'
 import type {
-  ExportPayload,
-  ExportRequest,
-  HealthStatus,
-  LivenessStatus,
-  MarketSummaryStatus,
-  StrategyRuntimeStatus,
-  SystemVersionStatus,
+  AccountOverview, AnalysisRun, HealthStatus, LivenessStatus,
+  Recommendation, RecommendationDetail, SystemVersionStatus,
 } from './api-types.generated'
 
 export { API_PATHS }
 export type * from './api-types.generated'
-export type StrategyRuntimeMode = StrategyRuntimeStatus['mode']
-export type ExportMode = NonNullable<ExportRequest['mode']>
 
 async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
-  const payload = await response.json() as T & {
-    error?: string
-    reason?: string
-    readiness?: { error?: string }
-  }
-  if (!response.ok) {
-    throw new Error(
-      payload?.reason
-      || payload?.error
-      || payload?.readiness?.error
-      || `Request failed: ${response.status}`,
-    )
-  }
+  const payload = await response.json() as T & { error?: string; readiness?: { error?: string } }
+  if (!response.ok) throw new Error(payload?.error || payload?.readiness?.error || `Request failed: ${response.status}`)
   return payload
 }
 
-function postJSON<T>(url: string, body: unknown): Promise<T> {
-  return requestJSON<T>(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+function queryPage(limit = 50, offset = 0): string {
+  return `?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(offset)}`
 }
 
 export const apiClient = {
@@ -47,24 +25,12 @@ export const apiClient = {
     ready: () => requestJSON<SystemVersionStatus>(API_PATHS.getReadiness),
     version: () => requestJSON<SystemVersionStatus>(API_PATHS.getSystemVersion),
   },
-  strategy: {
-    runtime: () => requestJSON<StrategyRuntimeStatus>(API_PATHS.getStrategyRuntime),
-  },
-  market: {
-    latestSummary: (sinceSeconds?: number) => {
-      const query = sinceSeconds && sinceSeconds > 0 ? `?sinceSeconds=${encodeURIComponent(sinceSeconds)}` : ''
-      return requestJSON<MarketSummaryStatus>(`${API_PATHS.getLatestMarketSummary}${query}`)
-    },
-  },
-  exports: {
-    markdown: (stockCode: string, stockName: string, mode: ExportMode = 'download') =>
-      postJSON<ExportPayload>(API_PATHS.exportMarkdown, { mode, stockCode, stockName }),
-    config: (mode: ExportMode = 'download') =>
-      postJSON<ExportPayload>(API_PATHS.exportConfig, { mode }),
-    image: (name: string, base64Data: string, mode: ExportMode = 'download') =>
-      postJSON<ExportPayload>(API_PATHS.exportImage, { mode, name, base64Data }),
-    word: (filename: string, base64Data: string, mode: ExportMode = 'download') =>
-      postJSON<ExportPayload>(API_PATHS.exportWord, { mode, filename, base64Data }),
+  research: {
+    analyses: (limit = 50, offset = 0) => requestJSON<AnalysisRun[]>(API_PATHS.listAnalysisRuns + queryPage(limit, offset)),
+    analysis: (id: string) => requestJSON<AnalysisRun>(`${API_PATHS.getAnalysisRun}?id=${encodeURIComponent(id)}`),
+    recommendations: (limit = 50, offset = 0) => requestJSON<Recommendation[]>(API_PATHS.listRecommendations + queryPage(limit, offset)),
+    recommendation: (id: string) => requestJSON<RecommendationDetail>(`${API_PATHS.getRecommendation}?id=${encodeURIComponent(id)}`),
+    account: () => requestJSON<AccountOverview>(API_PATHS.getSimulatedAccount),
   },
   eventsWebSocketURL(location: Location = window.location): string {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'

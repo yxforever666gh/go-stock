@@ -18,10 +18,6 @@ func (s AIService) TestAIConfig(ctx context.Context, aiConfigID int) *models.AIM
 	return s.operations.TestAIConfig(ctx, aiConfigID)
 }
 
-func (s AIService) HumanizeMarketSummaryReport(raw string) string {
-	return s.operations.HumanizeMarketSummaryReport(raw)
-}
-
 func (s AIService) AnalyzeSentiment(text string) models.SentimentResult {
 	return s.operations.AnalyzeSentiment(text)
 }
@@ -68,32 +64,4 @@ func (s AIService) ResolveAIModelName(aiConfigID int) string {
 
 func (s AIService) NewChatStream(ctx context.Context, stock, stockCode, question string, aiConfigID int, sysPromptID *int, tools []models.Tool, think bool) <-chan map[string]any {
 	return s.operations.NewChatStream(ctx, stock, stockCode, question, aiConfigID, sysPromptID, tools, think)
-}
-
-func (s AIService) NewSummaryStockNewsStream(ctx context.Context, aiConfigID int, question string, sysPromptID *int, think bool) <-chan map[string]any {
-	return s.operations.NewSummaryStockNewsStream(ctx, aiConfigID, question, sysPromptID, think)
-}
-
-func (s AIService) NormalizeMarketSummaryQuestion(question string) string {
-	return s.operations.NormalizeMarketSummaryQuestion(question)
-}
-
-func (s AIService) SendYieldEmailTestMessage() error {
-	return s.operations.SendYieldEmailTestMessage()
-}
-
-func (s AIService) SendYieldEmailXLSXNow() (int, error) {
-	return s.operations.SendYieldEmailXLSXNow()
-}
-
-func (s AIService) SendLatestAIAnalysisReportEmail() (*models.AIResponseResult, error) {
-	return s.operations.SendLatestAIAnalysisReportEmail()
-}
-
-func (s AIService) SendLatestAIAnalysisReportEmailForCron() (*models.AIResponseResult, error) {
-	return s.operations.SendLatestAIAnalysisReportEmailForCron()
-}
-
-func (s AIService) SendMarketSummaryEmail(sendType string, report *models.AIResponseResult, failureReason string) error {
-	return s.operations.SendMarketSummaryEmail(sendType, report, failureReason)
 }

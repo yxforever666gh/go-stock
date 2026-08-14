@@ -18,7 +18,6 @@ func (a *App) domReady(ctx context.Context) {
 
 	// Web mode invokes domReady directly without the desktop startup hook. The
 	// once-guard makes this a fallback only; desktop execution starts earlier.
-	a.registerMarketSummaryV150ExecutionRuntime()
 	config := a.services.Config.GetConfig()
 	a.registerRealtimeRuntime(config)
 	a.registerFundRuntime(config)
@@ -33,7 +32,6 @@ func (a *App) domReady(ctx context.Context) {
 		return
 	}
 	releaseinfo.MarkSchedulerReady(true)
-	a.startMarketSummaryV150ExecutionRuntime()
 	a.updateBasicInfo()
 	a.startImmediateRuntimeTasks(config)
 	a.startMaintenanceRuntime(config)
@@ -134,8 +132,7 @@ func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 }
 
 func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
-	a.reloadSummaryStockNewsCron(config)
-	a.enableSummaryStockNewsTestCron()
+	a.reloadAIAnalysisCron(config)
 }
 
 func (a *App) registerFollowAnalysisCrons() {

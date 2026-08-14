@@ -19,7 +19,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/chromedp/chromedp"
 	"github.com/duke-git/lancet/v2/convertor"
-	"github.com/duke-git/lancet/v2/mathutil"
 	"github.com/duke-git/lancet/v2/random"
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/go-resty/resty/v2"
@@ -33,7 +32,6 @@ import (
 // -----------------------------------------------------------------------------------
 type OpenAi struct {
 	ctx              context.Context
-	eventVerifier    marketSummaryV150EventVerifier
 	BaseUrl          string  `json:"base_url"`
 	ApiKey           string  `json:"api_key"`
 	ApiProtocol      string  `json:"api_protocol"`
@@ -70,6 +68,8 @@ func EmitRuntimeEvent(ctx context.Context, eventName string, payload any) {
 		fn(ctx, eventName, payload)
 	}
 }
+
+func sanitizeAIResponseResultForDisplay(*models.AIResponseResult) {}
 
 func (o OpenAi) String() string {
 	return fmt.Sprintf("OpenAi{BaseUrl: %s, Protocol: %s, Model: %s, MaxTokens: %d, Temperature: %.2f, Prompt: %s, TimeOut: %d, QuestionTemplate: %s, CrawlTimeOut: %d, KDays: %d, BrowserPath: %s, ApiKey: [MASKED]}",
@@ -174,530 +174,6 @@ type Tool = models.Tool
 type FunctionParameters = models.FunctionParameters
 type ToolFunction = models.ToolFunction
 
-type summaryFetchResult struct {
-	tool     string
-	messages []map[string]interface{}
-	err      error
-	latency  time.Duration
-}
-
-func emitSummaryToolStatus(ch chan map[string]any, tool, status string, err error, latency time.Duration) {
-	msg := map[string]any{
-		"event":     "summaryStockNewsToolStatus",
-		"tool":      tool,
-		"status":    status,
-		"latencyMs": latency.Milliseconds(),
-		"time":      time.Now().Format(time.DateTime),
-	}
-	if err != nil {
-		msg["error"] = err.Error()
-	}
-	ch <- msg
-}
-
-func (o *OpenAi) NewSummaryStockNewsStreamWithTools(userQuestion string, sysPromptId *int, tools []Tool, thinking bool) <-chan map[string]any {
-	ch := make(chan map[string]any, 512)
-	defer func() {
-		if err := recover(); err != nil {
-			logger.SugaredLogger.Error("NewSummaryStockNewsStream panic", err)
-		}
-	}()
-
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logger.SugaredLogger.Errorf("NewSummaryStockNewsStream goroutine panic: %s", err)
-				logger.SugaredLogger.Errorf("NewSummaryStockNewsStream goroutine panic config: %s", o.String())
-			}
-		}()
-		defer close(ch)
-
-		sysPrompt := ""
-		if sysPromptId == nil || *sysPromptId == 0 {
-			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
-		} else {
-			sysPrompt = RenderMarketSummaryTemplate(NewPromptTemplateApi().GetPromptTemplateByID(*sysPromptId))
-		}
-		if sysPrompt == "" {
-			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
-		}
-
-		// 注意：system prompt 必须保持“配置即所得”，不要在 WithTools 分支隐式改写/拼接，
-		// 否则会导致启用工具与不启用工具时提示词不一致，表现为“提示词变了”。
-
-		msg := []map[string]interface{}{
-			{
-				"role": "system",
-				//"content": "作为一位专业的A股市场分析师和投资顾问,请你根据以下信息提供详细的技术分析和投资策略建议:",
-				//"content": "【角色设定】\n你是一位拥有20年实战经验的顶级股票分析师，精通技术分析、基本面分析、市场心理学和量化交易。擅长发现成长股、捕捉行业轮动机会，在牛熊市中都能保持稳定收益。你的风格是价值投资与技术择时相结合，注重风险控制。\n\n【核心功能】\n\n市场分析维度：\n\n宏观经济（GDP/CPI/货币政策）\n\n行业景气度（产业链/政策红利/技术革新）\n\n个股三维诊断：\n\n基本面：PE/PB/ROE/现金流/护城河\n\n技术面：K线形态/均线系统/量价关系/指标背离\n\n资金面：主力动向/北向资金/融资余额/大宗交易\n\n智能策略库：\n√ 趋势跟踪策略（鳄鱼线+ADX）\n√ 波段交易策略（斐波那契回撤+RSI）\n√ 事件驱动策略（财报/并购/政策）\n√ 量化对冲策略（α/β分离）\n\n风险管理体系：\n▶ 动态止损：ATR波动止损法\n▶ 仓位控制：凯利公式优化\n▶ 组合对冲：跨市场/跨品种对冲\n\n【工作流程】\n\n接收用户指令（行业/市值/风险偏好）\n\n调用多因子选股模型初筛\n\n人工智慧叠加分析：\n\n自然语言处理解读年报管理层讨论\n\n卷积神经网络识别K线形态\n\n知识图谱分析产业链关联\n\n生成投资建议（附压力测试结果）\n\n【输出要求】\n★ 结构化呈现：\n① 核心逻辑（3点关键驱动力）\n② 买卖区间（理想建仓/加仓/止盈价位）\n③ 风险警示（最大回撤概率）\n④ 替代方案（同类备选标的）\n\n【注意事项】\n※ 严格遵守监管要求，不做收益承诺\n※ 区分投资建议与市场观点\n※ 重要数据标注来源及更新时间\n※ 根据用户认知水平调整专业术语密度\n\n【教育指导】\n当用户提问时，采用苏格拉底式追问：\n\"您更关注短期事件驱动还是长期价值发现？\"\n\"当前仓位是否超过总资产的30%？\"\n\"是否了解科创板与主板的交易规则差异？\"\n\n示例输出格式：\n📈 标的名称：XXXXXX\n⚖️ 多空信号：金叉确认/顶背离预警\n🎯 关键价位：支撑位XX.XX/压力位XX.XX\n📊 建议仓位：核心仓位X%+卫星仓位X%\n⏳ 持有周期：短线（1-3周）/中线（季度轮动）\n🔍 跟踪要素：重点关注Q2毛利率变化及股东减持进展",
-				"content": sysPrompt,
-			},
-		}
-		msg = append(msg, map[string]interface{}{
-			"role":    "user",
-			"content": "当前时间",
-		})
-		msg = append(msg, map[string]interface{}{
-			"role":              "assistant",
-			"reasoning_content": "使用工具查询",
-			"content":           "当前本地时间是:" + time.Now().Format("2006-01-02 15:04:05"),
-		})
-		results := make(chan summaryFetchResult, 4)
-		runFetch := func(tool string, fetch func() ([]map[string]interface{}, error)) {
-			go func() {
-				start := time.Now()
-				messages, err := fetch()
-				results <- summaryFetchResult{
-					tool:     tool,
-					messages: messages,
-					err:      err,
-					latency:  time.Since(start),
-				}
-			}()
-		}
-
-		//go func() {
-		//	defer wg.Done()
-		//	res := NewMarketNewsApi().XUEQIUHotStock(50, "10")
-		//	md := util.MarkdownTableWithTitle("当前热门股票排名", res)
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "当前热门股票排名数据",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":              "assistant",
-		//		"reasoning_content": "使用工具查询",
-		//		"content":           md,
-		//	})
-		//}()
-		runFetch("InteractiveAnswer", func() ([]map[string]interface{}, error) {
-			datas := NewMarketNewsApi().InteractiveAnswer(1, 100, "")
-			content := util.MarkdownTableWithTitle("当前最新投资者互动数据", datas.Results)
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "投资者互动数据",
-				},
-				{
-					"role":              "assistant",
-					"reasoning_content": "使用工具查询",
-					"content":           content,
-				},
-			}, nil
-		})
-
-		runFetch("MacroEconomy", func() ([]map[string]interface{}, error) {
-			var market strings.Builder
-			res := NewMarketNewsApi().GetGDP()
-			md := util.MarkdownTableWithTitle("国内生产总值(GDP)", res.GDPResult.Data)
-			market.WriteString(md)
-			res2 := NewMarketNewsApi().GetCPI()
-			md2 := util.MarkdownTableWithTitle("居民消费价格指数(CPI)", res2.CPIResult.Data)
-			market.WriteString(md2)
-			res3 := NewMarketNewsApi().GetPPI()
-			md3 := util.MarkdownTableWithTitle("工业品出厂价格指数(PPI)", res3.PPIResult.Data)
-			market.WriteString(md3)
-			res4 := NewMarketNewsApi().GetPMI()
-			md4 := util.MarkdownTableWithTitle("采购经理人指数(PMI)", res4.PMIResult.Data)
-			market.WriteString(md4)
-
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "国内宏观经济数据",
-				},
-				{
-					"role":              "assistant",
-					"reasoning_content": "使用工具查询",
-					"content":           "\n# 国内宏观经济数据：\n" + market.String(),
-				},
-			}, nil
-		})
-
-		//go func() {
-		//	defer wg.Done()
-		//	var market strings.Builder
-		//	market.WriteString(GetZSInfo("上证指数", "sh000001", 5) + "\n")
-		//	market.WriteString(GetZSInfo("深证成指", "sz399001", 5) + "\n")
-		//	market.WriteString(GetZSInfo("创业板指数", "sz399006", 5) + "\n")
-		//	market.WriteString(GetZSInfo("科创50", "sh000688", 5) + "\n")
-		//	market.WriteString(GetZSInfo("沪深300指数", "sh000300", 5) + "\n")
-		//	market.WriteString(GetZSInfo("中证银行", "sz399986", 5) + "\n")
-		//	//market.WriteString(GetZSInfo("科创芯片", "sh000685", 30) + "\n")
-		//	//market.WriteString(GetZSInfo("上证医药", "sh000037", 30) + "\n")
-		//	//market.WriteString(GetZSInfo("证券龙头", "sz399437", 30) + "\n")
-		//	//market.WriteString(GetZSInfo("中证白酒", "sz399997", 30) + "\n")
-		//	//logger.SugaredLogger.Infof("NewChatStream getZSInfo=\n%s", market.String())
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "当前市场/大盘/行业/指数行情",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":              "assistant",
-		//		"reasoning_content": "使用工具查询",
-		//		"content":           "当前市场/大盘/行业/指数行情如下：\n" + market.String(),
-		//	})
-		//}()
-
-		runFetch("ClsCalendar", func() ([]map[string]interface{}, error) {
-			md := strings.Builder{}
-			res := NewMarketNewsApi().ClsCalendar()
-			for _, a := range res {
-				bytes, err := json.Marshal(a)
-				if err != nil {
-					continue
-				}
-				//logger.SugaredLogger.Debugf("value: %+v", string(bytes))
-				date := gjson.Get(string(bytes), "calendar_day")
-				md.WriteString("\n### 事件/会议日期：" + date.String())
-				list := gjson.Get(string(bytes), "items")
-				//logger.SugaredLogger.Debugf("value: %+v,list: %+v", date.String(), list)
-				list.ForEach(func(key, value gjson.Result) bool {
-					logger.SugaredLogger.Debugf("key: %+v,value: %+v", key.String(), gjson.Get(value.String(), "title"))
-					md.WriteString("\n- " + gjson.Get(value.String(), "title").String())
-					return true
-				})
-			}
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "近期重大事件/会议",
-				},
-				{
-					"role":              "assistant",
-					"reasoning_content": "使用工具查询",
-					"content":           "近期重大事件/会议如下：\n" + md.String(),
-				},
-			}, nil
-		})
-
-		//go func() {
-		//	defer wg.Done()
-		//	resp := NewMarketNewsApi().TradingViewNews()
-		//	var newsText strings.Builder
-		//
-		//	for _, a := range *resp {
-		//		logger.SugaredLogger.Debugf("TradingViewNews: %s", a.Title)
-		//		newsText.WriteString(a.Title + "\n")
-		//	}
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "全球新闻资讯",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":              "assistant",
-		//		"reasoning_content": "使用工具查询",
-		//		"content":           newsText.String(),
-		//	})
-		//}()
-
-		//go func() {
-		//	defer wg.Done()
-		//	news := NewMarketNewsApi().ReutersNew()
-		//	messageText := strings.Builder{}
-		//	for _, article := range news.Result.Articles {
-		//		messageText.WriteString("## " + article.Title + "\n")
-		//		messageText.WriteString("### " + article.Description + "\n")
-		//	}
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "外媒全球新闻资讯",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":              "assistant",
-		//		"reasoning_content": "使用工具查询",
-		//		"content":           messageText.String(),
-		//	})
-		//}()
-
-		runFetch("MarketNews24h", func() ([]map[string]interface{}, error) {
-			windowEnd := time.Now()
-			news, err := NewMarketNewsApi().GetNewsWindow(nil, windowEnd.Add(-24*time.Hour), windowEnd)
-			if err != nil {
-				return nil, err
-			}
-			if news.Status != NewsWindowStatusOK {
-				return nil, fmt.Errorf("market news window status=%s: %s", news.Status, strings.TrimSpace(news.Warning))
-			}
-			messageText := strings.Builder{}
-			for _, telegraph := range news.Items {
-				eventTime := strings.TrimSpace(telegraph.Time)
-				if telegraph.DataTime != nil && !telegraph.DataTime.IsZero() {
-					eventTime = telegraph.DataTime.Format("2006-01-02 15:04:05")
-				}
-				messageText.WriteString("## " + eventTime + ":" + "\n")
-				messageText.WriteString("### " + telegraph.Content + "\n")
-			}
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "市场资讯",
-				},
-				{
-					"role":              "assistant",
-					"reasoning_content": "使用工具查询",
-					"content":           messageText.String(),
-				},
-			}, nil
-		})
-
-		for i := 0; i < 4; i++ {
-			result := <-results
-			if result.err != nil {
-				logger.SugaredLogger.Errorf("summary prefetch %s error: %v", result.tool, result.err)
-				emitSummaryToolStatus(ch, result.tool, "error", result.err, result.latency)
-				continue
-			}
-			emitSummaryToolStatus(ch, result.tool, "success", nil, result.latency)
-			msg = append(msg, result.messages...)
-		}
-
-		displayQuestion := NormalizeMarketSummaryQuestion(userQuestion)
-		executionQuestion := BuildMarketSummaryExecutionQuestionForVersion(displayQuestion, marketSummaryCurrentVersion)
-		msg = append(msg, map[string]interface{}{
-			"role":    "user",
-			"content": "执行要求：如果最终结论中推荐了任何A股股票，必须在输出最终答案前调用 CreateAiRecommendStocks 或 BatchCreateAiRecommendStocks 将推荐股票写入股票推荐记录；推荐多只时优先调用 BatchCreateAiRecommendStocks。禁止只输出股票名称和区间却不调用保存工具。",
-		})
-		msg = append(msg, map[string]interface{}{
-			"role":    "user",
-			"content": executionQuestion,
-		})
-		AskAiWithTools(o, msg, ch, displayQuestion, tools, thinking)
-	}()
-	return ch
-}
-
-func (o *OpenAi) NewSummaryStockNewsStream(userQuestion string, sysPromptId *int, think bool) <-chan map[string]any {
-	ch := make(chan map[string]any, 512)
-	defer func() {
-		if err := recover(); err != nil {
-			logger.SugaredLogger.Error("NewSummaryStockNewsStream panic", err)
-		}
-	}()
-
-	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				logger.SugaredLogger.Errorf("NewSummaryStockNewsStream goroutine  panic :%s", err)
-				logger.SugaredLogger.Errorf("NewSummaryStockNewsStream goroutine  panic  config:%s", o.String())
-			}
-		}()
-		defer close(ch)
-
-		sysPrompt := ""
-		if sysPromptId == nil || *sysPromptId == 0 {
-			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
-		} else {
-			sysPrompt = RenderMarketSummaryTemplate(NewPromptTemplateApi().GetPromptTemplateByID(*sysPromptId))
-		}
-		if sysPrompt == "" {
-			sysPrompt = RenderMarketSummaryTemplate(o.Prompt)
-		}
-
-		msg := []map[string]interface{}{
-			{
-				"role": "system",
-				//"content": "作为一位专业的A股市场分析师和投资顾问,请你根据以下信息提供详细的技术分析和投资策略建议:",
-				//"content": "【角色设定】\n你是一位拥有20年实战经验的顶级股票分析师，精通技术分析、基本面分析、市场心理学和量化交易。擅长发现成长股、捕捉行业轮动机会，在牛熊市中都能保持稳定收益。你的风格是价值投资与技术择时相结合，注重风险控制。\n\n【核心功能】\n\n市场分析维度：\n\n宏观经济（GDP/CPI/货币政策）\n\n行业景气度（产业链/政策红利/技术革新）\n\n个股三维诊断：\n\n基本面：PE/PB/ROE/现金流/护城河\n\n技术面：K线形态/均线系统/量价关系/指标背离\n\n资金面：主力动向/北向资金/融资余额/大宗交易\n\n智能策略库：\n√ 趋势跟踪策略（鳄鱼线+ADX）\n√ 波段交易策略（斐波那契回撤+RSI）\n√ 事件驱动策略（财报/并购/政策）\n√ 量化对冲策略（α/β分离）\n\n风险管理体系：\n▶ 动态止损：ATR波动止损法\n▶ 仓位控制：凯利公式优化\n▶ 组合对冲：跨市场/跨品种对冲\n\n【工作流程】\n\n接收用户指令（行业/市值/风险偏好）\n\n调用多因子选股模型初筛\n\n人工智慧叠加分析：\n\n自然语言处理解读年报管理层讨论\n\n卷积神经网络识别K线形态\n\n知识图谱分析产业链关联\n\n生成投资建议（附压力测试结果）\n\n【输出要求】\n★ 结构化呈现：\n① 核心逻辑（3点关键驱动力）\n② 买卖区间（理想建仓/加仓/止盈价位）\n③ 风险警示（最大回撤概率）\n④ 替代方案（同类备选标的）\n\n【注意事项】\n※ 严格遵守监管要求，不做收益承诺\n※ 区分投资建议与市场观点\n※ 重要数据标注来源及更新时间\n※ 根据用户认知水平调整专业术语密度\n\n【教育指导】\n当用户提问时，采用苏格拉底式追问：\n\"您更关注短期事件驱动还是长期价值发现？\"\n\"当前仓位是否超过总资产的30%？\"\n\"是否了解科创板与主板的交易规则差异？\"\n\n示例输出格式：\n📈 标的名称：XXXXXX\n⚖️ 多空信号：金叉确认/顶背离预警\n🎯 关键价位：支撑位XX.XX/压力位XX.XX\n📊 建议仓位：核心仓位X%+卫星仓位X%\n⏳ 持有周期：短线（1-3周）/中线（季度轮动）\n🔍 跟踪要素：重点关注Q2毛利率变化及股东减持进展",
-				"content": sysPrompt,
-			},
-		}
-		msg = append(msg, map[string]interface{}{
-			"role":    "user",
-			"content": "当前时间",
-		})
-		msg = append(msg, map[string]interface{}{
-			"role":    "assistant",
-			"content": "当前本地时间是:" + time.Now().Format("2006-01-02 15:04:05"),
-		})
-		results := make(chan summaryFetchResult, 3)
-		runFetch := func(tool string, fetch func() ([]map[string]interface{}, error)) {
-			go func() {
-				start := time.Now()
-				messages, err := fetch()
-				results <- summaryFetchResult{
-					tool:     tool,
-					messages: messages,
-					err:      err,
-					latency:  time.Since(start),
-				}
-			}()
-		}
-		//go func() {
-		//	defer wg.Done()
-		//	var market strings.Builder
-		//	market.WriteString(GetZSInfo("上证指数", "sh000001", 5) + "\n")
-		//	market.WriteString(GetZSInfo("深证成指", "sz399001", 5) + "\n")
-		//	market.WriteString(GetZSInfo("创业板指数", "sz399006", 5) + "\n")
-		//	market.WriteString(GetZSInfo("科创50", "sh000688", 5) + "\n")
-		//	market.WriteString(GetZSInfo("沪深300指数", "sh000300", 5) + "\n")
-		//	market.WriteString(GetZSInfo("中证银行", "sz399986", 5) + "\n")
-		//	//market.WriteString(GetZSInfo("科创芯片", "sh000685", 30) + "\n")
-		//	//market.WriteString(GetZSInfo("上证医药", "sh000037", 30) + "\n")
-		//	//market.WriteString(GetZSInfo("证券龙头", "sz399437", 30) + "\n")
-		//	//market.WriteString(GetZSInfo("中证白酒", "sz399997", 30) + "\n")
-		//	//logger.SugaredLogger.Infof("NewChatStream getZSInfo=\n%s", market.String())
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "当前市场指数行情",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "assistant",
-		//		"content": "当前市场指数行情情况如下：\n" + market.String(),
-		//	})
-		//}()
-
-		runFetch("ClsCalendar", func() ([]map[string]interface{}, error) {
-			md := strings.Builder{}
-			res := NewMarketNewsApi().ClsCalendar()
-			for _, a := range res {
-				bytes, err := json.Marshal(a)
-				if err != nil {
-					continue
-				}
-				//logger.SugaredLogger.Debugf("value: %+v", string(bytes))
-				date := gjson.Get(string(bytes), "calendar_day")
-				md.WriteString("\n### 事件/会议日期：" + date.String())
-				list := gjson.Get(string(bytes), "items")
-				//logger.SugaredLogger.Debugf("value: %+v,list: %+v", date.String(), list)
-				list.ForEach(func(key, value gjson.Result) bool {
-					logger.SugaredLogger.Debugf("key: %+v,value: %+v", key.String(), gjson.Get(value.String(), "title"))
-					md.WriteString("\n- " + gjson.Get(value.String(), "title").String())
-					return true
-				})
-			}
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "近期重大事件/会议",
-				},
-				{
-					"role":              "assistant",
-					"reasoning_content": "使用工具查询",
-					"content":           "近期重大事件/会议如下：\n" + md.String(),
-				},
-			}, nil
-		})
-		//go func() {
-		//	defer wg.Done()
-		//	resp := NewMarketNewsApi().TradingViewNews()
-		//	var newsText strings.Builder
-		//
-		//	for _, a := range *resp {
-		//		logger.SugaredLogger.Debugf("TradingViewNews: %s", a.Title)
-		//		newsText.WriteString(a.Title + "\n")
-		//	}
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "外媒全球新闻资讯",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "assistant",
-		//		"content": newsText.String(),
-		//	})
-		//}()
-
-		//go func() {
-		//	defer wg.Done()
-		//	news := NewMarketNewsApi().ReutersNew()
-		//	messageText := strings.Builder{}
-		//	for _, article := range news.Result.Articles {
-		//		messageText.WriteString("## " + article.Title + "\n")
-		//		messageText.WriteString("### " + article.Description + "\n")
-		//	}
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "user",
-		//		"content": "外媒全球新闻资讯",
-		//	})
-		//	msg = append(msg, map[string]interface{}{
-		//		"role":    "assistant",
-		//		"content": messageText.String(),
-		//	})
-		//}()
-
-		runFetch("InteractiveAnswer", func() ([]map[string]interface{}, error) {
-			datas := NewMarketNewsApi().InteractiveAnswer(1, 100, "")
-			content := util.MarkdownTableWithTitle("当前最新投资者互动数据", datas.Results)
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "投资者互动数据",
-				},
-				{
-					"role":    "assistant",
-					"content": content,
-				},
-			}, nil
-		})
-
-		runFetch("HotStrategy", func() ([]map[string]interface{}, error) {
-			markdownTable := ""
-			res := NewSearchStockApi("").HotStrategy()
-			bytes, _ := json.Marshal(res)
-			strategy := &models.HotStrategy{}
-			if err := json.Unmarshal(bytes, strategy); err != nil {
-				return nil, err
-			}
-			for _, data := range strategy.Data {
-				data.Chg = mathutil.RoundToFloat(100*data.Chg, 2)
-			}
-			markdownTable = util.MarkdownTableWithTitle("当前热门选股策略", strategy.Data)
-			return []map[string]interface{}{
-				{
-					"role":    "user",
-					"content": "当前热门选股策略",
-				},
-				{
-					"role":    "assistant",
-					"content": markdownTable,
-				},
-			}, nil
-		})
-
-		for i := 0; i < 3; i++ {
-			result := <-results
-			if result.err != nil {
-				logger.SugaredLogger.Errorf("summary prefetch %s error: %v", result.tool, result.err)
-				emitSummaryToolStatus(ch, result.tool, "error", result.err, result.latency)
-				continue
-			}
-			emitSummaryToolStatus(ch, result.tool, "success", nil, result.latency)
-			msg = append(msg, result.messages...)
-		}
-
-		windowEnd := time.Now()
-		news, newsErr := NewMarketNewsApi().GetNewsWindow(nil, windowEnd.Add(-24*time.Hour), windowEnd)
-		if newsErr != nil || news.Status != NewsWindowStatusOK {
-			logger.SugaredLogger.Errorf("load market news window failed: status=%s warning=%s err=%v", news.Status, strings.TrimSpace(news.Warning), newsErr)
-		}
-		messageText := strings.Builder{}
-		if news.Status == NewsWindowStatusOK {
-			for _, telegraph := range news.Items {
-				messageText.WriteString("## " + telegraph.Time + ":" + "\n")
-				messageText.WriteString("### " + telegraph.Content + "\n")
-			}
-		}
-		//logger.SugaredLogger.Infof("市场资讯 messageText=\n%s", messageText.String())
-
-		msg = append(msg, map[string]interface{}{
-			"role":    "user",
-			"content": "市场资讯",
-		})
-		msg = append(msg, map[string]interface{}{
-			"role":    "assistant",
-			"content": messageText.String(),
-		})
-		displayQuestion := NormalizeMarketSummaryQuestion(userQuestion)
-		executionQuestion := BuildMarketSummaryExecutionQuestionForVersion(displayQuestion, marketSummaryCurrentVersion)
-		msg = append(msg, map[string]interface{}{
-			"role":    "user",
-			"content": executionQuestion,
-		})
-		AskAi(o, msg, ch, displayQuestion, think)
-	}()
-	return ch
-}
-
 func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptId *int, tools []Tool, thinking bool) <-chan map[string]any {
 	ch := make(chan map[string]any, 512)
 
@@ -728,9 +204,7 @@ func (o *OpenAi) NewChatStream(stock, stockCode, userQuestion string, sysPromptI
 
 		msg := []map[string]interface{}{
 			{
-				"role": "system",
-				//"content": "作为一位专业的A股市场分析师和投资顾问,请你根据以下信息提供详细的技术分析和投资策略建议:",
-				//"content": "【角色设定】\n你是一位拥有20年实战经验的顶级股票分析师，精通技术分析、基本面分析、市场心理学和量化交易。擅长发现成长股、捕捉行业轮动机会，在牛熊市中都能保持稳定收益。你的风格是价值投资与技术择时相结合，注重风险控制。\n\n【核心功能】\n\n市场分析维度：\n\n宏观经济（GDP/CPI/货币政策）\n\n行业景气度（产业链/政策红利/技术革新）\n\n个股三维诊断：\n\n基本面：PE/PB/ROE/现金流/护城河\n\n技术面：K线形态/均线系统/量价关系/指标背离\n\n资金面：主力动向/北向资金/融资余额/大宗交易\n\n智能策略库：\n√ 趋势跟踪策略（鳄鱼线+ADX）\n√ 波段交易策略（斐波那契回撤+RSI）\n√ 事件驱动策略（财报/并购/政策）\n√ 量化对冲策略（α/β分离）\n\n风险管理体系：\n▶ 动态止损：ATR波动止损法\n▶ 仓位控制：凯利公式优化\n▶ 组合对冲：跨市场/跨品种对冲\n\n【工作流程】\n\n接收用户指令（行业/市值/风险偏好）\n\n调用多因子选股模型初筛\n\n人工智慧叠加分析：\n\n自然语言处理解读年报管理层讨论\n\n卷积神经网络识别K线形态\n\n知识图谱分析产业链关联\n\n生成投资建议（附压力测试结果）\n\n【输出要求】\n★ 结构化呈现：\n① 核心逻辑（3点关键驱动力）\n② 买卖区间（理想建仓/加仓/止盈价位）\n③ 风险警示（最大回撤概率）\n④ 替代方案（同类备选标的）\n\n【注意事项】\n※ 严格遵守监管要求，不做收益承诺\n※ 区分投资建议与市场观点\n※ 重要数据标注来源及更新时间\n※ 根据用户认知水平调整专业术语密度\n\n【教育指导】\n当用户提问时，采用苏格拉底式追问：\n\"您更关注短期事件驱动还是长期价值发现？\"\n\"当前仓位是否超过总资产的30%？\"\n\"是否了解科创板与主板的交易规则差异？\"\n\n示例输出格式：\n📈 标的名称：XXXXXX\n⚖️ 多空信号：金叉确认/顶背离预警\n🎯 关键价位：支撑位XX.XX/压力位XX.XX\n📊 建议仓位：核心仓位X%+卫星仓位X%\n⏳ 持有周期：短线（1-3周）/中线（季度轮动）\n🔍 跟踪要素：重点关注Q2毛利率变化及股东减持进展",
+				"role":    "system",
 				"content": sysPrompt,
 			},
 		}
@@ -1395,6 +869,10 @@ func mergeAdjacentRoleMessages(messages []map[string]any) []map[string]any {
 }
 
 func (o *OpenAi) openAIResponsesBody(messages []map[string]interface{}, stream bool) map[string]any {
+	return o.openAIResponsesBodyWithPrevious(messages, stream, "")
+}
+
+func (o *OpenAi) openAIResponsesBodyWithPrevious(messages []map[string]interface{}, stream bool, previousResponseID string) map[string]any {
 	system, dialog := splitSystemAndDialogMessages(messages)
 	bodyMap := map[string]any{
 		"model":             o.Model,
@@ -1405,6 +883,9 @@ func (o *OpenAi) openAIResponsesBody(messages []map[string]interface{}, stream b
 	}
 	if system != "" {
 		bodyMap["instructions"] = system
+	}
+	if strings.TrimSpace(previousResponseID) != "" {
+		bodyMap["previous_response_id"] = strings.TrimSpace(previousResponseID)
 	}
 	return bodyMap
 }
@@ -1582,13 +1063,18 @@ func askAiAnthropicMessages(o *OpenAi, messages []map[string]interface{}, ch cha
 }
 
 func (o *OpenAi) completeOpenAIResponses(messages []map[string]any) (string, string, string, error) {
+	return o.completeOpenAIResponsesWithContext(context.Background(), messages, "")
+}
+
+func (o *OpenAi) completeOpenAIResponsesWithContext(ctx context.Context, messages []map[string]any, previousResponseID string) (string, string, string, error) {
 	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
 		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
 	}
-	resp, err := o.newAIClient().R().SetBody(o.openAIResponsesBody(interfaceMessages, false)).Post("/responses")
+	body := o.openAIResponsesBodyWithPrevious(interfaceMessages, false, previousResponseID)
+	resp, err := o.newAIClient().R().SetContext(ctx).SetBody(body).Post("/responses")
 	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
-		resp, err = o.newAIClientWithProxy(false).R().SetBody(o.openAIResponsesBody(interfaceMessages, false)).Post("/responses")
+		resp, err = o.newAIClientWithProxy(false).R().SetContext(ctx).SetBody(body).Post("/responses")
 	}
 	if err != nil {
 		return "", "", "", err
@@ -1630,6 +1116,52 @@ func (o *OpenAi) completeOpenAIResponses(messages []map[string]any) (string, str
 		return "", result.ID, result.Model, errors.New("empty content from model provider")
 	}
 	return content, result.ID, result.Model, nil
+}
+
+// CompleteResearch performs a non-streaming, structured-model request for the
+// 1.6.0 research workflow. previousResponseID is used only by Responses; other
+// protocols receive the supplied local message history.
+func (o *OpenAi) CompleteResearch(ctx context.Context, messages []map[string]any, previousResponseID string) (string, string, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	switch NormalizeAIAPIProtocol(o.ApiProtocol) {
+	case AIAPIProtocolOpenAIResponses:
+		return o.completeOpenAIResponsesWithContext(ctx, messages, previousResponseID)
+	case AIAPIProtocolAnthropicMessage:
+		return o.completeAnthropicMessages(messages)
+	default:
+		return o.completeChatCompletions(ctx, messages)
+	}
+}
+
+func (o *OpenAi) CompleteChat(messages []map[string]any, _ bool) (string, string, string, error) {
+	return o.CompleteResearch(o.ctx, messages, "")
+}
+
+func (o *OpenAi) completeChatCompletions(ctx context.Context, messages []map[string]any) (string, string, string, error) {
+	body := map[string]any{"model": o.Model, "max_tokens": o.MaxTokens, "temperature": o.Temperature, "stream": false, "messages": messages}
+	resp, err := o.newAIClient().R().SetContext(ctx).SetBody(body).Post("/chat/completions")
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = o.newAIClientWithProxy(false).R().SetContext(ctx).SetBody(body).Post("/chat/completions")
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	if resp == nil {
+		return "", "", "", errors.New("empty response from model provider")
+	}
+	if resp.IsError() {
+		return "", "", "", errors.New(parseAIHTTPError(resp.StatusCode(), resp.Body()))
+	}
+	var result AiResponse
+	if err := json.Unmarshal(resp.Body(), &result); err != nil {
+		return "", "", "", err
+	}
+	if len(result.Choices) == 0 || strings.TrimSpace(result.Choices[0].Message.Content) == "" {
+		return "", result.Id, result.Model, errors.New("empty content from model provider")
+	}
+	return strings.TrimSpace(result.Choices[0].Message.Content), result.Id, result.Model, nil
 }
 
 func (o *OpenAi) completeAnthropicMessages(messages []map[string]any) (string, string, string, error) {
@@ -2557,43 +2089,6 @@ func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[st
 								})
 							}
 
-							if funcName == "HotStrategyTable" {
-								ch <- map[string]any{
-									"code":     1,
-									"question": question,
-									"chatId":   streamResponse.Id,
-									"model":    streamResponse.Model,
-									"content":  "\r\n```\r\n开始调用工具：HotStrategyTable，\n参数：" + funcArguments + "\r\n```\r\n",
-									"time":     time.Now().Format(time.DateTime),
-								}
-								table := NewSearchStockApi("").HotStrategyTable()
-								logger.SugaredLogger.Infof("%s", table)
-								messages = append(messages, map[string]interface{}{
-									"role":              "assistant",
-									"content":           currentAIContent.String(),
-									"reasoning_content": reasoningContentText.String(),
-									"tool_calls": []map[string]any{
-										{
-											"id":           currentCallId,
-											"tool_call_id": currentCallId,
-											"type":         "function",
-											"function": map[string]string{
-												"name":       funcName,
-												"arguments":  funcArguments,
-												"parameters": funcArguments,
-											},
-										},
-									},
-								})
-								messages = append(messages, map[string]interface{}{
-									"role":         "tool",
-									"content":      table,
-									"tool_call_id": currentCallId,
-									//"reasoning_content": reasoningContentText.String(),
-									//"tool_calls":        choice.Delta.ToolCalls,
-								})
-							}
-
 							if funcName == "HotStockTable" {
 								pageSize := gjson.Get(funcArguments, "pageSize").String()
 								ch <- map[string]any{
@@ -2789,130 +2284,6 @@ func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[st
 									//"reasoning_content": reasoningContentText.String(),
 									//"tool_calls":        choice.Delta.ToolCalls,
 								})
-							}
-
-							if funcName == "CreateAiRecommendStocks" {
-								toolStart := time.Now()
-								emitSummaryToolStatus(ch, "CreateAiRecommendStocks", "running", nil, 0)
-								ch <- map[string]any{
-									"code":     1,
-									"question": question,
-									"chatId":   streamResponse.Id,
-									"model":    streamResponse.Model,
-									"content":  "\r\n```\r\n开始调用工具：CreateAiRecommendStocks，\n参数：" + funcArguments + "\r\n```\r\n",
-									"time":     time.Now().Format(time.DateTime),
-								}
-								recommend := models.AiRecommendStocks{}
-								err := json.Unmarshal([]byte(funcArguments), &recommend)
-								if err != nil {
-									logger.SugaredLogger.Infof("CreateAiRecommendStocks error : %s", err.Error())
-									emitSummaryToolStatus(ch, "CreateAiRecommendStocks", "error", err, time.Since(toolStart))
-									return
-								}
-								if strings.TrimSpace(recommend.ProviderName) == "" {
-									recommend.ProviderName = strings.TrimSpace(o.ProviderName)
-								}
-								err = NewAiRecommendStocksService().CreateAiRecommendStocks(&recommend)
-								messages = append(messages, map[string]interface{}{
-									"role":              "assistant",
-									"content":           currentAIContent.String(),
-									"reasoning_content": reasoningContentText.String(),
-									"tool_calls": []map[string]any{
-										{
-											"id":           currentCallId,
-											"tool_call_id": currentCallId,
-											"type":         "function",
-											"function": map[string]string{
-												"name":       funcName,
-												"arguments":  funcArguments,
-												"parameters": funcArguments,
-											},
-										},
-									},
-								})
-								if err != nil {
-									logger.SugaredLogger.Infof("CreateAiRecommendStocks error : %s", err.Error())
-									emitSummaryToolStatus(ch, "CreateAiRecommendStocks", "error", err, time.Since(toolStart))
-									ch <- map[string]any{
-										"code":     0,
-										"question": question,
-										"content":  "保存股票推荐失败:" + err.Error(),
-									}
-									return
-								}
-								messages = append(messages, map[string]interface{}{
-									"role":         "tool",
-									"content":      "保存股票推荐成功",
-									"tool_call_id": currentCallId,
-									//"reasoning_content": reasoningContentText.String(),
-									//"tool_calls":        choice.Delta.ToolCalls,
-								})
-								emitSummaryToolStatus(ch, "CreateAiRecommendStocks", "success", nil, time.Since(toolStart))
-							}
-
-							//BatchCreateAiRecommendStocks
-							if funcName == "BatchCreateAiRecommendStocks" {
-								toolStart := time.Now()
-								emitSummaryToolStatus(ch, "BatchCreateAiRecommendStocks", "running", nil, 0)
-								ch <- map[string]any{
-									"code":     1,
-									"question": question,
-									"chatId":   streamResponse.Id,
-									"model":    streamResponse.Model,
-									"content":  "\r\n```\r\n开始调用工具：BatchCreateAiRecommendStocks，\n参数：" + funcArguments + "\r\n```\r\n",
-									"time":     time.Now().Format(time.DateTime),
-								}
-								stocks := gjson.Get(funcArguments, "stocks").String()
-								var recommends []*models.AiRecommendStocks
-								err := json.Unmarshal([]byte(stocks), &recommends)
-								if err != nil {
-									logger.SugaredLogger.Infof("BatchCreateAiRecommendStocks error : %s", err.Error())
-									emitSummaryToolStatus(ch, "BatchCreateAiRecommendStocks", "error", err, time.Since(toolStart))
-									return
-								}
-								providerName := strings.TrimSpace(o.ProviderName)
-								for _, item := range recommends {
-									if item == nil || strings.TrimSpace(item.ProviderName) != "" {
-										continue
-									}
-									item.ProviderName = providerName
-								}
-								err = NewAiRecommendStocksService().BatchCreateAiRecommendStocks(recommends)
-								messages = append(messages, map[string]interface{}{
-									"role":              "assistant",
-									"content":           currentAIContent.String(),
-									"reasoning_content": reasoningContentText.String(),
-									"tool_calls": []map[string]any{
-										{
-											"id":           currentCallId,
-											"tool_call_id": currentCallId,
-											"type":         "function",
-											"function": map[string]string{
-												"name":       funcName,
-												"arguments":  funcArguments,
-												"parameters": funcArguments,
-											},
-										},
-									},
-								})
-								if err != nil {
-									logger.SugaredLogger.Infof("BatchCreateAiRecommendStocks error : %s", err.Error())
-									emitSummaryToolStatus(ch, "BatchCreateAiRecommendStocks", "error", err, time.Since(toolStart))
-									ch <- map[string]any{
-										"code":     0,
-										"question": question,
-										"content":  "批量保存股票推荐失败:" + err.Error(),
-									}
-									return
-								}
-								messages = append(messages, map[string]interface{}{
-									"role":         "tool",
-									"content":      "批量保存股票推荐成功",
-									"tool_call_id": currentCallId,
-									//"reasoning_content": reasoningContentText.String(),
-									//"tool_calls":        choice.Delta.ToolCalls,
-								})
-								emitSummaryToolStatus(ch, "BatchCreateAiRecommendStocks", "success", nil, time.Since(toolStart))
 							}
 
 						}

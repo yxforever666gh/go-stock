@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.5.2
-  description: Local-only HTTP contract for the Windows Web product.
+  version: 1.6.0
+  description: Local-only 1.6.0 API for market data and the AI research lifecycle.
 servers:
   - url: http://127.0.0.1:34115
 paths:
@@ -10,361 +10,177 @@ paths:
     get:
       deprecated: true
       operationId: getLegacyHealth
-      tags: [system]
-      responses:
-        "200":
-          description: Legacy Web health endpoint. New clients should use livez and readyz.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthStatus"
+      responses: {"200": {description: Process health}}
   /livez:
     get:
       operationId: getLiveness
-      tags: [system]
       responses:
-        "200":
-          description: The process is alive.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/LivenessStatus"
+        "200": {description: Process is alive, content: {application/json: {schema: {$ref: "#/components/schemas/LivenessStatus"}}}}
   /readyz:
     get:
       operationId: getReadiness
-      tags: [system]
       responses:
-        "200":
-          description: The process is ready to serve local traffic.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SystemVersionStatus"
-        "503":
-          description: Startup validation or service assembly is incomplete.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SystemVersionStatus"
+        "200": {description: Ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
+        "503": {description: Not ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
   /api/v1/system/version:
     get:
       operationId: getSystemVersion
-      tags: [system]
       responses:
-        "200":
-          description: Release, build, schema, strategy, and runtime identity.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/SystemVersionStatus"
+        "200": {description: App and database identity, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
   /api/v1/system/health:
     get:
       operationId: getSystemHealth
-      tags: [system]
       responses:
-        "200":
-          description: Compatibility health response under the versioned API.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/HealthStatus"
-  /api/v1/strategy/runtime:
+        "200": {description: Health, content: {application/json: {schema: {$ref: "#/components/schemas/HealthStatus"}}}}
+  /api/v1/research/analysis-runs:
     get:
-      operationId: getStrategyRuntime
-      tags: [strategy]
+      operationId: listAnalysisRuns
       responses:
-        "200":
-          description: Persisted strategy production mode. This endpoint is read-only.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StrategyRuntimeStatus"
-        "503":
-          description: The persisted runtime state could not be read; callers must assume paused.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/StrategyRuntimeStatus"
-  /api/v1/market/summary/latest:
+        "200": {description: Analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AnalysisRun"}}}}}
+  /api/v1/research/analysis-run:
     get:
-      operationId: getLatestMarketSummary
-      tags: [market]
-      parameters:
-        - in: query
-          name: sinceSeconds
-          schema:
-            type: integer
-            minimum: 1
+      operationId: getAnalysisRun
       responses:
-        "200":
-          description: Metadata for the latest persisted market summary.
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/MarketSummaryStatus"
+        "200": {description: Analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/AnalysisRun"}}}}
+  /api/v1/research/recommendations:
+    get:
+      operationId: listRecommendations
+      responses:
+        "200": {description: Recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Recommendation"}}}}}
+  /api/v1/research/recommendation:
+    get:
+      operationId: getRecommendation
+      responses:
+        "200": {description: Recommendation detail, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationDetail"}}}}
+  /api/v1/research/account:
+    get:
+      operationId: getSimulatedAccount
+      responses:
+        "200": {description: Simulated account and net yield, content: {application/json: {schema: {$ref: "#/components/schemas/AccountOverview"}}}}
   /api/v1/exports/markdown:
     post:
       operationId: exportMarkdown
-      tags: [exports]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/MarkdownExportRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/ExportResponse"
+      responses: {"200": {description: Export}}
   /api/v1/exports/config:
     post:
       operationId: exportConfig
-      tags: [exports]
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ExportRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/ExportResponse"
+      responses: {"200": {description: Export}}
   /api/v1/exports/image:
     post:
       operationId: exportImage
-      tags: [exports]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/ImageExportRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/ExportResponse"
+      responses: {"200": {description: Export}}
   /api/v1/exports/word:
     post:
       operationId: exportWord
-      tags: [exports]
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/WordExportRequest"
-      responses:
-        "200":
-          $ref: "#/components/responses/ExportResponse"
+      responses: {"200": {description: Export}}
   /api/v1/events/ws:
     get:
       operationId: connectEventsWebSocket
-      tags: [system]
-      responses:
-        "101":
-          description: WebSocket event stream using EventEnvelope JSON messages.
+      responses: {"101": {description: Event stream}}
 components:
-  responses:
-    ExportResponse:
-      description: Download payload or path to a server-side export.
-      content:
-        application/json:
-          schema:
-            $ref: "#/components/schemas/ExportPayload"
   schemas:
     LivenessStatus:
       type: object
       required: [ok]
-      properties:
-        ok:
-          type: boolean
-          const: true
+      properties: {ok: {type: boolean}}
     HealthStatus:
       type: object
       required: [ok, mode, version]
-      properties:
-        ok:
-          type: boolean
-          const: true
-        mode:
-          type: string
-          const: web
-        version:
-          type: string
-    ReleaseManifest:
-      type: object
-      required: [appVersion, currentStrategyVersion, strategyConfigHash, mainSchemaVersion, minuteSchemaVersion]
-      properties:
-        appVersion:
-          type: string
-        currentStrategyVersion:
-          type: string
-        strategyConfigHash:
-          type: string
-          pattern: "^[a-f0-9]{64}$"
-        mainSchemaVersion:
-          type: integer
-        minuteSchemaVersion:
-          type: integer
-    BuildInfo:
-      type: object
-      required: [commit, buildTime, artifactSHA256, dirty]
-      properties:
-        commit:
-          type: string
-        buildTime:
-          type: string
-        artifactSHA256:
-          type: string
-        dirty:
-          type: boolean
+      properties: {ok: {type: boolean}, mode: {type: string}, version: {type: string}}
     ReadinessStatus:
       type: object
-      required: [ready, migrations, database, services, scheduler, strategyMode]
+      required: [migrations, database, services, scheduler, ready]
       properties:
-        ready:
-          type: boolean
-        migrations:
-          type: boolean
-        database:
-          type: boolean
-        services:
-          type: boolean
-        scheduler:
-          type: boolean
-        strategyMode:
-          type: string
-          enum: [paused, live]
-        error:
-          type: string
+        migrations: {type: boolean}
+        database: {type: boolean}
+        services: {type: boolean}
+        scheduler: {type: boolean}
+        ready: {type: boolean}
+        error: {type: string}
     SystemVersionStatus:
-      allOf:
-        - $ref: "#/components/schemas/ReleaseManifest"
-        - $ref: "#/components/schemas/BuildInfo"
-        - type: object
-          required: [configHash, startedAt, strategyMode, readiness]
-          properties:
-            configHash:
-              type: string
-            startedAt:
-              type: string
-              format: date-time
-            strategyMode:
-              type: string
-              enum: [paused, live]
-            readiness:
-              $ref: "#/components/schemas/ReadinessStatus"
-    StrategyRuntimeStatus:
       type: object
-      required: [mode, targetStrategyVersion, ready]
+      required: [appVersion, mainSchemaVersion, minuteSchemaVersion, readiness]
       properties:
-        mode:
-          type: string
-          enum: [paused, live]
-        changedAt:
-          type: string
-          format: date-time
-        reason:
-          type: string
-        targetStrategyVersion:
-          type: string
-        changedBy:
-          type: string
-        ready:
-          type: boolean
-    MarketSummaryStatus:
+        appVersion: {type: string}
+        commit: {type: string}
+        buildTime: {type: string}
+        artifactSHA256: {type: string}
+        dirty: {type: boolean}
+        mainSchemaVersion: {type: integer}
+        minuteSchemaVersion: {type: integer}
+        startedAt: {type: string, format: date-time}
+        readiness: {$ref: "#/components/schemas/ReadinessStatus"}
+    AnalysisRun:
       type: object
-      required: [ok, id, createdAt, stockCode, stockName, question, providerName, modelName, contentLen]
+      required: [runId, status, startedAt, finalReport, recommendationCount]
       properties:
-        ok:
-          type: boolean
-        id:
-          type: integer
-          format: int64
-        createdAt:
-          type: string
-          format: date-time
-        stockCode:
-          type: string
-        stockName:
-          type: string
-        question:
-          type: string
-        providerName:
-          type: string
-        modelName:
-          type: string
-        contentLen:
-          type: integer
-    ExportRequest:
+        runId: {type: string}
+        scheduledFor: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+        status: {type: string}
+        providerName: {type: string}
+        modelName: {type: string}
+        marketReport: {type: string}
+        sectorReport: {type: string}
+        stockReport: {type: string}
+        finalReport: {type: string}
+        sourceStatusJson: {type: string}
+        failureReason: {type: string}
+        recommendationCount: {type: integer}
+    Recommendation:
       type: object
+      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, status]
       properties:
-        mode:
-          type: string
-          enum: [download, server]
-          default: download
-    MarkdownExportRequest:
-      allOf:
-        - $ref: "#/components/schemas/ExportRequest"
-        - type: object
-          required: [stockCode, stockName]
-          properties:
-            stockCode:
-              type: string
-            stockName:
-              type: string
-    ImageExportRequest:
-      allOf:
-        - $ref: "#/components/schemas/ExportRequest"
-        - type: object
-          required: [name, base64Data]
-          properties:
-            name:
-              type: string
-            base64Data:
-              type: string
-              format: byte
-    WordExportRequest:
-      allOf:
-        - $ref: "#/components/schemas/ExportRequest"
-        - type: object
-          required: [filename, base64Data]
-          properties:
-            filename:
-              type: string
-            base64Data:
-              type: string
-              format: byte
-    DownloadPayload:
+        recommendationId: {type: string}
+        analysisRunId: {type: string}
+        stockCode: {type: string}
+        stockName: {type: string}
+        signalAt: {type: string, format: date-time}
+        aiSummary: {type: string}
+        activationCondition: {type: string}
+        mainRisk: {type: string}
+        sourceRefs: {type: string}
+        status: {type: string}
+        activatedAt: {type: string, format: date-time}
+        activationPrice: {type: number}
+        quantity: {type: integer}
+        closedAt: {type: string, format: date-time}
+        closePrice: {type: number}
+        totalFees: {type: number}
+        netPnl: {type: number}
+        netYieldRate: {type: number}
+    LifecycleMessage:
       type: object
-      required: [mode, filename, mime, contentBase64]
-      properties:
-        mode:
-          type: string
-          const: download
-        filename:
-          type: string
-        mime:
-          type: string
-        contentBase64:
-          type: string
-          format: byte
-    ServerFilePayload:
+      properties: {sequence: {type: integer}, role: {type: string}, phase: {type: string}, content: {type: string}, responseId: {type: string}, createdAt: {type: string, format: date-time}}
+    DecisionEvent:
       type: object
-      required: [mode, path, filename]
-      properties:
-        mode:
-          type: string
-          const: server
-        path:
-          type: string
-        filename:
-          type: string
-    ExportPayload:
-      oneOf:
-        - $ref: "#/components/schemas/DownloadPayload"
-        - $ref: "#/components/schemas/ServerFilePayload"
-    EventEnvelope:
+      properties: {decisionType: {type: string}, decidedAt: {type: string, format: date-time}, reason: {type: string}, quotePrice: {type: number}, quoteAt: {type: string, format: date-time}}
+    SimulatedTrade:
       type: object
-      required: [event, payload]
+      properties: {side: {type: string}, tradedAt: {type: string, format: date-time}, marketPrice: {type: number}, executionPrice: {type: number}, quantity: {type: integer}, totalFees: {type: number}, netCashFlow: {type: number}}
+    Position:
+      type: object
+      properties: {stockCode: {type: string}, stockName: {type: string}, quantity: {type: integer}, entryAt: {type: string, format: date-time}, entryPrice: {type: number}, buyFees: {type: number}, currentPrice: {type: number}, currentPriceAt: {type: string, format: date-time}, status: {type: string}, sellFees: {type: number}, netPnl: {type: number}, netYieldRate: {type: number}, estimatedSellFees: {type: number}, netSellValue: {type: number}}
+    RecommendationDetail:
+      type: object
+      required: [recommendation, analysis, messages, decisions, trades]
       properties:
-        event:
-          type: string
-        payload: {}
+        recommendation: {$ref: "#/components/schemas/Recommendation"}
+        analysis: {$ref: "#/components/schemas/AnalysisRun"}
+        messages: {type: array, items: {$ref: "#/components/schemas/LifecycleMessage"}}
+        decisions: {type: array, items: {$ref: "#/components/schemas/DecisionEvent"}}
+        trades: {type: array, items: {$ref: "#/components/schemas/SimulatedTrade"}}
+        position: {$ref: "#/components/schemas/Position"}
+    AccountOverview:
+      type: object
+      required: [initialCash, cash, positionValue, netAssetValue, netProfit, netYieldRate, valuedAt, positions]
+      properties:
+        initialCash: {type: number}
+        cash: {type: number}
+        positionValue: {type: number}
+        netAssetValue: {type: number}
+        netProfit: {type: number}
+        netYieldRate: {type: number}
+        valuedAt: {type: string, format: date-time}
+        positions: {type: array, items: {$ref: "#/components/schemas/Position"}}

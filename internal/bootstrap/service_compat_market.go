@@ -6,14 +6,8 @@ import (
 	"time"
 
 	"go-stock/backend/data"
-	"go-stock/backend/execution"
-	"go-stock/backend/legacy"
 	"go-stock/backend/models"
-	"go-stock/backend/persistence"
-	"go-stock/backend/portfolio"
-	"go-stock/backend/strategy/v150"
 	cliports "go-stock/internal/cli/ports"
-	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 
 	"github.com/coocood/freecache"
@@ -42,37 +36,15 @@ func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) err
 // the bootstrap compatibility adapter makes the composition root explicit
 // while the old package is being retired.
 func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
+	return newCompatibilityServiceDependenciesWithOperations(storage, newCompatibilityServiceOperations(storage.Main))
+}
+
+func newCompatibilityServiceDependenciesWithOperations(storage Storage, operations service.ServiceOperations) service.Dependencies {
 	clock := systemClock{}
-	recommendationAdapter := &compatibilityServiceAdapter{main: storage.Main}
-	marketData := data.NewCompatibilityMarketDataReader(storage.Main, storage.Minute)
-	newsReader := data.NewCompatibilityNewsReader()
-	ledger := data.NewCompatibilityPortfolioLedger(storage.Main)
-	legacyRepository := data.NewCompatibilityLegacyRepository(storage.Main)
-	currentRecommendations := data.NewCompatibilityCurrentRecommendationReader(storage.Main)
-	orderEvents := persistence.NewGORMOrderEventStore(storage.Main)
-	strategyConfig := v150.FixedStrategyV150Config()
 	return service.Dependencies{
-		Clock:                       clock,
-		Initializer:                 legacyApplicationInitializer{},
-		Operations:                  newCompatibilityServiceOperations(storage.Main),
-		MarketSummaryV150Producer:   newMarketSummaryV150CompatibilityProducer(storage.Main, clock, recommendationAdapter),
-		ExecutionMonitor:            data.NewCompatibilityExecutionMonitor(orderEvents, execution.Evaluator{}),
-		PortfolioReader:             portfolio.NewReader(ledger),
-		LegacyReader:                legacy.NewService(legacyRepository, marketData),
-		CurrentRecommendationReader: currentRecommendations,
-		CurrentStrategyVersion:      releaseinfo.Manifest().CurrentStrategyVersion,
-		PortfolioInitialCash:        strategyConfig.PortfolioCash,
-		PortfolioMaxQuoteAge:        strategyConfig.MaximumRealtimeQuoteLag,
-		Providers: service.ProviderSet{
-			DailyBars:   marketData,
-			MinuteBars:  marketData,
-			Quotes:      marketData,
-			Securities:  marketData,
-			News:        newsReader,
-			MarketIntel: data.NewCompatibilityMarketIntelReader(newsReader),
-			Ledger:      ledger,
-			Legacy:      legacyRepository,
-		},
+		Clock:       clock,
+		Initializer: legacyApplicationInitializer{},
+		Operations:  operations,
 	}
 }
 
@@ -192,10 +164,6 @@ func (*marketAuditCompatibilityAdapter) DetectAIProviderName(cfg *models.AIConfi
 
 func (*marketAuditCompatibilityAdapter) CompleteChat(ctx context.Context, cfg *models.AIConfig, messages []map[string]any, think bool) (string, string, string, error) {
 	return data.NewOpenAiWithConfig(ctx, cfg).CompleteChat(messages, think)
-}
-
-func (*marketAuditCompatibilityAdapter) SendYieldEmailTestMessage() error {
-	return data.SendYieldEmailTestMessage()
 }
 
 func (*marketAuditCompatibilityAdapter) SendDingDingMessage(message string) string {
@@ -332,14 +300,6 @@ func (a *marketAuditSearchCompatibilityAdapter) SearchBk(pageSize int) map[strin
 
 func (a *marketAuditSearchCompatibilityAdapter) SearchETF(pageSize int) map[string]any {
 	return a.api.SearchETF(pageSize)
-}
-
-func (a *marketAuditSearchCompatibilityAdapter) HotStrategy() map[string]any {
-	return a.api.HotStrategy()
-}
-
-func (a *marketAuditSearchCompatibilityAdapter) StrategySquare() map[string]any {
-	return a.api.StrategySquare()
 }
 
 type marketAuditStockCompatibilityAdapter struct {
@@ -479,10 +439,6 @@ func (a *compatibilityServiceAdapter) PersistSyncedTelegraph(ctx context.Context
 
 func (*compatibilityServiceAdapter) EnsureMarketDataSelfCheck(reason string) {
 	data.EnsureDiemengSelfCheckAsync(reason)
-}
-
-func (*compatibilityServiceAdapter) NormalizeYieldEmailCronTimes(input string) ([]string, error) {
-	return data.NormalizeYieldEmailCronTimes(input)
 }
 
 func (*compatibilityServiceAdapter) IsCNOpenTradeDay(day time.Time) bool {

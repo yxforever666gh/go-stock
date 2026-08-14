@@ -6,70 +6,88 @@ export const API_PATHS = {
   exportImage: "/api/v1/exports/image",
   exportMarkdown: "/api/v1/exports/markdown",
   exportWord: "/api/v1/exports/word",
-  getLatestMarketSummary: "/api/v1/market/summary/latest",
+  getAnalysisRun: "/api/v1/research/analysis-run",
   getLegacyHealth: "/healthz",
   getLiveness: "/livez",
   getReadiness: "/readyz",
-  getStrategyRuntime: "/api/v1/strategy/runtime",
+  getRecommendation: "/api/v1/research/recommendation",
+  getSimulatedAccount: "/api/v1/research/account",
   getSystemHealth: "/api/v1/system/health",
   getSystemVersion: "/api/v1/system/version",
+  listAnalysisRuns: "/api/v1/research/analysis-runs",
+  listRecommendations: "/api/v1/research/recommendations",
 } as const
 
-export type BuildInfo = {
-  artifactSHA256: string
-  buildTime: string
-  commit: string
-  dirty: boolean
+export type AccountOverview = {
+  cash: number
+  initialCash: number
+  netAssetValue: number
+  netProfit: number
+  netYieldRate: number
+  positionValue: number
+  positions: Array<Position>
+  valuedAt: string
 }
 
-export type DownloadPayload = {
-  contentBase64: string
-  filename: string
-  mime: string
-  mode: "download"
+export type AnalysisRun = {
+  completedAt?: string
+  failureReason?: string
+  finalReport: string
+  marketReport?: string
+  modelName?: string
+  providerName?: string
+  recommendationCount: number
+  runId: string
+  scheduledFor?: string
+  sectorReport?: string
+  sourceStatusJson?: string
+  startedAt: string
+  status: string
+  stockReport?: string
 }
 
-export type EventEnvelope = {
-  event: string
-  payload: unknown
-}
-
-export type ExportPayload = DownloadPayload | ServerFilePayload
-
-export type ExportRequest = {
-  mode?: "download" | "server"
+export type DecisionEvent = {
+  decidedAt?: string
+  decisionType?: string
+  quoteAt?: string
+  quotePrice?: number
+  reason?: string
 }
 
 export type HealthStatus = {
-  mode: "web"
-  ok: true
+  mode: string
+  ok: boolean
   version: string
 }
 
-export type ImageExportRequest = ExportRequest & {
-  base64Data: string
-  name: string
+export type LifecycleMessage = {
+  content?: string
+  createdAt?: string
+  phase?: string
+  responseId?: string
+  role?: string
+  sequence?: number
 }
 
 export type LivenessStatus = {
-  ok: true
-}
-
-export type MarkdownExportRequest = ExportRequest & {
-  stockCode: string
-  stockName: string
-}
-
-export type MarketSummaryStatus = {
-  contentLen: number
-  createdAt: string
-  id: number
-  modelName: string
   ok: boolean
-  providerName: string
-  question: string
-  stockCode: string
-  stockName: string
+}
+
+export type Position = {
+  buyFees?: number
+  currentPrice?: number
+  currentPriceAt?: string
+  entryAt?: string
+  entryPrice?: number
+  estimatedSellFees?: number
+  netPnl?: number
+  netSellValue?: number
+  netYieldRate?: number
+  quantity?: number
+  sellFees?: number
+  status?: string
+  stockCode?: string
+  stockName?: string
 }
 
 export type ReadinessStatus = {
@@ -79,40 +97,56 @@ export type ReadinessStatus = {
   ready: boolean
   scheduler: boolean
   services: boolean
-  strategyMode: "paused" | "live"
 }
 
-export type ReleaseManifest = {
+export type Recommendation = {
+  activatedAt?: string
+  activationCondition?: string
+  activationPrice?: number
+  aiSummary?: string
+  analysisRunId: string
+  closePrice?: number
+  closedAt?: string
+  mainRisk?: string
+  netPnl?: number
+  netYieldRate?: number
+  quantity?: number
+  recommendationId: string
+  signalAt: string
+  sourceRefs?: string
+  status: string
+  stockCode: string
+  stockName: string
+  totalFees?: number
+}
+
+export type RecommendationDetail = {
+  analysis: AnalysisRun
+  decisions: Array<DecisionEvent>
+  messages: Array<LifecycleMessage>
+  position?: Position
+  recommendation: Recommendation
+  trades: Array<SimulatedTrade>
+}
+
+export type SimulatedTrade = {
+  executionPrice?: number
+  marketPrice?: number
+  netCashFlow?: number
+  quantity?: number
+  side?: string
+  totalFees?: number
+  tradedAt?: string
+}
+
+export type SystemVersionStatus = {
   appVersion: string
-  currentStrategyVersion: string
+  artifactSHA256?: string
+  buildTime?: string
+  commit?: string
+  dirty?: boolean
   mainSchemaVersion: number
   minuteSchemaVersion: number
-  strategyConfigHash: string
-}
-
-export type ServerFilePayload = {
-  filename: string
-  mode: "server"
-  path: string
-}
-
-export type StrategyRuntimeStatus = {
-  changedAt?: string
-  changedBy?: string
-  mode: "paused" | "live"
-  ready: boolean
-  reason?: string
-  targetStrategyVersion: string
-}
-
-export type SystemVersionStatus = ReleaseManifest & BuildInfo & {
-  configHash: string
   readiness: ReadinessStatus
-  startedAt: string
-  strategyMode: "paused" | "live"
-}
-
-export type WordExportRequest = ExportRequest & {
-  base64Data: string
-  filename: string
+  startedAt?: string
 }

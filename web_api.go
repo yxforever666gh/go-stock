@@ -9,65 +9,21 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
-	"go-stock/backend/governance"
-	"go-stock/backend/models"
 	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 )
 
 type webStatusProvider interface {
 	SystemVersion(context.Context) releaseinfo.VersionStatus
-	StrategyRuntime(context.Context) governance.StrategyRuntimeStatus
-	LatestMarketSummary(context.Context) (models.AIResponseResult, error)
-	Now() time.Time
 }
 
 type defaultWebStatusProvider struct {
-	system  service.SystemService
 	runtime service.RuntimeService
 }
 
-func (p defaultWebStatusProvider) StrategyRuntime(ctx context.Context) governance.StrategyRuntimeStatus {
-	manifest := releaseinfo.Manifest()
-	return p.system.StrategyRuntime(ctx, manifest.CurrentStrategyVersion)
-}
-
-func (p defaultWebStatusProvider) LatestMarketSummary(ctx context.Context) (models.AIResponseResult, error) {
-	return p.system.LatestMarketSummary(ctx)
-}
-
-func (p defaultWebStatusProvider) Now() time.Time { return p.runtime.Now() }
-
-func (p defaultWebStatusProvider) SystemVersion(ctx context.Context) releaseinfo.VersionStatus {
-	strategy := p.StrategyRuntime(ctx)
-	status := releaseinfo.SystemVersion(strategy.Mode)
-	if !strategy.Ready {
-		status.Readiness.Ready = false
-		status.Readiness.Error = strategy.Reason
-	}
-	return status
-}
-
-type strategyRuntimeAPIStatus struct {
-	Mode                  string    `json:"mode"`
-	ChangedAt             time.Time `json:"changedAt,omitempty"`
-	Reason                string    `json:"reason,omitempty"`
-	TargetStrategyVersion string    `json:"targetStrategyVersion"`
-	ChangedBy             string    `json:"changedBy,omitempty"`
-	Ready                 bool      `json:"ready"`
-}
-
-func strategyRuntimeResponse(status governance.StrategyRuntimeStatus) strategyRuntimeAPIStatus {
-	return strategyRuntimeAPIStatus{
-		Mode:                  status.Mode,
-		ChangedAt:             status.ChangedAt,
-		Reason:                status.Reason,
-		TargetStrategyVersion: status.CurrentStrategyVersion,
-		ChangedBy:             status.ChangedBy,
-		Ready:                 status.Ready,
-	}
+func (p defaultWebStatusProvider) SystemVersion(context.Context) releaseinfo.VersionStatus {
+	return releaseinfo.SystemVersion()
 }
 
 func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status webStatusProvider) {
@@ -89,18 +45,28 @@ func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status 
 		version := status.SystemVersion(r.Context())
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": "web", "version": version.AppVersion})
 	}))
-	mux.HandleFunc("/api/v1/strategy/runtime", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-		strategy := status.StrategyRuntime(r.Context())
-		code := http.StatusOK
-		if !strategy.Ready {
-			code = http.StatusServiceUnavailable
-		}
-		writeJSON(w, code, strategyRuntimeResponse(strategy))
-	}))
-
 	mux.HandleFunc("/api/v1/events/ws", methodHandler(http.MethodGet, hub.HandleWS))
-	mux.HandleFunc("/api/v1/market/summary/latest", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
-		handleLatestMarketSummary(status, w, r)
+	mux.HandleFunc("/api/v1/research/analysis-runs", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+		limit, offset := webPage(r)
+		items, err := app.ListAIAnalysisReports(limit, offset)
+		writeResearchResult(w, items, err)
+	}))
+	mux.HandleFunc("/api/v1/research/analysis-run", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+		item, err := app.GetAIAnalysisReport(r.URL.Query().Get("id"))
+		writeResearchResult(w, item, err)
+	}))
+	mux.HandleFunc("/api/v1/research/recommendations", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+		limit, offset := webPage(r)
+		items, err := app.ListAIRecommendations(limit, offset)
+		writeResearchResult(w, items, err)
+	}))
+	mux.HandleFunc("/api/v1/research/recommendation", methodHandler(http.MethodGet, func(w http.ResponseWriter, r *http.Request) {
+		item, err := app.GetAIRecommendation(r.URL.Query().Get("id"))
+		writeResearchResult(w, item, err)
+	}))
+	mux.HandleFunc("/api/v1/research/account", methodHandler(http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
+		item, err := app.GetAISimulatedAccount()
+		writeResearchResult(w, item, err)
 	}))
 	mux.HandleFunc("/api/v1/exports/markdown", methodHandler(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
 		handleMarkdownExport(app, w, r)
@@ -123,36 +89,18 @@ func methodHandler(method string, next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func handleLatestMarketSummary(status webStatusProvider, w http.ResponseWriter, r *http.Request) {
-	sinceSeconds := 0
-	if raw := strings.TrimSpace(r.URL.Query().Get("sinceSeconds")); raw != "" {
-		if value, err := strconv.Atoi(raw); err == nil && value > 0 {
-			sinceSeconds = value
-		}
-	}
+func webPage(r *http.Request) (int, int) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	return normalizedPage(limit, offset)
+}
 
-	latest, err := status.LatestMarketSummary(r.Context())
+func writeResearchResult(w http.ResponseWriter, value any, err error) {
 	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "market summary is unavailable"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
 		return
 	}
-
-	ok := latest.ID != 0 && strings.TrimSpace(latest.Content) != ""
-	if ok && sinceSeconds > 0 {
-		ok = status.Now().Sub(latest.CreatedAt) <= time.Duration(sinceSeconds)*time.Second
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":           ok,
-		"id":           latest.ID,
-		"createdAt":    latest.CreatedAt,
-		"stockCode":    latest.StockCode,
-		"stockName":    latest.StockName,
-		"question":     latest.Question,
-		"providerName": latest.ProviderName,
-		"modelName":    latest.ModelName,
-		"contentLen":   len(strings.TrimSpace(latest.Content)),
-	})
+	writeJSON(w, http.StatusOK, value)
 }
 
 func handleMarkdownExport(app *App, w http.ResponseWriter, r *http.Request) {

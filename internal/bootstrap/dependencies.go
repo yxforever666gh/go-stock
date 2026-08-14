@@ -4,6 +4,7 @@ import (
 	"errors"
 	"time"
 
+	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
 	"go-stock/internal/service"
 
@@ -31,6 +32,8 @@ type RuntimeDependencies struct {
 	Storage  Storage
 	Services service.Dependencies
 }
+
+type StockMasterSeedLoader func() ([]models.StockBasic, models.StockMasterRefreshResult, error)
 
 func AssembleRuntime(cfg appconfig.AppConfig, dependencies RuntimeDependencies) (AppRuntime, error) {
 	if err := dependencies.Storage.Validate(); err != nil {

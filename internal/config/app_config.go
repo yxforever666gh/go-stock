@@ -34,13 +34,6 @@ const (
 	DefaultDiemengMinIntervalMS  = 1200
 	DefaultDiemengLevel          = "1min"
 	DefaultDiemengProxyMode      = "disable"
-	DefaultAiRecommendYieldMode  = "strict"
-	DefaultYieldDownloadWorkers  = 6
-	DefaultYieldCalcWorkers      = 0
-	DefaultYieldRecentTradeDays  = 5
-	DefaultYieldHedgeTencentMS   = 300
-	DefaultYieldHedgeDiemengMS   = 800
-	DefaultYieldAkshareFallback  = true
 	DefaultBrowserPath           = ""
 )
 
@@ -54,7 +47,6 @@ type AppConfig struct {
 	Minute  MinuteConfig  `json:"minute"`
 	Akshare AkshareConfig `json:"akshare"`
 	Diemeng DiemengConfig `json:"diemeng"`
-	Yield   YieldConfig   `json:"yield"`
 	Browser BrowserConfig `json:"browser"`
 }
 
@@ -116,16 +108,6 @@ type BrowserConfig struct {
 	Path string `json:"path,omitempty"`
 }
 
-type YieldConfig struct {
-	DefaultMode           string `json:"defaultMode"`
-	DownloadWorkers       int    `json:"downloadWorkers"`
-	CalcWorkers           int    `json:"calcWorkers"`
-	RecentWindowTradeDays int    `json:"recentWindowTradeDays"`
-	HedgeTencentDelayMS   int    `json:"hedgeTencentDelayMs"`
-	HedgeDiemengDelayMS   int    `json:"hedgeDiemengDelayMs"`
-	AkshareFallback       bool   `json:"akshareFallback"`
-}
-
 func Load() AppConfig {
 	runtimeDir := resolveRuntimeDir()
 	cfg := AppConfig{
@@ -174,15 +156,6 @@ func Load() AppConfig {
 			ProxyMode:     enumOrDefault("GO_STOCK_DIEMENG_PROXY_MODE", DefaultDiemengProxyMode, "disable", "inherit", "settings", "config", "off", "none", "0", "false"),
 			Level:         enumOrDefault("GO_STOCK_DIEMENG_LEVEL", DefaultDiemengLevel, "1min", "5min", "15min", "30min", "60min"),
 		},
-		Yield: YieldConfig{
-			DefaultMode:           enumOrDefault("GO_STOCK_AI_RECOMMEND_YIELD_DEFAULT_MODE", DefaultAiRecommendYieldMode, "strict"),
-			DownloadWorkers:       intOrDefault("GO_STOCK_YIELD_DOWNLOAD_WORKERS", DefaultYieldDownloadWorkers, 1, 64),
-			CalcWorkers:           intOrDefault("GO_STOCK_YIELD_CALC_WORKERS", DefaultYieldCalcWorkers, 0, 64),
-			RecentWindowTradeDays: intOrDefault("GO_STOCK_YIELD_RECENT_WINDOW_TRADE_DAYS", DefaultYieldRecentTradeDays, 1, 30),
-			HedgeTencentDelayMS:   intOrDefault("GO_STOCK_YIELD_HEDGE_DELAY_TENCENT_MS", DefaultYieldHedgeTencentMS, 0, 60000),
-			HedgeDiemengDelayMS:   intOrDefault("GO_STOCK_YIELD_HEDGE_DELAY_DIEMENG_MS", DefaultYieldHedgeDiemengMS, 0, 60000),
-			AkshareFallback:       boolOrDefault("GO_STOCK_YIELD_AKSHARE_FALLBACK", DefaultYieldAkshareFallback),
-		},
 		Browser: BrowserConfig{
 			Path: strings.TrimSpace(os.Getenv("GO_STOCK_BROWSER_PATH")),
 		},
@@ -230,15 +203,6 @@ func (c AppConfig) StartupSummary() string {
 			"proxyMode":        c.Diemeng.ProxyMode,
 			"level":            c.Diemeng.Level,
 			"apiKeyConfigured": strings.TrimSpace(c.Diemeng.APIKey) != "",
-		},
-		"yield": map[string]any{
-			"defaultMode":           c.Yield.DefaultMode,
-			"downloadWorkers":       c.Yield.DownloadWorkers,
-			"calcWorkers":           c.Yield.CalcWorkers,
-			"recentWindowTradeDays": c.Yield.RecentWindowTradeDays,
-			"hedgeTencentDelayMs":   c.Yield.HedgeTencentDelayMS,
-			"hedgeDiemengDelayMs":   c.Yield.HedgeDiemengDelayMS,
-			"akshareFallback":       c.Yield.AkshareFallback,
 		},
 	}
 	if c.Runtime.Dir != "" {

@@ -12,7 +12,6 @@ import (
 )
 
 func (a *App) registerCommonRuntimeEvents(ctx context.Context) {
-	a.registerMarketSummaryV150ExecutionRuntime()
 	runtime.EventsOn(ctx, "frontendError", func(optionalData ...interface{}) {
 		logger.SugaredLogger.Errorf("Frontend error: %v\n", optionalData)
 	})

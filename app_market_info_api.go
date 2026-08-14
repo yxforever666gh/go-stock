@@ -26,6 +26,10 @@ func (a *App) AnalyzeSentiment(text string) models.SentimentResult {
 	return a.services.AI.AnalyzeSentiment(text)
 }
 
+func (a *App) AnalyzeSentimentWithFreqWeight(text string) map[string]any {
+	return a.services.AI.AnalyzeSentimentWithFreqWeight(text)
+}
+
 func (a *App) HotStock(marketType string) *[]models.HotItem {
 	return a.services.Market.HotStock(marketType, 100)
 }
@@ -54,8 +58,4 @@ func (a *App) ClsCalendar() []any {
 
 func (a *App) SearchStock(words string) map[string]any {
 	return a.services.Stock.SearchStock(words)
-}
-
-func (a *App) GetHotStrategy() map[string]any {
-	return a.services.Stock.GetHotStrategy()
 }

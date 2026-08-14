@@ -36,6 +36,7 @@ import (
 
 const sinaStockUrl = "http://hq.sinajs.cn/rn=%d&list=%s"
 const txStockUrl = "http://qt.gtimg.cn/?_=%d&q=%s"
+const defaultPublicStockMasterURL = "https://raw.githubusercontent.com/yxforever666gh/go-stock/main/build/stock_basic.json"
 
 // Tushare 官方接口已支持 HTTPS；使用 HTTPS 可以减少中间网络设备对明文 HTTP 的干扰，
 // 同时也能降低遇到 EOF/连接中断 的概率。
@@ -152,6 +153,72 @@ func (receiver StockDataApi) GetIndexBasic() {
 
 // map转换为结构体
 
+func (receiver StockDataApi) FetchValidatedStockMaster(ctx context.Context) ([]models.StockBasic, StockMasterRefreshResult, error) {
+	result := StockMasterRefreshResult{Source: "tushare", FetchedAt: time.Now().UTC()}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if receiver.config == nil || strings.TrimSpace(receiver.config.TushareToken) == "" {
+		return nil, result, errors.New("Tushare token is not configured")
+	}
+	fields := "ts_code,symbol,name,area,industry,cnspell,market,list_date,act_name,act_ent_type,fullname,exchange,list_status,curr_type,enname,delist_date,is_hs"
+	resp, err := receiver.client.R().
+		SetContext(ctx).
+		SetHeader("content-type", "application/json").
+		SetBody(&TushareRequest{
+			ApiName: "stock_basic",
+			Token:   receiver.config.TushareToken,
+			Params:  nil,
+			Fields:  fields,
+		}).
+		Post(tushareApiUrl)
+	if err != nil {
+		return nil, result, fmt.Errorf("fetch Tushare stock master: %w", err)
+	}
+	if resp.IsError() {
+		return nil, result, fmt.Errorf("fetch Tushare stock master: status=%s", resp.Status())
+	}
+	rows, decoded, err := DecodeStockMasterPayload(resp.Body())
+	decoded.Source = result.Source
+	if err != nil {
+		return nil, decoded, err
+	}
+	return rows, decoded, nil
+}
+
+// FetchValidatedPublicStockMaster loads the controlled public snapshot used
+// when Tushare is unavailable. It is validated by the same strict decoder and
+// never writes the database itself.
+func (receiver StockDataApi) FetchValidatedPublicStockMaster(ctx context.Context) ([]models.StockBasic, StockMasterRefreshResult, error) {
+	result := StockMasterRefreshResult{Source: "controlled_public", FetchedAt: time.Now().UTC()}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	endpoint := strings.TrimSpace(os.Getenv("GO_STOCK_BASEINFO_BASE_URL"))
+	if endpoint == "" {
+		endpoint = defaultPublicStockMasterURL
+	} else {
+		endpoint = strings.TrimRight(endpoint, "/") + "/stock_basic.json"
+	}
+	client := receiver.client
+	if client == nil {
+		client = newRealtimeRestyClient()
+	}
+	resp, err := client.R().SetContext(ctx).Get(endpoint)
+	if err != nil {
+		return nil, result, fmt.Errorf("fetch controlled public stock master: %w", err)
+	}
+	if resp.IsError() {
+		return nil, result, fmt.Errorf("fetch controlled public stock master: status=%s", resp.Status())
+	}
+	rows, decoded, err := DecodeStockMasterPayload(resp.Body())
+	decoded.Source = result.Source
+	if err != nil {
+		return nil, decoded, err
+	}
+	return rows, decoded, nil
+}
+
 func (receiver StockDataApi) GetStockBaseInfo() {
 	res := &TushareStockBasicResponse{}
 	fields := "ts_code,symbol,name,area,industry,cnspell,market,list_date,act_name,act_ent_type,fullname,exchange,list_status,curr_type,enname,delist_date,is_hs"
@@ -218,6 +285,21 @@ func (receiver StockDataApi) GetStockBaseInfo() {
 }
 
 func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]StockInfo, error) {
+	return receiver.getStockCodeRealTimeData(context.Background(), true, StockCodes...)
+}
+
+// GetStockCodeRealTimeDataReadOnly performs the same live provider request as
+// GetStockCodeRealTimeData, but deliberately bypasses the legacy stock_info
+// cache writer. Read-only health checks use this method so a probe
+// can never make the state it is checking look healthier.
+func (receiver StockDataApi) GetStockCodeRealTimeDataReadOnly(ctx context.Context, StockCodes ...string) (*[]StockInfo, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return receiver.getStockCodeRealTimeData(ctx, false, StockCodes...)
+}
+
+func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, persist bool, StockCodes ...string) (*[]StockInfo, error) {
 	stockInfos := make([]StockInfo, 0)
 
 	hkcodes := slice.Filter(StockCodes, func(i int, s string) bool {
@@ -234,6 +316,7 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 		})
 		url := fmt.Sprintf(txStockUrl, time.Now().Unix(), hkcodesStr)
 		resp, err := receiver.client.R().
+			SetContext(ctx).
 			SetHeader("Host", "qt.gtimg.cn").
 			SetHeader("Referer", "https://gu.qq.com/").
 			SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
@@ -274,13 +357,16 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 	})
 
 	if strings.TrimSpace(codes) == "" {
-		persistRealtimeStockInfosAsync(stockInfos)
+		if persist {
+			persistRealtimeStockInfosAsync(stockInfos)
+		}
 		return &stockInfos, nil
 	}
 
 	url := fmt.Sprintf(sinaStockUrl, time.Now().Unix(), codes)
 	//logger.SugaredLogger.Infof("GetStockCodeRealTimeData %s", url)
 	resp, err := receiver.client.R().
+		SetContext(ctx).
 		SetHeader("Host", "hq.sinajs.cn").
 		SetHeader("Referer", "https://finance.sina.com.cn/").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
@@ -311,7 +397,9 @@ func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]
 
 	}
 
-	persistRealtimeStockInfosAsync(stockInfos)
+	if persist {
+		persistRealtimeStockInfosAsync(stockInfos)
+	}
 	return &stockInfos, err
 }
 
@@ -601,6 +689,135 @@ func GB18030ToUTF8(bs []byte) string {
 }
 
 func ParseTxStockData(data string) (*StockInfo, error) {
+	return parseTencentStockInfoLine(data)
+}
+
+func parseTencentStockInfoLine(data string) (*StockInfo, error) {
+	separator := strings.Index(data, "=")
+	if separator <= 0 {
+		return nil, fmt.Errorf("%w: Tencent assignment is missing", ErrInvalidDataFormat)
+	}
+	variable := strings.TrimSpace(data[:separator])
+	payload := strings.TrimSpace(data[separator+1:])
+	payload = strings.TrimSuffix(payload, ";")
+	payload = strings.Trim(payload, "\"")
+	if !strings.Contains(variable, "v_r_hk") && !strings.Contains(variable, "v_hk") && !strings.Contains(variable, "v_sz") && !strings.Contains(variable, "v_sh") {
+		return nil, fmt.Errorf("%w: unsupported Tencent variable %q", ErrInvalidDataFormat, variable)
+	}
+	return parseTencentStockInfo(variable, payload)
+}
+
+func parseTencentStockInfo(variable, payload string) (*StockInfo, error) {
+	parts := strings.Split(payload, "~")
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+	}
+	if len(parts) < 38 {
+		return nil, fmt.Errorf("%w: Tencent field count %d is below 38", ErrInvalidDataFormat, len(parts))
+	}
+	code := strings.TrimSpace(variable)
+	code = strings.TrimPrefix(code, "v_r_")
+	code = strings.TrimPrefix(code, "v_")
+	code = strings.ToLower(strings.TrimSpace(code))
+	if !strings.HasPrefix(code, "sh") && !strings.HasPrefix(code, "sz") && !strings.HasPrefix(code, "hk") {
+		return nil, fmt.Errorf("%w: unsupported Tencent code %q", ErrInvalidDataFormat, code)
+	}
+
+	date, clock, err := parseTencentQuoteTime(parts)
+	if err != nil {
+		return nil, fmt.Errorf("Tencent quote time: %w", err)
+	}
+	volume, amount, err := parseTencentTurnover(code, parts)
+	if err != nil {
+		return nil, fmt.Errorf("Tencent turnover: %w", err)
+	}
+	highIndex, lowIndex := 33, 34
+	if !strings.HasPrefix(code, "hk") {
+		highIndex, lowIndex = 32, 33
+	}
+
+	info := &StockInfo{
+		Code:     code,
+		Name:     strings.TrimSpace(parts[1]),
+		Price:    strings.TrimSpace(parts[3]),
+		PreClose: strings.TrimSpace(parts[4]),
+		Open:     strings.TrimSpace(parts[5]),
+		High:     strings.TrimSpace(parts[highIndex]),
+		Low:      strings.TrimSpace(parts[lowIndex]),
+		Date:     date,
+		Time:     clock,
+		Volume:   volume,
+		Amount:   amount,
+	}
+	if strings.HasPrefix(code, "hk") {
+		info.Market = "HK"
+	} else {
+		info.Market = "A"
+		info.B1P, info.B1V = strings.TrimSpace(parts[9]), strings.TrimSpace(parts[10])
+		info.B2P, info.B2V = strings.TrimSpace(parts[11]), strings.TrimSpace(parts[12])
+		info.B3P, info.B3V = strings.TrimSpace(parts[13]), strings.TrimSpace(parts[14])
+		info.B4P, info.B4V = strings.TrimSpace(parts[15]), strings.TrimSpace(parts[16])
+		info.B5P, info.B5V = strings.TrimSpace(parts[17]), strings.TrimSpace(parts[18])
+		info.A1P, info.A1V = strings.TrimSpace(parts[19]), strings.TrimSpace(parts[20])
+		info.A2P, info.A2V = strings.TrimSpace(parts[21]), strings.TrimSpace(parts[22])
+		info.A3P, info.A3V = strings.TrimSpace(parts[23]), strings.TrimSpace(parts[24])
+		info.A4P, info.A4V = strings.TrimSpace(parts[25]), strings.TrimSpace(parts[26])
+		info.A5P, info.A5V = strings.TrimSpace(parts[27]), strings.TrimSpace(parts[28])
+	}
+	return info, nil
+}
+
+func parseTencentQuoteTime(parts []string) (string, string, error) {
+	if len(parts) > 30 && strings.Contains(parts[30], "/") {
+		fields := strings.Fields(strings.ReplaceAll(strings.TrimSpace(parts[30]), "/", "-"))
+		if len(fields) != 2 {
+			return "", "", ErrInvalidDataFormat
+		}
+		return fields[0], fields[1], nil
+	}
+	timestampIndex := 29
+	if len(parts) > 30 && len(strings.TrimSpace(parts[30])) == 14 {
+		timestampIndex = 30
+	}
+	if len(parts) <= timestampIndex {
+		return "", "", ErrInvalidDataFormat
+	}
+	raw := strings.TrimSpace(parts[timestampIndex])
+	if len(raw) != 14 {
+		return "", "", ErrInvalidDataFormat
+	}
+	return raw[0:4] + "-" + raw[4:6] + "-" + raw[6:8], raw[8:10] + ":" + raw[10:12] + ":" + raw[12:14], nil
+}
+
+func parseTencentTurnover(code string, parts []string) (string, string, error) {
+	if strings.HasPrefix(code, "hk") {
+		volume, err := strconv.ParseFloat(strings.TrimSpace(parts[36]), 64)
+		if err != nil || volume < 0 {
+			return "", "", ErrInvalidDataFormat
+		}
+		amount, err := strconv.ParseFloat(strings.TrimSpace(parts[37]), 64)
+		if err != nil || amount < 0 {
+			return "", "", ErrInvalidDataFormat
+		}
+		return strconv.FormatFloat(volume, 'f', -1, 64), strconv.FormatFloat(amount, 'f', 3, 64), nil
+	}
+
+	composite := strings.Split(strings.TrimSpace(parts[35]), "/")
+	if len(composite) != 3 {
+		return "", "", ErrInvalidDataFormat
+	}
+	volumeLots, err := strconv.ParseFloat(strings.TrimSpace(composite[1]), 64)
+	if err != nil || volumeLots < 0 {
+		return "", "", ErrInvalidDataFormat
+	}
+	amount, err := strconv.ParseFloat(strings.TrimSpace(composite[2]), 64)
+	if err != nil || amount < 0 {
+		return "", "", ErrInvalidDataFormat
+	}
+	return strconv.FormatFloat(volumeLots*100, 'f', -1, 64), strconv.FormatFloat(amount, 'f', -1, 64), nil
+}
+
+func parseTxStockDataLegacy(data string) (*StockInfo, error) {
 	//v_r_hk09660="100~地平线机器人-W~09660~6.240~5.690~5.800~192659034.0~0~0~6.240~0~0~0~0~0~0~0~0~0~6.240~0~0~0~0~0~0~0~0~0~192659034.0~2025/04/29
 	//13:41:04~0.550~9.67~6.450~5.710~6.240~192659034.0~1180471843.140~0~32.51~~0~0~13.01~691.1364~823.6983~HORIZONROBOT-W~0.00~10.380~3.320~1.07~-16.03~0~0~0~0~0~32.51~6.40~1.74~600~73.33~17.96~GP~19.70~11.51~-0.95~-18.54~44.44~13200293682.00~11075904412.00~32.51~0.000~6.127~56.39~HKD~1~30";
 	//v_sz002241="51~歌尔股份~002241~22.26~22.27~0.00~0~0~0~22.26~1004~0.00~0~0.00~0~0.00~0~0.00~0~22.26~1004~0.00~558~0.00~0~0.00~0~0.00~0~~20250509092233~-0.01~-0.04~0.00~0.00~22.26/0/0~0~0~0.00~28.21~~0.00~0.00~0.00~686.46~777.09~2.31~24.50~20.04~0.00~-558~0.00~41.44~29.16~~~1.24~0.0000~0.0000~0~

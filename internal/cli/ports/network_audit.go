@@ -35,7 +35,6 @@ type MarketAuditProvider interface {
 
 	DetectAIProviderName(*models.AIConfig) string
 	CompleteChat(context.Context, *models.AIConfig, []map[string]any, bool) (content, reasoning, modelName string, err error)
-	SendYieldEmailTestMessage() error
 	SendDingDingMessage(message string) string
 }
 
@@ -74,8 +73,6 @@ type MarketAuditSearch interface {
 	SearchStock(pageSize int) map[string]any
 	SearchBk(pageSize int) map[string]any
 	SearchETF(pageSize int) map[string]any
-	HotStrategy() map[string]any
-	StrategySquare() map[string]any
 }
 
 type MarketAuditStock interface {

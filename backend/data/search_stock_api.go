@@ -4,11 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"go-stock/backend/logger"
-	"go-stock/backend/models"
-	"go-stock/backend/util"
 	"time"
-
-	"github.com/duke-git/lancet/v2/mathutil"
 )
 
 // @Author spark
@@ -186,61 +182,5 @@ func (s SearchStockApi) SearchETF(pageSize int) map[string]any {
 		}
 	}
 	//logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
-	return respMap
-}
-
-func (s SearchStockApi) HotStrategy() map[string]any {
-	url := fmt.Sprintf("https://np-ipick.eastmoney.com/recommend/stock/heat/ranking?count=20&trace=%d&client=web&biz=web_smart_tag", time.Now().Unix())
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
-		SetHeader("Host", "np-ipick.eastmoney.com").
-		SetHeader("Origin", "https://xuangu.eastmoney.com").
-		SetHeader("Referer", "https://xuangu.eastmoney.com/").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0").
-		Get(url)
-	if err != nil {
-		logger.SugaredLogger.Errorf("HotStrategy-err:%+v", err)
-		return map[string]any{}
-	}
-	respMap := map[string]any{}
-	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
-		return map[string]any{}
-	}
-	return respMap
-}
-
-func (s SearchStockApi) HotStrategyTable() string {
-	markdownTable := ""
-	res := s.HotStrategy()
-	bytes, _ := json.Marshal(res)
-	strategy := &models.HotStrategy{}
-	if err := json.Unmarshal(bytes, strategy); err != nil {
-		return markdownTable
-	}
-	for _, data := range strategy.Data {
-		data.Chg = mathutil.RoundToFloat(100*data.Chg, 2)
-	}
-	markdownTable = util.MarkdownTableWithTitle("当前热门选股策略", strategy.Data)
-	return markdownTable
-}
-
-func (s SearchStockApi) StrategySquare() map[string]any {
-	//https://backtest.10jqka.com.cn/strategysquare/list?order=desc&page=1&pageNum=10&sortType=hot&keyword=
-	url := "https://backtest.10jqka.com.cn/strategysquare/list?order=desc&page=1&pageNum=10&sortType=hot&keyword="
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
-		SetHeader("Host", "backtest.10jqka.com.cn").
-		SetHeader("Origin", "https://backtest.10jqka.com.cn").
-		SetHeader("Referer", "https://backtest.10jqka.com.cn/strategysquare/list").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0").
-		Get(url)
-	if err != nil {
-		logger.SugaredLogger.Errorf("StrategySquare-err:%+v", err)
-		return map[string]any{}
-	}
-	respMap := map[string]any{}
-	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
-		logger.SugaredLogger.Errorf("StrategySquare unmarshal err:%+v", err)
-		return map[string]any{}
-	}
-	logger.SugaredLogger.Infof("resp:%+v", respMap["data"])
 	return respMap
 }

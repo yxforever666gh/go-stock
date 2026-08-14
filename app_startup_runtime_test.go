@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
-	"go-stock/internal/bootstrap"
 	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 )
@@ -45,8 +44,6 @@ func TestSchedulerRegistrationFailurePreventsReadyAssembly(t *testing.T) {
 func TestAppSchedulerStartsOnlyAfterSuccessfulAssembly(t *testing.T) {
 	app := NewAppWithServices(
 		service.AppServices{},
-		bootstrap.NewProductionAgentToolDataProvider(),
-		bootstrap.NewProductionAgentConfigurationProvider(),
 	)
 	entryID, err := app.cron.AddFunc("@every 1h", func() {})
 	if err != nil {
