@@ -123,7 +123,7 @@ const handleUpdateAction = () => {
         <div style="justify-self: center; text-align: left;">
           <p>go-stock 是一个本地优先的股票分析工作台，基于 Go、Wails、Vue 3 和 Naive UI 构建，支持桌面模式与本地 Web 模式。</p>
           <p>当前公开版聚焦真正可维护的核心能力：自选股、市场资讯、AI 分析报告、推荐收益跟踪、邮件报告与运行时任务管理。</p>
-          <p>当前 1.6.1 版本以“分级 AI 分析 → 推荐入库 → 独立会话判断激活/卖出 → T+1 模拟成交 → 净收益”为研究主链路。</p>
+          <p>当前 1.6.2 版本以“分级 AI 分析 → 推荐入库 → 独立会话判断激活/卖出 → T+1 模拟成交 → 净收益”为研究主链路。</p>
           <p>来源说明：当前仓库基于 <a href="https://github.com/ArvinLovegood/go-stock" target="_blank">ArvinLovegood/go-stock</a> 改编整理而来，不是原作者官方仓库；当前维护的是公开清理版与后续改动。</p>
           <p>公开仓库已经移除个人赞赏码、联系方式、赞助码入口、私有接入说明和本地工作区配置，只保留适合协作与二次开发的公开内容。</p>
           <p>
@@ -149,7 +149,7 @@ const handleUpdateAction = () => {
       </div>
       <n-divider title-placement="center">公开说明</n-divider>
       <div style="justify-self: center; text-align: left;">
-        <p>当前 1.6.1 已隔离历史表并删除旧策略、旧收益计算和 AI 智能体运行入口；市场行情继续保持独立。</p>
+        <p>当前 1.6.2 已隔离历史表并删除旧策略、旧收益计算和 AI 智能体运行入口；市场行情继续保持独立。</p>
         <p>如果你准备继续二次开发，建议优先阅读 README、CHANGELOG、Release Notes 和仓库中的公开发布检查清单。</p>
       </div>
       <n-divider title-placement="center">鸣谢</n-divider>

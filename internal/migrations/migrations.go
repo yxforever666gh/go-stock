@@ -102,6 +102,12 @@ var mainMigrations = []migration{
 		definition:  func() string { return "ai_config.disabled NOT NULL DEFAULT 0\nai_config.sort is fallback order" },
 		apply:       applyAIConfigModelSwitchFallbackOrder,
 	},
+	{
+		id: 5, name: "research_model_attempt_diagnostics",
+		description: "App 1.6.2 persists sanitized, structured model-attempt diagnostics for each research analysis run.",
+		definition:  func() string { return "research_v160_analysis_runs.model_attempt_log_json TEXT NOT NULL DEFAULT '[]'" },
+		apply:       applyResearchModelAttemptDiagnostics,
+	},
 }
 
 var minuteMigrations = []migration{
@@ -167,6 +173,24 @@ func applyAIConfigModelSwitchFallbackOrder(tx *gorm.DB) error {
 	}
 	if err := tx.Exec("UPDATE ai_config SET disabled = 0 WHERE disabled IS NULL").Error; err != nil {
 		return fmt.Errorf("backfill ai_config.disabled: %w", err)
+	}
+	return nil
+}
+
+func applyResearchModelAttemptDiagnostics(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if !tx.Migrator().HasTable(&research.AnalysisRun{}) {
+		return errors.New("research analysis table is unavailable")
+	}
+	if !tx.Migrator().HasColumn(&research.AnalysisRun{}, "ModelAttemptLogJSON") {
+		if err := tx.Exec("ALTER TABLE research_v160_analysis_runs ADD COLUMN model_attempt_log_json TEXT NOT NULL DEFAULT '[]'").Error; err != nil {
+			return fmt.Errorf("add research model attempt log: %w", err)
+		}
+	}
+	if err := tx.Exec("UPDATE research_v160_analysis_runs SET model_attempt_log_json = '[]' WHERE model_attempt_log_json IS NULL OR TRIM(model_attempt_log_json) = ''").Error; err != nil {
+		return fmt.Errorf("backfill research model attempt log: %w", err)
 	}
 	return nil
 }
@@ -335,6 +359,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 5 {
+		if err := verifyMainSchema5Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -372,6 +401,20 @@ func verifyMainSchema4Runtime(database *gorm.DB) error {
 	}
 	if nullCount != 0 {
 		return fmt.Errorf("main schema 4 has %d ai_config rows without call-switch state", nullCount)
+	}
+	return nil
+}
+
+func verifyMainSchema5Runtime(database *gorm.DB) error {
+	if !database.Migrator().HasColumn(&research.AnalysisRun{}, "ModelAttemptLogJSON") {
+		return errors.New("main schema 5 research model attempt log is missing")
+	}
+	var invalidCount int64
+	if err := database.Raw("SELECT COUNT(*) FROM research_v160_analysis_runs WHERE model_attempt_log_json IS NULL OR TRIM(model_attempt_log_json) = ''").Scan(&invalidCount).Error; err != nil {
+		return err
+	}
+	if invalidCount != 0 {
+		return fmt.Errorf("main schema 5 has %d analysis rows without model attempt diagnostics", invalidCount)
 	}
 	return nil
 }

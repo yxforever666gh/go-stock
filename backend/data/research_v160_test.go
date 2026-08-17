@@ -33,15 +33,13 @@ func TestResearchAIClientRetriesFiveTimesThenFallsBackInEnabledTableOrder(t *tes
 	called := make([]uint, 0, 6)
 	client := &ResearchAIClient{
 		loadSetting: func() *SettingConfig { return setting },
-		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string) (string, string, string, error) {
+		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
 			called = append(called, config.ID)
-			deadline, ok := ctx.Deadline()
-			remaining := time.Until(deadline)
-			if !ok || remaining <= 25*time.Second || remaining > 31*time.Second {
-				t.Fatalf("attempt deadline remaining=%s ok=%v, want about 30s", remaining, ok)
+			if _, ok := ctx.Deadline(); ok {
+				t.Fatal("research attempt must use inactivity cancellation, not a fixed deadline")
 			}
 			if config.ID == 1 {
-				return "", "", "", errors.New("Upstream request failed")
+				return "", "", "", &aiProviderCallError{Category: "provider_error", Message: "Upstream request failed", Retryable: true}
 			}
 			return "ok", "response-3", config.ModelName, nil
 		},
@@ -60,8 +58,8 @@ func TestResearchAIClientRetriesFiveTimesThenFallsBackInEnabledTableOrder(t *tes
 
 func TestResearchAIClientDefaultRetryPolicy(t *testing.T) {
 	client := &ResearchAIClient{}
-	if got := client.modelAttemptTimeout(); got != 30*time.Second {
-		t.Fatalf("attempt timeout=%s, want 30s", got)
+	if got := client.modelAttemptTimeout(); got != 300*time.Second {
+		t.Fatalf("attempt timeout=%s, want 300s", got)
 	}
 	if got := client.modelMaxAttempts(); got != 5 {
 		t.Fatalf("max attempts=%d, want 5", got)
@@ -78,7 +76,7 @@ func TestResearchAIClientHardTimeoutThenFallback(t *testing.T) {
 		loadSetting:    func() *SettingConfig { return setting },
 		attemptTimeout: 10 * time.Millisecond,
 		maxAttempts:    2,
-		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string) (string, string, string, error) {
+		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
 			called = append(called, config.ID)
 			if config.ID == 1 {
 				<-ctx.Done()
@@ -110,5 +108,99 @@ func TestResearchProviderCanDisableNestedHTTPRetries(t *testing.T) {
 	}
 	if got := provider.newAnthropicClient().RetryCount; got != 0 {
 		t.Fatalf("Anthropic retry count=%d, want 0", got)
+	}
+}
+
+func TestResearchAIClientActiveInferenceResetsInactivityTimeout(t *testing.T) {
+	setting := &SettingConfig{AiConfigs: []*AIConfig{{ID: 1, Sort: 1, Name: "active", ModelName: "model-1"}}}
+	client := &ResearchAIClient{
+		loadSetting:    func() *SettingConfig { return setting },
+		attemptTimeout: 25 * time.Millisecond,
+		maxAttempts:    1,
+		completeProvider: func(ctx context.Context, _ *models.AIConfig, _ []map[string]any, _ string, activity func(AIStreamActivity)) (string, string, string, error) {
+			for index := 0; index < 8; index++ {
+				select {
+				case <-ctx.Done():
+					return "", "", "", context.Cause(ctx)
+				case <-time.After(10 * time.Millisecond):
+					activity(AIStreamActivity{EventType: "response.in_progress", State: "reasoning"})
+				}
+			}
+			return "ok", "response-1", "model-1", nil
+		},
+	}
+	started := time.Now()
+	result, err := client.Complete(context.Background(), research.CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 70*time.Millisecond {
+		t.Fatalf("elapsed=%s, active stream should outlive one inactivity window", elapsed)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestResearchAIClientFatalErrorFallsBackImmediately(t *testing.T) {
+	setting := &SettingConfig{AiConfigs: []*AIConfig{
+		{ID: 1, Sort: 1, Name: "bad-key", ModelName: "model-1", ApiKey: "secret-key", BaseUrl: "https://secret.example"},
+		{ID: 2, Sort: 2, Name: "fallback", ModelName: "model-2"},
+	}}
+	called := make([]uint, 0, 2)
+	records := make([]research.ModelAttemptRecord, 0)
+	client := &ResearchAIClient{
+		loadSetting: func() *SettingConfig { return setting },
+		completeProvider: func(_ context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
+			called = append(called, config.ID)
+			if config.ID == 1 {
+				return "", "", "", &aiProviderCallError{Category: "http_error", StatusCode: 401, Message: "secret-key rejected by https://secret.example", Retryable: false}
+			}
+			return "ok", "response-2", "model-2", nil
+		},
+	}
+	result, err := client.Complete(context.Background(), research.CompletionRequest{
+		Phase: "sector_analysis", Prompt: "test", OnAttempt: func(record research.ModelAttemptRecord) { records = append(records, record) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(called, []uint{1, 2}) {
+		t.Fatalf("called=%v, fatal provider should fall back immediately", called)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result=%+v", result)
+	}
+	var failed *research.ModelAttemptRecord
+	for index := range records {
+		if records[index].ConfigID == 1 && records[index].Status == "failed" {
+			failed = &records[index]
+		}
+	}
+	if failed == nil || failed.NextAction != "fallback_next_model" || failed.Retryable {
+		t.Fatalf("failed record=%+v", failed)
+	}
+	if strings.Contains(failed.ErrorMessage, "secret-key") || strings.Contains(failed.ErrorMessage, "secret.example") {
+		t.Fatalf("error was not sanitized: %q", failed.ErrorMessage)
+	}
+}
+
+func TestResearchAIClientParentCancellationIsNotRetried(t *testing.T) {
+	setting := &SettingConfig{AiConfigs: []*AIConfig{{ID: 1, Sort: 1, Name: "slow", ModelName: "model-1"}}}
+	calls := 0
+	client := &ResearchAIClient{
+		loadSetting:    func() *SettingConfig { return setting },
+		attemptTimeout: time.Second,
+		completeProvider: func(ctx context.Context, _ *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
+			calls++
+			<-ctx.Done()
+			return "", "", "", context.Cause(ctx)
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := client.Complete(ctx, research.CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if !errors.Is(err, context.DeadlineExceeded) || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }

@@ -55,6 +55,57 @@ func (r *AnalysisRunner) completeAI(ctx context.Context, request CompletionReque
 	return r.service.ai.Complete(ctx, request)
 }
 
+func (r *AnalysisRunner) completeAIForRun(ctx context.Context, run *AnalysisRun, request CompletionRequest) (CompletionResult, error) {
+	if run == nil {
+		return r.completeAI(ctx, request)
+	}
+	var persistErr error
+	request.OnAttempt = func(record ModelAttemptRecord) {
+		if persistErr != nil {
+			return
+		}
+		records := decodeModelAttemptLog(run.ModelAttemptLogJSON)
+		updated := false
+		for index := range records {
+			if records[index].ID == record.ID {
+				records[index] = record
+				updated = true
+				break
+			}
+		}
+		if !updated {
+			records = append(records, record)
+		}
+		body, err := json.Marshal(records)
+		if err != nil {
+			persistErr = fmt.Errorf("序列化模型调用记录: %w", err)
+			return
+		}
+		run.ModelAttemptLogJSON = string(body)
+		persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if err = r.service.repository.UpdateAnalysisAttemptLog(persistCtx, run.RunID, run.ModelAttemptLogJSON); err != nil {
+			persistErr = fmt.Errorf("保存模型调用记录: %w", err)
+		}
+	}
+	result, err := r.completeAI(ctx, request)
+	if persistErr != nil {
+		if err != nil {
+			return result, errors.Join(err, persistErr)
+		}
+		return result, persistErr
+	}
+	return result, err
+}
+
+func decodeModelAttemptLog(value string) []ModelAttemptRecord {
+	var records []ModelAttemptRecord
+	if json.Unmarshal([]byte(strings.TrimSpace(value)), &records) != nil || records == nil {
+		return []ModelAttemptRecord{}
+	}
+	return records
+}
+
 func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (AnalysisRun, error) {
 	r.service.analysisMu.Lock()
 	defer r.service.analysisMu.Unlock()
@@ -65,6 +116,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	run := AnalysisRun{
 		RunID: newID(), ScheduledFor: request.ScheduledFor, StartedAt: now, Status: "running",
 		AIConfigID: request.AIConfigID, ProviderName: request.ProviderName, ModelName: request.ModelName,
+		ModelAttemptLogJSON: "[]",
 	}
 	if err := r.service.repository.CreateAnalysis(ctx, &run); err != nil {
 		return run, err
@@ -107,13 +159,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	}
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
-	marketResult, err := r.completeAI(ctx, CompletionRequest{Phase: "market_analysis", Prompt: marketStagePrompt(now, filterSources(allSources, "market"))})
+	marketResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "market_analysis", Prompt: marketStagePrompt(now, filterSources(allSources, "market"))})
 	if err != nil {
 		return finishFailure(fmt.Errorf("大盘层失败: %w", err))
 	}
 	run.MarketReport = strings.TrimSpace(marketResult.Content)
 
-	sectorResult, err := r.completeAI(ctx, CompletionRequest{Phase: "sector_analysis", Prompt: sectorStagePrompt(now, run.MarketReport, filterSources(allSources, "sector"))})
+	sectorResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "sector_analysis", Prompt: sectorStagePrompt(now, run.MarketReport, filterSources(allSources, "sector"))})
 	if err != nil {
 		return finishFailure(fmt.Errorf("板块层失败: %w", err))
 	}
@@ -142,7 +194,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		}
 		allSources = dedupeSources(append(allSources, stockSources...))
 		run.SourceStatusJSON = sourceStatusJSON(allSources)
-		batchResult, callErr := r.completeAI(ctx, CompletionRequest{Phase: "stock_analysis", Prompt: stockStagePrompt(now, run.MarketReport, run.SectorReport, batch, stockSources)})
+		batchResult, callErr := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "stock_analysis", Prompt: stockStagePrompt(now, run.MarketReport, run.SectorReport, batch, stockSources)})
 		if callErr != nil {
 			allSources = append(allSources, failedSource("stock", fmt.Sprintf("个股分析批次%d", start/10+1), now, callErr))
 			continue
@@ -163,13 +215,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	run.StockReport = strings.Join(stockReports, "\n\n")
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
-	finalResult, err := r.completeAI(ctx, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(now, run.MarketReport, run.SectorReport, run.StockReport, shortlist)})
+	finalResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(now, run.MarketReport, run.SectorReport, run.StockReport, shortlist)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("决策层失败: %w", err))
 	}
 	rows, parseErr := parseFinalReport(finalResult.Content)
 	if parseErr != nil {
-		repairResult, repairErr := r.completeAI(ctx, CompletionRequest{Phase: "final_report_repair", Prompt: repairFinalReportPrompt(finalResult.Content, parseErr)})
+		repairResult, repairErr := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_report_repair", Prompt: repairFinalReportPrompt(finalResult.Content, parseErr)})
 		if repairErr != nil {
 			return finishFailure(fmt.Errorf("报告修复失败: %w", repairErr))
 		}

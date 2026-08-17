@@ -34,6 +34,7 @@ export type AnalysisRun = {
   failureReason?: string
   finalReport: string
   marketReport?: string
+  modelAttemptLogJson?: string
   modelName?: string
   providerName?: string
   recommendationCount: number

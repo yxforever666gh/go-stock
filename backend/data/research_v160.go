@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
+	"net"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +20,7 @@ import (
 	"go-stock/backend/research"
 )
 
-type researchProviderCompletion func(context.Context, *models.AIConfig, []map[string]any, string) (string, string, string, error)
+type researchProviderCompletion func(context.Context, *models.AIConfig, []map[string]any, string, func(AIStreamActivity)) (string, string, string, error)
 
 type ResearchAIClient struct {
 	configID         int
@@ -29,9 +31,11 @@ type ResearchAIClient struct {
 }
 
 const (
-	researchModelAttemptTimeout = 30 * time.Second
+	researchModelAttemptTimeout = 300 * time.Second
 	researchModelMaxAttempts    = 5
 )
+
+var errResearchModelInactive = errors.New("model stream had no activity before timeout")
 
 func NewResearchAIClient(configID int) *ResearchAIClient {
 	return &ResearchAIClient{configID: configID}
@@ -51,14 +55,123 @@ func (client *ResearchAIClient) modelMaxAttempts() int {
 	return researchModelMaxAttempts
 }
 
-func (client *ResearchAIClient) completeModelAttempt(ctx context.Context, config *models.AIConfig, messages []map[string]any, previousResponseID string) (string, string, string, error) {
+func (client *ResearchAIClient) completeModelAttempt(ctx context.Context, config *models.AIConfig, messages []map[string]any, previousResponseID string, activity func(AIStreamActivity)) (string, string, string, error) {
 	if client.completeProvider != nil {
-		return client.completeProvider(ctx, config, messages, previousResponseID)
+		return client.completeProvider(ctx, config, messages, previousResponseID, activity)
 	}
 	provider := NewOpenAiWithConfig(ctx, config)
-	provider.TimeOut = int(client.modelAttemptTimeout() / time.Second)
 	provider.DisableRequestRetries = true
-	return provider.CompleteResearch(ctx, messages, previousResponseID)
+	return provider.CompleteResearchStream(ctx, messages, previousResponseID, activity)
+}
+
+func researchInactivityContext(parent context.Context, timeout time.Duration) (context.Context, func(), func()) {
+	ctx, cancel := context.WithCancelCause(parent)
+	touchCh := make(chan struct{}, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-timer.C:
+				select {
+				case <-touchCh:
+					timer.Reset(timeout)
+					continue
+				default:
+					cancel(errResearchModelInactive)
+					return
+				}
+			case <-touchCh:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				timer.Reset(timeout)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	touch := func() {
+		select {
+		case touchCh <- struct{}{}:
+		default:
+		}
+	}
+	stop := func() {
+		cancel(context.Canceled)
+		<-done
+	}
+	return ctx, touch, stop
+}
+
+type researchProviderErrorInfo struct {
+	category   string
+	message    string
+	statusCode int
+	retryable  bool
+	lastEvent  string
+}
+
+func classifyResearchProviderError(err error) researchProviderErrorInfo {
+	if err == nil {
+		return researchProviderErrorInfo{}
+	}
+	var providerErr *aiProviderCallError
+	if errors.As(err, &providerErr) {
+		return researchProviderErrorInfo{
+			category: providerErr.Category, message: providerErr.Message, statusCode: providerErr.StatusCode,
+			retryable: providerErr.Retryable, lastEvent: providerErr.LastEventType,
+		}
+	}
+	if errors.Is(err, errResearchModelInactive) {
+		return researchProviderErrorInfo{category: "idle_timeout", message: err.Error(), retryable: true}
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return researchProviderErrorInfo{category: "stream_interrupted", message: err.Error(), retryable: true}
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return researchProviderErrorInfo{category: "network_error", message: err.Error(), retryable: true}
+	}
+	lower := strings.ToLower(err.Error())
+	for _, marker := range []string{"connection reset", "connection refused", "unexpected eof", "tls handshake timeout", "i/o timeout", "temporary failure", "no such host"} {
+		if strings.Contains(lower, marker) {
+			return researchProviderErrorInfo{category: "network_error", message: err.Error(), retryable: true}
+		}
+	}
+	return researchProviderErrorInfo{category: "request_error", message: err.Error(), retryable: false}
+}
+
+func sanitizeResearchProviderError(message string, config *models.AIConfig) string {
+	message = strings.TrimSpace(message)
+	if config != nil {
+		for _, secret := range []string{config.ApiKey, config.BaseUrl, config.HttpProxy} {
+			if secret = strings.TrimSpace(secret); secret != "" {
+				message = strings.ReplaceAll(message, secret, "[REDACTED]")
+			}
+		}
+	}
+	message = strings.Join(strings.Fields(message), " ")
+	const maxRunes = 2048
+	runes := []rune(message)
+	if len(runes) > maxRunes {
+		message = string(runes[:maxRunes]) + "…"
+	}
+	if message == "" {
+		return "模型服务返回了空错误"
+	}
+	return message
+}
+
+func emitResearchAttempt(callback func(research.ModelAttemptRecord), record research.ModelAttemptRecord) {
+	if callback != nil {
+		callback(record)
+	}
 }
 
 func (client *ResearchAIClient) Complete(ctx context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
@@ -94,52 +207,104 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 			configs[int(config.ID)] = config
 		}
 	}
-	attemptErrors := make([]error, 0, len(order))
+	orderedConfigs := make([]*models.AIConfig, 0, len(order))
+	for _, configID := range order {
+		if config := configs[configID]; config != nil && !config.Disabled {
+			orderedConfigs = append(orderedConfigs, config)
+		}
+	}
+	attemptErrors := make([]error, 0, len(orderedConfigs))
 	attemptTimeout := client.modelAttemptTimeout()
 	maxAttempts := client.modelMaxAttempts()
-	for index, configID := range order {
-		config := configs[configID]
-		if config == nil || config.Disabled {
-			continue
-		}
+	for index, config := range orderedConfigs {
 		label := strings.TrimSpace(config.Name)
 		if label == "" {
 			label = DisplayAIProviderName(config)
 		}
 		var lastErr error
+		var lastInfo researchProviderErrorInfo
+		attemptsMade := 0
 		for attempt := 1; attempt <= maxAttempts; attempt++ {
 			if err := ctx.Err(); err != nil {
 				return research.CompletionResult{}, err
 			}
-			attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
-			content, responseID, model, err := client.completeModelAttempt(attemptCtx, config, messages, request.PreviousResponseID)
-			attemptTimedOut := errors.Is(err, context.DeadlineExceeded) || errors.Is(attemptCtx.Err(), context.DeadlineExceeded)
-			cancel()
+			attemptsMade = attempt
+			startedAt := time.Now()
+			record := research.ModelAttemptRecord{
+				ID:    fmt.Sprintf("%s-%d-%d-%d", request.Phase, config.ID, attempt, startedAt.UnixNano()),
+				Phase: request.Phase, ConfigID: config.ID, ProviderName: label,
+				ModelName: strings.TrimSpace(config.ModelName), APIProtocol: NormalizeAIAPIProtocol(config.ApiProtocol),
+				Attempt: attempt, MaxAttempts: maxAttempts, StartedAt: startedAt, Status: "waiting_response",
+			}
+			emitResearchAttempt(request.OnAttempt, record)
+			attemptCtx, touch, stop := researchInactivityContext(ctx, attemptTimeout)
+			lastPersistedAt := startedAt
+			lastPersistedStatus := record.Status
+			content, responseID, model, err := client.completeModelAttempt(attemptCtx, config, messages, request.PreviousResponseID, func(event AIStreamActivity) {
+				touch()
+				now := time.Now()
+				record.LastActivityAt = &now
+				record.LastEventType = strings.TrimSpace(event.EventType)
+				if strings.TrimSpace(event.State) != "" {
+					record.Status = strings.TrimSpace(event.State)
+				}
+				if record.Status != lastPersistedStatus || now.Sub(lastPersistedAt) >= 5*time.Second {
+					record.DurationMS = now.Sub(startedAt).Milliseconds()
+					emitResearchAttempt(request.OnAttempt, record)
+					lastPersistedAt, lastPersistedStatus = now, record.Status
+				}
+			})
+			cause := context.Cause(attemptCtx)
+			stop()
+			if errors.Is(cause, errResearchModelInactive) {
+				err = fmt.Errorf("连续 %s 未收到有效模型事件: %w", attemptTimeout, errResearchModelInactive)
+			}
 			if err == nil {
+				completedAt := time.Now()
+				record.Status, record.CompletedAt, record.DurationMS = "success", &completedAt, completedAt.Sub(startedAt).Milliseconds()
+				record.NextAction = "complete"
+				emitResearchAttempt(request.OnAttempt, record)
 				return research.CompletionResult{Content: content, ResponseID: responseID, Model: model}, nil
 			}
 			if parentErr := ctx.Err(); parentErr != nil {
+				completedAt := time.Now()
+				record.Status, record.CompletedAt, record.DurationMS = "cancelled", &completedAt, completedAt.Sub(startedAt).Milliseconds()
+				record.ErrorCategory, record.ErrorMessage, record.NextAction = "cancelled", sanitizeResearchProviderError(parentErr.Error(), config), "stop"
+				emitResearchAttempt(request.OnAttempt, record)
 				return research.CompletionResult{}, parentErr
 			}
-			lastErr = err
-			if attemptTimedOut {
-				lastErr = fmt.Errorf("单次调用超过 %s: %w", attemptTimeout, context.DeadlineExceeded)
+			lastInfo = classifyResearchProviderError(err)
+			lastInfo.message = sanitizeResearchProviderError(lastInfo.message, config)
+			lastErr = errors.New(lastInfo.message)
+			completedAt := time.Now()
+			record.Status, record.CompletedAt, record.DurationMS = "failed", &completedAt, completedAt.Sub(startedAt).Milliseconds()
+			record.HTTPStatus, record.ErrorCategory, record.ErrorMessage = lastInfo.statusCode, lastInfo.category, lastInfo.message
+			record.Retryable = lastInfo.retryable
+			if record.LastEventType == "" {
+				record.LastEventType = lastInfo.lastEvent
 			}
-			if attempt < maxAttempts {
-				logger.SugaredLogger.Warnf("研究中心 AI 调用失败，重试当前模型。phase=%s model=%s/%s attempt=%d/%d timeout=%s error=%v",
-					request.Phase, label, strings.TrimSpace(config.ModelName), attempt, maxAttempts, attemptTimeout, lastErr)
+			if lastInfo.retryable && attempt < maxAttempts {
+				record.NextAction = "retry_same_model"
+			} else if index+1 < len(orderedConfigs) {
+				record.NextAction = "fallback_next_model"
+			} else {
+				record.NextAction = "stop"
 			}
+			emitResearchAttempt(request.OnAttempt, record)
+			if lastInfo.retryable && attempt < maxAttempts {
+				logger.SugaredLogger.Warnf("研究中心 AI 调用失败，重试当前模型。phase=%s model=%s/%s attempt=%d/%d inactivity_timeout=%s category=%s http_status=%d error=%s",
+					request.Phase, label, strings.TrimSpace(config.ModelName), attempt, maxAttempts, attemptTimeout, lastInfo.category, lastInfo.statusCode, lastInfo.message)
+				continue
+			}
+			break
 		}
-		attemptErrors = append(attemptErrors, fmt.Errorf("%s/%s 连续 %d 次失败（单次超时 %s）: %w",
-			label, strings.TrimSpace(config.ModelName), maxAttempts, attemptTimeout, lastErr))
-		if index+1 < len(order) {
-			next := configs[order[index+1]]
-			nextLabel := "下一模型"
-			if next != nil {
-				nextLabel = strings.TrimSpace(next.Name) + "/" + strings.TrimSpace(next.ModelName)
-			}
-			logger.SugaredLogger.Warnf("研究中心 AI 连续 %d 次调用失败，按回退顺序切换。phase=%s from=%s/%s to=%s timeout=%s error=%v",
-				maxAttempts, request.Phase, label, strings.TrimSpace(config.ModelName), nextLabel, attemptTimeout, lastErr)
+		attemptErrors = append(attemptErrors, fmt.Errorf("%s/%s 调用 %d 次后失败（%s）: %w",
+			label, strings.TrimSpace(config.ModelName), attemptsMade, lastInfo.category, lastErr))
+		if index+1 < len(orderedConfigs) {
+			next := orderedConfigs[index+1]
+			nextLabel := strings.TrimSpace(next.Name) + "/" + strings.TrimSpace(next.ModelName)
+			logger.SugaredLogger.Warnf("研究中心 AI 调用失败，按回退顺序切换。phase=%s from=%s/%s attempts=%d to=%s inactivity_timeout=%s category=%s http_status=%d error=%s",
+				request.Phase, label, strings.TrimSpace(config.ModelName), attemptsMade, nextLabel, attemptTimeout, lastInfo.category, lastInfo.statusCode, lastInfo.message)
 		}
 	}
 	if len(attemptErrors) == 0 {

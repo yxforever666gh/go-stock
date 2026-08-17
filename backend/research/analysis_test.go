@@ -12,6 +12,36 @@ import (
 
 type fixedCollector struct{}
 
+type attemptReportingAI struct {
+	delegate *scriptedAI
+	sequence int
+}
+
+func (a *attemptReportingAI) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
+	a.sequence++
+	started := time.Now()
+	record := ModelAttemptRecord{
+		ID: "attempt-" + request.Phase, Phase: request.Phase, ConfigID: 1,
+		ProviderName: "provider", ModelName: "model", APIProtocol: "openai_responses",
+		Attempt: 1, MaxAttempts: 5, StartedAt: started, Status: "reasoning", LastEventType: "response.in_progress",
+	}
+	if request.OnAttempt != nil {
+		request.OnAttempt(record)
+	}
+	result, err := a.delegate.Complete(ctx, request)
+	completed := time.Now()
+	record.CompletedAt, record.DurationMS, record.NextAction = &completed, completed.Sub(started).Milliseconds(), "complete"
+	if err == nil {
+		record.Status = "success"
+	} else {
+		record.Status, record.ErrorCategory, record.ErrorMessage = "failed", "test_error", err.Error()
+	}
+	if request.OnAttempt != nil {
+		request.OnAttempt(record)
+	}
+	return result, err
+}
+
 func (fixedCollector) CollectMarket(_ context.Context, now time.Time) ([]SourceDocument, error) {
 	return []SourceDocument{{SourceName: "CLS", Category: "market", CollectedAt: now, Content: "market"}}, nil
 }
@@ -127,6 +157,33 @@ func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 	}
 	if summaries[0].SourceCount != 2 || summaries[0].FailedSourceCount != 1 || summaries[0].RunID != run.RunID {
 		t.Fatalf("summary=%+v", summaries[0])
+	}
+}
+
+func TestAnalysisRunPersistsModelAttemptDiagnostics(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 14, 9, 30, 0, 0, shanghaiLocation)
+	emptySector := `{"analysis":"暂无方向","directions":[],"candidates":[]}`
+	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|---|"
+	ai := &attemptReportingAI{delegate: &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: emptySector}, {Content: emptyFinal}}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time { return now }
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, AIConfigID: 1, ModelName: "model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := repo.Analysis(context.Background(), run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := decodeModelAttemptLog(stored.ModelAttemptLogJSON)
+	if len(records) != 3 {
+		t.Fatalf("records=%+v", records)
+	}
+	for _, record := range records {
+		if record.Status != "success" || record.NextAction != "complete" {
+			t.Fatalf("record=%+v", record)
+		}
 	}
 }
 

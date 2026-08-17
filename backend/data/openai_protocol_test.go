@@ -1,12 +1,84 @@
 package data
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 )
+
+func TestCompleteResearchStreamProtocols(t *testing.T) {
+	tests := []struct {
+		name, protocol, path, stream, wantID, wantModel string
+	}{
+		{
+			name: "responses", protocol: AIAPIProtocolOpenAIResponses, path: "/responses", wantID: "resp_1", wantModel: "responses-model",
+			stream: "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"model\":\"responses-model\"}}\n\n" +
+				"data: {\"type\":\"response.reasoning_summary_text.delta\",\"delta\":\"thinking\"}\n\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"O\"}\n\n" +
+				"data: {\"type\":\"response.output_text.delta\",\"delta\":\"K\"}\n\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"responses-model\"}}\n\n",
+		},
+		{
+			name: "chat", protocol: AIAPIProtocolChatCompletions, path: "/chat/completions", wantID: "chat_1", wantModel: "chat-model",
+			stream: "data: {\"id\":\"chat_1\",\"model\":\"chat-model\",\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking\"}}]}\n\n" +
+				"data: {\"id\":\"chat_1\",\"model\":\"chat-model\",\"choices\":[{\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n",
+		},
+		{
+			name: "anthropic", protocol: AIAPIProtocolAnthropicMessage, path: "/messages", wantID: "msg_1", wantModel: "claude-test",
+			stream: "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-test\"}}\n\n" +
+				"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"thinking\"}}\n\n" +
+				"data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != test.path {
+					t.Fatalf("path=%s, want %s", r.URL.Path, test.path)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["stream"] != true {
+					t.Fatalf("stream=%v, want true", body["stream"])
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprint(w, test.stream)
+			}))
+			defer server.Close()
+			states := make([]string, 0)
+			content, responseID, model, err := testOpenAI(server.URL, test.protocol).CompleteResearchStream(
+				context.Background(), []map[string]any{{"role": "user", "content": "ping"}}, "", func(event AIStreamActivity) {
+					states = append(states, event.State)
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if content != "OK" || responseID != test.wantID || model != test.wantModel {
+				t.Fatalf("content=%q responseID=%q model=%q", content, responseID, model)
+			}
+			if !containsString(states, "reasoning") {
+				t.Fatalf("states=%v, want reasoning activity", states)
+			}
+		})
+	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 func testOpenAI(baseURL, protocol string) *OpenAi {
 	return &OpenAi{

@@ -126,8 +126,10 @@ func (a *App) startAIAnalysis(origin string) error {
 			a.aiAnalysisRunning = false
 			a.aiAnalysisRunMu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Minute)
-		defer cancel()
+		ctx := a.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
 		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: now, AIConfigID: selected.ID,
 			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName})
 		if runErr != nil {
@@ -155,8 +157,10 @@ func (a *App) processDueAILifecycle() {
 		logger.SugaredLogger.Errorf("AI 生命周期运行时不可用: %v", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := runtime.Service.ProcessDue(ctx); err != nil {
 		logger.SugaredLogger.Errorf("AI 生命周期处理失败: %v", err)
 	}

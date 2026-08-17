@@ -96,6 +96,36 @@ INSERT INTO ai_config(sort, name) VALUES (1, 'primary'), (2, 'fallback');`).Erro
 	}
 }
 
+func TestSchema5AddsAttemptDiagnosticsAndPreservesRuns(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	// Recreate the schema-4 shape by removing the field that AutoMigrate adds
+	// when tests use the current AnalysisRun model.
+	if err := database.Migrator().DropColumn(&research.AnalysisRun{}, "ModelAttemptLogJSON"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec(`INSERT INTO research_v160_analysis_runs
+(run_id, scheduled_for, started_at, status, ai_config_id, provider_name, model_name, market_report, sector_report, stock_report, final_report, source_status_json, failure_reason, recommendation_count, created_at, updated_at)
+VALUES ('legacy-run', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'failed', 1, 'provider', 'model', '', '', '', '', '[]', 'old failure', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchModelAttemptDiagnostics(database); err != nil {
+		t.Fatal(err)
+	}
+	var run research.AnalysisRun
+	if err := database.Where("run_id = ?", "legacy-run").First(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	if run.FailureReason != "old failure" || run.ModelAttemptLogJSON != "[]" {
+		t.Fatalf("run=%+v", run)
+	}
+	if err := verifyMainSchema5Runtime(database); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMinuteSchemaRemainsVersion2(t *testing.T) {
 	database := openMigrationTestDB(t)
 	for _, item := range minuteMigrations {

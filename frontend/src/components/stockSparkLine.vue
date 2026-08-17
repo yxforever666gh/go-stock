@@ -1,5 +1,5 @@
 <script setup>
-import {onMounted, onBeforeMount, ref, watchEffect} from "vue";
+import {onBeforeUnmount, onMounted, ref, watch} from "vue";
 import * as echarts from 'echarts';
 import {GetStockMinutePriceLineData} from "../services/app-api"; // 如果您使用多个组件，请将此样式导入放在您的主文件中
 const {stockCode,stockName,lastPrice,openPrice,darkTheme} = defineProps({
@@ -25,13 +25,18 @@ const {stockCode,stockName,lastPrice,openPrice,darkTheme} = defineProps({
   },
 })
 
-const chartRef=ref();
+const chartElement = ref(null)
+let chart = null
+let requestVersion = 0
+let mounted = false
 
-function setChartData(chart) {
-  //console.log("setChartData")
-  GetStockMinutePriceLineData(stockCode, stockName).then(result => {
-    //console.log("GetStockMinutePriceLineData",result)
-    const priceData = result.priceData
+async function setChartData() {
+  if (!mounted || !chart || chart.isDisposed()) return
+  const version = ++requestVersion
+  try {
+    const result = await GetStockMinutePriceLineData(stockCode, stockName)
+    if (!mounted || version !== requestVersion || !chart || chart.isDisposed()) return
+    const priceData = Array.isArray(result?.priceData) ? result.priceData : []
     let category = []
     let price = []
     let min = 0
@@ -114,24 +119,34 @@ function setChartData(chart) {
       ]
     };
     chart.setOption(option);
-  })
+  } catch (_) {
+    // Minute data is optional in compact detail charts. The parent page keeps
+    // the rest of the recommendation detail usable when the source is absent.
+  }
 }
-const chart =ref( null)
 
 onMounted(() => {
-  chart.value = echarts.init( document.getElementById('sparkLine'+stockCode));
-  setChartData(chart.value);
+  mounted = true
+  if (chartElement.value) {
+    chart = echarts.init(chartElement.value)
+    void setChartData()
+  }
 })
 
+watch(() => [stockCode, stockName, lastPrice, openPrice, darkTheme], () => {
+  void setChartData()
+}, {flush: 'post'})
 
-watchEffect(() => {
-  console.log(stockName,'lastPrice变化为:', lastPrice,lastPrice > openPrice)
-  setChartData(chart.value);
+onBeforeUnmount(() => {
+  mounted = false
+  requestVersion++
+  if (chart && !chart.isDisposed()) chart.dispose()
+  chart = null
 })
 
 
 </script>
 <template>
-<div style="height: 20px;width: 100%"  :id="'sparkLine'+stockCode">
+<div ref="chartElement" style="height: 20px;width: 100%">
 </div>
 </template>

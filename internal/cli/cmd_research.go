@@ -34,7 +34,7 @@ func executeResearchOnce(ctx context.Context, repository researchRunRepository, 
 
 func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
 	if len(args) == 0 || strings.EqualFold(args[0], "help") || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintln(stdout, "用法: go-stock-cli [--db-path PATH] research run-once [--json] [--timeout 45m]")
+		fmt.Fprintln(stdout, "用法: go-stock-cli [--db-path PATH] research run-once [--json] [--timeout 0]")
 		return nil
 	}
 	if !strings.EqualFold(args[0], "run-once") {
@@ -44,14 +44,14 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	fs := flag.NewFlagSet("research run-once", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	jsonOut := g.JSON
-	timeout := 45 * time.Minute
+	timeout := time.Duration(0)
 	fs.BoolVar(&jsonOut, "json", jsonOut, "JSON 输出")
-	fs.DurationVar(&timeout, "timeout", timeout, "整轮分析超时")
+	fs.DurationVar(&timeout, "timeout", timeout, "可选整轮分析超时，0 表示无限等待")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	if timeout <= 0 {
-		return errors.New("timeout 必须大于 0")
+	if timeout < 0 {
+		return errors.New("timeout 不能小于 0")
 	}
 
 	setting := data.GetSettingConfig()
@@ -70,7 +70,11 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 		return err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx := context.Background()
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+	}
 	defer cancel()
 	run, runErr := executeResearchOnce(ctx, runtime.Repository, runtime.Runner, research.AnalysisRequest{
 		ScheduledFor: time.Now(), AIConfigID: selected.ID,

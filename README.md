@@ -2,11 +2,11 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.6.1
+## 当前版本：App 1.6.2
 
 Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本将产品边界收敛为“市场行情”和“研究中心”，并建立全新的 AI 分析到模拟交易净收益流程。
 
-[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.6.1 发布说明](./RELEASE_NOTES_1.6.1.md)
+[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.6.2 发布说明](./RELEASE_NOTES_1.6.2.md)
 
 > 本仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 演化，不是原作者官方仓库。
 
@@ -40,17 +40,17 @@ Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 
 
 ## AI 配置
 
-AI 模型配置表从上到下即为回退顺序，关闭的模型会被跳过。每个模型单次调用硬超时 30 秒，最多尝试 5 次后切换下一模型。API Key 仍由用户在本机设置，迁移不会复制或生成密钥。
+AI 模型配置表从上到下即为回退顺序，关闭的模型会被跳过。研究调用采用流式接收：连续 300 秒没有有效推理、心跳、状态或正文事件才超时，活跃推理不限制总时长。瞬态错误在当前模型最多尝试 5 次，不可恢复错误立即切换下一模型。API Key 仍由用户在本机设置，迁移不会复制或生成密钥。
 
 Responses API 优先使用 `previous_response_id` 延续单股会话；中转站不支持续接时，只重发该股票本地保存并压缩后的历史消息。
 
 ## 数据库
 
-- 主库 schema：`4`
+- 主库 schema：`5`
 - 分钟库 schema：`2`
 - 1.6.x 表统一使用 `research_v160_` 前缀
 
-schema 3 创建分析运行、推荐、生命周期消息、AI 决策事件、模拟账户、交易和持仓表；schema 4 增加逐模型启用状态。迁移不会删除旧表或历史行。
+schema 3 创建分析运行、推荐、生命周期消息、AI 决策事件、模拟账户、交易和持仓表；schema 4 增加逐模型启用状态；schema 5 增加脱敏的模型调用诊断记录。迁移不会删除旧表或历史行。
 
 ## 本地运行
 

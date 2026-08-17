@@ -9,6 +9,7 @@ const loading = ref(false)
 const rows = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
+const detailRunID = ref('')
 const starting = ref(false)
 let waitingForManualRun = false
 let manualBaselineRunID = ''
@@ -65,6 +66,44 @@ function sourceRows(value) {
   }
 }
 
+function attemptRows(value) {
+  try {
+    const records = JSON.parse(value || '[]')
+    return Array.isArray(records) ? records : []
+  } catch (_) {
+    return []
+  }
+}
+
+const attemptStatusLabels = {
+  waiting_response: '等待响应', waiting: '等待响应', reasoning: '推理中', streaming: '生成中',
+  success: '成功', failed: '失败', cancelled: '已取消',
+}
+
+const attemptActionLabels = {
+  retry_same_model: '重试当前模型', fallback_next_model: '顺延下一模型', stop: '终止', complete: '完成',
+}
+
+function attemptStatusType(status) {
+  if (status === 'success') return 'success'
+  if (status === 'failed' || status === 'cancelled') return 'error'
+  if (status === 'reasoning' || status === 'streaming' || status === 'waiting' || status === 'waiting_response') return 'warning'
+  return 'default'
+}
+
+const attemptColumns = [
+  {title: '阶段', key: 'phase', width: 150},
+  {title: '模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
+  {title: 'API 格式', key: 'apiProtocol', width: 145},
+  {title: '次数', key: 'attempt', width: 80, render: row => `${row.attempt}/${row.maxAttempts}`},
+  {title: '状态', key: 'status', width: 110, render: row => h(NTag, {type: attemptStatusType(row.status), bordered: false}, {default: () => attemptStatusLabels[row.status] || row.status})},
+  {title: '最后事件', key: 'lastEventType', minWidth: 180, ellipsis: {tooltip: true}, render: row => row.lastEventType || '--'},
+  {title: '最后活动', key: 'lastActivityAt', width: 170, render: row => dateTime(row.lastActivityAt)},
+  {title: '耗时', key: 'durationMs', width: 90, render: row => `${(Number(row.durationMs || 0) / 1000).toFixed(1)}s`},
+  {title: '错误', key: 'errorMessage', minWidth: 260, ellipsis: {tooltip: true}, render: row => row.errorMessage ? `[${row.errorCategory || 'error'}] ${row.errorMessage}` : '--'},
+  {title: '后续动作', key: 'nextAction', width: 130, render: row => attemptActionLabels[row.nextAction] || row.nextAction || '--'},
+]
+
 const sourceColumns = [
   {title: '编号', key: 'sourceId', width: 90},
   {title: '来源', key: 'sourceName', minWidth: 150},
@@ -110,6 +149,9 @@ async function refresh(silent = false) {
 			starting.value = false
 			message.success('AI 分析报告已生成')
 		}
+		if (detailVisible.value && detailRunID.value && (!detail.value || detail.value.status === 'running')) {
+			await refreshDetail(true)
+		}
   } catch (error) {
 		if (!silent) message.error(error?.message || String(error))
   } finally {
@@ -137,10 +179,16 @@ async function startAnalysis() {
 async function showDetail(row) {
   detailVisible.value = true
   detail.value = null
+	detailRunID.value = row.runId
+	await refreshDetail(false)
+}
+
+async function refreshDetail(silent = false) {
+  if (!detailRunID.value) return
   try {
-    detail.value = await GetAIAnalysisReport(row.runId)
+    detail.value = await GetAIAnalysisReport(detailRunID.value)
   } catch (error) {
-    message.error(error?.message || String(error))
+    if (!silent) message.error(error?.message || String(error))
   }
 }
 
@@ -175,6 +223,9 @@ onBeforeUnmount(stopPolling)
               <n-collapse-item title="大盘层" name="market"><MdPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
               <n-collapse-item title="板块层" name="sector"><MdPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
               <n-collapse-item title="个股层" name="stock"><MdPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="模型调用记录" name="attempts">
+                <n-data-table :columns="attemptColumns" :data="attemptRows(detail.modelAttemptLogJson)" :scroll-x="1650" size="small"/>
+              </n-collapse-item>
               <n-collapse-item title="来源状态" name="sources">
                 <n-data-table :columns="sourceColumns" :data="sourceRows(detail.sourceStatusJson)" :scroll-x="900" size="small"/>
               </n-collapse-item>

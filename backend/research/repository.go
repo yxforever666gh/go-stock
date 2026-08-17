@@ -56,6 +56,12 @@ func (r *Repository) SaveAnalysis(ctx context.Context, run *AnalysisRun) error {
 	return r.db.WithContext(ctx).Save(run).Error
 }
 
+func (r *Repository) UpdateAnalysisAttemptLog(ctx context.Context, runID, value string) error {
+	return r.db.WithContext(ctx).Model(&AnalysisRun{}).
+		Where("run_id = ?", runID).
+		Update("model_attempt_log_json", value).Error
+}
+
 func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(recommendation).Error; err != nil {

@@ -747,6 +747,20 @@ func (o *OpenAi) newAnthropicClientWithProxy(enableProxy bool) *resty.Client {
 	return client
 }
 
+func (o *OpenAi) newResearchAIClientWithProxy(enableProxy bool) *resty.Client {
+	client := o.newAIClientWithProxy(enableProxy)
+	client.SetTimeout(0)
+	client.SetRetryCount(0)
+	return client
+}
+
+func (o *OpenAi) newResearchAnthropicClientWithProxy(enableProxy bool) *resty.Client {
+	client := o.newAnthropicClientWithProxy(enableProxy)
+	client.SetTimeout(0)
+	client.SetRetryCount(0)
+	return client
+}
+
 func emitAIStreamContent(ch chan map[string]any, question, chatID, model, content string) {
 	if content == "" {
 		return
@@ -1126,9 +1140,488 @@ func (o *OpenAi) completeOpenAIResponsesWithContext(ctx context.Context, message
 	return content, result.ID, result.Model, nil
 }
 
-// CompleteResearch performs a non-streaming, structured-model request for the
-// 1.6.0 research workflow. previousResponseID is used only by Responses; other
-// protocols receive the supplied local message history.
+type AIStreamActivity struct {
+	EventType string
+	State     string
+}
+
+type aiProviderCallError struct {
+	Category      string
+	StatusCode    int
+	Message       string
+	Retryable     bool
+	LastEventType string
+}
+
+func (e *aiProviderCallError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.StatusCode > 0 {
+		return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+	}
+	return e.Message
+}
+
+func providerHTTPError(statusCode int, body []byte) error {
+	retryable := statusCode == 408 || statusCode == 429 || statusCode >= 500
+	return &aiProviderCallError{
+		Category: "http_error", StatusCode: statusCode,
+		Message: parseAIHTTPError(statusCode, body), Retryable: retryable,
+	}
+}
+
+func providerProtocolError(category, message, lastEvent string, retryable bool) error {
+	return &aiProviderCallError{Category: category, Message: message, Retryable: retryable, LastEventType: lastEvent}
+}
+
+func providerStreamError(message, lastEvent string) error {
+	lower := strings.ToLower(message)
+	retryable := true
+	for _, marker := range []string{
+		"authentication", "unauthorized", "invalid api key", "permission", "forbidden",
+		"invalid_request", "invalid request", "model not found", "does not exist", "unsupported model",
+		"max_output_tokens", "context_length", "context length", "maximum context",
+	} {
+		if strings.Contains(lower, marker) {
+			retryable = false
+			break
+		}
+	}
+	return providerProtocolError("provider_error", message, lastEvent, retryable)
+}
+
+type sseFrame struct {
+	Event string
+	Data  string
+}
+
+func scanSSE(ctx context.Context, body io.Reader, onFrame func(sseFrame) error, onHeartbeat func()) error {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
+	var eventName string
+	dataLines := make([]string, 0, 1)
+	flush := func() error {
+		if len(dataLines) == 0 {
+			if eventName != "" && onHeartbeat != nil {
+				onHeartbeat()
+			}
+			eventName = ""
+			return nil
+		}
+		if strings.TrimSpace(strings.Join(dataLines, "\n")) == "" {
+			if onHeartbeat != nil {
+				onHeartbeat()
+			}
+			eventName = ""
+			dataLines = dataLines[:0]
+			return nil
+		}
+		frame := sseFrame{Event: eventName, Data: strings.Join(dataLines, "\n")}
+		eventName = ""
+		dataLines = dataLines[:0]
+		return onFrame(frame)
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			if err := flush(); err != nil {
+				return err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, ":") {
+			if onHeartbeat != nil {
+				onHeartbeat()
+			}
+			continue
+		}
+		name, value, found := strings.Cut(line, ":")
+		if !found {
+			name, value = line, ""
+		}
+		value = strings.TrimPrefix(value, " ")
+		switch name {
+		case "event":
+			eventName = value
+		case "data":
+			dataLines = append(dataLines, value)
+		case "id", "retry":
+			// Valid SSE metadata; it does not prove model activity by itself.
+		default:
+			return providerProtocolError("protocol_error", "模型服务返回了非 SSE 流内容", eventName, false)
+		}
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
+	return scanner.Err()
+}
+
+func streamResponseOutputText(raw json.RawMessage) (string, string, string) {
+	var response struct {
+		ID         string `json:"id"`
+		Model      string `json:"model"`
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if len(raw) == 0 || json.Unmarshal(raw, &response) != nil {
+		return "", "", ""
+	}
+	parts := make([]string, 0)
+	if strings.TrimSpace(response.OutputText) != "" {
+		parts = append(parts, response.OutputText)
+	}
+	for _, output := range response.Output {
+		for _, block := range output.Content {
+			if strings.TrimSpace(block.Text) != "" {
+				parts = append(parts, block.Text)
+			}
+		}
+	}
+	return strings.TrimSpace(strings.Join(parts, "\n")), response.ID, response.Model
+}
+
+func streamEventError(raw json.RawMessage) string {
+	var payload struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+		Error   struct {
+			Message string `json:"message"`
+			Code    string `json:"code"`
+			Type    string `json:"type"`
+		} `json:"error"`
+		Response struct {
+			Error struct {
+				Message string `json:"message"`
+				Code    string `json:"code"`
+			} `json:"error"`
+			IncompleteDetails struct {
+				Reason string `json:"reason"`
+			} `json:"incomplete_details"`
+		} `json:"response"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	for _, value := range []string{payload.Error.Message, payload.Response.Error.Message, payload.Response.IncompleteDetails.Reason, payload.Message, payload.Error.Code, payload.Response.Error.Code, payload.Code} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return "model provider reported a failed stream"
+}
+
+func emitResearchActivity(callback func(AIStreamActivity), eventType, state string) {
+	if callback != nil {
+		callback(AIStreamActivity{EventType: eventType, State: state})
+	}
+}
+
+func (o *OpenAi) completeOpenAIResponsesStream(ctx context.Context, messages []map[string]any, previousResponseID string, activity func(AIStreamActivity)) (string, string, string, error) {
+	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
+	}
+	bodyMap := o.openAIResponsesBodyWithPrevious(interfaceMessages, true, previousResponseID)
+	request := func(enableProxy bool) (*resty.Response, error) {
+		return o.newResearchAIClientWithProxy(enableProxy).R().SetContext(ctx).SetDoNotParseResponse(true).SetBody(bodyMap).Post("/responses")
+	}
+	resp, err := request(true)
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = request(false)
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	if resp == nil {
+		return "", "", "", providerProtocolError("empty_response", "empty response from model provider", "", true)
+	}
+	if resp.IsError() {
+		return "", "", "", providerHTTPError(resp.StatusCode(), readErrorResponseBody(resp))
+	}
+	emitResearchActivity(activity, "response_headers", "waiting")
+	body := resp.RawBody()
+	if body == nil {
+		return "", "", "", providerProtocolError("empty_response", "model provider returned no stream body", "response_headers", true)
+	}
+	defer body.Close()
+	var content strings.Builder
+	responseID, model, lastEvent := "", o.Model, "response_headers"
+	terminal := false
+	err = scanSSE(ctx, body, func(frame sseFrame) error {
+		data := strings.TrimSpace(frame.Data)
+		if data == "[DONE]" {
+			lastEvent, terminal = "done", true
+			emitResearchActivity(activity, lastEvent, "streaming")
+			return nil
+		}
+		var event struct {
+			Type     string          `json:"type"`
+			Delta    string          `json:"delta"`
+			Response json.RawMessage `json:"response"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return providerProtocolError("protocol_error", "Responses 流事件不是有效 JSON", lastEvent, false)
+		}
+		if event.Type == "" {
+			event.Type = strings.TrimSpace(frame.Event)
+		}
+		if event.Type == "" {
+			return providerProtocolError("protocol_error", "Responses 流事件缺少 type", lastEvent, false)
+		}
+		lastEvent = event.Type
+		state := "streaming"
+		if strings.Contains(event.Type, "reasoning") || event.Type == "response.in_progress" || event.Type == "response.created" {
+			state = "reasoning"
+		}
+		emitResearchActivity(activity, event.Type, state)
+		if finalText, id, responseModel := streamResponseOutputText(event.Response); id != "" || responseModel != "" || finalText != "" {
+			if id != "" {
+				responseID = id
+			}
+			if responseModel != "" {
+				model = responseModel
+			}
+			if event.Type == "response.completed" && content.Len() == 0 && finalText != "" {
+				content.WriteString(finalText)
+			}
+		}
+		switch event.Type {
+		case "response.output_text.delta":
+			content.WriteString(event.Delta)
+		case "response.completed":
+			terminal = true
+		case "response.failed", "response.incomplete", "error":
+			return providerStreamError(streamEventError([]byte(data)), lastEvent)
+		}
+		return nil
+	}, func() {
+		lastEvent = "heartbeat"
+		emitResearchActivity(activity, lastEvent, "reasoning")
+	})
+	if err != nil {
+		return "", responseID, model, err
+	}
+	if !terminal {
+		return "", responseID, model, providerProtocolError("stream_interrupted", "Responses 流在完成事件前中断", lastEvent, true)
+	}
+	result := strings.TrimSpace(content.String())
+	if result == "" {
+		return "", responseID, model, providerProtocolError("empty_output", "Responses 流已完成但没有正文", lastEvent, false)
+	}
+	return result, responseID, model, nil
+}
+
+func (o *OpenAi) completeChatCompletionsStream(ctx context.Context, messages []map[string]any, activity func(AIStreamActivity)) (string, string, string, error) {
+	bodyMap := map[string]any{"model": o.Model, "max_tokens": o.MaxTokens, "temperature": o.Temperature, "stream": true, "messages": messages}
+	request := func(enableProxy bool) (*resty.Response, error) {
+		return o.newResearchAIClientWithProxy(enableProxy).R().SetContext(ctx).SetDoNotParseResponse(true).SetBody(bodyMap).Post("/chat/completions")
+	}
+	resp, err := request(true)
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = request(false)
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	if resp == nil {
+		return "", "", "", providerProtocolError("empty_response", "empty response from model provider", "", true)
+	}
+	if resp.IsError() {
+		return "", "", "", providerHTTPError(resp.StatusCode(), readErrorResponseBody(resp))
+	}
+	emitResearchActivity(activity, "response_headers", "waiting")
+	body := resp.RawBody()
+	if body == nil {
+		return "", "", "", providerProtocolError("empty_response", "model provider returned no stream body", "response_headers", true)
+	}
+	defer body.Close()
+	var content strings.Builder
+	responseID, model, lastEvent := "", o.Model, "response_headers"
+	terminal := false
+	err = scanSSE(ctx, body, func(frame sseFrame) error {
+		data := strings.TrimSpace(frame.Data)
+		if data == "[DONE]" {
+			lastEvent, terminal = "done", true
+			emitResearchActivity(activity, lastEvent, "streaming")
+			return nil
+		}
+		var event struct {
+			ID      string          `json:"id"`
+			Model   string          `json:"model"`
+			Error   json.RawMessage `json:"error"`
+			Choices []struct {
+				Delta struct {
+					Content          string `json:"content"`
+					ReasoningContent string `json:"reasoning_content"`
+				} `json:"delta"`
+				FinishReason string `json:"finish_reason"`
+			} `json:"choices"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return providerProtocolError("protocol_error", "Chat Completions 流事件不是有效 JSON", lastEvent, false)
+		}
+		if len(event.Error) > 0 && string(event.Error) != "null" {
+			return providerStreamError(streamEventError([]byte(data)), lastEvent)
+		}
+		if event.ID != "" {
+			responseID = event.ID
+		}
+		if event.Model != "" {
+			model = event.Model
+		}
+		lastEvent = "chat.completion.chunk"
+		state := "streaming"
+		for _, choice := range event.Choices {
+			if choice.Delta.ReasoningContent != "" {
+				state = "reasoning"
+			}
+			content.WriteString(choice.Delta.Content)
+			if choice.FinishReason != "" {
+				terminal = true
+				lastEvent = "finish_reason:" + choice.FinishReason
+			}
+		}
+		emitResearchActivity(activity, lastEvent, state)
+		return nil
+	}, func() {
+		lastEvent = "heartbeat"
+		emitResearchActivity(activity, lastEvent, "reasoning")
+	})
+	if err != nil {
+		return "", responseID, model, err
+	}
+	if !terminal {
+		return "", responseID, model, providerProtocolError("stream_interrupted", "Chat Completions 流在完成事件前中断", lastEvent, true)
+	}
+	result := strings.TrimSpace(content.String())
+	if result == "" {
+		return "", responseID, model, providerProtocolError("empty_output", "Chat Completions 流已完成但没有正文", lastEvent, false)
+	}
+	return result, responseID, model, nil
+}
+
+func (o *OpenAi) completeAnthropicMessagesStream(ctx context.Context, messages []map[string]any, activity func(AIStreamActivity)) (string, string, string, error) {
+	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
+	for _, msg := range messages {
+		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
+	}
+	bodyMap := o.anthropicMessagesBody(interfaceMessages, true)
+	request := func(enableProxy bool) (*resty.Response, error) {
+		return o.newResearchAnthropicClientWithProxy(enableProxy).R().SetContext(ctx).SetDoNotParseResponse(true).SetBody(bodyMap).Post("/messages")
+	}
+	resp, err := request(true)
+	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
+		resp, err = request(false)
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	if resp == nil {
+		return "", "", "", providerProtocolError("empty_response", "empty response from model provider", "", true)
+	}
+	if resp.IsError() {
+		return "", "", "", providerHTTPError(resp.StatusCode(), readErrorResponseBody(resp))
+	}
+	emitResearchActivity(activity, "response_headers", "waiting")
+	body := resp.RawBody()
+	if body == nil {
+		return "", "", "", providerProtocolError("empty_response", "model provider returned no stream body", "response_headers", true)
+	}
+	defer body.Close()
+	var content strings.Builder
+	responseID, model, lastEvent := "", o.Model, "response_headers"
+	terminal := false
+	err = scanSSE(ctx, body, func(frame sseFrame) error {
+		data := strings.TrimSpace(frame.Data)
+		if data == "[DONE]" {
+			lastEvent, terminal = "done", true
+			emitResearchActivity(activity, lastEvent, "streaming")
+			return nil
+		}
+		var event struct {
+			Type    string `json:"type"`
+			Message struct {
+				ID    string `json:"id"`
+				Model string `json:"model"`
+			} `json:"message"`
+			Delta struct {
+				Type     string `json:"type"`
+				Text     string `json:"text"`
+				Thinking string `json:"thinking"`
+			} `json:"delta"`
+		}
+		if err := json.Unmarshal([]byte(data), &event); err != nil {
+			return providerProtocolError("protocol_error", "Anthropic 流事件不是有效 JSON", lastEvent, false)
+		}
+		if event.Type == "" {
+			event.Type = strings.TrimSpace(frame.Event)
+		}
+		if event.Type == "" {
+			return providerProtocolError("protocol_error", "Anthropic 流事件缺少 type", lastEvent, false)
+		}
+		lastEvent = event.Type
+		if event.Message.ID != "" {
+			responseID = event.Message.ID
+		}
+		if event.Message.Model != "" {
+			model = event.Message.Model
+		}
+		state := "streaming"
+		if event.Type == "ping" || event.Delta.Thinking != "" || strings.Contains(event.Delta.Type, "thinking") {
+			state = "reasoning"
+		}
+		emitResearchActivity(activity, event.Type, state)
+		switch event.Type {
+		case "content_block_delta":
+			content.WriteString(event.Delta.Text)
+		case "message_stop":
+			terminal = true
+		case "error":
+			return providerStreamError(streamEventError([]byte(data)), lastEvent)
+		}
+		return nil
+	}, func() {
+		lastEvent = "heartbeat"
+		emitResearchActivity(activity, lastEvent, "reasoning")
+	})
+	if err != nil {
+		return "", responseID, model, err
+	}
+	if !terminal {
+		return "", responseID, model, providerProtocolError("stream_interrupted", "Anthropic 流在完成事件前中断", lastEvent, true)
+	}
+	result := strings.TrimSpace(content.String())
+	if result == "" {
+		return "", responseID, model, providerProtocolError("empty_output", "Anthropic 流已完成但没有正文", lastEvent, false)
+	}
+	return result, responseID, model, nil
+}
+
+// CompleteResearchStream performs an activity-observable streaming request for
+// research. The orchestrator owns the inactivity timer and retry ordering.
+func (o *OpenAi) CompleteResearchStream(ctx context.Context, messages []map[string]any, previousResponseID string, activity func(AIStreamActivity)) (string, string, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	switch NormalizeAIAPIProtocol(o.ApiProtocol) {
+	case AIAPIProtocolOpenAIResponses:
+		return o.completeOpenAIResponsesStream(ctx, messages, previousResponseID, activity)
+	case AIAPIProtocolAnthropicMessage:
+		return o.completeAnthropicMessagesStream(ctx, messages, activity)
+	default:
+		return o.completeChatCompletionsStream(ctx, messages, activity)
+	}
+}
+
+// CompleteResearch is retained for non-research callers and compatibility
+// tests. The 1.6.2 research workflow uses CompleteResearchStream.
 func (o *OpenAi) CompleteResearch(ctx context.Context, messages []map[string]any, previousResponseID string) (string, string, string, error) {
 	if ctx == nil {
 		ctx = context.Background()

@@ -21,6 +21,7 @@ type CompletionRequest struct {
 	Prompt             string
 	Messages           []LifecycleMessage
 	PreviousResponseID string
+	OnAttempt          func(ModelAttemptRecord)
 }
 
 type CompletionResult struct {

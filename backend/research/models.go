@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion       = "1.6.1"
+	AppVersion       = "1.6.2"
 	InitialCash      = 100000.0
 	MaxCashPerTrade  = 50000.0
 	DefaultCheckMins = 15
@@ -24,10 +24,35 @@ type AnalysisRun struct {
 	StockReport         string     `json:"stockReport" gorm:"type:text"`
 	FinalReport         string     `json:"finalReport" gorm:"type:text"`
 	SourceStatusJSON    string     `json:"sourceStatusJson" gorm:"type:text"`
+	ModelAttemptLogJSON string     `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
 	FailureReason       string     `json:"failureReason" gorm:"type:text"`
 	RecommendationCount int        `json:"recommendationCount"`
 	CreatedAt           time.Time  `json:"createdAt"`
 	UpdatedAt           time.Time  `json:"updatedAt"`
+}
+
+// ModelAttemptRecord is the persisted, sanitized state of one provider call.
+// It deliberately excludes prompts, response bodies, headers and credentials.
+type ModelAttemptRecord struct {
+	ID             string     `json:"id"`
+	Phase          string     `json:"phase"`
+	ConfigID       uint       `json:"configId"`
+	ProviderName   string     `json:"providerName"`
+	ModelName      string     `json:"modelName"`
+	APIProtocol    string     `json:"apiProtocol"`
+	Attempt        int        `json:"attempt"`
+	MaxAttempts    int        `json:"maxAttempts"`
+	StartedAt      time.Time  `json:"startedAt"`
+	LastActivityAt *time.Time `json:"lastActivityAt,omitempty"`
+	CompletedAt    *time.Time `json:"completedAt,omitempty"`
+	DurationMS     int64      `json:"durationMs"`
+	Status         string     `json:"status"`
+	LastEventType  string     `json:"lastEventType,omitempty"`
+	HTTPStatus     int        `json:"httpStatus,omitempty"`
+	ErrorCategory  string     `json:"errorCategory,omitempty"`
+	ErrorMessage   string     `json:"errorMessage,omitempty"`
+	Retryable      bool       `json:"retryable"`
+	NextAction     string     `json:"nextAction,omitempty"`
 }
 
 func (AnalysisRun) TableName() string { return "research_v160_analysis_runs" }
