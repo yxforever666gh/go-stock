@@ -106,22 +106,29 @@ func (s *Service) expirePending(ctx context.Context, now time.Time) error {
 		return err
 	}
 	for _, recommendation := range pending {
-		signalDate := ShanghaiTime(recommendation.SignalAt).Format("2006-01-02")
-		currentDate := ShanghaiTime(now).Format("2006-01-02")
-		if signalDate > currentDate || (signalDate == currentDate && !IsAfterMarketClose(now)) {
+		elapsed, elapsedErr := AccumulatedTradingTime(ctx, s.calendar, recommendation.SignalAt, now, ActivationTradingWindow)
+		if elapsedErr != nil {
+			return elapsedErr
+		}
+		if elapsed < ActivationTradingWindow {
 			continue
 		}
-		if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
-			"status": "invalidated", "last_decision": "失效", "last_decision_at": now, "next_check_at": nil,
-		}); err != nil {
+		if err := s.invalidatePending(ctx, recommendation.RecommendationID, now, "累计开盘交易时长达到4小时，推荐仍未激活"); err != nil {
 			return err
 		}
-		_ = s.repository.AppendDecision(ctx, &DecisionEvent{
-			EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "失效", DecidedAt: now,
-			Reason: "收盘后仍未激活，推荐当日失效",
-		})
 	}
 	return nil
+}
+
+func (s *Service) invalidatePending(ctx context.Context, recommendationID string, now time.Time, reason string) error {
+	if err := s.repository.UpdateRecommendation(ctx, recommendationID, map[string]any{
+		"status": "invalidated", "last_decision": "失效", "last_decision_at": now, "next_check_at": nil,
+	}); err != nil {
+		return err
+	}
+	return s.repository.AppendDecision(ctx, &DecisionEvent{
+		EventID: newID(), RecommendationID: recommendationID, DecisionType: "失效", DecidedAt: now, Reason: reason,
+	})
 }
 
 func (s *Service) processOne(ctx context.Context, recommendation *Recommendation, now time.Time) error {
@@ -174,6 +181,31 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return err
 	}
 	decisionAt := s.now()
+	if phase == "activation" {
+		elapsed, elapsedErr := AccumulatedTradingTime(ctx, s.calendar, recommendation.SignalAt, decisionAt, ActivationTradingWindow)
+		if elapsedErr != nil {
+			return elapsedErr
+		}
+		if elapsed >= ActivationTradingWindow {
+			return s.invalidatePending(ctx, recommendation.RecommendationID, decisionAt, "模型响应时累计开盘交易时长已达到4小时，推荐失效")
+		}
+		trading, tradingErr := s.calendar.IsTradingDay(ctx, decisionAt)
+		if tradingErr != nil {
+			return tradingErr
+		}
+		if !trading || !IsTradingSession(decisionAt) {
+			next := NextLifecycleCheck(decisionAt)
+			if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
+				"previous_response_id": result.ResponseID, "next_check_at": next,
+			}); err != nil {
+				return err
+			}
+			return s.repository.AppendDecision(ctx, &DecisionEvent{
+				EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "响应跨休市", DecidedAt: decisionAt,
+				AIResponse: result.Content, Reason: "模型响应时市场已休市，本次判断不执行，顺延至下一开盘时段",
+			})
+		}
+	}
 	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
 		"previous_response_id": result.ResponseID, "last_decision": decision.Action, "last_decision_at": decisionAt,
 	}); err != nil {

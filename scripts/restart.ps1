@@ -16,7 +16,7 @@ $WebAddr = if ($env:GO_STOCK_WEB_ADDR) { $env:GO_STOCK_WEB_ADDR } else { "127.0.
 $Port = [int]($WebAddr.Split(":")[-1])
 $ReadyURL = "http://$WebAddr/readyz"
 $AppURL = "http://$WebAddr/"
-$ResearchCenterURL = "http://$WebAddr/#/research?name=AI%E5%88%86%E6%9E%90%E6%8A%A5%E5%91%8A"
+$ResearchCenterURL = "http://$WebAddr/#/research?name=%E8%82%A1%E7%A5%A8%E6%8E%A8%E8%8D%90%E8%AE%B0%E5%BD%95"
 
 function Get-OpenURL {
     if ($ResearchCenter) { return $ResearchCenterURL }

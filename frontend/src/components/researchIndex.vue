@@ -3,18 +3,18 @@ import { defineAsyncComponent, nextTick, onBeforeMount, onBeforeUnmount, onMount
 import { EventsOff, EventsOn } from "../services/browser-runtime.mjs";
 import { useRoute, useRouter } from 'vue-router'
 
-const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order'
+const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order-v163'
 const ResearchYield = defineAsyncComponent(() => import('./researchYield.vue'))
 const ResearchReport = defineAsyncComponent(() => import('./researchReport.vue'))
 const ResearchRecommendations = defineAsyncComponent(() => import('./researchRecommendations.vue'))
 const defaultTabs = [
-  { name: "AI分析报告", component: ResearchReport },
   { name: "股票推荐记录", component: ResearchRecommendations },
+  { name: "AI分析报告", component: ResearchReport },
   { name: "股票收益率", component: ResearchYield },
 ]
 
 const tabs = ref([...defaultTabs])
-const nowTab = ref("AI分析报告")
+const nowTab = ref("股票推荐记录")
 const route = useRoute()
 const router = useRouter()
 const cardRef = ref(null)

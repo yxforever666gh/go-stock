@@ -53,6 +53,19 @@ type openCalendar struct{}
 
 func (openCalendar) IsTradingDay(context.Context, time.Time) (bool, error) { return true, nil }
 
+type advancingAI struct {
+	clock    *time.Time
+	finishAt time.Time
+	result   CompletionResult
+	requests []CompletionRequest
+}
+
+func (a *advancingAI) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
+	a.requests = append(a.requests, request)
+	*a.clock = a.finishAt
+	return a.result, nil
+}
+
 func researchTestRepo(t *testing.T) *Repository {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
@@ -187,19 +200,51 @@ func TestDueLifecycleDoesNotRunDuringLunch(t *testing.T) {
 	}
 }
 
-func TestPreviousDayPendingExpiresBeforeNextSessionDecision(t *testing.T) {
+func TestPendingCarriesTradingBudgetAcrossDaysAndExpiresAtFourHours(t *testing.T) {
 	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 17, 9, 30, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation), now, "")
+	signal := time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation)
+	now := time.Date(2026, 8, 17, 14, 29, 0, 0, shanghaiLocation)
+	due := now.Add(time.Minute)
+	rec := seedRecommendation(t, repo, "pending", signal, due, "")
 	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"激活","reason":"不应调用"}`}}}
-	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if updated.Status != "pending" || len(ai.requests) != 0 {
+		t.Fatalf("recommendation expired before four trading hours: %+v requests=%d", updated, len(ai.requests))
+	}
+	now = now.Add(time.Minute)
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = repo.Recommendation(context.Background(), rec.RecommendationID)
 	if updated.Status != "invalidated" || len(ai.requests) != 0 {
-		t.Fatalf("stale pending was processed instead of expired: %+v requests=%d", updated, len(ai.requests))
+		t.Fatalf("recommendation did not expire at four trading hours: %+v requests=%d", updated, len(ai.requests))
+	}
+}
+
+func TestActivationResponseCrossingCloseIsDeferred(t *testing.T) {
+	repo := researchTestRepo(t)
+	signal := time.Date(2026, 8, 17, 14, 30, 0, 0, shanghaiLocation)
+	now := time.Date(2026, 8, 17, 14, 45, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "pending", signal, now, "")
+	ai := &advancingAI{clock: &now, finishAt: time.Date(2026, 8, 17, 15, 5, 0, 0, shanghaiLocation), result: CompletionResult{Content: `{"action":"激活","reason":"条件满足"}`, ResponseID: "late-response"}}
+	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: now}}}
+	service := NewService(repo, ai, quotes, weekdayTradingCalendar{})
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if updated.Status != "pending" || updated.PreviousResponseID != "late-response" || quotes.calls != 1 {
+		t.Fatalf("late response was executed: recommendation=%+v quoteCalls=%d", updated, quotes.calls)
+	}
+	var deferred int64
+	if err := repo.DB().Model(&DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", rec.RecommendationID, "响应跨休市").Count(&deferred).Error; err != nil || deferred != 1 {
+		t.Fatalf("deferred events=%d err=%v", deferred, err)
 	}
 }
 

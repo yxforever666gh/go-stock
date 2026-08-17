@@ -108,6 +108,14 @@ var mainMigrations = []migration{
 		definition:  func() string { return "research_v160_analysis_runs.model_attempt_log_json TEXT NOT NULL DEFAULT '[]'" },
 		apply:       applyResearchModelAttemptDiagnostics,
 	},
+	{
+		id: 6, name: "research_four_hour_activation_recovery",
+		description: "App 1.6.3 restores the two after-close recommendations that were invalidated by the former same-day rule while preserving their decision history.",
+		definition: func() string {
+			return "restore c49ade23-12f4-4aa0-8203-b985bfd9d7e4 and 699640bc-861e-4330-8023-4182173b3e9e as pending at 2026-08-18 09:30 Asia/Shanghai; append deterministic recovery events"
+		},
+		apply: applyResearchFourHourActivationRecovery,
+	},
 }
 
 var minuteMigrations = []migration{
@@ -191,6 +199,45 @@ func applyResearchModelAttemptDiagnostics(tx *gorm.DB) error {
 	}
 	if err := tx.Exec("UPDATE research_v160_analysis_runs SET model_attempt_log_json = '[]' WHERE model_attempt_log_json IS NULL OR TRIM(model_attempt_log_json) = ''").Error; err != nil {
 		return fmt.Errorf("backfill research model attempt log: %w", err)
+	}
+	return nil
+}
+
+func applyResearchFourHourActivationRecovery(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if !tx.Migrator().HasTable(&research.Recommendation{}) || !tx.Migrator().HasTable(&research.DecisionEvent{}) {
+		return errors.New("research lifecycle tables are unavailable")
+	}
+	nextCheck := time.Date(2026, 8, 18, 9, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	recoveries := []struct {
+		recommendationID string
+		eventID          string
+	}{
+		{recommendationID: "c49ade23-12f4-4aa0-8203-b985bfd9d7e4", eventID: "16300000-0000-4000-8000-000000000001"},
+		{recommendationID: "699640bc-861e-4330-8023-4182173b3e9e", eventID: "16300000-0000-4000-8000-000000000002"},
+	}
+	for _, recovery := range recoveries {
+		result := tx.Model(&research.Recommendation{}).
+			Where("recommendation_id = ? AND status = ?", recovery.recommendationID, "invalidated").
+			Updates(map[string]any{
+				"status": "pending", "next_check_at": nextCheck, "last_decision": "", "last_decision_at": nil,
+			})
+		if result.Error != nil {
+			return fmt.Errorf("restore recommendation %s: %w", recovery.recommendationID, result.Error)
+		}
+		if result.RowsAffected == 0 {
+			continue
+		}
+		event := research.DecisionEvent{
+			EventID: recovery.eventID, RecommendationID: recovery.recommendationID,
+			DecisionType: "人工恢复", DecidedAt: time.Now(),
+			Reason: "1.6.3 启用累计4小时开盘交易时长规则，恢复为未激活并从下一交易日继续判断",
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error; err != nil {
+			return fmt.Errorf("record recovery event %s: %w", recovery.recommendationID, err)
+		}
 	}
 	return nil
 }

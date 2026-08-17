@@ -93,8 +93,8 @@ function createMarketChildren(activeKey) {
 
 function createResearchChildren(activeKey) {
   const researchTabs = [
-    ['research1', 'AI分析报告', ReportAnalytics, 0],
-    ['research2', '股票推荐记录', DiamondOutline, 1],
+    ['research1', '股票推荐记录', DiamondOutline, 0],
+    ['research2', 'AI分析报告', ReportAnalytics, 1],
     ['research3', '股票收益率', ReportMoney, 2],
   ]
 
@@ -211,11 +211,11 @@ export function createMenuOptions({
         '研究中心',
         {
           name: 'research',
-          query: { name: 'AI分析报告' },
+          query: { name: '股票推荐记录' },
         },
         () => {
           activeKey.value = 'research'
-          emitLater('changeResearchTab', { ID: 0, name: 'AI分析报告' })
+          emitLater('changeResearchTab', { ID: 0, name: '股票推荐记录' })
         },
       ),
       key: 'research',

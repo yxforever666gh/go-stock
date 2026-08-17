@@ -126,6 +126,57 @@ VALUES ('legacy-run', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'failed', 1, 'provid
 	}
 }
 
+func TestSchema6RestoresTargetRecommendationsAndPreservesInvalidationHistory(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 17, 15, 43, 28, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	run := research.AnalysisRun{RunID: "00350e77-a1f3-4a4c-8e18-d1cf594e8d26", ScheduledFor: now, StartedAt: now, Status: "success"}
+	if err := database.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	ids := []string{"c49ade23-12f4-4aa0-8203-b985bfd9d7e4", "699640bc-861e-4330-8023-4182173b3e9e"}
+	for index, id := range ids {
+		recommendation := research.Recommendation{
+			RecommendationID: id, AnalysisRunID: run.RunID, StockCode: "sh60000" + string(rune('0'+index)),
+			StockName: "测试", SignalAt: now, Status: "invalidated", LastDecision: "失效", LastDecisionAt: &now,
+		}
+		if err := database.Create(&recommendation).Error; err != nil {
+			t.Fatal(err)
+		}
+		original := research.DecisionEvent{EventID: "old-event-" + id, RecommendationID: id, DecisionType: "失效", DecidedAt: now, Reason: "收盘后仍未激活，推荐当日失效"}
+		if err := database.Create(&original).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := applyResearchFourHourActivationRecovery(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchFourHourActivationRecovery(database); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		var recommendation research.Recommendation
+		if err := database.Where("recommendation_id = ?", id).First(&recommendation).Error; err != nil {
+			t.Fatal(err)
+		}
+		if recommendation.Status != "pending" || recommendation.NextCheckAt == nil || recommendation.NextCheckAt.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02 15:04") != "2026-08-18 09:30" {
+			t.Fatalf("restored recommendation=%+v", recommendation)
+		}
+		var originalCount, recoveryCount int64
+		if err := database.Model(&research.DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", id, "失效").Count(&originalCount).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Model(&research.DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", id, "人工恢复").Count(&recoveryCount).Error; err != nil {
+			t.Fatal(err)
+		}
+		if originalCount != 1 || recoveryCount != 1 {
+			t.Fatalf("events for %s: invalid=%d recovery=%d", id, originalCount, recoveryCount)
+		}
+	}
+}
+
 func TestMinuteSchemaRemainsVersion2(t *testing.T) {
 	database := openMigrationTestDB(t)
 	for _, item := range minuteMigrations {

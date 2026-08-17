@@ -1,10 +1,18 @@
 package research
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
 )
+
+type weekdayTradingCalendar struct{}
+
+func (weekdayTradingCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, error) {
+	weekday := ShanghaiTime(value).Weekday()
+	return weekday != time.Saturday && weekday != time.Sunday, nil
+}
 
 func TestSizeBuyHonorsCashCapCostsAndMarketLot(t *testing.T) {
 	quantity, cost, err := SizeBuy("sh600000", 10, 100000)
@@ -69,6 +77,34 @@ func TestTradingSessionExcludesLunchAndClose(t *testing.T) {
 		if IsTradingSession(value) {
 			t.Fatalf("%s should not be a trading session", minute)
 		}
+	}
+}
+
+func TestAccumulatedTradingTimeSkipsLunchNightsAndWeekend(t *testing.T) {
+	calendar := weekdayTradingCalendar{}
+	fridaySignal := time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation)
+	mondayBeforeDeadline := time.Date(2026, 8, 17, 14, 29, 0, 0, shanghaiLocation)
+	elapsed, err := AccumulatedTradingTime(context.Background(), calendar, fridaySignal, mondayBeforeDeadline, ActivationTradingWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed != 3*time.Hour+59*time.Minute {
+		t.Fatalf("elapsed=%s, want 3h59m", elapsed)
+	}
+	mondayDeadline := mondayBeforeDeadline.Add(time.Minute)
+	elapsed, err = AccumulatedTradingTime(context.Background(), calendar, fridaySignal, mondayDeadline, ActivationTradingWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed != ActivationTradingWindow {
+		t.Fatalf("elapsed=%s, want 4h", elapsed)
+	}
+
+	afterCloseSignal := time.Date(2026, 8, 17, 15, 43, 0, 0, shanghaiLocation)
+	nextClose := time.Date(2026, 8, 18, 15, 0, 0, 0, shanghaiLocation)
+	elapsed, err = AccumulatedTradingTime(context.Background(), calendar, afterCloseSignal, nextClose, ActivationTradingWindow)
+	if err != nil || elapsed != ActivationTradingWindow {
+		t.Fatalf("after-close elapsed=%s err=%v", elapsed, err)
 	}
 }
 

@@ -17,6 +17,15 @@ type attemptReportingAI struct {
 	sequence int
 }
 
+type fixedCalendar struct {
+	trading bool
+	err     error
+}
+
+func (c fixedCalendar) IsTradingDay(context.Context, time.Time) (bool, error) {
+	return c.trading, c.err
+}
+
 func (a *attemptReportingAI) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
 	a.sequence++
 	started := time.Now()
@@ -157,6 +166,57 @@ func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 	}
 	if summaries[0].SourceCount != 2 || summaries[0].FailedSourceCount != 1 || summaries[0].RunID != run.RunID {
 		t.Fatalf("summary=%+v", summaries[0])
+	}
+}
+
+func TestScheduledAnalysisGateCreatesNoRunAndManualBypassesTime(t *testing.T) {
+	weekend := time.Date(2026, 8, 15, 10, 0, 0, 0, shanghaiLocation)
+	emptySector := `{"analysis":"暂无方向","directions":[],"candidates":[]}`
+	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|---|"
+
+	repo := researchTestRepo(t)
+	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: emptySector}, {Content: emptyFinal}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, fixedCalendar{trading: false})
+	service.now = func() time.Time { return weekend }
+	runner := NewAnalysisRunner(service, fixedCollector{})
+	if _, err := runner.Run(context.Background(), AnalysisRequest{ScheduledFor: weekend, Mode: AnalysisModeScheduled}); !errors.Is(err, ErrScheduledAnalysisSkipped) {
+		t.Fatalf("scheduled weekend err=%v", err)
+	}
+	runs, err := repo.ListAnalysis(context.Background(), 10, 0)
+	if err != nil || len(runs) != 0 || len(ai.requests) != 0 {
+		t.Fatalf("scheduled skip persisted or invoked AI: runs=%+v calls=%d err=%v", runs, len(ai.requests), err)
+	}
+
+	run, err := runner.Run(context.Background(), AnalysisRequest{ScheduledFor: weekend, Mode: AnalysisModeManual})
+	if err != nil || run.Status != "no_recommendation" || len(ai.requests) != 3 {
+		t.Fatalf("manual run=%+v calls=%d err=%v", run, len(ai.requests), err)
+	}
+
+	repo2 := researchTestRepo(t)
+	ai2 := &scriptedAI{}
+	service2 := NewService(repo2, ai2, &scriptedQuotes{}, fixedCalendar{trading: true})
+	service2.now = func() time.Time { return time.Date(2026, 8, 17, 12, 0, 0, 0, shanghaiLocation) }
+	if _, err = NewAnalysisRunner(service2, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeScheduled}); !errors.Is(err, ErrScheduledAnalysisSkipped) {
+		t.Fatalf("scheduled lunch err=%v", err)
+	}
+	runs, _ = repo2.ListAnalysis(context.Background(), 10, 0)
+	if len(runs) != 0 || len(ai2.requests) != 0 {
+		t.Fatalf("lunch skip persisted or invoked AI: runs=%+v calls=%d", runs, len(ai2.requests))
+	}
+}
+
+func TestScheduledCalendarFailureCreatesNoAnalysisRecord(t *testing.T) {
+	repo := researchTestRepo(t)
+	ai := &scriptedAI{}
+	service := NewService(repo, ai, &scriptedQuotes{}, fixedCalendar{err: errors.New("calendar unavailable")})
+	service.now = func() time.Time { return time.Date(2026, 8, 17, 10, 0, 0, 0, shanghaiLocation) }
+	_, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeScheduled})
+	if err == nil || errors.Is(err, ErrScheduledAnalysisSkipped) {
+		t.Fatalf("calendar failure err=%v", err)
+	}
+	runs, _ := repo.ListAnalysis(context.Background(), 10, 0)
+	if len(runs) != 0 || len(ai.requests) != 0 {
+		t.Fatalf("calendar failure persisted or invoked AI: runs=%+v calls=%d", runs, len(ai.requests))
 	}
 }
 

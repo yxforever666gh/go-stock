@@ -131,8 +131,12 @@ func (a *App) startAIAnalysis(origin string) error {
 			ctx = context.Background()
 		}
 		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: now, AIConfigID: selected.ID,
-			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName})
+			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName, Mode: origin})
 		if runErr != nil {
+			if errors.Is(runErr, research.ErrScheduledAnalysisSkipped) {
+				logger.SugaredLogger.Infof("AI 自动分析已由交易时段门禁跳过: %v", runErr)
+				return
+			}
 			logger.SugaredLogger.Errorf("AI 分析失败 origin=%s run=%s: %v", origin, run.RunID, runErr)
 			return
 		}

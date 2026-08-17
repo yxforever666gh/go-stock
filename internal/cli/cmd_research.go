@@ -78,7 +78,7 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	defer cancel()
 	run, runErr := executeResearchOnce(ctx, runtime.Repository, runtime.Runner, research.AnalysisRequest{
 		ScheduledFor: time.Now(), AIConfigID: selected.ID,
-		ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName,
+		ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName, Mode: research.AnalysisModeManual,
 	})
 	result := struct {
 		RunID               string     `json:"runId"`

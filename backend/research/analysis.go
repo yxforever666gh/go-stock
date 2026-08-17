@@ -15,6 +15,13 @@ import (
 
 const finalReportTableHeader = "| 股票名称 | 股票代码 | AI分析摘要 | 激活条件 | 主要风险 | 来源编号 |"
 
+const (
+	AnalysisModeManual    = "manual"
+	AnalysisModeScheduled = "scheduled"
+)
+
+var ErrScheduledAnalysisSkipped = errors.New("scheduled AI analysis skipped outside an open trading session")
+
 type SourceDocument struct {
 	SourceID    string    `json:"sourceId"`
 	SourceName  string    `json:"sourceName"`
@@ -40,6 +47,7 @@ type AnalysisRequest struct {
 	AIConfigID   uint
 	ProviderName string
 	ModelName    string
+	Mode         string
 }
 
 type AnalysisRunner struct {
@@ -113,6 +121,18 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	if request.ScheduledFor.IsZero() {
 		request.ScheduledFor = now
 	}
+	if request.Mode == AnalysisModeScheduled {
+		trading, err := r.service.calendar.IsTradingDay(ctx, now)
+		if err != nil {
+			return AnalysisRun{}, fmt.Errorf("检查自动分析交易日失败: %w", err)
+		}
+		if !trading {
+			return AnalysisRun{}, fmt.Errorf("%w: 非沪深交易日", ErrScheduledAnalysisSkipped)
+		}
+		if !IsTradingSession(now) {
+			return AnalysisRun{}, fmt.Errorf("%w: 当前不在开盘时段", ErrScheduledAnalysisSkipped)
+		}
+	}
 	run := AnalysisRun{
 		RunID: newID(), ScheduledFor: request.ScheduledFor, StartedAt: now, Status: "running",
 		AIConfigID: request.AIConfigID, ProviderName: request.ProviderName, ModelName: request.ModelName,
@@ -128,15 +148,6 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 			return run, errors.Join(stageErr, saveErr)
 		}
 		return run, stageErr
-	}
-	trading, err := r.service.calendar.IsTradingDay(ctx, now)
-	if err != nil {
-		return finishFailure(err)
-	}
-	if !trading {
-		completed := r.service.now()
-		run.Status, run.CompletedAt, run.FailureReason = "skipped_non_trading_day", &completed, "非沪深交易日"
-		return run, r.service.repository.SaveAnalysis(ctx, &run)
 	}
 	hasPosition, err := r.service.repository.HasOpenPosition(ctx)
 	if err != nil {

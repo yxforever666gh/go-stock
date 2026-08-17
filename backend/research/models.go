@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion       = "1.6.2"
+	AppVersion       = "1.6.3"
 	InitialCash      = 100000.0
 	MaxCashPerTrade  = 50000.0
 	DefaultCheckMins = 15
