@@ -27,6 +27,17 @@ func (r *Repository) HasOpenPosition(ctx context.Context) (bool, error) {
 	return count > 0, err
 }
 
+func (r *Repository) HasBlockingExposure(ctx context.Context) (bool, error) {
+	open, err := r.HasOpenPosition(ctx)
+	if err != nil || open {
+		return open, err
+	}
+	var queued int64
+	err = r.db.WithContext(ctx).Model(&Recommendation{}).
+		Where("status IN ?", []string{"buy_pending", "pending"}).Count(&queued).Error
+	return queued > 0, err
+}
+
 func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&AnalysisRun{}).Where("status = ?", "running").Count(&count).Error
@@ -36,7 +47,7 @@ func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
 func (r *Repository) HasPendingOrPosition(ctx context.Context, code string) (bool, error) {
 	var recommendations int64
 	if err := r.db.WithContext(ctx).Model(&Recommendation{}).
-		Where("stock_code = ? AND status IN ?", code, []string{"pending", "active", "sell_pending"}).
+		Where("stock_code = ? AND status IN ?", code, []string{"buy_pending", "pending", "active", "sell_pending"}).
 		Count(&recommendations).Error; err != nil {
 		return false, err
 	}
@@ -83,14 +94,8 @@ func (r *Repository) Recommendation(ctx context.Context, id string) (Recommendat
 func (r *Repository) DueRecommendations(ctx context.Context, now time.Time) ([]Recommendation, error) {
 	var result []Recommendation
 	err := r.db.WithContext(ctx).
-		Where("status IN ? AND next_check_at IS NOT NULL AND next_check_at <= ?", []string{"pending", "active", "sell_pending"}, now).
-		Order("next_check_at ASC, id ASC").Find(&result).Error
-	return result, err
-}
-
-func (r *Repository) PendingRecommendations(ctx context.Context) ([]Recommendation, error) {
-	var result []Recommendation
-	err := r.db.WithContext(ctx).Where("status = ?", "pending").Order("signal_at ASC, id ASC").Find(&result).Error
+		Where("status IN ? AND next_check_at IS NOT NULL AND next_check_at <= ?", []string{"buy_pending", "active", "sell_pending"}, now).
+		Order("next_check_at ASC, signal_at ASC, id ASC").Find(&result).Error
 	return result, err
 }
 
@@ -163,14 +168,14 @@ func (r *Repository) Position(ctx context.Context, recommendationID string) (Pos
 	return result, err
 }
 
-func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quote, now time.Time) error {
+func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quote, nextCheck time.Time, now time.Time) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var recommendation Recommendation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ?", recommendationID).First(&recommendation).Error; err != nil {
 			return err
 		}
-		if recommendation.Status != "pending" {
-			return errors.New("recommendation is no longer pending")
+		if recommendation.Status != "buy_pending" {
+			return errors.New("recommendation is no longer awaiting direct buy")
 		}
 		var account SimulatedAccount
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, 1).Error; err != nil {
@@ -187,7 +192,7 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return errors.New("insufficient cash")
+			return ErrInsufficientCash
 		}
 		position := Position{
 			RecommendationID: recommendationID, StockCode: recommendation.StockCode, StockName: recommendation.StockName,
@@ -206,11 +211,36 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 		if err := tx.Create(&trade).Error; err != nil {
 			return err
 		}
-		next := NextLifecycleCheck(now)
-		return tx.Model(&Recommendation{}).Where("recommendation_id = ?", recommendationID).Updates(map[string]any{
+		if err := tx.Model(&Recommendation{}).Where("recommendation_id = ?", recommendationID).Updates(map[string]any{
 			"status": "active", "activated_at": quote.At, "activation_price": cost.ExecutionPrice,
-			"quantity": quantity, "total_fees": cost.TotalFees, "next_check_at": next,
-		}).Error
+			"quantity": quantity, "total_fees": cost.TotalFees, "next_check_at": nextCheck,
+			"last_decision": "模拟买入", "last_decision_at": now,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
+			DecisionType: "模拟买入", DecidedAt: now, Reason: "AI 推荐后按最新可交易行情直接成交",
+			QuotePrice: quote.Price, QuoteAt: &quote.At}).Error
+	})
+}
+
+func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, decisionType, reason string, now time.Time, quote *Quote) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&Recommendation{}).
+			Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").
+			Updates(map[string]any{"status": status, "next_check_at": nil, "last_decision": decisionType, "last_decision_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("recommendation is no longer awaiting direct buy")
+		}
+		event := DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
+			DecisionType: decisionType, DecidedAt: now, Reason: reason}
+		if quote != nil {
+			event.QuotePrice, event.QuoteAt = quote.Price, &quote.At
+		}
+		return tx.Create(&event).Error
 	})
 }
 

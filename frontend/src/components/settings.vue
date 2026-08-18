@@ -723,7 +723,7 @@ function deletePrompt(ID) {
               />
             </n-form-item-gi>
             <n-gi :span="24">
-              <n-text depth="3">模型按上方“回退顺序”从上到下调用，关闭的模型会直接跳过。仅沪深交易日自动运行；有未卖出持仓时跳过新分析。</n-text>
+              <n-text depth="3">模型按上方“回退顺序”从上到下调用，关闭的模型会直接跳过。仅沪深交易日自动运行；有待买入任务或未卖出持仓时跳过新分析。</n-text>
             </n-gi>
           </n-grid>
         </n-card>

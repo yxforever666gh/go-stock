@@ -18,12 +18,6 @@ function sourcesOf(item) { return parseJSON(item.evidenceJson, []) }
 function sourceRefsOf(item) { return parseJSON(item.sourceRefs, []) }
 function percent(value) { return Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(2)}%` : '--' }
 function number(value, digits = 2) { return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '--' }
-function duration(seconds) {
-  const total = Math.max(0, Number(seconds) || 0)
-  const hours = Math.floor(total / 3600)
-  const minutes = Math.floor((total % 3600) / 60)
-  return `${hours}小时${minutes}分钟`
-}
 function readableContent(value) {
   if (!value) return '无新增内容'
   const parsed = parseJSON(value, null)
@@ -33,21 +27,17 @@ function sourceContent(row) {
   return h('pre', {style: {margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '180px', overflow: 'auto'}}, row.error || readableContent(row.content))
 }
 
-const pendingSummary = computed(() => {
-  if (props.detail?.recommendation?.status !== 'pending') return null
+const buyPending = computed(() => {
+  if (props.detail?.recommendation?.status !== 'buy_pending') return null
   return {
-    remaining: duration(props.detail.activationRemainingSeconds),
-    elapsed: duration(props.detail.activationTradingElapsedSeconds),
-    pause: duration(props.detail.recommendation.dataPauseSeconds),
     next: dateTime(props.detail.recommendation.nextCheckAt),
   }
 })
 </script>
 
 <template>
-  <n-alert v-if="pendingSummary" type="info" style="margin-bottom: 12px">
-    已累计 {{ pendingSummary.elapsed }}，剩余激活交易时长 {{ pendingSummary.remaining }}；关键数据故障已抵扣
-    {{ pendingSummary.pause }}，下次检查 {{ pendingSummary.next }}。
+  <n-alert v-if="buyPending" type="info" style="margin-bottom: 12px">
+    这条推荐正在等待一次性模拟买入，计划尝试时间：{{ buyPending.next }}。若届时不可交易或资金不足，将直接记为错过且不再重试。
   </n-alert>
 
   <n-empty v-if="!(detail.observations || []).length" description="尚无生命周期数据快照" size="small"/>
@@ -55,7 +45,7 @@ const pendingSummary = computed(() => {
     <n-collapse-item v-for="item in [...detail.observations].reverse()" :key="item.observationId" :name="item.observationId">
       <template #header>
         <n-flex align="center" :wrap="false">
-          <n-text>{{ dateTime(item.observedAt) }} · {{ item.phase === 'holding' ? '持仓判断' : '激活判断' }}</n-text>
+          <n-text>{{ dateTime(item.observedAt) }} · {{ item.phase === 'holding' ? '持仓卖出判断' : '旧制激活判断' }}</n-text>
           <n-tag size="small" :type="statusType(item.status)" :bordered="false">{{ statusLabel[item.status] || item.status }}</n-tag>
           <n-tag size="small" :type="item.modelInvoked ? 'info' : 'default'" :bordered="false">{{ item.modelInvoked ? '已调用 AI' : '未调用 AI' }}</n-tag>
         </n-flex>

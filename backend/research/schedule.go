@@ -2,10 +2,9 @@ package research
 
 import (
 	"context"
+	"errors"
 	"time"
 )
-
-const ActivationTradingWindow = 4 * time.Hour
 
 var shanghaiLocation = func() *time.Location {
 	location, err := time.LoadLocation("Asia/Shanghai")
@@ -17,33 +16,94 @@ var shanghaiLocation = func() *time.Location {
 
 func ShanghaiTime(value time.Time) time.Time { return value.In(shanghaiLocation) }
 
-func NextLifecycleCheck(after time.Time) time.Time {
-	next := ShanghaiTime(after).Add(DefaultCheckMins * time.Minute)
-	year, month, day := next.Date()
-	morningOpen := time.Date(year, month, day, 9, 30, 0, 0, shanghaiLocation)
-	afternoonOpen := time.Date(year, month, day, 13, 0, 0, 0, shanghaiLocation)
-	closeAt := time.Date(year, month, day, 15, 0, 0, 0, shanghaiLocation)
-	if next.Before(morningOpen) {
-		return morningOpen
-	}
-	if next.After(time.Date(year, month, day, 11, 30, 0, 0, shanghaiLocation)) && next.Before(afternoonOpen) {
-		return afternoonOpen
-	}
-	if !next.Before(closeAt) {
-		following := next.AddDate(0, 0, 1)
-		for following.Weekday() == time.Saturday || following.Weekday() == time.Sunday {
-			following = following.AddDate(0, 0, 1)
-		}
-		y, m, d := following.Date()
-		return time.Date(y, m, d, 9, 30, 0, 0, shanghaiLocation)
-	}
-	return next
+var sellCheckClock = [][2]int{
+	{9, 50}, {10, 5}, {10, 20}, {10, 35}, {10, 50}, {11, 5}, {11, 20},
+	{13, 0}, {13, 15}, {13, 30}, {13, 45}, {14, 0}, {14, 15}, {14, 30}, {14, 45},
 }
 
-func IsAfterMarketClose(value time.Time) bool {
-	local := ShanghaiTime(value)
-	y, m, d := local.Date()
-	return !local.Before(time.Date(y, m, d, 15, 0, 0, 0, shanghaiLocation))
+// NextTradingSessionOpen returns the next point at which a queued direct buy
+// may be attempted. It keeps an in-session time unchanged, moves lunch to
+// 13:00, and consults the strict calendar before selecting a later 09:30 open.
+func NextTradingSessionOpen(ctx context.Context, calendar TradingCalendar, after time.Time) (time.Time, error) {
+	if calendar == nil {
+		return time.Time{}, errors.New("trading calendar is unavailable")
+	}
+	local := ShanghaiTime(after)
+	for scanned := 0; scanned < 740; scanned++ {
+		day := local.AddDate(0, 0, scanned)
+		trading, err := calendar.IsTradingDay(ctx, day)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !trading {
+			continue
+		}
+		y, m, d := day.Date()
+		morning := time.Date(y, m, d, 9, 30, 0, 0, shanghaiLocation)
+		afternoon := time.Date(y, m, d, 13, 0, 0, 0, shanghaiLocation)
+		closeAt := time.Date(y, m, d, 15, 0, 0, 0, shanghaiLocation)
+		if scanned > 0 || local.Before(morning) {
+			return morning, nil
+		}
+		if IsTradingSession(local) {
+			return local, nil
+		}
+		if local.Before(afternoon) {
+			return afternoon, nil
+		}
+		if local.Before(closeAt) {
+			return local, nil
+		}
+	}
+	return time.Time{}, errors.New("no trading session found within calendar scan limit")
+}
+
+// FirstSellCheck anchors a new position to 09:50 on the strict next trading
+// day, regardless of the intraday entry time.
+func FirstSellCheck(ctx context.Context, calendar TradingCalendar, entryAt time.Time) (time.Time, error) {
+	if calendar == nil {
+		return time.Time{}, errors.New("trading calendar is unavailable")
+	}
+	entry := ShanghaiTime(entryAt)
+	for scanned := 1; scanned < 740; scanned++ {
+		day := entry.AddDate(0, 0, scanned)
+		trading, err := calendar.IsTradingDay(ctx, day)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if trading {
+			y, m, d := day.Date()
+			return time.Date(y, m, d, 9, 50, 0, 0, shanghaiLocation), nil
+		}
+	}
+	return time.Time{}, errors.New("no next trading day found within calendar scan limit")
+}
+
+// NextSellCheck returns the next fixed 1.6.5 sell-review slot. Slots never
+// drift with model latency and missed slots are not replayed.
+func NextSellCheck(ctx context.Context, calendar TradingCalendar, after time.Time) (time.Time, error) {
+	if calendar == nil {
+		return time.Time{}, errors.New("trading calendar is unavailable")
+	}
+	local := ShanghaiTime(after)
+	for scanned := 0; scanned < 740; scanned++ {
+		day := local.AddDate(0, 0, scanned)
+		trading, err := calendar.IsTradingDay(ctx, day)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !trading {
+			continue
+		}
+		y, m, d := day.Date()
+		for _, clock := range sellCheckClock {
+			candidate := time.Date(y, m, d, clock[0], clock[1], 0, 0, shanghaiLocation)
+			if candidate.After(local) {
+				return candidate, nil
+			}
+		}
+	}
+	return time.Time{}, errors.New("no sell check found within calendar scan limit")
 }
 
 func IsTradingSession(value time.Time) bool {
@@ -55,48 +115,4 @@ func IsTradingSession(value time.Time) bool {
 	afternoonClose := time.Date(y, m, d, 15, 0, 0, 0, shanghaiLocation)
 	return (!local.Before(morningOpen) && !local.After(morningClose)) ||
 		(!local.Before(afternoonOpen) && local.Before(afternoonClose))
-}
-
-// AccumulatedTradingTime returns only the time that overlaps an actual Shanghai
-// Stock Exchange trading session. Lunch, nights and closed calendar days do not
-// consume the activation budget. The calculation stops at cap when cap is
-// positive so stale recommendations cannot cause an unbounded calendar scan.
-func AccumulatedTradingTime(ctx context.Context, calendar TradingCalendar, start, end time.Time, cap time.Duration) (time.Duration, error) {
-	start, end = ShanghaiTime(start), ShanghaiTime(end)
-	if !end.After(start) {
-		return 0, nil
-	}
-	startDay := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, shanghaiLocation)
-	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, shanghaiLocation)
-	total := time.Duration(0)
-	for day := startDay; !day.After(endDay); day = day.AddDate(0, 0, 1) {
-		trading, err := calendar.IsTradingDay(ctx, day)
-		if err != nil {
-			return total, err
-		}
-		if !trading {
-			continue
-		}
-		year, month, date := day.Date()
-		sessions := [][2]time.Time{
-			{time.Date(year, month, date, 9, 30, 0, 0, shanghaiLocation), time.Date(year, month, date, 11, 30, 0, 0, shanghaiLocation)},
-			{time.Date(year, month, date, 13, 0, 0, 0, shanghaiLocation), time.Date(year, month, date, 15, 0, 0, 0, shanghaiLocation)},
-		}
-		for _, session := range sessions {
-			from, to := session[0], session[1]
-			if start.After(from) {
-				from = start
-			}
-			if end.Before(to) {
-				to = end
-			}
-			if to.After(from) {
-				total += to.Sub(from)
-				if cap > 0 && total >= cap {
-					return cap, nil
-				}
-			}
-		}
-	}
-	return total, nil
 }

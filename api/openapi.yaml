@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.4
-  description: Local-only 1.6.4 API for market data and the evidence-backed AI research lifecycle.
+  version: 1.6.5
+  description: Local-only 1.6.5 API for market data and the direct-buy, evidence-backed AI sell lifecycle.
 servers:
   - url: http://127.0.0.1:34115
 paths:
@@ -154,13 +154,13 @@ components:
         stockName: {type: string}
         signalAt: {type: string, format: date-time}
         aiSummary: {type: string}
-        activationCondition: {type: string}
+        activationCondition: {type: string, description: Legacy pre-1.6.5 activation field; empty for new recommendations.}
         mainRisk: {type: string}
         sourceRefs: {type: string}
-        status: {type: string}
+        status: {type: string, enum: [buy_pending, pending, active, sell_pending, invalidated, missed_cash, missed_untradable, closed]}
         nextCheckAt: {type: string, format: date-time}
-        activatedAt: {type: string, format: date-time}
-        activationPrice: {type: number}
+        activatedAt: {type: string, format: date-time, description: Simulated buy time; legacy JSON name retained for compatibility.}
+        activationPrice: {type: number, description: Simulated buy execution price; legacy JSON name retained for compatibility.}
         quantity: {type: integer}
         closedAt: {type: string, format: date-time}
         closePrice: {type: number}

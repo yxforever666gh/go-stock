@@ -12,16 +12,15 @@ const rows = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
 
-const statusLabels = {pending: '待激活', active: '已激活', sell_pending: '待卖', invalidated: '已失效', missed_cash: '错过—资金不足', closed: '已卖出'}
+const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
-function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
+function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'buy_pending' || status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
 
 const columns = [
   {title: '股票名称', key: 'stockName', width: 120, render: row => h(NButton, {text: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => row.stockName})},
   {title: '股票代码', key: 'stockCode', width: 115},
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
   {title: 'AI 摘要', key: 'aiSummary', minWidth: 260, ellipsis: {tooltip: true}},
-  {title: '激活条件', key: 'activationCondition', minWidth: 280, ellipsis: {tooltip: true}},
   {title: '主要风险', key: 'mainRisk', minWidth: 220, ellipsis: {tooltip: true}},
   {title: '当前状态', key: 'status', width: 135, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
   {title: '来源', key: 'sourceRefs', minWidth: 150, ellipsis: {tooltip: true}},
@@ -47,10 +46,10 @@ onMounted(refresh)
 <template>
   <n-space vertical>
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">推荐只代表 AI 研究信号；点击股票名称查看独立会话和成交详情。</n-text>
+      <n-text depth="3">AI 推荐入库后按最新可交易行情直接模拟买入；点击股票名称查看独立会话和成交详情。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
-    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1650" :row-key="row => row.recommendationId"/>
+    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1370" :row-key="row => row.recommendationId"/>
   </n-space>
 
   <n-modal v-model:show="detailVisible">
@@ -62,14 +61,14 @@ onMounted(refresh)
               <n-descriptions-item label="股票">{{ detail.recommendation.stockName }}（{{ detail.recommendation.stockCode }}）</n-descriptions-item>
               <n-descriptions-item label="信号时间">{{ dateTime(detail.recommendation.signalAt) }}</n-descriptions-item>
               <n-descriptions-item label="状态">{{ statusLabels[detail.recommendation.status] || detail.recommendation.status }}</n-descriptions-item>
-              <n-descriptions-item label="激活条件" :span="3">{{ detail.recommendation.activationCondition }}</n-descriptions-item>
+              <n-descriptions-item v-if="detail.recommendation.activationCondition" label="旧制历史激活条件" :span="3">{{ detail.recommendation.activationCondition }}</n-descriptions-item>
               <n-descriptions-item label="主要风险" :span="3">{{ detail.recommendation.mainRisk }}</n-descriptions-item>
             </n-descriptions>
             <n-divider title-placement="left">分钟图</n-divider>
             <StockSparkLine :stock-code="detail.recommendation.stockCode" :stock-name="detail.recommendation.stockName" :last-price="detail.recommendation.closePrice || detail.recommendation.activationPrice" :open-price="detail.recommendation.activationPrice"/>
             <n-divider title-placement="left">完整 AI 报告</n-divider>
             <MdPreview :model-value="detail.analysis.finalReport || '暂无报告'"/>
-            <n-divider title-placement="left">AI 判断时间线</n-divider>
+            <n-divider title-placement="left">交易与 AI 判断时间线</n-divider>
             <ResearchLifecycleTimeline :detail="detail"/>
             <n-divider title-placement="left">成交与净收益</n-divider>
             <n-data-table :columns="[

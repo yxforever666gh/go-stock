@@ -52,15 +52,15 @@ func TestSellCostAndNetValuationIncludeAllCosts(t *testing.T) {
 	}
 }
 
-func TestNextLifecycleCheckHandlesLunchAndClose(t *testing.T) {
-	loc := shanghaiLocation
-	lunch := NextLifecycleCheck(time.Date(2026, 8, 14, 11, 25, 0, 0, loc))
-	if got := lunch.Format("2006-01-02 15:04"); got != "2026-08-14 13:00" {
-		t.Fatalf("lunch=%s", got)
+func TestNextTradingSessionOpenHandlesLunchCloseAndWeekend(t *testing.T) {
+	calendar := weekdayTradingCalendar{}
+	lunch, err := NextTradingSessionOpen(context.Background(), calendar, time.Date(2026, 8, 14, 11, 31, 0, 0, shanghaiLocation))
+	if err != nil || lunch.Format("2006-01-02 15:04") != "2026-08-14 13:00" {
+		t.Fatalf("lunch=%s err=%v", lunch, err)
 	}
-	close := NextLifecycleCheck(time.Date(2026, 8, 14, 14, 55, 0, 0, loc))
-	if got := close.Format("2006-01-02 15:04"); got != "2026-08-17 09:30" {
-		t.Fatalf("close=%s", got)
+	close, err := NextTradingSessionOpen(context.Background(), calendar, time.Date(2026, 8, 14, 15, 0, 0, 0, shanghaiLocation))
+	if err != nil || close.Format("2006-01-02 15:04") != "2026-08-17 09:30" {
+		t.Fatalf("close=%s err=%v", close, err)
 	}
 }
 
@@ -80,31 +80,23 @@ func TestTradingSessionExcludesLunchAndClose(t *testing.T) {
 	}
 }
 
-func TestAccumulatedTradingTimeSkipsLunchNightsAndWeekend(t *testing.T) {
+func TestFixedSellCheckScheduleAndTPlusOneAnchor(t *testing.T) {
 	calendar := weekdayTradingCalendar{}
-	fridaySignal := time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation)
-	mondayBeforeDeadline := time.Date(2026, 8, 17, 14, 29, 0, 0, shanghaiLocation)
-	elapsed, err := AccumulatedTradingTime(context.Background(), calendar, fridaySignal, mondayBeforeDeadline, ActivationTradingWindow)
-	if err != nil {
-		t.Fatal(err)
+	first, err := FirstSellCheck(context.Background(), calendar, time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation))
+	if err != nil || first.Format("2006-01-02 15:04") != "2026-08-17 09:50" {
+		t.Fatalf("first=%s err=%v", first, err)
 	}
-	if elapsed != 3*time.Hour+59*time.Minute {
-		t.Fatalf("elapsed=%s, want 3h59m", elapsed)
+	cases := map[string]string{
+		"2026-08-17 09:50": "2026-08-17 10:05",
+		"2026-08-17 11:20": "2026-08-17 13:00",
+		"2026-08-17 14:45": "2026-08-18 09:50",
 	}
-	mondayDeadline := mondayBeforeDeadline.Add(time.Minute)
-	elapsed, err = AccumulatedTradingTime(context.Background(), calendar, fridaySignal, mondayDeadline, ActivationTradingWindow)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if elapsed != ActivationTradingWindow {
-		t.Fatalf("elapsed=%s, want 4h", elapsed)
-	}
-
-	afterCloseSignal := time.Date(2026, 8, 17, 15, 43, 0, 0, shanghaiLocation)
-	nextClose := time.Date(2026, 8, 18, 15, 0, 0, 0, shanghaiLocation)
-	elapsed, err = AccumulatedTradingTime(context.Background(), calendar, afterCloseSignal, nextClose, ActivationTradingWindow)
-	if err != nil || elapsed != ActivationTradingWindow {
-		t.Fatalf("after-close elapsed=%s err=%v", elapsed, err)
+	for input, want := range cases {
+		value, _ := time.ParseInLocation("2006-01-02 15:04", input, shanghaiLocation)
+		next, nextErr := NextSellCheck(context.Background(), calendar, value)
+		if nextErr != nil || next.Format("2006-01-02 15:04") != want {
+			t.Fatalf("after %s next=%s err=%v", input, next, nextErr)
+		}
 	}
 }
 

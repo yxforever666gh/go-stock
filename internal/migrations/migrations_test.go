@@ -241,6 +241,87 @@ func TestSchema7CreatesCleanLifecycleEvidenceSchema(t *testing.T) {
 	}
 }
 
+func TestSchema8QueuesLegacyRecommendationsAndRestoresApprovedFour(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchLifecycleObservationEvidence(database); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 18, 14, 30, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	run := research.AnalysisRun{RunID: "schema8-run", ScheduledFor: now, StartedAt: now, Status: "success"}
+	if err := database.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	rows := []research.Recommendation{
+		{RecommendationID: "c49ade23-12f4-4aa0-8203-b985bfd9d7e4", AnalysisRunID: run.RunID, StockCode: "sz300308", StockName: "中际旭创", SignalAt: now.Add(-4 * time.Hour), Status: "invalidated"},
+		{RecommendationID: "699640bc-861e-4330-8023-4182173b3e9e", AnalysisRunID: run.RunID, StockCode: "sh688012", StockName: "中微公司", SignalAt: now.Add(-3 * time.Hour), Status: "invalidated"},
+		{RecommendationID: "3bf68fd1-d97f-4426-aa2c-cb63236be808", AnalysisRunID: run.RunID, StockCode: "sz002539", StockName: "云图控股", SignalAt: now.Add(-2 * time.Hour), Status: "pending"},
+		{RecommendationID: "053e7c47-a538-4d6d-9dbd-61e9897d8285", AnalysisRunID: run.RunID, StockCode: "sh601899", StockName: "紫金矿业", SignalAt: now.Add(-time.Hour), Status: "pending"},
+		{RecommendationID: "schema8-generic-pending", AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "浦发银行", SignalAt: now, Status: "pending"},
+	}
+	if err := database.Create(&rows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchDirectBuyStrategy(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchDirectBuyStrategy(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyMainSchema8Runtime(database); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		var stored research.Recommendation
+		if err := database.Where("recommendation_id = ?", row.RecommendationID).First(&stored).Error; err != nil {
+			t.Fatal(err)
+		}
+		if stored.Status != "buy_pending" || stored.NextCheckAt == nil {
+			t.Fatalf("stored=%+v", stored)
+		}
+		var events int64
+		if err := database.Model(&research.DecisionEvent{}).
+			Where("recommendation_id = ? AND decision_type = ?", row.RecommendationID, "策略升级待买入").Count(&events).Error; err != nil {
+			t.Fatal(err)
+		}
+		if events != 1 {
+			t.Fatalf("recommendation %s migration events=%d", row.RecommendationID, events)
+		}
+	}
+}
+
+func TestSchema8DoesNotRequeueRecommendationWithExistingBuy(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	run := research.AnalysisRun{RunID: "schema8-bought-run", ScheduledFor: now, StartedAt: now, Status: "success"}
+	if err := database.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	recommendation := research.Recommendation{RecommendationID: "c49ade23-12f4-4aa0-8203-b985bfd9d7e4", AnalysisRunID: run.RunID,
+		StockCode: "sz300308", StockName: "中际旭创", SignalAt: now, Status: "invalidated"}
+	if err := database.Create(&recommendation).Error; err != nil {
+		t.Fatal(err)
+	}
+	trade := research.SimulatedTrade{TradeID: "schema8-existing-buy", RecommendationID: recommendation.RecommendationID,
+		StockCode: recommendation.StockCode, Side: "buy", TradedAt: now, Quantity: 100}
+	if err := database.Create(&trade).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchDirectBuyStrategy(database); err != nil {
+		t.Fatal(err)
+	}
+	var stored research.Recommendation
+	_ = database.Where("recommendation_id = ?", recommendation.RecommendationID).First(&stored).Error
+	if stored.Status != "invalidated" {
+		t.Fatalf("bought recommendation was requeued: %+v", stored)
+	}
+}
+
 func TestMinuteSchemaRemainsVersion2(t *testing.T) {
 	database := openMigrationTestDB(t)
 	for _, item := range minuteMigrations {

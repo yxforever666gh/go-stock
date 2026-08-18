@@ -3,11 +3,9 @@ package research
 import "time"
 
 const (
-	AppVersion       = "1.6.4"
-	InitialCash      = 100000.0
-	MaxCashPerTrade  = 50000.0
-	DefaultCheckMins = 15
-	MaxDataPauseSecs = 30 * 60
+	AppVersion      = "1.6.5"
+	InitialCash     = 100000.0
+	MaxCashPerTrade = 50000.0
 )
 
 type AnalysisRun struct {
@@ -260,13 +258,16 @@ type AccountOverview struct {
 }
 
 type RecommendationDetail struct {
-	Recommendation                  Recommendation         `json:"recommendation"`
-	Analysis                        AnalysisRun            `json:"analysis"`
-	Messages                        []LifecycleMessage     `json:"messages"`
-	Decisions                       []DecisionEvent        `json:"decisions"`
-	Observations                    []LifecycleObservation `json:"observations"`
-	Trades                          []SimulatedTrade       `json:"trades"`
-	Position                        *Position              `json:"position,omitempty"`
-	ActivationTradingElapsedSeconds int64                  `json:"activationTradingElapsedSeconds"`
-	ActivationRemainingSeconds      int64                  `json:"activationRemainingSeconds"`
+	Recommendation Recommendation         `json:"recommendation"`
+	Analysis       AnalysisRun            `json:"analysis"`
+	Messages       []LifecycleMessage     `json:"messages"`
+	Decisions      []DecisionEvent        `json:"decisions"`
+	Observations   []LifecycleObservation `json:"observations"`
+	Trades         []SimulatedTrade       `json:"trades"`
+	Position       *Position              `json:"position,omitempty"`
+	// Retained as zero-valued compatibility fields for pre-1.6.5 clients and
+	// historical records. Direct-buy recommendations no longer have an
+	// activation window.
+	ActivationTradingElapsedSeconds int64 `json:"activationTradingElapsedSeconds"`
+	ActivationRemainingSeconds      int64 `json:"activationRemainingSeconds"`
 }

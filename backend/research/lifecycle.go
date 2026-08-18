@@ -97,6 +97,35 @@ func (provider quoteLifecycleContextProvider) CollectLifecycleContext(ctx contex
 
 func (s *Service) Repository() *Repository { return s.repository }
 
+// EnqueueRecommendation persists one AI recommendation and either attempts its
+// single direct buy immediately or schedules that attempt for the next valid
+// trading session. The same serial lock is shared with the lifecycle scanner so
+// account competition is deterministic.
+func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage) error {
+	s.serial.Lock()
+	defer s.serial.Unlock()
+	now := s.now()
+	next, err := NextTradingSessionOpen(ctx, s.calendar, now)
+	if err != nil {
+		return err
+	}
+	recommendation.Status, recommendation.NextCheckAt = "buy_pending", &next
+	if err := s.repository.CreateRecommendation(ctx, recommendation, initial); err != nil {
+		return err
+	}
+	if err := s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
+		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入"}); err != nil {
+		return err
+	}
+	if next.After(now) {
+		return nil
+	}
+	if err := s.attemptBuy(ctx, recommendation, now); err != nil {
+		return s.recordError(ctx, *recommendation, now, err)
+	}
+	return nil
+}
+
 func (s *Service) ProcessDue(ctx context.Context) error {
 	s.serial.Lock()
 	defer s.serial.Unlock()
@@ -105,16 +134,23 @@ func (s *Service) ProcessDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !trading {
-		return nil
-	}
-	if err := s.expirePending(ctx, now); err != nil {
-		return err
-	}
-	if IsAfterMarketClose(now) {
-		return nil
-	}
-	if !IsTradingSession(now) {
+	if !trading || !IsTradingSession(now) {
+		due, dueErr := s.repository.DueRecommendations(ctx, now)
+		if dueErr != nil {
+			return dueErr
+		}
+		for index := range due {
+			if due[index].Status != "buy_pending" {
+				continue
+			}
+			next, nextErr := NextTradingSessionOpen(ctx, s.calendar, now)
+			if nextErr != nil {
+				return nextErr
+			}
+			if err := s.repository.UpdateRecommendation(ctx, due[index].RecommendationID, map[string]any{"next_check_at": next}); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	due, err := s.repository.DueRecommendations(ctx, now)
@@ -129,60 +165,39 @@ func (s *Service) ProcessDue(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) expirePending(ctx context.Context, now time.Time) error {
-	pending, err := s.repository.PendingRecommendations(ctx)
+func (s *Service) processOne(ctx context.Context, recommendation *Recommendation, now time.Time) error {
+	if recommendation.Status == "buy_pending" {
+		return s.attemptBuy(ctx, recommendation, now)
+	}
+	if recommendation.Status != "active" && recommendation.Status != "sell_pending" {
+		return nil
+	}
+	current, positionErr := s.repository.Position(ctx, recommendation.RecommendationID)
+	if positionErr != nil {
+		return positionErr
+	}
+	firstCheck, err := FirstSellCheck(ctx, s.calendar, current.EntryAt)
 	if err != nil {
 		return err
 	}
-	for _, recommendation := range pending {
-		elapsed, elapsedErr := s.effectiveActivationElapsed(ctx, recommendation, now)
-		if elapsedErr != nil {
-			return elapsedErr
-		}
-		if elapsed < ActivationTradingWindow {
-			continue
-		}
-		if err := s.invalidatePending(ctx, recommendation.RecommendationID, now, "累计开盘交易时长达到4小时，推荐仍未激活"); err != nil {
+	effectiveDue := recommendation.NextCheckAt
+	if effectiveDue == nil || effectiveDue.Before(firstCheck) {
+		effectiveDue = &firstCheck
+	}
+	local := ShanghaiTime(now)
+	y, m, d := local.Date()
+	staleDue := now.Sub(*effectiveDue) > 2*time.Minute
+	if now.Before(firstCheck) || local.Before(time.Date(y, m, d, 9, 50, 0, 0, shanghaiLocation)) || staleDue {
+		next, err := NextSellCheck(ctx, s.calendar, now)
+		if err != nil {
 			return err
 		}
+		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next})
 	}
-	return nil
-}
-
-func (s *Service) effectiveActivationElapsed(ctx context.Context, recommendation Recommendation, now time.Time) (time.Duration, error) {
-	raw, err := AccumulatedTradingTime(ctx, s.calendar, recommendation.SignalAt, now, ActivationTradingWindow+time.Duration(MaxDataPauseSecs)*time.Second)
-	if err != nil {
-		return 0, err
-	}
-	pause := time.Duration(recommendation.DataPauseSeconds) * time.Second
-	if pause > time.Duration(MaxDataPauseSecs)*time.Second {
-		pause = time.Duration(MaxDataPauseSecs) * time.Second
-	}
-	if raw <= pause {
-		return 0, nil
-	}
-	return raw - pause, nil
-}
-
-func (s *Service) invalidatePending(ctx context.Context, recommendationID string, now time.Time, reason string) error {
-	if err := s.repository.UpdateRecommendation(ctx, recommendationID, map[string]any{
-		"status": "invalidated", "last_decision": "失效", "last_decision_at": now, "next_check_at": nil,
-	}); err != nil {
-		return err
-	}
-	return s.repository.AppendDecision(ctx, &DecisionEvent{
-		EventID: newID(), RecommendationID: recommendationID, DecisionType: "失效", DecidedAt: now, Reason: reason,
-	})
-}
-
-func (s *Service) processOne(ctx context.Context, recommendation *Recommendation, now time.Time) error {
 	if recommendation.Status == "sell_pending" {
 		return s.retrySell(ctx, recommendation, now)
 	}
-	phase, allowed := "activation", map[string]bool{"等待": true, "激活": true, "失效": true}
-	if recommendation.Status == "active" {
-		phase, allowed = "holding", map[string]bool{"持有": true, "卖出": true}
-	}
+	allowed := map[string]bool{"持有": true, "卖出": true}
 	windowFrom := recommendation.SignalAt
 	if previous, previousErr := s.repository.LastUsableObservation(ctx, recommendation.RecommendationID); previousErr == nil && previous.ObservedAt.After(windowFrom) {
 		windowFrom = previous.ObservedAt
@@ -193,16 +208,9 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if err != nil {
 		return err
 	}
-	var position *Position
-	if phase == "holding" {
-		current, positionErr := s.repository.Position(ctx, recommendation.RecommendationID)
-		if positionErr != nil {
-			return positionErr
-		}
-		enrichPositionValue(&current)
-		position = &current
-	}
-	contextRequest := LifecycleContextRequest{ObservationID: newID(), Recommendation: *recommendation, Phase: phase,
+	enrichPositionValue(&current)
+	position := &current
+	contextRequest := LifecycleContextRequest{ObservationID: newID(), Recommendation: *recommendation, Phase: "holding",
 		WindowFrom: windowFrom, Now: now, Position: position, KnownFingerprints: knownFingerprints}
 	draft, err := s.contextProvider.CollectLifecycleContext(ctx, contextRequest)
 	if err != nil {
@@ -222,8 +230,8 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if observation.Status == "critical_failed" || strings.TrimSpace(observation.CriticalFailure) != "" {
 		return s.deferForCriticalData(ctx, recommendation, observation, now)
 	}
-	prompt := lifecyclePrompt(*recommendation, phase, now, observation, position)
-	userMessage := LifecycleMessage{RecommendationID: recommendation.RecommendationID, Role: "user", Phase: phase, Content: prompt, CreatedAt: now}
+	prompt := lifecyclePrompt(*recommendation, now, observation, position)
+	userMessage := LifecycleMessage{RecommendationID: recommendation.RecommendationID, Role: "user", Phase: "holding", Content: prompt, CreatedAt: now}
 	if err := s.repository.AppendMessage(ctx, &userMessage); err != nil {
 		return err
 	}
@@ -234,7 +242,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if err != nil {
 		return err
 	}
-	request := CompletionRequest{RecommendationID: recommendation.RecommendationID, Phase: phase, Prompt: prompt, PreviousResponseID: recommendation.PreviousResponseID}
+	request := CompletionRequest{RecommendationID: recommendation.RecommendationID, Phase: "holding", Prompt: prompt, PreviousResponseID: recommendation.PreviousResponseID}
 	if recommendation.PreviousResponseID == "" {
 		// The first remote response chain is seeded from this recommendation's
 		// locally persisted context, never from the shared final-decision call.
@@ -252,7 +260,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return err
 	}
 	assistantMessage := LifecycleMessage{
-		RecommendationID: recommendation.RecommendationID, Role: "assistant", Phase: phase, Content: result.Content,
+		RecommendationID: recommendation.RecommendationID, Role: "assistant", Phase: "holding", Content: result.Content,
 		ResponseID: result.ResponseID, PreviousResponseID: recommendation.PreviousResponseID, Model: result.Model, CreatedAt: s.now(),
 	}
 	if err := s.repository.AppendMessage(ctx, &assistantMessage); err != nil {
@@ -263,31 +271,25 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return err
 	}
 	decisionAt := s.now()
-	if phase == "activation" {
-		elapsed, elapsedErr := s.effectiveActivationElapsed(ctx, *recommendation, decisionAt)
-		if elapsedErr != nil {
-			return elapsedErr
+	trading, tradingErr := s.calendar.IsTradingDay(ctx, decisionAt)
+	if tradingErr != nil {
+		return tradingErr
+	}
+	if !trading || !IsTradingSession(decisionAt) {
+		next, nextErr := NextSellCheck(ctx, s.calendar, decisionAt)
+		if nextErr != nil {
+			return nextErr
 		}
-		if elapsed >= ActivationTradingWindow {
-			return s.invalidatePending(ctx, recommendation.RecommendationID, decisionAt, "模型响应时累计开盘交易时长已达到4小时，推荐失效")
+		if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
+			"previous_response_id": result.ResponseID, "next_check_at": next,
+		}); err != nil {
+			return err
 		}
-		trading, tradingErr := s.calendar.IsTradingDay(ctx, decisionAt)
-		if tradingErr != nil {
-			return tradingErr
-		}
-		if !trading || !IsTradingSession(decisionAt) {
-			next := NextLifecycleCheck(decisionAt)
-			if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
-				"previous_response_id": result.ResponseID, "next_check_at": next,
-			}); err != nil {
-				return err
-			}
-			return s.repository.AppendDecision(ctx, &DecisionEvent{
-				EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "响应跨休市", DecidedAt: decisionAt,
-				AIResponse: result.Content, Reason: "模型响应时市场已休市，本次判断不执行，顺延至下一开盘时段",
-				SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status,
-			})
-		}
+		return s.repository.AppendDecision(ctx, &DecisionEvent{
+			EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "响应跨休市", DecidedAt: decisionAt,
+			AIResponse: result.Content, Reason: "模型响应时市场已休市，本次判断不执行，顺延至下一固定卖出检查时点",
+			SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status,
+		})
 	}
 	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
 		"previous_response_id": result.ResponseID, "last_decision": decision.Action, "last_decision_at": decisionAt,
@@ -300,13 +302,12 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return err
 	}
 	switch decision.Action {
-	case "等待", "持有":
-		next := NextLifecycleCheck(decisionAt)
+	case "持有":
+		next, nextErr := NextSellCheck(ctx, s.calendar, decisionAt)
+		if nextErr != nil {
+			return nextErr
+		}
 		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next})
-	case "失效":
-		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"status": "invalidated", "next_check_at": nil})
-	case "激活":
-		return s.activate(ctx, recommendation, decisionAt)
 	case "卖出":
 		return s.trySell(ctx, recommendation, decisionAt)
 	default:
@@ -315,47 +316,44 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 }
 
 func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Recommendation, observation LifecycleObservation, now time.Time) error {
-	updates := map[string]any{"next_check_at": NextLifecycleCheck(now)}
-	pauseGranted := int64(0)
-	if recommendation.Status == "pending" && recommendation.DataPauseSeconds < MaxDataPauseSecs {
-		pauseGranted = int64(DefaultCheckMins * 60)
-		remaining := int64(MaxDataPauseSecs) - recommendation.DataPauseSeconds
-		if pauseGranted > remaining {
-			pauseGranted = remaining
-		}
-		updates["data_pause_seconds"] = recommendation.DataPauseSeconds + pauseGranted
+	next, err := NextSellCheck(ctx, s.calendar, now)
+	if err != nil {
+		return err
 	}
-	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, updates); err != nil {
+	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next}); err != nil {
 		return err
 	}
 	reason := strings.TrimSpace(observation.CriticalFailure)
-	if pauseGranted > 0 {
-		reason += fmt.Sprintf("；本轮抵扣激活交易时长 %d 分钟，累计最多抵扣 30 分钟", pauseGranted/60)
-	}
 	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
 		DecisionType: "数据不足重试", DecidedAt: now, Reason: reason, DataStatus: "critical_failed"})
 }
 
-func (s *Service) activate(ctx context.Context, recommendation *Recommendation, now time.Time) error {
-	quote, err := s.quotes.CurrentQuote(ctx, recommendation.StockCode)
+func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation, now time.Time) error {
+	nextSell, err := FirstSellCheck(ctx, s.calendar, now)
 	if err != nil {
 		return err
 	}
-	if err = validateBuyQuote(quote); err != nil {
-		next := NextLifecycleCheck(now)
-		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next})
+	quote, quoteErr := s.quotes.CurrentQuote(ctx, recommendation.StockCode)
+	if quoteErr != nil {
+		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
+			"一次性买入行情读取失败: "+quoteErr.Error(), now, nil)
 	}
-	err = s.repository.Buy(ctx, recommendation.RecommendationID, quote, now)
-	if err == nil {
-		return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "模拟买入", DecidedAt: now, Reason: "AI 判断激活后按最新可交易行情成交", QuotePrice: quote.Price, QuoteAt: &quote.At})
+	if err := validateBuyQuoteAt(now, quote); err != nil {
+		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
+			"一次性买入校验失败: "+err.Error(), now, &quote)
 	}
-	if strings.Contains(err.Error(), "insufficient cash") || strings.Contains(err.Error(), "minimum order") {
-		if updateErr := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"status": "missed_cash", "next_check_at": nil}); updateErr != nil {
-			return updateErr
+	quoteCode, quoteCodeOK := NormalizeMainlandCode(quote.Code)
+	if !quoteCodeOK || quoteCode != recommendation.StockCode || !sameStockName(quote.Name, recommendation.StockName) {
+		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
+			"一次性买入行情与推荐股票不匹配", now, &quote)
+	}
+	if err := s.repository.Buy(ctx, recommendation.RecommendationID, quote, nextSell, now); err != nil {
+		if errors.Is(err, ErrInsufficientCash) || errors.Is(err, ErrMinimumOrder) {
+			return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_cash", "错过—资金不足", err.Error(), now, &quote)
 		}
-		return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "错过—资金不足", DecidedAt: now, Reason: err.Error(), QuotePrice: quote.Price, QuoteAt: &quote.At})
+		return err
 	}
-	return err
+	return nil
 }
 
 func (s *Service) trySell(ctx context.Context, recommendation *Recommendation, now time.Time) error {
@@ -370,8 +368,8 @@ func (s *Service) trySell(ctx context.Context, recommendation *Recommendation, n
 	if err != nil {
 		return err
 	}
-	if quote.Suspended || quote.LimitDown || quote.Price <= 0 {
-		return s.deferSell(ctx, recommendation.RecommendationID, now, "停牌、跌停或行情不可交易")
+	if err := validateSellQuoteAt(now, recommendation, quote); err != nil {
+		return s.deferSell(ctx, recommendation.RecommendationID, now, err.Error())
 	}
 	if err := s.repository.Sell(ctx, recommendation.RecommendationID, quote); err != nil {
 		return err
@@ -384,7 +382,10 @@ func (s *Service) retrySell(ctx context.Context, recommendation *Recommendation,
 }
 
 func (s *Service) deferSell(ctx context.Context, recommendationID string, now time.Time, reason string) error {
-	next := NextLifecycleCheck(now)
+	next, err := NextSellCheck(ctx, s.calendar, now)
+	if err != nil {
+		return err
+	}
 	if err := s.repository.UpdateRecommendation(ctx, recommendationID, map[string]any{"status": "sell_pending", "next_check_at": next}); err != nil {
 		return err
 	}
@@ -392,7 +393,14 @@ func (s *Service) deferSell(ctx context.Context, recommendationID string, now ti
 }
 
 func (s *Service) recordError(ctx context.Context, recommendation Recommendation, now time.Time, processErr error) error {
-	next := NextLifecycleCheck(now)
+	if recommendation.Status == "buy_pending" {
+		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
+			"一次性买入处理失败: "+processErr.Error(), now, nil)
+	}
+	next, err := NextSellCheck(ctx, s.calendar, now)
+	if err != nil {
+		return err
+	}
 	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next}); err != nil {
 		return err
 	}
@@ -432,17 +440,6 @@ func (s *Service) Detail(ctx context.Context, recommendationID string) (Recommen
 	if err != nil {
 		return detail, err
 	}
-	if detail.Recommendation.Status == "pending" {
-		elapsed, elapsedErr := s.effectiveActivationElapsed(ctx, detail.Recommendation, s.now())
-		if elapsedErr == nil {
-			detail.ActivationTradingElapsedSeconds = int64(elapsed / time.Second)
-			remaining := ActivationTradingWindow - elapsed
-			if remaining < 0 {
-				remaining = 0
-			}
-			detail.ActivationRemainingSeconds = int64(remaining / time.Second)
-		}
-	}
 	if detail.Position != nil {
 		position := detail.Position
 		if position.Status == "open" {
@@ -475,7 +472,7 @@ func enrichPositionValue(position *Position) {
 	}
 }
 
-func lifecyclePrompt(recommendation Recommendation, phase string, now time.Time, observation LifecycleObservation, position *Position) string {
+func lifecyclePrompt(recommendation Recommendation, now time.Time, observation LifecycleObservation, position *Position) string {
 	quoteID := LifecycleSourceID(observation.ObservationID, LifecycleQuoteSourceSuffix)
 	minuteID := LifecycleSourceID(observation.ObservationID, LifecycleMinuteSourceSuffix)
 	sources := ParseLifecycleEvidence(observation)
@@ -497,13 +494,10 @@ func lifecyclePrompt(recommendation Recommendation, phase string, now time.Time,
 		}
 		evidence.WriteString(line + "\n")
 	}
-	common := fmt.Sprintf("现在是 %s。只判断股票 %s(%s)，不得混入其他股票。原始 AI 摘要：%s。原始激活条件：%s。主要风险：%s。\n本轮观察编号：%s，数据状态：%s，增量窗口：%s 至 %s。\n本轮证据：\n%s\n最新证据优先于历史记忆；失败来源不得补造内容。sourceRefs 只能填写本轮方括号中的来源编号。",
+	common := fmt.Sprintf("现在是 %s。只判断股票 %s(%s)，不得混入其他股票。原始 AI 摘要：%s。主要风险：%s。\n本轮观察编号：%s，数据状态：%s，增量窗口：%s 至 %s。\n本轮证据：\n%s\n最新证据优先于历史记忆；失败来源不得补造内容。sourceRefs 只能填写本轮方括号中的来源编号。",
 		now.Format(time.RFC3339), recommendation.StockName, recommendation.StockCode, recommendation.AISummary,
-		recommendation.ActivationCondition, recommendation.MainRisk, observation.ObservationID, observation.Status,
+		recommendation.MainRisk, observation.ObservationID, observation.Status,
 		observation.WindowFrom.Format(time.RFC3339), observation.ObservedAt.Format(time.RFC3339), evidence.String())
-	if phase == "activation" {
-		return common + fmt.Sprintf("\n只返回 JSON：{\"action\":\"等待|激活|失效\",\"reason\":\"简明理由\",\"sourceRefs\":[\"来源编号\"],\"dataSufficiency\":\"充足|不足\"}。判断激活时必须引用 %s 和 %s；证据不足只能等待，后续已经不容乐观可直接失效。", quoteID, minuteID)
-	}
 	positionText := "持仓数据不可用"
 	if position != nil {
 		positionText = fmt.Sprintf("买入时间=%s，成本价=%.3f，数量=%d，当前价=%.3f，预估净收益=%.2f，预估净收益率=%.4f，T+1可卖=%t，预估卖出费用=%.2f",
@@ -568,10 +562,10 @@ func parseLifecycleDecision(content string, allowed map[string]bool, observation
 		}
 		seen[sourceRef] = struct{}{}
 	}
-	if decision.Action == "激活" || decision.Action == "卖出" {
+	if decision.Action == "卖出" {
 		sufficiency := strings.ToLower(strings.TrimSpace(decision.DataSufficiency))
 		if sufficiency != "充足" && sufficiency != "sufficient" && sufficiency != "ready" {
-			return decision, errors.New("activation or sale requires sufficient latest evidence")
+			return decision, errors.New("sale requires sufficient latest evidence")
 		}
 		required := []string{LifecycleSourceID(observation.ObservationID, LifecycleQuoteSourceSuffix), LifecycleSourceID(observation.ObservationID, LifecycleMinuteSourceSuffix)}
 		for _, sourceID := range required {
@@ -607,6 +601,46 @@ func validateBuyQuote(quote Quote) error {
 	}
 	if strings.TrimSpace(quote.Name) == "" {
 		return errors.New("quote name is empty")
+	}
+	return nil
+}
+
+func validateBuyQuoteAt(now time.Time, quote Quote) error {
+	if err := validateBuyQuote(quote); err != nil {
+		return err
+	}
+	if quote.At.IsZero() {
+		return errors.New("quote time is empty")
+	}
+	localNow, localQuote := ShanghaiTime(now), ShanghaiTime(quote.At)
+	if localNow.Format("2006-01-02") != localQuote.Format("2006-01-02") {
+		return fmt.Errorf("quote trading date is stale: %s", localQuote.Format(time.RFC3339))
+	}
+	lag := localNow.Sub(localQuote)
+	if lag > 20*time.Minute || lag < -2*time.Minute {
+		return fmt.Errorf("quote time is stale or invalid: %s", lag.Round(time.Second))
+	}
+	return nil
+}
+
+func validateSellQuoteAt(now time.Time, recommendation *Recommendation, quote Quote) error {
+	if quote.Price <= 0 || quote.Suspended || quote.LimitDown {
+		return errors.New("停牌、跌停或行情不可交易")
+	}
+	if quote.At.IsZero() {
+		return errors.New("卖出行情缺少有效时间")
+	}
+	quoteCode, ok := NormalizeMainlandCode(quote.Code)
+	if !ok || recommendation == nil || quoteCode != recommendation.StockCode || !sameStockName(quote.Name, recommendation.StockName) {
+		return errors.New("卖出行情与持仓股票不匹配")
+	}
+	localNow, localQuote := ShanghaiTime(now), ShanghaiTime(quote.At)
+	if localNow.Format("2006-01-02") != localQuote.Format("2006-01-02") {
+		return fmt.Errorf("卖出行情日期滞后: %s", localQuote.Format(time.RFC3339))
+	}
+	lag := localNow.Sub(localQuote)
+	if lag > 20*time.Minute || lag < -2*time.Minute {
+		return fmt.Errorf("卖出行情时间异常: %s", lag.Round(time.Second))
 	}
 	return nil
 }

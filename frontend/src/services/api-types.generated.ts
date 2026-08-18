@@ -151,7 +151,7 @@ export type Recommendation = {
   recommendationId: string
   signalAt: string
   sourceRefs?: string
-  status: string
+  status: "buy_pending" | "pending" | "active" | "sell_pending" | "invalidated" | "missed_cash" | "missed_untradable" | "closed"
   stockCode: string
   stockName: string
   totalFees?: number

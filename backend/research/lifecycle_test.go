@@ -27,7 +27,7 @@ func (m *scriptedAI) Complete(_ context.Context, request CompletionRequest) (Com
 	var err error
 	if i < len(m.results) {
 		result = m.results[i]
-		if (strings.Contains(result.Content, `"action":"激活"`) || strings.Contains(result.Content, `"action":"卖出"`)) && !strings.Contains(result.Content, "sourceRefs") {
+		if strings.Contains(result.Content, `"action":"卖出"`) && !strings.Contains(result.Content, "sourceRefs") {
 			refs := regexp.MustCompile(`OBS-[A-Z0-9]+-[QM]`).FindAllString(request.Prompt, -1)
 			if len(refs) >= 2 {
 				result.Content = strings.TrimSuffix(result.Content, "}") + `,"sourceRefs":["` + refs[0] + `","` + refs[1] + `"],"dataSufficiency":"充足"}`
@@ -42,7 +42,23 @@ func (m *scriptedAI) Complete(_ context.Context, request CompletionRequest) (Com
 
 type scriptedQuotes struct {
 	quotes []Quote
+	errors []error
 	calls  int
+}
+
+func (m *scriptedQuotes) CurrentQuote(_ context.Context, _ string) (Quote, error) {
+	i := m.calls
+	m.calls++
+	if i < len(m.errors) && m.errors[i] != nil {
+		return Quote{}, m.errors[i]
+	}
+	if len(m.quotes) == 0 {
+		return Quote{}, errors.New("no quote")
+	}
+	if i >= len(m.quotes) {
+		i = len(m.quotes) - 1
+	}
+	return m.quotes[i], nil
 }
 
 type scriptedContexts struct {
@@ -81,18 +97,6 @@ func readyLifecycleDraft(now time.Time, status string) LifecycleObservationDraft
 		}}
 }
 
-func (m *scriptedQuotes) CurrentQuote(_ context.Context, _ string) (Quote, error) {
-	if len(m.quotes) == 0 {
-		return Quote{}, errors.New("no quote")
-	}
-	i := m.calls
-	if i >= len(m.quotes) {
-		i = len(m.quotes) - 1
-	}
-	m.calls++
-	return m.quotes[i], nil
-}
-
 type openCalendar struct{}
 
 func (openCalendar) IsTradingDay(context.Context, time.Time) (bool, error) { return true, nil }
@@ -108,7 +112,7 @@ func (a *advancingAI) Complete(_ context.Context, request CompletionRequest) (Co
 	a.requests = append(a.requests, request)
 	*a.clock = a.finishAt
 	result := a.result
-	if !strings.Contains(result.Content, "sourceRefs") {
+	if strings.Contains(result.Content, `"action":"卖出"`) && !strings.Contains(result.Content, "sourceRefs") {
 		refs := regexp.MustCompile(`OBS-[A-Z0-9]+-[QM]`).FindAllString(request.Prompt, -1)
 		if len(refs) >= 2 {
 			result.Content = strings.TrimSuffix(result.Content, "}") + `,"sourceRefs":["` + refs[0] + `","` + refs[1] + `"],"dataSufficiency":"充足"}`
@@ -133,13 +137,19 @@ func researchTestRepo(t *testing.T) *Repository {
 	return repo
 }
 
-func seedRecommendation(t *testing.T, repo *Repository, status string, signal, due time.Time, previous string) Recommendation {
+func seedRun(t *testing.T, repo *Repository, now time.Time) string {
 	t.Helper()
-	run := AnalysisRun{RunID: newID(), ScheduledFor: signal, StartedAt: signal, Status: "success"}
+	run := AnalysisRun{RunID: newID(), ScheduledFor: now, StartedAt: now, Status: "success"}
 	if err := repo.CreateAnalysis(context.Background(), &run); err != nil {
 		t.Fatal(err)
 	}
-	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "浦发银行", SignalAt: signal, ActivationCondition: "放量转强", Status: status, PreviousResponseID: previous, NextCheckAt: &due}
+	return run.RunID
+}
+
+func seedRecommendation(t *testing.T, repo *Repository, status string, signal, due time.Time, previous string) Recommendation {
+	t.Helper()
+	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, signal), StockCode: "sh600000", StockName: "浦发银行", SignalAt: signal,
+		AISummary: "量价与资金保持强势", MainRisk: "板块退潮", Status: status, PreviousResponseID: previous, NextCheckAt: &due}
 	initial := []LifecycleMessage{{RecommendationID: rec.RecommendationID, Sequence: 1, Role: "system", Phase: "initial", Content: "ONLY:" + rec.RecommendationID, CreatedAt: signal}}
 	if err := repo.CreateRecommendation(context.Background(), &rec, initial); err != nil {
 		t.Fatal(err)
@@ -147,146 +157,178 @@ func seedRecommendation(t *testing.T, repo *Repository, status string, signal, d
 	return rec
 }
 
-func TestLifecycleFallbackUsesOnlyStockHistoryAndActivatesAtRefetchedQuote(t *testing.T) {
+func seedOpenPosition(t *testing.T, repo *Repository, rec Recommendation, entry time.Time) {
+	t.Helper()
+	position := Position{RecommendationID: rec.RecommendationID, StockCode: rec.StockCode, StockName: rec.StockName, Market: "SH",
+		Quantity: 100, EntryAt: entry, EntryPrice: 10.01, BuyFees: 5, CurrentPrice: 10, Status: "open"}
+	if err := repo.DB().Create(&position).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnqueueRecommendationBuysImmediatelyAndAnchorsNextTradingDay0950(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", now.Add(-time.Hour), now, "response-old")
-	ai := &scriptedAI{results: []CompletionResult{{}, {Content: `{"action":"激活","reason":"条件满足"}`, ResponseID: "response-new", Model: "gpt-5.6-sol"}}, errors: []error{errors.New("relay rejects previous_response_id"), nil}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}, {Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10.1, PreviousClose: 9.8, At: now.Add(time.Second)}}}
-	service := NewService(repo, ai, quotes, openCalendar{})
+	quote := Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{quote}}, weekdayTradingCalendar{})
+	service.now = func() time.Time { return now }
+	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: quote.Code, StockName: quote.Name, SignalAt: now}
+	if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.Status != "active" || stored.Quantity == 0 || stored.NextCheckAt == nil || stored.NextCheckAt.Format("2006-01-02 15:04") != "2026-08-17 09:50" {
+		t.Fatalf("stored=%+v", stored)
+	}
+	var trades, events int64
+	_ = repo.DB().Model(&SimulatedTrade{}).Where("recommendation_id = ? AND side = ?", rec.RecommendationID, "buy").Count(&trades).Error
+	_ = repo.DB().Model(&DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", rec.RecommendationID, "模拟买入").Count(&events).Error
+	if trades != 1 || events != 1 {
+		t.Fatalf("trades=%d events=%d", trades, events)
+	}
+}
+
+func TestAfterCloseBuyQueuesForNextOpenAndFailsOnlyOnce(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 14, 15, 30, 0, 0, shanghaiLocation)
+	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: time.Date(2026, 8, 17, 9, 30, 0, 0, shanghaiLocation), LimitUp: true}}}
+	service := NewService(repo, &scriptedAI{}, quotes, weekdayTradingCalendar{})
+	service.now = func() time.Time { return now }
+	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: "sh600000", StockName: "浦发银行", SignalAt: now}
+	if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.Status != "buy_pending" || stored.NextCheckAt.Format("2006-01-02 15:04") != "2026-08-17 09:30" || quotes.calls != 0 {
+		t.Fatalf("queued=%+v calls=%d", stored, quotes.calls)
+	}
+	now = time.Date(2026, 8, 17, 9, 30, 0, 0, shanghaiLocation)
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ = repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.Status != "missed_untradable" || stored.NextCheckAt != nil || quotes.calls != 1 {
+		t.Fatalf("failed=%+v calls=%d", stored, quotes.calls)
+	}
+	now = now.Add(15 * time.Minute)
+	_ = service.ProcessDue(context.Background())
+	if quotes.calls != 1 {
+		t.Fatalf("one-shot buy retried %d times", quotes.calls)
+	}
+}
+
+func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{
+		{Code: "sh600000", Name: "甲", Market: "SH", Price: 40, At: now}, {Code: "sz000001", Name: "乙", Market: "SZ", Price: 40, At: now},
+		{Code: "sh600001", Name: "丙", Market: "SH", Price: 40, At: now},
+	}}, weekdayTradingCalendar{})
+	service.now = func() time.Time { return now }
+	runID := seedRun(t, repo, now)
+	var statuses []string
+	for index, code := range []string{"sh600000", "sz000001", "sh600001"} {
+		rec := Recommendation{RecommendationID: newID(), AnalysisRunID: runID, StockCode: code, StockName: []string{"甲", "乙", "丙"}[index], SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
+		if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
+			t.Fatal(err)
+		}
+		stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+		statuses = append(statuses, stored.Status)
+	}
+	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "missed_cash" {
+		t.Fatalf("statuses=%v", statuses)
+	}
+}
+
+func TestHoldingFallbackUsesOnlyStockHistoryAndFixedNextSlot(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -3), now, "response-old")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -3))
+	ai := &scriptedAI{results: []CompletionResult{{}, {Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`, ResponseID: "response-new"}}, errors: []error{errors.New("relay rejects previous_response_id"), nil}}
+	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}}
+	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, contexts)
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(ai.requests) != 2 || ai.requests[0].PreviousResponseID != "response-old" || ai.requests[1].PreviousResponseID != "" {
+	if len(ai.requests) != 2 || ai.requests[0].PreviousResponseID != "response-old" || ai.requests[1].PreviousResponseID != "" || len(ai.requests[1].Messages) == 0 {
 		t.Fatalf("requests=%+v", ai.requests)
-	}
-	if len(ai.requests[1].Messages) == 0 {
-		t.Fatal("fallback history missing")
 	}
 	for _, message := range ai.requests[1].Messages {
 		if message.RecommendationID != rec.RecommendationID {
 			t.Fatalf("cross-stock memory: %+v", message)
 		}
 	}
-	if !strings.Contains(ai.requests[0].Prompt, "价格：10.000") {
-		t.Fatalf("decision prompt lacks quote: %s", ai.requests[0].Prompt)
-	}
-	updated, err := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if updated.Status != "active" || updated.Quantity%100 != 0 || updated.ActivationPrice <= 10.1 {
-		t.Fatalf("updated=%+v", updated)
-	}
-	if quotes.calls != 2 {
-		t.Fatalf("quote calls=%d, want decision+execution refetch", quotes.calls)
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.Status != "active" || stored.NextCheckAt.Format("15:04") != "10:05" {
+		t.Fatalf("stored=%+v", stored)
 	}
 }
 
-func TestLifecycleAPIFailureKeepsStateAndRetriesFifteenMinutesLater(t *testing.T) {
+func TestMigratedPositionNominalWeekendDueRunsAtStrictMonday0950(t *testing.T) {
 	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", now.Add(-time.Hour), now, "")
-	ai := &scriptedAI{errors: []error{errors.New("timeout")}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: now}}}
-	service := NewService(repo, ai, quotes, openCalendar{})
-	service.now = func() time.Time { return now }
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "pending" || updated.NextCheckAt == nil || !updated.NextCheckAt.Equal(now.Add(15*time.Minute)) {
-		t.Fatalf("updated=%+v", updated)
-	}
-	if updated.DataPauseSeconds != 0 {
-		t.Fatalf("model failure paused activation budget: %d", updated.DataPauseSeconds)
-	}
-	var count int64
-	if err := repo.DB().Model(&DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", rec.RecommendationID, "错误重试").Count(&count).Error; err != nil || count != 1 {
-		t.Fatalf("error events=%d err=%v", count, err)
-	}
-}
-
-func TestCriticalLifecycleDataSkipsAIAndCapsPauseAtThirtyMinutes(t *testing.T) {
-	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 18, 9, 30, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", now, now, "")
-	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{{Status: "critical_failed", CriticalFailure: "分钟量价不可用"}}}
-	ai := &scriptedAI{}
-	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, contexts)
-	service.now = func() time.Time { return now }
-	for index := 0; index < 3; index++ {
-		if err := service.ProcessDue(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		now = now.Add(15 * time.Minute)
-	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if len(ai.requests) != 0 || updated.DataPauseSeconds != MaxDataPauseSecs {
-		t.Fatalf("AI requests=%d pause=%d", len(ai.requests), updated.DataPauseSeconds)
-	}
-	var observations []LifecycleObservation
-	if err := repo.DB().Where("recommendation_id = ?", rec.RecommendationID).Find(&observations).Error; err != nil {
-		t.Fatal(err)
-	}
-	if len(observations) != 3 {
-		t.Fatalf("observations=%d", len(observations))
-	}
-	for _, observation := range observations {
-		if observation.ModelInvoked || observation.Status != "critical_failed" {
-			t.Fatalf("observation=%+v", observation)
-		}
-	}
-}
-
-func TestPartialOptionalSourcesStillInvokeAI(t *testing.T) {
-	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", now.Add(-time.Hour), now, "")
-	draft := readyLifecycleDraft(now, "partial")
-	draft.Sources = append(draft.Sources, LifecycleEvidenceSource{ID: "optional-news", Name: "增量新闻", Category: "news", Status: "failed", Error: "timeout", CollectedAt: now})
-	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{draft}}
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"等待","reason":"新闻失败但关键量价完整","sourceRefs":[],"dataSufficiency":"充足"}`}}}
-	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, contexts)
+	entry := time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation) // Friday.
+	nominalSaturday := time.Date(2026, 8, 15, 9, 50, 0, 0, shanghaiLocation)
+	now := time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "active", entry, nominalSaturday, "")
+	seedOpenPosition(t, repo, rec, entry)
+	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`}}}
+	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}}
+	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, contexts)
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(ai.requests) != 1 {
-		t.Fatalf("AI requests=%d", len(ai.requests))
+		t.Fatalf("strict Monday 09:50 should run exactly once, requests=%d", len(ai.requests))
 	}
-	detail, err := repo.Detail(context.Background(), rec.RecommendationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(detail.Observations) != 1 || detail.Observations[0].Status != "partial" || !detail.Observations[0].ModelInvoked {
-		t.Fatalf("observations=%+v", detail.Observations)
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.NextCheckAt == nil || stored.NextCheckAt.Format("2006-01-02 15:04") != "2026-08-17 10:05" {
+		t.Fatalf("next=%v", stored.NextCheckAt)
 	}
 }
 
-func TestActivationAndSaleRequireLatestQuoteAndMinuteCitations(t *testing.T) {
-	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
-	request := LifecycleContextRequest{ObservationID: "12345678-1234-1234-1234-123456789012", Recommendation: Recommendation{RecommendationID: "rec"}, Phase: "activation", Now: now, WindowFrom: now}
+func TestCriticalHoldingDataSkipsAIAndUsesNextFixedSlot(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -1))
+	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{{Status: "critical_failed", CriticalFailure: "分钟量价不可用"}}}
+	ai := &scriptedAI{}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, contexts)
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if len(ai.requests) != 0 || stored.NextCheckAt.Format("15:04") != "10:20" {
+		t.Fatalf("requests=%d stored=%+v", len(ai.requests), stored)
+	}
+}
+
+func TestSaleRequiresLatestQuoteAndMinuteCitations(t *testing.T) {
+	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	request := LifecycleContextRequest{ObservationID: "12345678-1234-1234-1234-123456789012", Recommendation: Recommendation{RecommendationID: "rec"}, Phase: "holding", Now: now, WindowFrom: now}
 	observation, err := NewLifecycleObservation(request, readyLifecycleDraft(now, "ready"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed := map[string]bool{"激活": true}
-	if _, err = parseLifecycleDecision(`{"action":"激活","reason":"满足","sourceRefs":[],"dataSufficiency":"充足"}`, allowed, observation); err == nil {
-		t.Fatal("activation without citations was accepted")
+	allowed := map[string]bool{"卖出": true}
+	if _, err = parseLifecycleDecision(`{"action":"卖出","reason":"转弱","sourceRefs":[],"dataSufficiency":"充足"}`, allowed, observation); err == nil {
+		t.Fatal("sale without citations was accepted")
 	}
 	quoteID := LifecycleSourceID(request.ObservationID, LifecycleQuoteSourceSuffix)
 	minuteID := LifecycleSourceID(request.ObservationID, LifecycleMinuteSourceSuffix)
-	content := fmt.Sprintf(`{"action":"激活","reason":"满足","sourceRefs":[%q,%q],"dataSufficiency":"充足"}`, quoteID, minuteID)
+	content := fmt.Sprintf(`{"action":"卖出","reason":"转弱","sourceRefs":[%q,%q],"dataSufficiency":"充足"}`, quoteID, minuteID)
 	if _, err = parseLifecycleDecision(content, allowed, observation); err != nil {
 		t.Fatalf("valid citations rejected: %v", err)
 	}
 }
 
-func TestLifecyclePromptRetainsEverySourceIDWithinBalancedBudget(t *testing.T) {
-	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
-	request := LifecycleContextRequest{ObservationID: "abcdef12-1234-1234-1234-123456789012", Recommendation: Recommendation{RecommendationID: "rec"}, Phase: "activation", Now: now, WindowFrom: now.Add(-15 * time.Minute)}
+func TestLifecyclePromptRetainsSourcesAndOmitsActivation(t *testing.T) {
+	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	request := LifecycleContextRequest{ObservationID: "abcdef12-1234-1234-1234-123456789012", Recommendation: Recommendation{RecommendationID: "rec"}, Phase: "holding", Now: now, WindowFrom: now.Add(-15 * time.Minute)}
 	draft := readyLifecycleDraft(now, "ready")
 	for index := 0; index < 12; index++ {
 		draft.Sources = append(draft.Sources, LifecycleEvidenceSource{ID: fmt.Sprintf("OPTIONAL-%02d", index), Name: "来源", Category: "news", Status: "ok", Content: strings.Repeat("资讯", 5000), CollectedAt: now})
@@ -295,220 +337,69 @@ func TestLifecyclePromptRetainsEverySourceIDWithinBalancedBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prompt := lifecyclePrompt(Recommendation{StockCode: "sh600000", StockName: "浦发银行"}, "activation", now, observation, nil)
+	prompt := lifecyclePrompt(Recommendation{StockCode: "sh600000", StockName: "浦发银行", ActivationCondition: "旧条件"}, now, observation, &Position{})
 	for _, source := range ParseLifecycleEvidence(observation) {
 		if !strings.Contains(prompt, "["+source.ID+"]") {
 			t.Fatalf("prompt omitted source %s", source.ID)
 		}
 	}
-}
-
-func TestThirtyMinuteDataPauseExtendsFourHourActivationWindow(t *testing.T) {
-	repo := researchTestRepo(t)
-	signal := time.Date(2026, 8, 18, 9, 30, 0, 0, shanghaiLocation)
-	due := time.Date(2026, 8, 19, 15, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", signal, due, "")
-	if err := repo.UpdateRecommendation(context.Background(), rec.RecommendationID, map[string]any{"data_pause_seconds": MaxDataPauseSecs}); err != nil {
-		t.Fatal(err)
-	}
-	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, weekdayTradingCalendar{})
-	now := time.Date(2026, 8, 18, 15, 0, 0, 0, shanghaiLocation)
-	service.now = func() time.Time { return now }
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "pending" {
-		t.Fatalf("paused recommendation expired at four raw hours: %+v", updated)
-	}
-	now = time.Date(2026, 8, 19, 10, 0, 0, 0, shanghaiLocation)
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ = repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "invalidated" {
-		t.Fatalf("recommendation did not expire after four effective hours: %+v", updated)
+	if strings.Contains(prompt, "旧条件") || strings.Contains(prompt, "激活条件") {
+		t.Fatalf("prompt leaked activation: %s", prompt)
 	}
 }
 
-func TestInvalidLifecycleReplyIsPersistedAndStateIsRetried(t *testing.T) {
+func TestLateHoldingResponseCrossingCloseIsDeferred(t *testing.T) {
 	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", now.Add(-time.Hour), now, "")
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"买入","reason":"越权动作"}`, ResponseID: "bad-response"}}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: rec.StockCode, Name: rec.StockName, Market: "SH", Price: 10, At: now}}}
-	service := NewService(repo, ai, quotes, openCalendar{})
-	service.now = func() time.Time { return now }
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "pending" || updated.NextCheckAt == nil || !updated.NextCheckAt.Equal(now.Add(15*time.Minute)) {
-		t.Fatalf("invalid response changed lifecycle: %+v", updated)
-	}
-	messages, err := repo.Messages(context.Background(), rec.RecommendationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(messages) != 3 || messages[2].ResponseID != "bad-response" || !strings.Contains(messages[2].Content, "买入") {
-		t.Fatalf("AI reply was not audited: %+v", messages)
-	}
-	if len(ai.requests) != 1 || len(ai.requests[0].Messages) < 2 {
-		t.Fatalf("first remote chain was not seeded with isolated local context: %+v", ai.requests)
-	}
-}
-
-func TestDueLifecycleDoesNotRunDuringLunch(t *testing.T) {
-	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 14, 12, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", now.Add(-time.Hour), now.Add(-time.Minute), "")
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"激活","reason":"不应调用"}`}}}
-	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
-	service.now = func() time.Time { return now }
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(ai.requests) != 0 {
-		t.Fatalf("lunch lifecycle invoked AI: %+v", ai.requests)
-	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "pending" {
-		t.Fatalf("lunch changed status: %+v", updated)
-	}
-}
-
-func TestPendingCarriesTradingBudgetAcrossDaysAndExpiresAtFourHours(t *testing.T) {
-	repo := researchTestRepo(t)
-	signal := time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation)
-	now := time.Date(2026, 8, 17, 14, 29, 0, 0, shanghaiLocation)
-	due := now.Add(time.Minute)
-	rec := seedRecommendation(t, repo, "pending", signal, due, "")
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"激活","reason":"不应调用"}`}}}
-	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{})
-	service.now = func() time.Time { return now }
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "pending" || len(ai.requests) != 0 {
-		t.Fatalf("recommendation expired before four trading hours: %+v requests=%d", updated, len(ai.requests))
-	}
-	now = now.Add(time.Minute)
-	if err := service.ProcessDue(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	updated, _ = repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "invalidated" || len(ai.requests) != 0 {
-		t.Fatalf("recommendation did not expire at four trading hours: %+v requests=%d", updated, len(ai.requests))
-	}
-}
-
-func TestActivationResponseCrossingCloseIsDeferred(t *testing.T) {
-	repo := researchTestRepo(t)
-	signal := time.Date(2026, 8, 17, 14, 30, 0, 0, shanghaiLocation)
 	now := time.Date(2026, 8, 17, 14, 45, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "pending", signal, now, "")
-	ai := &advancingAI{clock: &now, finishAt: time.Date(2026, 8, 17, 15, 5, 0, 0, shanghaiLocation), result: CompletionResult{Content: `{"action":"激活","reason":"条件满足"}`, ResponseID: "late-response"}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: now}}}
-	service := NewService(repo, ai, quotes, weekdayTradingCalendar{})
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -3), now, "")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -3))
+	ai := &advancingAI{clock: &now, finishAt: time.Date(2026, 8, 17, 15, 5, 0, 0, shanghaiLocation), result: CompletionResult{Content: `{"action":"卖出","reason":"走弱"}`, ResponseID: "late-response"}}
+	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "pending" || updated.PreviousResponseID != "late-response" || quotes.calls != 1 {
-		t.Fatalf("late response was executed: recommendation=%+v quoteCalls=%d", updated, quotes.calls)
-	}
-	var deferred int64
-	if err := repo.DB().Model(&DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", rec.RecommendationID, "响应跨休市").Count(&deferred).Error; err != nil || deferred != 1 {
-		t.Fatalf("deferred events=%d err=%v", deferred, err)
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.Status != "active" || stored.PreviousResponseID != "late-response" || stored.NextCheckAt.Format("2006-01-02 15:04") != "2026-08-18 09:50" {
+		t.Fatalf("stored=%+v", stored)
 	}
 }
 
-func TestSameDaySellBecomesPendingWithoutTrade(t *testing.T) {
+func TestStaleOverdueSellCheckIsNotReplayed(t *testing.T) {
 	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 14, 14, 0, 0, 0, shanghaiLocation)
-	rec := seedRecommendation(t, repo, "active", now.Add(-time.Hour), now, "")
-	position := Position{RecommendationID: rec.RecommendationID, StockCode: rec.StockCode, StockName: rec.StockName, Market: "SH", Quantity: 100, EntryAt: now.Add(-time.Hour), EntryPrice: 10, BuyFees: 5, CurrentPrice: 10, Status: "open"}
-	if err := repo.DB().Create(&position).Error; err != nil {
-		t.Fatal(err)
-	}
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"卖出","reason":"走弱"}`}}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: rec.StockCode, Name: rec.StockName, Market: "SH", Price: 9.8, At: now}}}
-	service := NewService(repo, ai, quotes, openCalendar{})
+	due := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	now := due.Add(3 * time.Minute)
+	rec := seedRecommendation(t, repo, "active", due.AddDate(0, 0, -1), due, "")
+	seedOpenPosition(t, repo, rec, due.AddDate(0, 0, -1))
+	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"卖出","reason":"不应补跑"}`}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if updated.Status != "sell_pending" {
-		t.Fatalf("status=%s", updated.Status)
-	}
-	var trades int64
-	_ = repo.DB().Model(&SimulatedTrade{}).Where("recommendation_id = ?", rec.RecommendationID).Count(&trades).Error
-	if trades != 0 {
-		t.Fatalf("same-day sell created %d trades", trades)
-	}
-}
-
-func TestCashCompetitionIsFirstComeFirstServed(t *testing.T) {
-	repo := researchTestRepo(t)
-	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
-	run := AnalysisRun{RunID: newID(), ScheduledFor: now, StartedAt: now, Status: "success"}
-	if err := repo.CreateAnalysis(context.Background(), &run); err != nil {
-		t.Fatal(err)
-	}
-	codes := []string{"sh600000", "sz000001", "sh600001"}
-	recommendations := make([]Recommendation, 0, len(codes))
-	for _, code := range codes {
-		recommendation := Recommendation{RecommendationID: newID(), AnalysisRunID: run.RunID, StockCode: code, StockName: code, SignalAt: now, Status: "pending"}
-		if err := repo.CreateRecommendation(context.Background(), &recommendation, nil); err != nil {
-			t.Fatal(err)
-		}
-		recommendations = append(recommendations, recommendation)
-	}
-	for index := 0; index < 2; index++ {
-		quote := Quote{Code: codes[index], Name: codes[index], Market: "SH", Price: 40, At: now.Add(time.Duration(index) * time.Second)}
-		if err := repo.Buy(context.Background(), recommendations[index].RecommendationID, quote, now); err != nil {
-			t.Fatalf("buy %d: %v", index, err)
-		}
-	}
-	thirdQuote := Quote{Code: codes[2], Name: codes[2], Market: "SH", Price: 40, At: now.Add(2 * time.Second)}
-	if err := repo.Buy(context.Background(), recommendations[2].RecommendationID, thirdQuote, now); err == nil || !strings.Contains(err.Error(), "insufficient cash") {
-		t.Fatalf("third buy must lose deterministic cash race: %v", err)
-	}
-	account, err := repo.Account(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if account.Cash < 0 {
-		t.Fatalf("account overdrawn: %.2f", account.Cash)
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if len(ai.requests) != 0 || stored.NextCheckAt.Format("15:04") != "10:20" {
+		t.Fatalf("requests=%d stored=%+v", len(ai.requests), stored)
 	}
 }
 
 func TestAccountOverviewUsesNetSellValue(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 14, 14, 0, 0, 0, shanghaiLocation)
-	position := Position{RecommendationID: newID(), StockCode: "sh600000", StockName: "浦发银行", Market: "SH", Quantity: 1000, EntryAt: now.AddDate(0, 0, -1), EntryPrice: 10, CurrentPrice: 10, Status: "open"}
+	position := Position{RecommendationID: newID(), StockCode: "sh600000", StockName: "浦发银行", Market: "SH", Quantity: 1000,
+		EntryAt: now.AddDate(0, 0, -1), EntryPrice: 10, CurrentPrice: 10, Status: "open"}
 	if err := repo.DB().Create(&position).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 90000.0).Error; err != nil {
-		t.Fatal(err)
-	}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: position.StockCode, Name: position.StockName, Market: "SH", Price: 11, At: now}}}
-	service := NewService(repo, &scriptedAI{}, quotes, openCalendar{})
+	_ = repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 90000.0).Error
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{{Code: position.StockCode, Name: position.StockName, Market: "SH", Price: 11, At: now}}}, openCalendar{})
 	service.now = func() time.Time { return now }
 	overview, err := service.AccountOverview(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	wantPositionValue := CalculateSellCost(11, 1000).NetCashFlow
-	wantNAV := 90000 + wantPositionValue
-	if math.Abs(overview.PositionValue-wantPositionValue) > 1e-8 || math.Abs(overview.NetAssetValue-wantNAV) > 1e-8 {
-		t.Fatalf("overview=%+v want position %.4f nav %.4f", overview, wantPositionValue, wantNAV)
-	}
-	if math.Abs(overview.NetYieldRate-(wantNAV-InitialCash)/InitialCash) > 1e-8 {
-		t.Fatalf("net yield=%f", overview.NetYieldRate)
+	if math.Abs(overview.PositionValue-wantPositionValue) > 1e-8 || math.Abs(overview.NetAssetValue-(90000+wantPositionValue)) > 1e-8 {
+		t.Fatalf("overview=%+v", overview)
 	}
 }

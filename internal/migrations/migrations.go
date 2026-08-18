@@ -13,6 +13,7 @@ import (
 	"go-stock/backend/research"
 	"go-stock/internal/releaseinfo"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -128,6 +129,19 @@ var mainMigrations = []migration{
 			}, "\n")
 		},
 		apply: applyResearchLifecycleObservationEvidence,
+	},
+	{
+		id: 8, name: "research_direct_buy_and_fixed_sell_schedule",
+		description: "App 1.6.5 replaces activation with one-shot direct buying and anchors sell reviews to fixed T+1 trading slots.",
+		definition: func() string {
+			return strings.Join([]string{
+				"research recommendation status: buy_pending, active, sell_pending, missed_cash, missed_untradable, closed",
+				"migrate legacy pending recommendations to buy_pending",
+				"restore the four approved 2026-08-17/18 recommendations when they have no buy or position",
+				"preserve historical activation fields, messages, observations and decisions",
+			}, "\n")
+		},
+		apply: applyResearchDirectBuyStrategy,
 	},
 }
 
@@ -267,6 +281,69 @@ func applyResearchLifecycleObservationEvidence(tx *gorm.DB) error {
 	}
 	if err := tx.Exec("UPDATE research_v160_recommendations SET data_pause_seconds = 0 WHERE data_pause_seconds IS NULL").Error; err != nil {
 		return fmt.Errorf("backfill lifecycle data pause budget: %w", err)
+	}
+	return nil
+}
+
+func applyResearchDirectBuyStrategy(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if !tx.Migrator().HasTable(&research.Recommendation{}) || !tx.Migrator().HasTable(&research.DecisionEvent{}) ||
+		!tx.Migrator().HasTable(&research.SimulatedTrade{}) || !tx.Migrator().HasTable(&research.Position{}) {
+		return errors.New("research direct-buy tables are unavailable")
+	}
+	targets := []string{
+		"c49ade23-12f4-4aa0-8203-b985bfd9d7e4",
+		"699640bc-861e-4330-8023-4182173b3e9e",
+		"3bf68fd1-d97f-4426-aa2c-cb63236be808",
+		"053e7c47-a538-4d6d-9dbd-61e9897d8285",
+	}
+	var rows []research.Recommendation
+	if err := tx.Where("status = ? OR (recommendation_id IN ? AND status = ?)", "pending", targets, "invalidated").
+		Order("signal_at ASC, id ASC").Find(&rows).Error; err != nil {
+		return fmt.Errorf("list legacy recommendations for direct buy: %w", err)
+	}
+	now := time.Now()
+	for _, row := range rows {
+		var bought, positioned int64
+		if err := tx.Model(&research.SimulatedTrade{}).
+			Where("recommendation_id = ? AND side = ?", row.RecommendationID, "buy").Count(&bought).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&research.Position{}).Where("recommendation_id = ?", row.RecommendationID).Count(&positioned).Error; err != nil {
+			return err
+		}
+		if bought > 0 || positioned > 0 {
+			continue
+		}
+		if err := tx.Model(&research.Recommendation{}).Where("recommendation_id = ?", row.RecommendationID).Updates(map[string]any{
+			"status": "buy_pending", "next_check_at": now, "last_decision": "待买入", "last_decision_at": now,
+		}).Error; err != nil {
+			return fmt.Errorf("queue legacy recommendation %s for direct buy: %w", row.RecommendationID, err)
+		}
+		event := research.DecisionEvent{
+			EventID:          uuid.NewSHA1(uuid.NameSpaceOID, []byte("go-stock-1.6.5-direct-buy:"+row.RecommendationID)).String(),
+			RecommendationID: row.RecommendationID, DecisionType: "策略升级待买入", DecidedAt: now,
+			Reason: "1.6.5 删除激活流程；保留历史记录并按原信号顺序进入一次性直接买入队列",
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error; err != nil {
+			return fmt.Errorf("append direct-buy migration event %s: %w", row.RecommendationID, err)
+		}
+	}
+	var openPositions []research.Position
+	if err := tx.Where("status = ?", "open").Order("entry_at ASC, id ASC").Find(&openPositions).Error; err != nil {
+		return err
+	}
+	for _, position := range openPositions {
+		entry := research.ShanghaiTime(position.EntryAt).AddDate(0, 0, 1)
+		y, m, d := entry.Date()
+		nominalNext := time.Date(y, m, d, 9, 50, 0, 0, entry.Location())
+		if err := tx.Model(&research.Recommendation{}).
+			Where("recommendation_id = ? AND status IN ?", position.RecommendationID, []string{"active", "sell_pending"}).
+			Update("next_check_at", nominalNext).Error; err != nil {
+			return fmt.Errorf("re-anchor open position %s: %w", position.RecommendationID, err)
+		}
 	}
 	return nil
 }
@@ -445,6 +522,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 8 {
+		if err := verifyMainSchema8Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -523,6 +605,17 @@ func verifyMainSchema7Runtime(database *gorm.DB) error {
 	}
 	if nullCount != 0 {
 		return fmt.Errorf("main schema 7 has %d recommendations without data pause state", nullCount)
+	}
+	return nil
+}
+
+func verifyMainSchema8Runtime(database *gorm.DB) error {
+	var pending int64
+	if err := database.Model(&research.Recommendation{}).Where("status = ?", "pending").Count(&pending).Error; err != nil {
+		return err
+	}
+	if pending != 0 {
+		return fmt.Errorf("main schema 8 has %d legacy pending recommendations", pending)
 	}
 	return nil
 }

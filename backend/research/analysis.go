@@ -13,7 +13,7 @@ import (
 	"unicode/utf8"
 )
 
-const finalReportTableHeader = "| 股票名称 | 股票代码 | AI分析摘要 | 激活条件 | 主要风险 | 来源编号 |"
+const finalReportTableHeader = "| 股票名称 | 股票代码 | AI分析摘要 | 主要风险 | 来源编号 |"
 
 const (
 	AnalysisModeManual    = "manual"
@@ -149,13 +149,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		}
 		return run, stageErr
 	}
-	hasPosition, err := r.service.repository.HasOpenPosition(ctx)
+	hasPosition, err := r.service.repository.HasBlockingExposure(ctx)
 	if err != nil {
 		return finishFailure(err)
 	}
 	if hasPosition {
 		completed := r.service.now()
-		run.Status, run.CompletedAt, run.FailureReason = "skipped_open_position", &completed, "账户存在未卖出持仓"
+		run.Status, run.CompletedAt, run.FailureReason = "skipped_open_position", &completed, "账户存在持仓或待买入任务"
 		return run, r.service.repository.SaveAnalysis(ctx, &run)
 	}
 
@@ -260,7 +260,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 			continue
 		}
 		quote, quoteErr := r.service.quotes.CurrentQuote(ctx, code)
-		if quoteErr != nil || validateBuyQuote(quote) != nil || quote.LimitUp || quote.LimitDown {
+		if quoteErr != nil || validateBuyQuote(quote) != nil {
 			continue
 		}
 		if !sameStockName(row.StockName, quote.Name) {
@@ -274,17 +274,16 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 			continue
 		}
 		signalAt := r.service.now()
-		next := NextLifecycleCheck(signalAt)
 		recommendation := Recommendation{
 			RecommendationID: newID(), AnalysisRunID: run.RunID, StockCode: code, StockName: quote.Name,
-			SignalAt: signalAt, AISummary: row.AISummary, ActivationCondition: row.ActivationCondition,
-			MainRisk: row.MainRisk, SourceRefs: row.SourceRefs, Status: "pending", NextCheckAt: &next,
+			SignalAt: signalAt, AISummary: row.AISummary,
+			MainRisk: row.MainRisk, SourceRefs: row.SourceRefs,
 		}
 		initial := []LifecycleMessage{
 			{RecommendationID: recommendation.RecommendationID, Sequence: 1, Role: "system", Phase: "initial", Content: isolatedInitialContext(run, recommendation), Model: finalResult.Model, CreatedAt: signalAt},
 			{RecommendationID: recommendation.RecommendationID, Sequence: 2, Role: "assistant", Phase: "initial", Content: row.markdownRow(), Model: finalResult.Model, CreatedAt: signalAt},
 		}
-		if err := r.service.repository.CreateRecommendation(ctx, &recommendation, initial); err != nil {
+		if err := r.service.EnqueueRecommendation(ctx, &recommendation, initial); err != nil {
 			return finishFailure(err)
 		}
 		inserted++
@@ -312,16 +311,15 @@ type stockEnvelope struct {
 	Shortlist []recommendationRow `json:"shortlist"`
 }
 type recommendationRow struct {
-	StockName           string `json:"stockName"`
-	StockCode           string `json:"stockCode"`
-	AISummary           string `json:"aiSummary"`
-	ActivationCondition string `json:"activationCondition"`
-	MainRisk            string `json:"mainRisk"`
-	SourceRefs          string `json:"sourceRefs"`
+	StockName  string `json:"stockName"`
+	StockCode  string `json:"stockCode"`
+	AISummary  string `json:"aiSummary"`
+	MainRisk   string `json:"mainRisk"`
+	SourceRefs string `json:"sourceRefs"`
 }
 
 func (row recommendationRow) markdownRow() string {
-	return fmt.Sprintf("| %s | %s | %s | %s | %s | %s |", row.StockName, row.StockCode, row.AISummary, row.ActivationCondition, row.MainRisk, row.SourceRefs)
+	return fmt.Sprintf("| %s | %s | %s | %s | %s |", row.StockName, row.StockCode, row.AISummary, row.MainRisk, row.SourceRefs)
 }
 
 func marketStagePrompt(now time.Time, sources []SourceDocument) string {
@@ -334,16 +332,16 @@ func sectorStagePrompt(now time.Time, market string, sources []SourceDocument) s
 
 func stockStagePrompt(now time.Time, market, sector string, candidates []StockCandidate, sources []SourceDocument) string {
 	candidateJSON, _ := json.Marshal(candidates)
-	return "你是沪深A股个股研究员。现在是" + now.Format(time.RFC3339) + "。逐只参考实时行情、日/分钟K线、公告、研报、财务、概念、资金流和新闻。本批最多保留3只；可以0只。不要给买入区间、止损或止盈。只返回严格 JSON：{\"analysis\":\"Markdown\",\"shortlist\":[{\"stockName\":\"名称\",\"stockCode\":\"sh600000\",\"aiSummary\":\"摘要\",\"activationCondition\":\"交给后续AI动态判断的条件\",\"mainRisk\":\"风险\",\"sourceRefs\":\"S001,S002\"}]}。\n大盘：\n" + market + "\n板块：\n" + sector + "\n候选：" + string(candidateJSON) + "\n来源：\n" + sourceCorpus(filterSourcesForCandidates(sources, candidates), 64000)
+	return "你是沪深A股个股研究员。现在是" + now.Format(time.RFC3339) + "。逐只参考实时行情、日/分钟K线、公告、研报、财务、概念、资金流和新闻。本批最多保留3只；可以0只。最终被推荐的股票会由系统按最新可交易行情直接模拟买入，不设置激活条件。不要给买入区间、止损或止盈。只返回严格 JSON：{\"analysis\":\"Markdown\",\"shortlist\":[{\"stockName\":\"名称\",\"stockCode\":\"sh600000\",\"aiSummary\":\"摘要\",\"mainRisk\":\"风险\",\"sourceRefs\":\"S001,S002\"}]}。\n大盘：\n" + market + "\n板块：\n" + sector + "\n候选：" + string(candidateJSON) + "\n来源：\n" + sourceCorpus(filterSourcesForCandidates(sources, candidates), 64000)
 }
 
 func finalStagePrompt(now time.Time, market, sector, stocks string, shortlist []recommendationRow) string {
 	shortlistJSON, _ := json.Marshal(shortlist)
-	return "你是最终投资研究决策员。现在是" + now.Format(time.RFC3339) + "。综合三级结果，推荐0到2只、允许明确空仓。周期通常中短线且一般不超过10天但不是硬规则。不代表真实购买。不要输出买入区间、止损、止盈、失效条件、基准或超额收益。输出完整 Markdown 报告，末尾必须严格包含下面6列表格且不可增加/删除/改名；空仓也保留表头和分隔行但无数据行。\n" + finalReportTableHeader + "\n|---|---|---|---|---|---|\n大盘：\n" + market + "\n板块：\n" + sector + "\n个股：\n" + stocks + "\n最多15只候选：" + string(shortlistJSON)
+	return "你是最终投资研究决策员。现在是" + now.Format(time.RFC3339) + "。综合三级结果，推荐0到2只、允许明确空仓。周期通常中短线且一般不超过10天但不是硬规则。推荐会触发系统按最新可交易行情直接模拟买入，但不代表真实购买。不要输出激活条件、买入区间、止损、止盈、失效条件、基准或超额收益。输出完整 Markdown 报告，末尾必须严格包含下面5列表格且不可增加/删除/改名；空仓也保留表头和分隔行但无数据行。\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n大盘：\n" + market + "\n板块：\n" + sector + "\n个股：\n" + stocks + "\n最多15只候选：" + string(shortlistJSON)
 }
 
 func repairFinalReportPrompt(report string, parseErr error) string {
-	return "以下报告格式不合规（" + parseErr.Error() + "）。只修复格式和最多2行限制，不改变事实。返回完整 Markdown；末尾必须为：\n" + finalReportTableHeader + "\n|---|---|---|---|---|---|\n\n原报告：\n" + report
+	return "以下报告格式不合规（" + parseErr.Error() + "）。只修复格式和最多2行限制，不改变事实。返回完整 Markdown；末尾必须为：\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n\n原报告：\n" + report
 }
 
 func parseSectorEnvelope(content string) (sectorEnvelope, error) {
@@ -414,7 +412,7 @@ func parseFinalReport(report string) ([]recommendationRow, error) {
 	if headerIndex < 0 || headerIndex+1 >= len(lines) {
 		return nil, errors.New("missing fixed recommendation table")
 	}
-	if len(splitTableRow(lines[headerIndex+1])) != 6 {
+	if len(splitTableRow(lines[headerIndex+1])) != 5 {
 		return nil, errors.New("invalid table separator")
 	}
 	rows := make([]recommendationRow, 0, 2)
@@ -423,10 +421,10 @@ func parseFinalReport(report string) ([]recommendationRow, error) {
 			break
 		}
 		columns := splitTableRow(lines[i])
-		if len(columns) != 6 {
-			return nil, errors.New("recommendation row must have 6 columns")
+		if len(columns) != 5 {
+			return nil, errors.New("recommendation row must have 5 columns")
 		}
-		rows = append(rows, recommendationRow{StockName: columns[0], StockCode: columns[1], AISummary: columns[2], ActivationCondition: columns[3], MainRisk: columns[4], SourceRefs: columns[5]})
+		rows = append(rows, recommendationRow{StockName: columns[0], StockCode: columns[1], AISummary: columns[2], MainRisk: columns[3], SourceRefs: columns[4]})
 	}
 	if len(rows) > 2 {
 		return nil, errors.New("final report returned more than 2 recommendations")
@@ -599,7 +597,6 @@ func isolatedInitialContext(run AnalysisRun, recommendation Recommendation) stri
 		"\n分析运行：" + run.RunID +
 		"\n信号时间：" + recommendation.SignalAt.Format(time.RFC3339) +
 		"\nAI摘要：" + recommendation.AISummary +
-		"\n激活条件：" + recommendation.ActivationCondition +
 		"\n主要风险：" + recommendation.MainRisk +
 		"\n来源：" + recommendation.SourceRefs
 }

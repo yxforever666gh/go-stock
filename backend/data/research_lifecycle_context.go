@@ -212,7 +212,7 @@ func (collector *ResearchLifecycleContextCollector) collectOptional(ctx context.
 		run      func() (any, error)
 	}
 	jobs := []job{{suffix: "NEWS", name: "增量新闻与重要事件", category: "news", run: func() (any, error) { return collector.incrementalNews(request) }}}
-	text := strings.ToLower(strings.Join([]string{request.Recommendation.ActivationCondition, request.Recommendation.AISummary, request.Recommendation.MainRisk}, " "))
+	text := strings.ToLower(strings.Join([]string{request.Recommendation.AISummary, request.Recommendation.MainRisk}, " "))
 	if containsLifecycleKeyword(text, "板块", "行业", "概念", "主线", "热点") {
 		jobs = append(jobs, job{suffix: "SECTORMONEY", name: "行业资金", category: "sector_money", run: func() (any, error) { return collector.news.GetIndustryMoneyRankSina("gn", "netamount"), nil }})
 	}

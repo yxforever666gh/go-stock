@@ -84,7 +84,8 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 		return
 	}
 	a.setCronEntry(aiLifecycleEntryKey, entryID)
-	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描到期的15分钟任务", times)
+	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描待买入和固定卖出检查时点", times)
+	go a.processDueAILifecycle()
 }
 
 func (a *App) runScheduledAIAnalysis() {

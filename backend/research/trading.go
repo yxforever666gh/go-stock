@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+var (
+	ErrInsufficientCash = errors.New("insufficient cash")
+	ErrMinimumOrder     = errors.New("insufficient cash for minimum order unit")
+)
+
 const (
 	CommissionRate    = 0.0003
 	MinimumCommission = 5.0
@@ -110,7 +115,7 @@ func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakd
 	}
 	capAmount := math.Min(MaxCashPerTrade, availableCash)
 	if capAmount <= 0 || marketPrice <= 0 {
-		return 0, CostBreakdown{}, errors.New("insufficient cash")
+		return 0, CostBreakdown{}, ErrInsufficientCash
 	}
 	quantity := int64(math.Floor(capAmount/(marketPrice*(1+SlippageRate))/float64(lot))) * lot
 	for quantity >= lot {
@@ -120,5 +125,5 @@ func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakd
 		}
 		quantity -= lot
 	}
-	return 0, CostBreakdown{}, errors.New("insufficient cash for minimum order unit")
+	return 0, CostBreakdown{}, ErrMinimumOrder
 }

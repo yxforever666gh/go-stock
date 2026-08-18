@@ -1,6 +1,6 @@
 <script setup>
 import {computed, h, onMounted, ref} from 'vue'
-import {NButton, NText, useMessage} from 'naive-ui'
+import {NButton, NTag, NText, useMessage} from 'naive-ui'
 import {MdPreview} from 'md-editor-v3'
 import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/app-api'
 import StockSparkLine from './stockSparkLine.vue'
@@ -22,13 +22,15 @@ function positionFor(row) { return positionsByRecommendation.value.get(row.recom
 function rowFees(row) { const position = positionFor(row); return position ? Number(position.buyFees || 0) + Number(position.estimatedSellFees || 0) : Number(row.totalFees || 0) }
 function rowNetPnl(row) { return positionFor(row)?.netPnl ?? row.netPnl }
 function rowNetYield(row) { return positionFor(row)?.netYieldRate ?? row.netYieldRate }
+const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
+function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'buy_pending' || status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
 
 const columns = [
   {title: '股票名称', key: 'stockName', width: 120, render: row => h(NButton, {text: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => row.stockName})},
   {title: '代码', key: 'stockCode', width: 110},
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
-  {title: '激活状态', key: 'status', width: 120},
-  {title: '激活时间/价格', key: 'activatedAt', minWidth: 210, render: row => row.activatedAt ? `${dateTime(row.activatedAt)} / ${Number(row.activationPrice).toFixed(3)}` : '--'},
+  {title: '交易状态', key: 'status', width: 145, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
+  {title: '买入时间/价格', key: 'activatedAt', minWidth: 210, render: row => row.activatedAt ? `${dateTime(row.activatedAt)} / ${Number(row.activationPrice).toFixed(3)}` : '--'},
   {title: '数量', key: 'quantity', width: 90},
   {title: '当前或卖出时间/价格', key: 'closedAt', minWidth: 220, render: row => {
     const position = positionsByRecommendation.value.get(row.recommendationId)
@@ -46,7 +48,7 @@ async function refresh() {
   try {
     const [accountResult, recommendationResult] = await Promise.all([GetAISimulatedAccount(), ListAIRecommendations(200, 0)])
     account.value = accountResult
-    rows.value = (recommendationResult || []).filter(item => item.activatedAt || item.status === 'missed_cash')
+    rows.value = (recommendationResult || []).filter(item => item.activatedAt || ['missed_cash', 'missed_untradable'].includes(item.status))
   } catch (error) { message.error(error?.message || String(error)) }
   finally { loading.value = false }
 }
@@ -86,13 +88,13 @@ onMounted(refresh)
               <n-descriptions-item label="股票">{{ detail.recommendation.stockName }}（{{ detail.recommendation.stockCode }}）</n-descriptions-item>
               <n-descriptions-item label="净收益">{{ money(detail.position?.netPnl ?? detail.recommendation.netPnl) }}</n-descriptions-item>
               <n-descriptions-item label="净收益率">{{ percent(detail.position?.netYieldRate ?? detail.recommendation.netYieldRate) }}</n-descriptions-item>
-              <n-descriptions-item label="激活条件" :span="3">{{ detail.recommendation.activationCondition }}</n-descriptions-item>
+              <n-descriptions-item v-if="detail.recommendation.activationCondition" label="旧制历史激活条件" :span="3">{{ detail.recommendation.activationCondition }}</n-descriptions-item>
             </n-descriptions>
             <n-divider>分钟图</n-divider>
             <StockSparkLine :stock-code="detail.recommendation.stockCode" :stock-name="detail.recommendation.stockName" :last-price="detail.position?.currentPrice || detail.recommendation.closePrice" :open-price="detail.recommendation.activationPrice"/>
             <n-divider>完整 AI 报告</n-divider>
             <MdPreview :model-value="detail.analysis.finalReport || '暂无报告'"/>
-            <n-divider>AI 判断时间线</n-divider>
+            <n-divider>交易与 AI 判断时间线</n-divider>
             <ResearchLifecycleTimeline :detail="detail"/>
             <n-divider>成交记录</n-divider>
             <n-data-table :columns="[
