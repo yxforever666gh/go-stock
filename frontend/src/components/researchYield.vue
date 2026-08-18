@@ -4,6 +4,7 @@ import {NButton, NText, useMessage} from 'naive-ui'
 import {MdPreview} from 'md-editor-v3'
 import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/app-api'
 import StockSparkLine from './stockSparkLine.vue'
+import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 
 const message = useMessage()
 const loading = ref(false)
@@ -92,11 +93,7 @@ onMounted(refresh)
             <n-divider>完整 AI 报告</n-divider>
             <MdPreview :model-value="detail.analysis.finalReport || '暂无报告'"/>
             <n-divider>AI 判断时间线</n-divider>
-            <n-timeline>
-              <n-timeline-item v-for="item in detail.decisions" :key="item.eventId" :type="item.decisionType === '错误重试' ? 'error' : 'info'" :title="item.decisionType" :time="dateTime(item.decidedAt)">
-                {{ item.reason }}
-              </n-timeline-item>
-            </n-timeline>
+            <ResearchLifecycleTimeline :detail="detail"/>
             <n-divider>成交记录</n-divider>
             <n-data-table :columns="[
               {title:'方向',key:'side'}, {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)}, {title:'市场价',key:'marketPrice'},

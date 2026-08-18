@@ -177,6 +177,70 @@ func TestSchema6RestoresTargetRecommendationsAndPreservesInvalidationHistory(t *
 	}
 }
 
+func TestSchema7AddsLifecycleEvidenceAndPreservesRecommendations(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 18, 10, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	run := research.AnalysisRun{RunID: "schema7-run", ScheduledFor: now, StartedAt: now, Status: "success"}
+	if err := database.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	recommendation := research.Recommendation{RecommendationID: "schema7-rec", AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "浦发银行", SignalAt: now, Status: "pending"}
+	if err := database.Create(&recommendation).Error; err != nil {
+		t.Fatal(err)
+	}
+	event := research.DecisionEvent{EventID: "schema7-event", RecommendationID: recommendation.RecommendationID, DecisionType: "等待", DecidedAt: now, Reason: "legacy"}
+	if err := database.Create(&event).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Migrator().DropTable(&research.LifecycleObservation{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"DataPauseSeconds"} {
+		if err := database.Migrator().DropColumn(&research.Recommendation{}, field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, field := range []string{"SourceRefs", "DataStatus"} {
+		if err := database.Migrator().DropColumn(&research.DecisionEvent{}, field); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := applyResearchLifecycleObservationEvidence(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyMainSchema7Runtime(database); err != nil {
+		t.Fatal(err)
+	}
+	var preserved research.Recommendation
+	if err := database.Where("recommendation_id = ?", recommendation.RecommendationID).First(&preserved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if preserved.Status != "pending" || preserved.DataPauseSeconds != 0 {
+		t.Fatalf("preserved=%+v", preserved)
+	}
+	observation := research.LifecycleObservation{ObservationID: "schema7-observation", RecommendationID: recommendation.RecommendationID,
+		Phase: "activation", WindowFrom: now, ObservedAt: now, Status: "ready", QuoteJSON: "{}", MinuteSummaryJSON: "{}", EvidenceJSON: "[]", SourceStatusJSON: "[]"}
+	if err := database.Create(&observation).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSchema7CreatesCleanLifecycleEvidenceSchema(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchLifecycleObservationEvidence(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyMainSchema7Runtime(database); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMinuteSchemaRemainsVersion2(t *testing.T) {
 	database := openMigrationTestDB(t)
 	for _, item := range minuteMigrations {

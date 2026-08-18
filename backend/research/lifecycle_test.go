@@ -3,7 +3,9 @@ package research
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +27,12 @@ func (m *scriptedAI) Complete(_ context.Context, request CompletionRequest) (Com
 	var err error
 	if i < len(m.results) {
 		result = m.results[i]
+		if (strings.Contains(result.Content, `"action":"激活"`) || strings.Contains(result.Content, `"action":"卖出"`)) && !strings.Contains(result.Content, "sourceRefs") {
+			refs := regexp.MustCompile(`OBS-[A-Z0-9]+-[QM]`).FindAllString(request.Prompt, -1)
+			if len(refs) >= 2 {
+				result.Content = strings.TrimSuffix(result.Content, "}") + `,"sourceRefs":["` + refs[0] + `","` + refs[1] + `"],"dataSufficiency":"充足"}`
+			}
+		}
 	}
 	if i < len(m.errors) {
 		err = m.errors[i]
@@ -35,6 +43,42 @@ func (m *scriptedAI) Complete(_ context.Context, request CompletionRequest) (Com
 type scriptedQuotes struct {
 	quotes []Quote
 	calls  int
+}
+
+type scriptedContexts struct {
+	drafts   []LifecycleObservationDraft
+	requests []LifecycleContextRequest
+}
+
+func (provider *scriptedContexts) CollectLifecycleContext(_ context.Context, request LifecycleContextRequest) (LifecycleObservationDraft, error) {
+	provider.requests = append(provider.requests, request)
+	index := len(provider.requests) - 1
+	if len(provider.drafts) == 0 {
+		return LifecycleObservationDraft{}, errors.New("no lifecycle context")
+	}
+	if index >= len(provider.drafts) {
+		index = len(provider.drafts) - 1
+	}
+	draft := provider.drafts[index]
+	for sourceIndex := range draft.Sources {
+		suffix := LifecycleQuoteSourceSuffix
+		if draft.Sources[sourceIndex].Category == "minute" {
+			suffix = LifecycleMinuteSourceSuffix
+		}
+		if draft.Sources[sourceIndex].ID == "" {
+			draft.Sources[sourceIndex].ID = LifecycleSourceID(request.ObservationID, suffix)
+		}
+	}
+	return draft, nil
+}
+
+func readyLifecycleDraft(now time.Time, status string) LifecycleObservationDraft {
+	return LifecycleObservationDraft{Status: status, Quote: Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now},
+		MinuteSummary: MinuteEvidenceSummary{TradingDate: now.Format("2006-01-02"), LatestAt: now, LatestPrice: 10, TotalBars: 30},
+		Sources: []LifecycleEvidenceSource{
+			{Name: "实时行情", Category: "quote", Status: "ok", CollectedAt: now, Content: "quote"},
+			{Name: "分钟量价", Category: "minute", Status: "ok", CollectedAt: now, Content: "minute"},
+		}}
 }
 
 func (m *scriptedQuotes) CurrentQuote(_ context.Context, _ string) (Quote, error) {
@@ -63,7 +107,14 @@ type advancingAI struct {
 func (a *advancingAI) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
 	a.requests = append(a.requests, request)
 	*a.clock = a.finishAt
-	return a.result, nil
+	result := a.result
+	if !strings.Contains(result.Content, "sourceRefs") {
+		refs := regexp.MustCompile(`OBS-[A-Z0-9]+-[QM]`).FindAllString(request.Prompt, -1)
+		if len(refs) >= 2 {
+			result.Content = strings.TrimSuffix(result.Content, "}") + `,"sourceRefs":["` + refs[0] + `","` + refs[1] + `"],"dataSufficiency":"充足"}`
+		}
+	}
+	return result, nil
 }
 
 func researchTestRepo(t *testing.T) *Repository {
@@ -72,7 +123,7 @@ func researchTestRepo(t *testing.T) *Repository {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = db.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &SimulatedAccount{}, &SimulatedTrade{}, &Position{}); err != nil {
+	if err = db.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{}, &SimulatedAccount{}, &SimulatedTrade{}, &Position{}); err != nil {
 		t.Fatal(err)
 	}
 	repo := NewRepository(db)
@@ -148,9 +199,135 @@ func TestLifecycleAPIFailureKeepsStateAndRetriesFifteenMinutesLater(t *testing.T
 	if updated.Status != "pending" || updated.NextCheckAt == nil || !updated.NextCheckAt.Equal(now.Add(15*time.Minute)) {
 		t.Fatalf("updated=%+v", updated)
 	}
+	if updated.DataPauseSeconds != 0 {
+		t.Fatalf("model failure paused activation budget: %d", updated.DataPauseSeconds)
+	}
 	var count int64
 	if err := repo.DB().Model(&DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", rec.RecommendationID, "错误重试").Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("error events=%d err=%v", count, err)
+	}
+}
+
+func TestCriticalLifecycleDataSkipsAIAndCapsPauseAtThirtyMinutes(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 9, 30, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "pending", now, now, "")
+	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{{Status: "critical_failed", CriticalFailure: "分钟量价不可用"}}}
+	ai := &scriptedAI{}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, contexts)
+	service.now = func() time.Time { return now }
+	for index := 0; index < 3; index++ {
+		if err := service.ProcessDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(15 * time.Minute)
+	}
+	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if len(ai.requests) != 0 || updated.DataPauseSeconds != MaxDataPauseSecs {
+		t.Fatalf("AI requests=%d pause=%d", len(ai.requests), updated.DataPauseSeconds)
+	}
+	var observations []LifecycleObservation
+	if err := repo.DB().Where("recommendation_id = ?", rec.RecommendationID).Find(&observations).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(observations) != 3 {
+		t.Fatalf("observations=%d", len(observations))
+	}
+	for _, observation := range observations {
+		if observation.ModelInvoked || observation.Status != "critical_failed" {
+			t.Fatalf("observation=%+v", observation)
+		}
+	}
+}
+
+func TestPartialOptionalSourcesStillInvokeAI(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "pending", now.Add(-time.Hour), now, "")
+	draft := readyLifecycleDraft(now, "partial")
+	draft.Sources = append(draft.Sources, LifecycleEvidenceSource{ID: "optional-news", Name: "增量新闻", Category: "news", Status: "failed", Error: "timeout", CollectedAt: now})
+	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{draft}}
+	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"等待","reason":"新闻失败但关键量价完整","sourceRefs":[],"dataSufficiency":"充足"}`}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, contexts)
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(ai.requests) != 1 {
+		t.Fatalf("AI requests=%d", len(ai.requests))
+	}
+	detail, err := repo.Detail(context.Background(), rec.RecommendationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(detail.Observations) != 1 || detail.Observations[0].Status != "partial" || !detail.Observations[0].ModelInvoked {
+		t.Fatalf("observations=%+v", detail.Observations)
+	}
+}
+
+func TestActivationAndSaleRequireLatestQuoteAndMinuteCitations(t *testing.T) {
+	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
+	request := LifecycleContextRequest{ObservationID: "12345678-1234-1234-1234-123456789012", Recommendation: Recommendation{RecommendationID: "rec"}, Phase: "activation", Now: now, WindowFrom: now}
+	observation, err := NewLifecycleObservation(request, readyLifecycleDraft(now, "ready"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed := map[string]bool{"激活": true}
+	if _, err = parseLifecycleDecision(`{"action":"激活","reason":"满足","sourceRefs":[],"dataSufficiency":"充足"}`, allowed, observation); err == nil {
+		t.Fatal("activation without citations was accepted")
+	}
+	quoteID := LifecycleSourceID(request.ObservationID, LifecycleQuoteSourceSuffix)
+	minuteID := LifecycleSourceID(request.ObservationID, LifecycleMinuteSourceSuffix)
+	content := fmt.Sprintf(`{"action":"激活","reason":"满足","sourceRefs":[%q,%q],"dataSufficiency":"充足"}`, quoteID, minuteID)
+	if _, err = parseLifecycleDecision(content, allowed, observation); err != nil {
+		t.Fatalf("valid citations rejected: %v", err)
+	}
+}
+
+func TestLifecyclePromptRetainsEverySourceIDWithinBalancedBudget(t *testing.T) {
+	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
+	request := LifecycleContextRequest{ObservationID: "abcdef12-1234-1234-1234-123456789012", Recommendation: Recommendation{RecommendationID: "rec"}, Phase: "activation", Now: now, WindowFrom: now.Add(-15 * time.Minute)}
+	draft := readyLifecycleDraft(now, "ready")
+	for index := 0; index < 12; index++ {
+		draft.Sources = append(draft.Sources, LifecycleEvidenceSource{ID: fmt.Sprintf("OPTIONAL-%02d", index), Name: "来源", Category: "news", Status: "ok", Content: strings.Repeat("资讯", 5000), CollectedAt: now})
+	}
+	observation, err := NewLifecycleObservation(request, draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := lifecyclePrompt(Recommendation{StockCode: "sh600000", StockName: "浦发银行"}, "activation", now, observation, nil)
+	for _, source := range ParseLifecycleEvidence(observation) {
+		if !strings.Contains(prompt, "["+source.ID+"]") {
+			t.Fatalf("prompt omitted source %s", source.ID)
+		}
+	}
+}
+
+func TestThirtyMinuteDataPauseExtendsFourHourActivationWindow(t *testing.T) {
+	repo := researchTestRepo(t)
+	signal := time.Date(2026, 8, 18, 9, 30, 0, 0, shanghaiLocation)
+	due := time.Date(2026, 8, 19, 15, 0, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "pending", signal, due, "")
+	if err := repo.UpdateRecommendation(context.Background(), rec.RecommendationID, map[string]any{"data_pause_seconds": MaxDataPauseSecs}); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, weekdayTradingCalendar{})
+	now := time.Date(2026, 8, 18, 15, 0, 0, 0, shanghaiLocation)
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if updated.Status != "pending" {
+		t.Fatalf("paused recommendation expired at four raw hours: %+v", updated)
+	}
+	now = time.Date(2026, 8, 19, 10, 0, 0, 0, shanghaiLocation)
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	updated, _ = repo.Recommendation(context.Background(), rec.RecommendationID)
+	if updated.Status != "invalidated" {
+		t.Fatalf("recommendation did not expire after four effective hours: %+v", updated)
 	}
 }
 

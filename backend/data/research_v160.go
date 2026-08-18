@@ -342,6 +342,7 @@ func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code st
 		quoteAt = time.Now()
 	}
 	volume, _ := strconv.ParseFloat(strings.TrimSpace(row.Volume), 64)
+	amount, _ := strconv.ParseFloat(strings.TrimSpace(row.Amount), 64)
 	market := "SZ"
 	if strings.HasPrefix(normalized, "sh") {
 		market = "SH"
@@ -361,7 +362,7 @@ func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code st
 		limitUp, limitDown = price >= up-0.001, price <= down+0.001
 	}
 	return research.Quote{Code: normalized, Name: strings.TrimSpace(row.Name), Market: market, Price: price, PreviousClose: previousClose,
-		At: quoteAt, Suspended: volume == 0, LimitUp: limitUp, LimitDown: limitDown}, nil
+		Volume: volume, Amount: amount, At: quoteAt, Suspended: volume == 0, LimitUp: limitUp, LimitDown: limitDown}, nil
 }
 
 type ResearchTradingCalendar struct{}
@@ -605,7 +606,9 @@ func NewResearchRuntime(configID int) (*ResearchRuntime, error) {
 	if err := repository.EnsureAccount(context.Background()); err != nil {
 		return nil, err
 	}
-	service := research.NewService(repository, NewResearchAIClient(configID), NewResearchQuoteProvider(), ResearchTradingCalendar{})
+	quoteProvider := NewResearchQuoteProvider()
+	lifecycleCollector := NewResearchLifecycleContextCollector(quoteProvider)
+	service := research.NewService(repository, NewResearchAIClient(configID), quoteProvider, ResearchTradingCalendar{}, lifecycleCollector)
 	return &ResearchRuntime{Repository: repository, Service: service, Runner: research.NewAnalysisRunner(service, NewResearchSourceCollector())}, nil
 }
 

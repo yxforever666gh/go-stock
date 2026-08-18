@@ -2,11 +2,11 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.6.3
+## 当前版本：App 1.6.4
 
 Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本将产品边界收敛为“市场行情”和“研究中心”，并建立全新的 AI 分析到模拟交易净收益流程。
 
-[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.6.3 发布说明](./RELEASE_NOTES_1.6.3.md)
+[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.6.4 发布说明](./RELEASE_NOTES_1.6.4.md)
 
 > 本仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 演化，不是原作者官方仓库。
 
@@ -15,7 +15,7 @@ Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 
 1. 在沪深交易日的 `09:30、11:30、14:30` 自动启动分级分析；时间和 AI 配置可在设置页调整。
 2. AI 依次完成大盘、板块、个股和最终决策分析，整合现有新闻、研报、公告、资金流、宏观、财务、概念、实时行情与 K 线数据。
 3. 每轮允许空仓，最多推荐两只可交易的沪深 A 股；涨跌停、停牌、北交所和重复候选会在入库前由代码过滤。
-4. 每只推荐建立独立生命周期会话，每 15 分钟由 AI 判断“等待 / 激活 / 失效”；激活后判断“持有 / 卖出”。
+4. 每只推荐建立独立生命周期会话，每 15 分钟复查实时行情、分钟量价和增量事件，再由 AI 判断“等待 / 激活 / 失效”；激活后判断“持有 / 卖出”。
 5. 激活时按实时可交易价格模拟买入，卖出遵守 T+1；停牌或跌停时进入待卖状态并继续检查。
 6. 研究中心展示 AI 分析报告、股票推荐记录、股票收益率和完整判断时间线。
 

@@ -1621,7 +1621,7 @@ func (o *OpenAi) CompleteResearchStream(ctx context.Context, messages []map[stri
 }
 
 // CompleteResearch is retained for non-research callers and compatibility
-// tests. The 1.6.3 research workflow uses CompleteResearchStream.
+// tests. The 1.6.4 research workflow uses CompleteResearchStream.
 func (o *OpenAi) CompleteResearch(ctx context.Context, messages []map[string]any, previousResponseID string) (string, string, string, error) {
 	if ctx == nil {
 		ctx = context.Background()

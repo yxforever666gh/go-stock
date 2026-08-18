@@ -62,11 +62,15 @@ export type AnalysisRunSummary = {
 }
 
 export type DecisionEvent = {
+  aiResponse?: string
+  dataStatus?: string
   decidedAt?: string
   decisionType?: string
+  eventId?: string
   quoteAt?: string
   quotePrice?: number
   reason?: string
+  sourceRefs?: string
 }
 
 export type HealthStatus = {
@@ -82,6 +86,22 @@ export type LifecycleMessage = {
   responseId?: string
   role?: string
   sequence?: number
+}
+
+export type LifecycleObservation = {
+  contentFingerprint?: string
+  criticalFailure?: string
+  evidenceJson: string
+  minuteSummaryJson: string
+  modelInvoked: boolean
+  observationId: string
+  observedAt: string
+  phase: string
+  quoteJson: string
+  recommendationId: string
+  sourceStatusJson: string
+  status: string
+  windowFrom: string
 }
 
 export type LivenessStatus = {
@@ -122,9 +142,11 @@ export type Recommendation = {
   analysisRunId: string
   closePrice?: number
   closedAt?: string
+  dataPauseSeconds?: number
   mainRisk?: string
   netPnl?: number
   netYieldRate?: number
+  nextCheckAt?: string
   quantity?: number
   recommendationId: string
   signalAt: string
@@ -136,9 +158,12 @@ export type Recommendation = {
 }
 
 export type RecommendationDetail = {
+  activationRemainingSeconds: number
+  activationTradingElapsedSeconds: number
   analysis: AnalysisRun
   decisions: Array<DecisionEvent>
   messages: Array<LifecycleMessage>
+  observations: Array<LifecycleObservation>
   position?: Position
   recommendation: Recommendation
   trades: Array<SimulatedTrade>

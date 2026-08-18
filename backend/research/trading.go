@@ -19,15 +19,17 @@ const (
 var mainlandCodePattern = regexp.MustCompile(`^(sh|sz)?(60|68|00|30)[0-9]{4}$`)
 
 type Quote struct {
-	Code          string
-	Name          string
-	Market        string
-	Price         float64
-	PreviousClose float64
-	At            time.Time
-	Suspended     bool
-	LimitUp       bool
-	LimitDown     bool
+	Code          string    `json:"code"`
+	Name          string    `json:"name"`
+	Market        string    `json:"market"`
+	Price         float64   `json:"price"`
+	PreviousClose float64   `json:"previousClose"`
+	Volume        float64   `json:"volume"`
+	Amount        float64   `json:"amount"`
+	At            time.Time `json:"at"`
+	Suspended     bool      `json:"suspended"`
+	LimitUp       bool      `json:"limitUp"`
+	LimitDown     bool      `json:"limitDown"`
 }
 
 func NormalizeMainlandCode(code string) (string, bool) {

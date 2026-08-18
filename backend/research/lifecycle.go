@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -50,20 +51,48 @@ func (WeekdayCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, e
 }
 
 type Service struct {
-	repository *Repository
-	ai         AIClient
-	quotes     QuoteProvider
-	calendar   TradingCalendar
-	now        func() time.Time
-	serial     sync.Mutex
-	analysisMu sync.Mutex
+	repository      *Repository
+	ai              AIClient
+	quotes          QuoteProvider
+	contextProvider LifecycleContextProvider
+	calendar        TradingCalendar
+	now             func() time.Time
+	serial          sync.Mutex
+	analysisMu      sync.Mutex
 }
 
-func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calendar TradingCalendar) *Service {
+func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calendar TradingCalendar, providers ...LifecycleContextProvider) *Service {
 	if calendar == nil {
 		calendar = WeekdayCalendar{}
 	}
-	return &Service{repository: repository, ai: ai, quotes: quotes, calendar: calendar, now: time.Now}
+	var provider LifecycleContextProvider
+	if len(providers) > 0 {
+		provider = providers[0]
+	}
+	if provider == nil {
+		provider = quoteLifecycleContextProvider{quotes: quotes}
+	}
+	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar, now: time.Now}
+}
+
+// quoteLifecycleContextProvider keeps direct service construction useful for
+// small integrations and tests. The formal runtime always installs the richer
+// data adapter from backend/data.
+type quoteLifecycleContextProvider struct{ quotes QuoteProvider }
+
+func (provider quoteLifecycleContextProvider) CollectLifecycleContext(ctx context.Context, request LifecycleContextRequest) (LifecycleObservationDraft, error) {
+	quote, err := provider.quotes.CurrentQuote(ctx, request.Recommendation.StockCode)
+	if err != nil {
+		return LifecycleObservationDraft{Status: "critical_failed", CriticalFailure: "实时行情不可用: " + err.Error()}, nil
+	}
+	quoteID := LifecycleSourceID(request.ObservationID, LifecycleQuoteSourceSuffix)
+	minuteID := LifecycleSourceID(request.ObservationID, LifecycleMinuteSourceSuffix)
+	minute := MinuteEvidenceSummary{TradingDate: quote.At.Format("2006-01-02"), LatestAt: quote.At, LatestPrice: quote.Price, TotalBars: 1,
+		Windows: []MinuteWindowSummary{{Minutes: 15, Bars: 1, High: quote.Price, Low: quote.Price, AveragePrice: quote.Price}}}
+	return LifecycleObservationDraft{Quote: quote, MinuteSummary: minute, Status: "ready", Sources: []LifecycleEvidenceSource{
+		{ID: quoteID, Name: "实时行情", Category: "quote", Status: "ok", CollectedAt: request.Now, Content: fmt.Sprintf("价格：%.3f，行情时间：%s", quote.Price, quote.At.Format(time.RFC3339))},
+		{ID: minuteID, Name: "分钟量价", Category: "minute", Status: "ok", CollectedAt: request.Now, Content: "兼容采集器使用当前行情作为分钟证据"},
+	}}, nil
 }
 
 func (s *Service) Repository() *Repository { return s.repository }
@@ -106,7 +135,7 @@ func (s *Service) expirePending(ctx context.Context, now time.Time) error {
 		return err
 	}
 	for _, recommendation := range pending {
-		elapsed, elapsedErr := AccumulatedTradingTime(ctx, s.calendar, recommendation.SignalAt, now, ActivationTradingWindow)
+		elapsed, elapsedErr := s.effectiveActivationElapsed(ctx, recommendation, now)
 		if elapsedErr != nil {
 			return elapsedErr
 		}
@@ -118,6 +147,21 @@ func (s *Service) expirePending(ctx context.Context, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+func (s *Service) effectiveActivationElapsed(ctx context.Context, recommendation Recommendation, now time.Time) (time.Duration, error) {
+	raw, err := AccumulatedTradingTime(ctx, s.calendar, recommendation.SignalAt, now, ActivationTradingWindow+time.Duration(MaxDataPauseSecs)*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	pause := time.Duration(recommendation.DataPauseSeconds) * time.Second
+	if pause > time.Duration(MaxDataPauseSecs)*time.Second {
+		pause = time.Duration(MaxDataPauseSecs) * time.Second
+	}
+	if raw <= pause {
+		return 0, nil
+	}
+	return raw - pause, nil
 }
 
 func (s *Service) invalidatePending(ctx context.Context, recommendationID string, now time.Time, reason string) error {
@@ -139,13 +183,51 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if recommendation.Status == "active" {
 		phase, allowed = "holding", map[string]bool{"持有": true, "卖出": true}
 	}
-	decisionQuote, err := s.quotes.CurrentQuote(ctx, recommendation.StockCode)
+	windowFrom := recommendation.SignalAt
+	if previous, previousErr := s.repository.LastUsableObservation(ctx, recommendation.RecommendationID); previousErr == nil && previous.ObservedAt.After(windowFrom) {
+		windowFrom = previous.ObservedAt
+	} else if previousErr != nil && !errors.Is(previousErr, gorm.ErrRecordNotFound) {
+		return previousErr
+	}
+	knownFingerprints, err := s.repository.ObservationFingerprints(ctx, recommendation.RecommendationID, 200)
 	if err != nil {
 		return err
 	}
-	prompt := lifecyclePrompt(*recommendation, phase, now, decisionQuote)
+	var position *Position
+	if phase == "holding" {
+		current, positionErr := s.repository.Position(ctx, recommendation.RecommendationID)
+		if positionErr != nil {
+			return positionErr
+		}
+		enrichPositionValue(&current)
+		position = &current
+	}
+	contextRequest := LifecycleContextRequest{ObservationID: newID(), Recommendation: *recommendation, Phase: phase,
+		WindowFrom: windowFrom, Now: now, Position: position, KnownFingerprints: knownFingerprints}
+	draft, err := s.contextProvider.CollectLifecycleContext(ctx, contextRequest)
+	if err != nil {
+		return err
+	}
+	if position != nil && draft.Quote.Price > 0 {
+		position.CurrentPrice, position.CurrentPriceAt = draft.Quote.Price, &draft.Quote.At
+		enrichPositionValue(position)
+	}
+	observation, err := NewLifecycleObservation(contextRequest, draft)
+	if err != nil {
+		return err
+	}
+	if err := s.repository.AppendObservation(ctx, &observation); err != nil {
+		return err
+	}
+	if observation.Status == "critical_failed" || strings.TrimSpace(observation.CriticalFailure) != "" {
+		return s.deferForCriticalData(ctx, recommendation, observation, now)
+	}
+	prompt := lifecyclePrompt(*recommendation, phase, now, observation, position)
 	userMessage := LifecycleMessage{RecommendationID: recommendation.RecommendationID, Role: "user", Phase: phase, Content: prompt, CreatedAt: now}
 	if err := s.repository.AppendMessage(ctx, &userMessage); err != nil {
+		return err
+	}
+	if err := s.repository.MarkObservationModelInvoked(ctx, observation.ObservationID); err != nil {
 		return err
 	}
 	messages, err := s.repository.Messages(ctx, recommendation.RecommendationID)
@@ -176,13 +258,13 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if err := s.repository.AppendMessage(ctx, &assistantMessage); err != nil {
 		return err
 	}
-	decision, err := parseLifecycleDecision(result.Content, allowed)
+	decision, err := parseLifecycleDecision(result.Content, allowed, observation)
 	if err != nil {
 		return err
 	}
 	decisionAt := s.now()
 	if phase == "activation" {
-		elapsed, elapsedErr := AccumulatedTradingTime(ctx, s.calendar, recommendation.SignalAt, decisionAt, ActivationTradingWindow)
+		elapsed, elapsedErr := s.effectiveActivationElapsed(ctx, *recommendation, decisionAt)
 		if elapsedErr != nil {
 			return elapsedErr
 		}
@@ -203,6 +285,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 			return s.repository.AppendDecision(ctx, &DecisionEvent{
 				EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "响应跨休市", DecidedAt: decisionAt,
 				AIResponse: result.Content, Reason: "模型响应时市场已休市，本次判断不执行，顺延至下一开盘时段",
+				SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status,
 			})
 		}
 	}
@@ -211,7 +294,8 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	}); err != nil {
 		return err
 	}
-	event := DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: decision.Action, DecidedAt: decisionAt, AIResponse: result.Content, Reason: decision.Reason}
+	event := DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: decision.Action, DecidedAt: decisionAt,
+		AIResponse: result.Content, Reason: decision.Reason, SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status}
 	if err := s.repository.AppendDecision(ctx, &event); err != nil {
 		return err
 	}
@@ -228,6 +312,28 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	default:
 		return errors.New("unreachable lifecycle action")
 	}
+}
+
+func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Recommendation, observation LifecycleObservation, now time.Time) error {
+	updates := map[string]any{"next_check_at": NextLifecycleCheck(now)}
+	pauseGranted := int64(0)
+	if recommendation.Status == "pending" && recommendation.DataPauseSeconds < MaxDataPauseSecs {
+		pauseGranted = int64(DefaultCheckMins * 60)
+		remaining := int64(MaxDataPauseSecs) - recommendation.DataPauseSeconds
+		if pauseGranted > remaining {
+			pauseGranted = remaining
+		}
+		updates["data_pause_seconds"] = recommendation.DataPauseSeconds + pauseGranted
+	}
+	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, updates); err != nil {
+		return err
+	}
+	reason := strings.TrimSpace(observation.CriticalFailure)
+	if pauseGranted > 0 {
+		reason += fmt.Sprintf("；本轮抵扣激活交易时长 %d 分钟，累计最多抵扣 30 分钟", pauseGranted/60)
+	}
+	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
+		DecisionType: "数据不足重试", DecidedAt: now, Reason: reason, DataStatus: "critical_failed"})
 }
 
 func (s *Service) activate(ctx context.Context, recommendation *Recommendation, now time.Time) error {
@@ -290,7 +396,8 @@ func (s *Service) recordError(ctx context.Context, recommendation Recommendation
 	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next}); err != nil {
 		return err
 	}
-	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error()})
+	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
+		DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error(), DataStatus: "model_error"})
 }
 
 func (s *Service) AccountOverview(ctx context.Context) (AccountOverview, error) {
@@ -322,17 +429,30 @@ func (s *Service) AccountOverview(ctx context.Context) (AccountOverview, error) 
 
 func (s *Service) Detail(ctx context.Context, recommendationID string) (RecommendationDetail, error) {
 	detail, err := s.repository.Detail(ctx, recommendationID)
-	if err != nil || detail.Position == nil {
+	if err != nil {
 		return detail, err
 	}
-	position := detail.Position
-	if position.Status == "open" {
-		if quote, quoteErr := s.quotes.CurrentQuote(ctx, position.StockCode); quoteErr == nil && quote.Price > 0 {
-			position.CurrentPrice, position.CurrentPriceAt = quote.Price, &quote.At
-			_ = s.repository.UpdatePositionQuote(ctx, position.ID, quote)
+	if detail.Recommendation.Status == "pending" {
+		elapsed, elapsedErr := s.effectiveActivationElapsed(ctx, detail.Recommendation, s.now())
+		if elapsedErr == nil {
+			detail.ActivationTradingElapsedSeconds = int64(elapsed / time.Second)
+			remaining := ActivationTradingWindow - elapsed
+			if remaining < 0 {
+				remaining = 0
+			}
+			detail.ActivationRemainingSeconds = int64(remaining / time.Second)
 		}
 	}
-	enrichPositionValue(position)
+	if detail.Position != nil {
+		position := detail.Position
+		if position.Status == "open" {
+			if quote, quoteErr := s.quotes.CurrentQuote(ctx, position.StockCode); quoteErr == nil && quote.Price > 0 {
+				position.CurrentPrice, position.CurrentPriceAt = quote.Price, &quote.At
+				_ = s.repository.UpdatePositionQuote(ctx, position.ID, quote)
+			}
+		}
+		enrichPositionValue(position)
+	}
 	return detail, nil
 }
 
@@ -355,20 +475,70 @@ func enrichPositionValue(position *Position) {
 	}
 }
 
-func lifecyclePrompt(recommendation Recommendation, phase string, now time.Time, quote Quote) string {
-	quoteText := fmt.Sprintf("最新行情时间：%s，价格：%.3f，昨收：%.3f，停牌：%t，涨停：%t，跌停：%t。", quote.At.Format(time.RFC3339), quote.Price, quote.PreviousClose, quote.Suspended, quote.LimitUp, quote.LimitDown)
-	if phase == "activation" {
-		return fmt.Sprintf("现在是 %s。只判断股票 %s(%s) 的激活条件是否成立。原始激活条件：%s。%s 结合该股票独立会话，只返回 JSON：{\"action\":\"等待|激活|失效\",\"reason\":\"简明理由\"}。如果后续已经不容乐观可直接失效。", now.Format(time.RFC3339), recommendation.StockName, recommendation.StockCode, recommendation.ActivationCondition, quoteText)
+func lifecyclePrompt(recommendation Recommendation, phase string, now time.Time, observation LifecycleObservation, position *Position) string {
+	quoteID := LifecycleSourceID(observation.ObservationID, LifecycleQuoteSourceSuffix)
+	minuteID := LifecycleSourceID(observation.ObservationID, LifecycleMinuteSourceSuffix)
+	sources := ParseLifecycleEvidence(observation)
+	var evidence strings.Builder
+	perSourceBudget := 30000
+	if len(sources) > 0 {
+		perSourceBudget /= len(sources)
 	}
-	return fmt.Sprintf("现在是 %s。只判断已持有股票 %s(%s) 应继续持有还是卖出。%s 结合风险和该股票独立会话，只返回 JSON：{\"action\":\"持有|卖出\",\"reason\":\"简明理由\"}。", now.Format(time.RFC3339), recommendation.StockName, recommendation.StockCode, quoteText)
+	if perSourceBudget < 800 {
+		perSourceBudget = 800
+	}
+	for _, source := range sources {
+		line := fmt.Sprintf("[%s] %s（%s，状态=%s）", source.ID, source.Name, source.Category, source.Status)
+		if source.Error != "" {
+			line += "，错误=" + truncateLifecycleText(source.Error, 500)
+		}
+		if source.Content != "" {
+			line += "：" + truncateLifecycleText(source.Content, perSourceBudget-len(line)-2)
+		}
+		evidence.WriteString(line + "\n")
+	}
+	common := fmt.Sprintf("现在是 %s。只判断股票 %s(%s)，不得混入其他股票。原始 AI 摘要：%s。原始激活条件：%s。主要风险：%s。\n本轮观察编号：%s，数据状态：%s，增量窗口：%s 至 %s。\n本轮证据：\n%s\n最新证据优先于历史记忆；失败来源不得补造内容。sourceRefs 只能填写本轮方括号中的来源编号。",
+		now.Format(time.RFC3339), recommendation.StockName, recommendation.StockCode, recommendation.AISummary,
+		recommendation.ActivationCondition, recommendation.MainRisk, observation.ObservationID, observation.Status,
+		observation.WindowFrom.Format(time.RFC3339), observation.ObservedAt.Format(time.RFC3339), evidence.String())
+	if phase == "activation" {
+		return common + fmt.Sprintf("\n只返回 JSON：{\"action\":\"等待|激活|失效\",\"reason\":\"简明理由\",\"sourceRefs\":[\"来源编号\"],\"dataSufficiency\":\"充足|不足\"}。判断激活时必须引用 %s 和 %s；证据不足只能等待，后续已经不容乐观可直接失效。", quoteID, minuteID)
+	}
+	positionText := "持仓数据不可用"
+	if position != nil {
+		positionText = fmt.Sprintf("买入时间=%s，成本价=%.3f，数量=%d，当前价=%.3f，预估净收益=%.2f，预估净收益率=%.4f，T+1可卖=%t，预估卖出费用=%.2f",
+			position.EntryAt.Format(time.RFC3339), position.EntryPrice, position.Quantity, position.CurrentPrice, position.NetPnL,
+			position.NetYieldRate, isTPlusOne(position.EntryAt, now), position.EstimatedSellFees)
+	}
+	return common + fmt.Sprintf("\n当前持仓：%s。只返回 JSON：{\"action\":\"持有|卖出\",\"reason\":\"简明理由\",\"sourceRefs\":[\"来源编号\"],\"dataSufficiency\":\"充足|不足\"}。判断卖出时必须引用 %s 和 %s；证据不足只能持有。", positionText, quoteID, minuteID)
+}
+
+func truncateLifecycleText(value string, maxBytes int) string {
+	if maxBytes <= 0 {
+		return ""
+	}
+	if len(value) <= maxBytes {
+		return value
+	}
+	const marker = "...<截断>"
+	end := maxBytes - len(marker)
+	if end < 0 {
+		end = 0
+	}
+	for end > 0 && !utf8.ValidString(value[:end]) {
+		end--
+	}
+	return value[:end] + marker
 }
 
 type lifecycleDecision struct {
-	Action string `json:"action"`
-	Reason string `json:"reason"`
+	Action          string   `json:"action"`
+	Reason          string   `json:"reason"`
+	SourceRefs      []string `json:"sourceRefs"`
+	DataSufficiency string   `json:"dataSufficiency"`
 }
 
-func parseLifecycleDecision(content string, allowed map[string]bool) (lifecycleDecision, error) {
+func parseLifecycleDecision(content string, allowed map[string]bool, observations ...LifecycleObservation) (lifecycleDecision, error) {
 	trimmed := strings.TrimSpace(content)
 	trimmed = strings.TrimPrefix(trimmed, "```json")
 	trimmed = strings.TrimPrefix(trimmed, "```")
@@ -383,7 +553,39 @@ func parseLifecycleDecision(content string, allowed map[string]bool) (lifecycleD
 	if strings.TrimSpace(decision.Reason) == "" {
 		return decision, errors.New("lifecycle reason is required")
 	}
+	if len(observations) == 0 {
+		return decision, nil
+	}
+	observation := observations[0]
+	seen := make(map[string]struct{}, len(decision.SourceRefs))
+	for _, sourceRef := range decision.SourceRefs {
+		sourceRef = strings.TrimSpace(sourceRef)
+		if sourceRef == "" {
+			continue
+		}
+		if !ObservationHasSource(observation, sourceRef) {
+			return decision, fmt.Errorf("lifecycle sourceRef %q is not a usable source in the latest observation", sourceRef)
+		}
+		seen[sourceRef] = struct{}{}
+	}
+	if decision.Action == "激活" || decision.Action == "卖出" {
+		sufficiency := strings.ToLower(strings.TrimSpace(decision.DataSufficiency))
+		if sufficiency != "充足" && sufficiency != "sufficient" && sufficiency != "ready" {
+			return decision, errors.New("activation or sale requires sufficient latest evidence")
+		}
+		required := []string{LifecycleSourceID(observation.ObservationID, LifecycleQuoteSourceSuffix), LifecycleSourceID(observation.ObservationID, LifecycleMinuteSourceSuffix)}
+		for _, sourceID := range required {
+			if _, ok := seen[sourceID]; !ok {
+				return decision, fmt.Errorf("%s decision must cite latest source %s", decision.Action, sourceID)
+			}
+		}
+	}
 	return decision, nil
+}
+
+func marshalSourceRefs(sourceRefs []string) string {
+	value, _ := json.Marshal(sourceRefs)
+	return string(value)
 }
 
 func compressMessages(messages []LifecycleMessage, max int) []LifecycleMessage {

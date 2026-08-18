@@ -137,7 +137,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.6.3：自动分析增加交易日与开盘时段门禁，人工分析不受时间限制；推荐按累计4小时开盘交易时长判断激活有效期，并支持跨交易日顺延。"
+		content = "1.6.4：生命周期每15分钟复查实时行情、分钟量价与增量事件；关键行情失败不调用AI，激活和卖出必须引用本轮证据。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

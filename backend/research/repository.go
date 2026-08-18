@@ -116,6 +116,43 @@ func (r *Repository) AppendDecision(ctx context.Context, event *DecisionEvent) e
 	return r.db.WithContext(ctx).Create(event).Error
 }
 
+func (r *Repository) AppendObservation(ctx context.Context, observation *LifecycleObservation) error {
+	return r.db.WithContext(ctx).Create(observation).Error
+}
+
+func (r *Repository) MarkObservationModelInvoked(ctx context.Context, observationID string) error {
+	return r.db.WithContext(ctx).Model(&LifecycleObservation{}).
+		Where("observation_id = ?", observationID).Update("model_invoked", true).Error
+}
+
+func (r *Repository) LastUsableObservation(ctx context.Context, recommendationID string) (LifecycleObservation, error) {
+	var result LifecycleObservation
+	err := r.db.WithContext(ctx).Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"ready", "partial"}).
+		Order("observed_at DESC, id DESC").First(&result).Error
+	return result, err
+}
+
+func (r *Repository) ObservationFingerprints(ctx context.Context, recommendationID string, limit int) (map[string]struct{}, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	var rows []LifecycleObservation
+	err := r.db.WithContext(ctx).Where("recommendation_id = ?", recommendationID).
+		Order("observed_at DESC, id DESC").Limit(limit).Find(&rows).Error
+	result := make(map[string]struct{}, len(rows)*4)
+	for _, row := range rows {
+		if row.ContentFingerprint != "" {
+			result[row.ContentFingerprint] = struct{}{}
+		}
+		for _, source := range ParseLifecycleEvidence(row) {
+			if source.Fingerprint != "" {
+				result[source.Fingerprint] = struct{}{}
+			}
+		}
+	}
+	return result, err
+}
+
 func (r *Repository) UpdateRecommendation(ctx context.Context, id string, updates map[string]any) error {
 	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(updates).Error
 }
@@ -275,6 +312,9 @@ func (r *Repository) Detail(ctx context.Context, recommendationID string) (Recom
 		return RecommendationDetail{}, err
 	}
 	if err = r.db.WithContext(ctx).Where("recommendation_id = ?", recommendationID).Order("decided_at ASC, id ASC").Find(&detail.Decisions).Error; err != nil {
+		return RecommendationDetail{}, err
+	}
+	if err = r.db.WithContext(ctx).Where("recommendation_id = ?", recommendationID).Order("observed_at ASC, id ASC").Find(&detail.Observations).Error; err != nil {
 		return RecommendationDetail{}, err
 	}
 	if err = r.db.WithContext(ctx).Where("recommendation_id = ?", recommendationID).Order("traded_at ASC, id ASC").Find(&detail.Trades).Error; err != nil {

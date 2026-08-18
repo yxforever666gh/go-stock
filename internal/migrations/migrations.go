@@ -116,6 +116,19 @@ var mainMigrations = []migration{
 		},
 		apply: applyResearchFourHourActivationRecovery,
 	},
+	{
+		id: 7, name: "research_lifecycle_observation_evidence",
+		description: "App 1.6.4 adds bounded lifecycle evidence snapshots, source citations and a capped critical-data pause budget.",
+		definition: func() string {
+			return strings.Join([]string{
+				"research_v160_lifecycle_observations",
+				"research_v160_recommendations.data_pause_seconds INTEGER NOT NULL DEFAULT 0",
+				"research_v160_decision_events.source_refs TEXT",
+				"research_v160_decision_events.data_status VARCHAR(32)",
+			}, "\n")
+		},
+		apply: applyResearchLifecycleObservationEvidence,
+	},
 }
 
 var minuteMigrations = []migration{
@@ -238,6 +251,22 @@ func applyResearchFourHourActivationRecovery(tx *gorm.DB) error {
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error; err != nil {
 			return fmt.Errorf("record recovery event %s: %w", recovery.recommendationID, err)
 		}
+	}
+	return nil
+}
+
+func applyResearchLifecycleObservationEvidence(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if !tx.Migrator().HasTable(&research.Recommendation{}) || !tx.Migrator().HasTable(&research.DecisionEvent{}) {
+		return errors.New("research lifecycle tables are unavailable")
+	}
+	if err := tx.AutoMigrate(&research.Recommendation{}, &research.DecisionEvent{}, &research.LifecycleObservation{}); err != nil {
+		return fmt.Errorf("add lifecycle observation evidence schema: %w", err)
+	}
+	if err := tx.Exec("UPDATE research_v160_recommendations SET data_pause_seconds = 0 WHERE data_pause_seconds IS NULL").Error; err != nil {
+		return fmt.Errorf("backfill lifecycle data pause budget: %w", err)
 	}
 	return nil
 }
@@ -411,6 +440,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 7 {
+		if err := verifyMainSchema7Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -462,6 +496,33 @@ func verifyMainSchema5Runtime(database *gorm.DB) error {
 	}
 	if invalidCount != 0 {
 		return fmt.Errorf("main schema 5 has %d analysis rows without model attempt diagnostics", invalidCount)
+	}
+	return nil
+}
+
+func verifyMainSchema7Runtime(database *gorm.DB) error {
+	if !database.Migrator().HasTable(&research.LifecycleObservation{}) {
+		return errors.New("main schema 7 lifecycle observation table is missing")
+	}
+	checks := []struct {
+		model any
+		field string
+	}{
+		{model: &research.Recommendation{}, field: "DataPauseSeconds"},
+		{model: &research.DecisionEvent{}, field: "SourceRefs"},
+		{model: &research.DecisionEvent{}, field: "DataStatus"},
+	}
+	for _, check := range checks {
+		if !database.Migrator().HasColumn(check.model, check.field) {
+			return fmt.Errorf("main schema 7 field %T.%s is missing", check.model, check.field)
+		}
+	}
+	var nullCount int64
+	if err := database.Raw("SELECT COUNT(*) FROM research_v160_recommendations WHERE data_pause_seconds IS NULL").Scan(&nullCount).Error; err != nil {
+		return err
+	}
+	if nullCount != 0 {
+		return fmt.Errorf("main schema 7 has %d recommendations without data pause state", nullCount)
 	}
 	return nil
 }

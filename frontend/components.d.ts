@@ -28,6 +28,7 @@ declare module 'vue' {
     NewsList: typeof import('./src/components/newsList.vue')['default']
     RankTable: typeof import('./src/components/rankTable.vue')['default']
     ResearchIndex: typeof import('./src/components/researchIndex.vue')['default']
+    ResearchLifecycleTimeline: typeof import('./src/components/ResearchLifecycleTimeline.vue')['default']
     ResearchRecommendations: typeof import('./src/components/researchRecommendations.vue')['default']
     ResearchReport: typeof import('./src/components/researchReport.vue')['default']
     ResearchYield: typeof import('./src/components/researchYield.vue')['default']

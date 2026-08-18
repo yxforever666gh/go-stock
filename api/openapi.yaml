@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.3
-  description: Local-only 1.6.3 API for market data and the AI research lifecycle.
+  version: 1.6.4
+  description: Local-only 1.6.4 API for market data and the evidence-backed AI research lifecycle.
 servers:
   - url: http://127.0.0.1:34115
 paths:
@@ -158,6 +158,7 @@ components:
         mainRisk: {type: string}
         sourceRefs: {type: string}
         status: {type: string}
+        nextCheckAt: {type: string, format: date-time}
         activatedAt: {type: string, format: date-time}
         activationPrice: {type: number}
         quantity: {type: integer}
@@ -166,12 +167,30 @@ components:
         totalFees: {type: number}
         netPnl: {type: number}
         netYieldRate: {type: number}
+        dataPauseSeconds: {type: integer, format: int64}
     LifecycleMessage:
       type: object
       properties: {sequence: {type: integer}, role: {type: string}, phase: {type: string}, content: {type: string}, responseId: {type: string}, createdAt: {type: string, format: date-time}}
     DecisionEvent:
       type: object
-      properties: {decisionType: {type: string}, decidedAt: {type: string, format: date-time}, reason: {type: string}, quotePrice: {type: number}, quoteAt: {type: string, format: date-time}}
+      properties: {eventId: {type: string}, decisionType: {type: string}, decidedAt: {type: string, format: date-time}, aiResponse: {type: string}, reason: {type: string}, quotePrice: {type: number}, quoteAt: {type: string, format: date-time}, sourceRefs: {type: string}, dataStatus: {type: string}}
+    LifecycleObservation:
+      type: object
+      required: [observationId, recommendationId, phase, windowFrom, observedAt, status, quoteJson, minuteSummaryJson, evidenceJson, sourceStatusJson, modelInvoked]
+      properties:
+        observationId: {type: string}
+        recommendationId: {type: string}
+        phase: {type: string}
+        windowFrom: {type: string, format: date-time}
+        observedAt: {type: string, format: date-time}
+        status: {type: string}
+        quoteJson: {type: string}
+        minuteSummaryJson: {type: string}
+        evidenceJson: {type: string}
+        sourceStatusJson: {type: string}
+        criticalFailure: {type: string}
+        contentFingerprint: {type: string}
+        modelInvoked: {type: boolean}
     SimulatedTrade:
       type: object
       properties: {side: {type: string}, tradedAt: {type: string, format: date-time}, marketPrice: {type: number}, executionPrice: {type: number}, quantity: {type: integer}, totalFees: {type: number}, netCashFlow: {type: number}}
@@ -180,14 +199,17 @@ components:
       properties: {stockCode: {type: string}, stockName: {type: string}, quantity: {type: integer}, entryAt: {type: string, format: date-time}, entryPrice: {type: number}, buyFees: {type: number}, currentPrice: {type: number}, currentPriceAt: {type: string, format: date-time}, status: {type: string}, sellFees: {type: number}, netPnl: {type: number}, netYieldRate: {type: number}, estimatedSellFees: {type: number}, netSellValue: {type: number}}
     RecommendationDetail:
       type: object
-      required: [recommendation, analysis, messages, decisions, trades]
+      required: [recommendation, analysis, messages, decisions, observations, trades, activationTradingElapsedSeconds, activationRemainingSeconds]
       properties:
         recommendation: {$ref: "#/components/schemas/Recommendation"}
         analysis: {$ref: "#/components/schemas/AnalysisRun"}
         messages: {type: array, items: {$ref: "#/components/schemas/LifecycleMessage"}}
         decisions: {type: array, items: {$ref: "#/components/schemas/DecisionEvent"}}
+        observations: {type: array, items: {$ref: "#/components/schemas/LifecycleObservation"}}
         trades: {type: array, items: {$ref: "#/components/schemas/SimulatedTrade"}}
         position: {$ref: "#/components/schemas/Position"}
+        activationTradingElapsedSeconds: {type: integer, format: int64}
+        activationRemainingSeconds: {type: integer, format: int64}
     AccountOverview:
       type: object
       required: [initialCash, cash, positionValue, netAssetValue, netProfit, netYieldRate, valuedAt, positions]

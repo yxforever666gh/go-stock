@@ -3,10 +3,11 @@ package research
 import "time"
 
 const (
-	AppVersion       = "1.6.3"
+	AppVersion       = "1.6.4"
 	InitialCash      = 100000.0
 	MaxCashPerTrade  = 50000.0
 	DefaultCheckMins = 15
+	MaxDataPauseSecs = 30 * 60
 )
 
 type AnalysisRun struct {
@@ -97,6 +98,7 @@ type Recommendation struct {
 	NetYieldRate        float64    `json:"netYieldRate"`
 	LastDecision        string     `json:"lastDecision" gorm:"size:32"`
 	LastDecisionAt      *time.Time `json:"lastDecisionAt"`
+	DataPauseSeconds    int64      `json:"dataPauseSeconds" gorm:"not null;default:0"`
 	CreatedAt           time.Time  `json:"createdAt"`
 	UpdatedAt           time.Time  `json:"updatedAt"`
 }
@@ -128,10 +130,65 @@ type DecisionEvent struct {
 	Reason           string     `json:"reason" gorm:"type:text"`
 	QuotePrice       float64    `json:"quotePrice"`
 	QuoteAt          *time.Time `json:"quoteAt"`
+	SourceRefs       string     `json:"sourceRefs" gorm:"type:text"`
+	DataStatus       string     `json:"dataStatus" gorm:"size:32"`
 	CreatedAt        time.Time  `json:"createdAt"`
 }
 
 func (DecisionEvent) TableName() string { return "research_v160_decision_events" }
+
+// LifecycleObservation is the bounded evidence snapshot collected immediately
+// before one lifecycle decision. Large raw upstream responses are deliberately
+// not persisted; EvidenceJSON contains compact per-source summaries.
+type LifecycleObservation struct {
+	ID                 uint      `json:"id" gorm:"primaryKey"`
+	ObservationID      string    `json:"observationId" gorm:"size:36;uniqueIndex;not null"`
+	RecommendationID   string    `json:"recommendationId" gorm:"size:36;index;not null"`
+	Phase              string    `json:"phase" gorm:"size:32;index;not null"`
+	WindowFrom         time.Time `json:"windowFrom" gorm:"index"`
+	ObservedAt         time.Time `json:"observedAt" gorm:"index;not null"`
+	Status             string    `json:"status" gorm:"size:32;index;not null"`
+	QuoteJSON          string    `json:"quoteJson" gorm:"type:text;not null;default:'{}'"`
+	MinuteSummaryJSON  string    `json:"minuteSummaryJson" gorm:"type:text;not null;default:'{}'"`
+	EvidenceJSON       string    `json:"evidenceJson" gorm:"type:text;not null;default:'[]'"`
+	SourceStatusJSON   string    `json:"sourceStatusJson" gorm:"type:text;not null;default:'[]'"`
+	CriticalFailure    string    `json:"criticalFailure" gorm:"type:text"`
+	ContentFingerprint string    `json:"contentFingerprint" gorm:"size:64;index"`
+	ModelInvoked       bool      `json:"modelInvoked" gorm:"not null;default:false"`
+	CreatedAt          time.Time `json:"createdAt"`
+}
+
+func (LifecycleObservation) TableName() string { return "research_v160_lifecycle_observations" }
+
+type LifecycleEvidenceSource struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Category    string    `json:"category"`
+	Status      string    `json:"status"`
+	CollectedAt time.Time `json:"collectedAt"`
+	Content     string    `json:"content,omitempty"`
+	Error       string    `json:"error,omitempty"`
+	Fingerprint string    `json:"fingerprint,omitempty"`
+}
+
+type MinuteWindowSummary struct {
+	Minutes      int     `json:"minutes"`
+	Bars         int     `json:"bars"`
+	ReturnRate   float64 `json:"returnRate"`
+	High         float64 `json:"high"`
+	Low          float64 `json:"low"`
+	Volume       float64 `json:"volume"`
+	Amount       float64 `json:"amount"`
+	AveragePrice float64 `json:"averagePrice"`
+}
+
+type MinuteEvidenceSummary struct {
+	TradingDate string                `json:"tradingDate"`
+	LatestAt    time.Time             `json:"latestAt"`
+	LatestPrice float64               `json:"latestPrice"`
+	TotalBars   int                   `json:"totalBars"`
+	Windows     []MinuteWindowSummary `json:"windows"`
+}
 
 type SimulatedAccount struct {
 	ID          uint      `json:"id" gorm:"primaryKey"`
@@ -203,10 +260,13 @@ type AccountOverview struct {
 }
 
 type RecommendationDetail struct {
-	Recommendation Recommendation     `json:"recommendation"`
-	Analysis       AnalysisRun        `json:"analysis"`
-	Messages       []LifecycleMessage `json:"messages"`
-	Decisions      []DecisionEvent    `json:"decisions"`
-	Trades         []SimulatedTrade   `json:"trades"`
-	Position       *Position          `json:"position,omitempty"`
+	Recommendation                  Recommendation         `json:"recommendation"`
+	Analysis                        AnalysisRun            `json:"analysis"`
+	Messages                        []LifecycleMessage     `json:"messages"`
+	Decisions                       []DecisionEvent        `json:"decisions"`
+	Observations                    []LifecycleObservation `json:"observations"`
+	Trades                          []SimulatedTrade       `json:"trades"`
+	Position                        *Position              `json:"position,omitempty"`
+	ActivationTradingElapsedSeconds int64                  `json:"activationTradingElapsedSeconds"`
+	ActivationRemainingSeconds      int64                  `json:"activationRemainingSeconds"`
 }
