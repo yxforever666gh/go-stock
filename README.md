@@ -2,11 +2,11 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.6.5
+## 当前版本：App 1.6.6
 
-Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本将产品边界收敛为“市场行情”和“研究中心”，并建立全新的 AI 分析到模拟交易净收益流程。
+Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本保留市场行情、股票自选、普通诊股和基金，并建立研究中心从 AI 分析到模拟交易净收益的完整流程。
 
-[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.6.5 发布说明](./RELEASE_NOTES_1.6.5.md)
+[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.6.6 发布说明](./RELEASE_NOTES_1.6.6.md)
 
 > 本仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 演化，不是原作者官方仓库。
 
@@ -19,7 +19,7 @@ Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 
 5. 买入后的下一交易日从 09:50 起按固定 15 分钟时点复查实时行情、分钟量价和增量事件，由 AI 判断“持有 / 卖出”；停牌或跌停时进入待卖状态。
 6. 研究中心展示 AI 分析报告、股票推荐记录、股票收益率和完整判断时间线。
 
-旧策略、cohort、冻结回放、runtime guard、preflight、策略审计、旧收益重算和 AI 智能体均已退出运行链路。旧数据库表与历史行只保留归档价值，1.6.x 不再读取或写入。
+旧策略、cohort、冻结回放、runtime guard、preflight、策略审计、旧收益重算和 AI 智能体均已退出运行链路。1.6.6 将旧策略表永久压缩归档后移出活动库，运行链不再读取或写入这些历史数据。
 
 ## 模拟账户与净收益
 
@@ -46,11 +46,11 @@ Responses API 优先使用 `previous_response_id` 延续单股会话；中转站
 
 ## 数据库
 
-- 主库 schema：`5`
+- 主库 schema：`9`
 - 分钟库 schema：`2`
 - 1.6.x 表统一使用 `research_v160_` 前缀
 
-schema 3 创建分析运行、推荐、生命周期消息、AI 决策事件、模拟账户、交易和持仓表；schema 4 增加逐模型启用状态；schema 5 增加脱敏的模型调用诊断记录；schema 7 增加生命周期证据快照；schema 8 将旧待激活记录迁移到一次性直接买入流程。迁移不会删除旧表或历史行。
+schema 3 创建分析运行、推荐、生命周期消息、AI 决策事件、模拟账户、交易和持仓表；schema 4 增加逐模型启用状态；schema 5 增加脱敏的模型调用诊断记录；schema 7 增加生命周期证据快照；schema 8 将旧待激活记录迁移到一次性直接买入流程；schema 9 在永久归档后删除 1.5 旧策略表。分钟库保持 schema 2。
 
 ## 本地运行
 

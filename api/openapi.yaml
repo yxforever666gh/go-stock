@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.5
-  description: Local-only 1.6.5 API for market data and the direct-buy, evidence-backed AI sell lifecycle.
+  version: 1.6.6
+  description: Local-only 1.6.6 API for market data and the direct-buy, evidence-backed AI sell lifecycle.
 servers:
   - url: http://127.0.0.1:34115
 paths:

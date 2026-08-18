@@ -322,6 +322,101 @@ func TestSchema8DoesNotRequeueRecommendationWithExistingBuy(t *testing.T) {
 	}
 }
 
+func TestSchema9DropsOnlyArchivedLegacyStrategyTables(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range legacyStrategyTables {
+		statement := "CREATE TABLE " + quoteSQLiteIdentifier(table) + " (id INTEGER PRIMARY KEY, payload TEXT)"
+		if err := database.Exec(statement).Error; err != nil {
+			t.Fatalf("create %s: %v", table, err)
+		}
+		if err := database.Exec("INSERT INTO " + quoteSQLiteIdentifier(table) + " (id, payload) VALUES (1, 'legacy')").Error; err != nil {
+			t.Fatalf("seed %s: %v", table, err)
+		}
+		if err := database.Exec("CREATE INDEX " + quoteSQLiteIdentifier("idx_test_"+table) + " ON " + quoteSQLiteIdentifier(table) + " (payload)").Error; err != nil {
+			t.Fatalf("index %s: %v", table, err)
+		}
+	}
+	if err := database.Exec("CREATE TABLE preserved_market_history (id INTEGER PRIMARY KEY, payload TEXT); INSERT INTO preserved_market_history VALUES (1, 'keep')").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyLegacyStrategyArchiveCleanup(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyLegacyStrategyArchiveCleanup(database); err != nil {
+		t.Fatalf("schema 9 cleanup must be idempotent: %v", err)
+	}
+	if err := verifyMainSchema9Runtime(database); err != nil {
+		t.Fatal(err)
+	}
+	var preserved int64
+	if err := database.Table("preserved_market_history").Count(&preserved).Error; err != nil {
+		t.Fatal(err)
+	}
+	if preserved != 1 {
+		t.Fatalf("preserved market rows = %d, want 1", preserved)
+	}
+}
+
+func TestEmptyDatabasesUpgradeDirectlyToSchema9(t *testing.T) {
+	mainDB := openMigrationTestDB(t)
+	minuteDB := openMigrationTestDB(t)
+	if err := MigrateAll(mainDB, minuteDB); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateAll(mainDB, minuteDB); err != nil {
+		t.Fatalf("repeat migration must be idempotent: %v", err)
+	}
+	mainStatus, err := VerifyMain(mainDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	minuteStatus, err := VerifyMinute(minuteDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainStatus.CurrentVersion != 9 || minuteStatus.CurrentVersion != 2 {
+		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
+	}
+}
+
+func TestPublished15BaselineUpgradesDirectlyToSchema9(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := database.AutoMigrate(&MigrationRecord{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range mainMigrations[:2] {
+		if err := item.apply(database); err != nil {
+			t.Fatalf("apply published baseline migration %d: %v", item.id, err)
+		}
+		record := MigrationRecord{
+			ID: item.id, Name: item.name, Checksum: item.checksum(),
+			AppliedAt: time.Now().UTC(), AppVersion: "1.5.1",
+		}
+		if err := database.Create(&record).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !database.Migrator().HasTable("ai_recommend_stocks") {
+		t.Fatal("published 1.5 baseline fixture is missing a legacy strategy table")
+	}
+	if err := MigrateMain(database); err != nil {
+		t.Fatal(err)
+	}
+	status, err := VerifyMain(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.CurrentVersion != 9 || len(status.Pending) != 0 {
+		t.Fatalf("upgraded status=%+v", status)
+	}
+	if database.Migrator().HasTable("ai_recommend_stocks") {
+		t.Fatal("schema 9 retained a 1.5 legacy strategy table")
+	}
+}
+
 func TestMinuteSchemaRemainsVersion2(t *testing.T) {
 	database := openMigrationTestDB(t)
 	for _, item := range minuteMigrations {

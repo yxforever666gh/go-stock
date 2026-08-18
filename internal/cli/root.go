@@ -128,6 +128,6 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
 	fmt.Fprintln(w, "  network-audit  审计当前环境下所有主要网络数据接口")
 	fmt.Fprintln(w, "  research run-once --json  后台执行一轮正式 AI 分析")
-	fmt.Fprintln(w, "  db status|backup|migrate|verify  管理并校验主库和分钟库")
+	fmt.Fprintln(w, "  db status|archive|backup|compact|migrate|verify  管理、归档并校验主库和分钟库")
 	fmt.Fprintln(w, "  release inspect  查看 App 与数据库版本身份")
 }

@@ -137,7 +137,7 @@ func (a *App) DelPrompt(id uint) string {
 func (a *App) GetVersionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.6.5：AI 推荐按最新可交易行情直接模拟买入；下一交易日 09:50 起在固定时点复查数据并由 AI 判断持有或卖出。"
+		content = "1.6.6：旧策略历史已安全归档并退出活动库；市场行情、股票、基金、普通诊股和 AI 研究功能保持不变。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

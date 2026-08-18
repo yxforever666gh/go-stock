@@ -34,7 +34,7 @@ func NewProductionCLIStorageAdmin(dbPath string, readOnly bool) (cliports.Storag
 			return nil, err
 		}
 	} else {
-		db.Init(dbPath)
+		db.InitSilent(dbPath)
 	}
 	if db.Dao == nil || db.MinuteDao == nil {
 		_ = db.Close()
@@ -104,6 +104,19 @@ func (a *cliStorageAdmin) Backup(_ context.Context, mainPath, minutePath string)
 		return fmt.Errorf("backup minute database: %w", err)
 	}
 	return nil
+}
+
+func (a *cliStorageAdmin) Compact(_ context.Context, databaseName string) error {
+	switch strings.ToLower(strings.TrimSpace(databaseName)) {
+	case "main":
+		return migrations.Compact(a.main)
+	default:
+		return fmt.Errorf("compact database must be main")
+	}
+}
+
+func (a *cliStorageAdmin) LegacyStrategyRowCounts(_ context.Context) (map[string]int64, error) {
+	return migrations.LegacyStrategyRowCounts(a.main)
 }
 
 func (a *cliStorageAdmin) QuickCheck(_ context.Context) error {

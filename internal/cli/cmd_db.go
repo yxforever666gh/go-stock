@@ -18,14 +18,15 @@ type dbCommandResult struct {
 	Main    cliports.DatabaseStatus `json:"main"`
 	Minute  cliports.DatabaseStatus `json:"minute"`
 	Backups map[string]string       `json:"backups,omitempty"`
+	Archive *databaseArchiveResult  `json:"archive,omitempty"`
 }
 
 func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: db status|backup|migrate|verify")
+		return fmt.Errorf("usage: db status|archive|backup|compact|migrate|verify")
 	}
 	subcommand := strings.ToLower(strings.TrimSpace(args[0]))
-	if subcommand != "status" && subcommand != "backup" && subcommand != "migrate" && subcommand != "verify" {
+	if subcommand != "status" && subcommand != "archive" && subcommand != "backup" && subcommand != "compact" && subcommand != "migrate" && subcommand != "verify" {
 		return fmt.Errorf("unknown db subcommand %q", subcommand)
 	}
 	if subcommand == "verify" {
@@ -41,7 +42,7 @@ func runDB(args []string, opts GlobalOptions, stdout, stderr io.Writer) error {
 		if *quickOnly {
 			return runDBQuickCheck(opts, stdout)
 		}
-	} else if len(args) > 1 && subcommand != "backup" {
+	} else if len(args) > 1 && subcommand != "archive" && subcommand != "backup" && subcommand != "compact" {
 		return fmt.Errorf("db %s does not accept positional arguments: %s", subcommand, strings.Join(args[1:], " "))
 	}
 	admin, err := bootstrap.NewProductionCLIStorageAdmin(resolveCLIPrimaryDBPath(opts.DataDir, opts.DBPath), subcommand == "status")
@@ -95,6 +96,54 @@ func runDBWithAdmin(subcommand string, args []string, opts GlobalOptions, stdout
 			Main: mainStatus, Minute: minuteStatus,
 			Backups: map[string]string{"main": mainBackup, "minute": minuteBackup},
 		})
+	case "archive":
+		fs := flag.NewFlagSet("db archive", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		output := fs.String("output", "", "permanent ZIP archive output path")
+		sourceAppVersion := fs.String("source-app-version", "", "source application version")
+		sourceCommit := fs.String("source-commit", "", "source release commit")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("db archive does not accept positional arguments: %s", strings.Join(fs.Args(), " "))
+		}
+		if strings.TrimSpace(*output) == "" {
+			return fmt.Errorf("db archive requires --output")
+		}
+		mainStatus, minuteStatus, err := admin.Status(ctx)
+		if err != nil {
+			return err
+		}
+		archive, err := createDatabaseArchive(ctx, admin, databaseArchiveOptions{
+			Output: *output, SourceAppVersion: *sourceAppVersion, SourceCommit: *sourceCommit,
+			MainSchemaVersion: mainStatus.CurrentVersion, MinuteSchemaVersion: minuteStatus.CurrentVersion,
+		})
+		if err != nil {
+			return err
+		}
+		return writeDBResult(stdout, opts.JSON, dbCommandResult{Main: mainStatus, Minute: minuteStatus, Archive: archive})
+	case "compact":
+		fs := flag.NewFlagSet("db compact", flag.ContinueOnError)
+		fs.SetOutput(stderr)
+		databaseName := fs.String("database", "main", "database to compact (main only)")
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		if len(fs.Args()) != 0 {
+			return fmt.Errorf("db compact does not accept positional arguments: %s", strings.Join(fs.Args(), " "))
+		}
+		if !strings.EqualFold(strings.TrimSpace(*databaseName), "main") {
+			return fmt.Errorf("db compact only supports --database main")
+		}
+		if err := admin.Compact(ctx, "main"); err != nil {
+			return err
+		}
+		mainStatus, minuteStatus, err := admin.Verify(ctx)
+		if err != nil {
+			return err
+		}
+		return writeDBResult(stdout, opts.JSON, dbCommandResult{Main: mainStatus, Minute: minuteStatus})
 	}
 	return nil
 }
@@ -135,6 +184,9 @@ func writeDBResult(w io.Writer, asJSON bool, result dbCommandResult) error {
 	fmt.Fprintf(w, "minute schema: %d/%d pending=%v quick_check=%s\n", result.Minute.CurrentVersion, result.Minute.ExpectedVersion, result.Minute.Pending, result.Minute.QuickCheck)
 	if len(result.Backups) != 0 {
 		fmt.Fprintf(w, "main backup: %s\nminute backup: %s\n", result.Backups["main"], result.Backups["minute"])
+	}
+	if result.Archive != nil {
+		fmt.Fprintf(w, "database archive: %s\narchive sha256: %s\n", result.Archive.Path, result.Archive.SHA256)
 	}
 	return nil
 }

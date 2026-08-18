@@ -43,23 +43,14 @@ func TestMinuteCacheUsesOnlyMinuteDatabase(t *testing.T) {
 		t.Fatalf("unexpected cached bars: %+v", bars)
 	}
 
-	var mainRows int64
-	if err := db.Dao.Table("ai_recommend_minute_bar").Count(&mainRows).Error; err != nil {
-		t.Fatalf("count historical main-db rows failed: %v", err)
-	}
-	if mainRows != 0 {
-		t.Fatalf("main-db historical cache received %d writes, want 0", mainRows)
+	if db.Dao.Migrator().HasTable("ai_recommend_minute_bar") {
+		t.Fatal("minute cache recreated the archived main-db strategy table")
 	}
 }
 
-func TestMinuteCacheIgnoresAndPreservesHistoricalMainTable(t *testing.T) {
+func TestMinuteCacheDoesNotRecreateArchivedMainTable(t *testing.T) {
 	initMinuteCacheTestDB(t, "minute-cache-no-legacy-access.db")
 	tradeTime := normalizeMinuteTime(testMinuteTime(10, 1))
-	if err := db.Dao.Exec(`INSERT INTO ai_recommend_minute_bar
-		(stock_code, trade_time, open, high, low, close, volume, amount, source)
-		VALUES (?, ?, 5, 6, 4, 5.5, 2000, 11000, 'historical')`, "300003.SZ", tradeTime).Error; err != nil {
-		t.Fatalf("insert historical row failed: %v", err)
-	}
 
 	bars, err := listMinuteBarsFromCache("300003.SZ", tradeTime, tradeTime)
 	if err != nil {
@@ -71,12 +62,8 @@ func TestMinuteCacheIgnoresAndPreservesHistoricalMainTable(t *testing.T) {
 	if err := deleteMinuteBarsCache("300003.SZ"); err != nil {
 		t.Fatalf("delete minute cache failed: %v", err)
 	}
-	var historicalRows int64
-	if err := db.Dao.Table("ai_recommend_minute_bar").Where("stock_code = ?", "300003.SZ").Count(&historicalRows).Error; err != nil {
-		t.Fatalf("count historical rows failed: %v", err)
-	}
-	if historicalRows != 1 {
-		t.Fatalf("historical main-db row count = %d, want preserved row", historicalRows)
+	if db.Dao.Migrator().HasTable("ai_recommend_minute_bar") {
+		t.Fatal("minute cache access recreated the archived main-db strategy table")
 	}
 }
 

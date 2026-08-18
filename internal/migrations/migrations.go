@@ -143,6 +143,51 @@ var mainMigrations = []migration{
 		},
 		apply: applyResearchDirectBuyStrategy,
 	},
+	{
+		id: 9, name: "archive_legacy_strategy_runtime",
+		description: "App 1.6.6 removes archived pre-1.6 strategy and yield tables after an externally verified permanent database archive has been created.",
+		definition:  func() string { return strings.Join(legacyStrategyTables, "\n") },
+		apply:       applyLegacyStrategyArchiveCleanup,
+	},
+}
+
+var legacyStrategyTables = []string{
+	"ai_recommend_daily_bar",
+	"ai_recommend_minute_bar",
+	"ai_recommend_opening_review",
+	"ai_recommend_stocks",
+	"ai_recommend_yield_dirty_code",
+	"ai_recommend_yield_meta",
+	"ai_recommend_yield_override",
+	"ai_recommend_yield_record_state",
+	"ai_recommend_yield_state",
+	"strategy_backtest_metric",
+	"strategy_backtest_run",
+	"strategy_backtest_trade",
+	"strategy_candidate_snapshot",
+	"strategy_order_event",
+	"strategy_rule_snapshot",
+	"strategy_run_snapshot",
+	"strategy_runtime_control",
+}
+
+func LegacyStrategyRowCounts(database *gorm.DB) (map[string]int64, error) {
+	if database == nil {
+		return nil, errors.New("main database is unavailable")
+	}
+	counts := make(map[string]int64, len(legacyStrategyTables))
+	for _, table := range legacyStrategyTables {
+		if !database.Migrator().HasTable(table) {
+			counts[table] = 0
+			continue
+		}
+		var count int64
+		if err := database.Table(table).Count(&count).Error; err != nil {
+			return nil, fmt.Errorf("count archived legacy strategy table %s: %w", table, err)
+		}
+		counts[table] = count
+	}
+	return counts, nil
 }
 
 var minuteMigrations = []migration{
@@ -348,6 +393,18 @@ func applyResearchDirectBuyStrategy(tx *gorm.DB) error {
 	return nil
 }
 
+func applyLegacyStrategyArchiveCleanup(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	for _, table := range legacyStrategyTables {
+		if err := tx.Exec("DROP TABLE IF EXISTS " + quoteSQLiteIdentifier(table)).Error; err != nil {
+			return fmt.Errorf("drop archived legacy strategy table %s: %w", table, err)
+		}
+	}
+	return verifyMainSchema9Runtime(tx)
+}
+
 func dropLegacyStrategyTriggers(database *gorm.DB) error {
 	var names []string
 	if err := database.Raw(`SELECT name FROM sqlite_master
@@ -485,12 +542,6 @@ func VerifyMinute(database *gorm.DB) (DatabaseStatus, error) {
 	return verifiedStatus(database, "minute", minuteMigrations, releaseinfo.Manifest().MinuteSchemaVersion)
 }
 
-// ValidateStrategyRuntimeSchema remains as a temporary source-compatibility alias.
-// It validates only the clean 1.6.0 research schema and no strategy runtime.
-func ValidateStrategyRuntimeSchema(database *gorm.DB) error {
-	return verifyMainSchema3Runtime(database)
-}
-
 func verifiedStatus(database *gorm.DB, name string, migrations []migration, expected int) (DatabaseStatus, error) {
 	result, err := status(database, name, migrations, expected, true)
 	if err != nil {
@@ -524,6 +575,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 8 {
 		if err := verifyMainSchema8Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 9 {
+		if err := verifyMainSchema9Runtime(database); err != nil {
 			return result, err
 		}
 	}
@@ -616,6 +672,25 @@ func verifyMainSchema8Runtime(database *gorm.DB) error {
 	}
 	if pending != 0 {
 		return fmt.Errorf("main schema 8 has %d legacy pending recommendations", pending)
+	}
+	return nil
+}
+
+func verifyMainSchema9Runtime(database *gorm.DB) error {
+	if database == nil {
+		return errors.New("main database is unavailable")
+	}
+	for _, table := range legacyStrategyTables {
+		if database.Migrator().HasTable(table) {
+			return fmt.Errorf("main schema 9 still has archived legacy strategy table %s", table)
+		}
+		var indexCount int64
+		if err := database.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = ?", table).Scan(&indexCount).Error; err != nil {
+			return fmt.Errorf("inspect archived legacy strategy indexes for %s: %w", table, err)
+		}
+		if indexCount != 0 {
+			return fmt.Errorf("main schema 9 still has %d indexes for archived legacy strategy table %s", indexCount, table)
+		}
 	}
 	return nil
 }

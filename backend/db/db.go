@@ -93,7 +93,16 @@ func openSQLite(sqlitePath string, dbLogger gormlogger.Interface) (*gorm.DB, err
 }
 
 func Init(sqlitePath string) {
-	dbLogger := newDBLogger()
+	initWithLogger(sqlitePath, newDBLogger())
+}
+
+// InitSilent opens the writable database pair without emitting SQL logs. It is
+// reserved for machine-readable administrative CLI commands.
+func InitSilent(sqlitePath string) {
+	initWithLogger(sqlitePath, gormlogger.Default.LogMode(gormlogger.Silent))
+}
+
+func initWithLogger(sqlitePath string, dbLogger gormlogger.Interface) {
 	var openDb *gorm.DB
 	var err error
 	if sqlitePath == "" {
@@ -124,7 +133,7 @@ func Init(sqlitePath string) {
 	dbCon.SetConnMaxLifetime(time.Hour)
 	Dao = openDb
 
-	InitMinute(resolveMinutePathForMainPath(sqlitePath))
+	initMinuteWithLogger(resolveMinutePathForMainPath(sqlitePath), dbLogger)
 }
 
 // InitReadOnly opens the primary database and its sibling minute cache without
@@ -198,7 +207,10 @@ func readOnlySQLiteDSN(rawPath string) (string, string, error) {
 }
 
 func InitMinute(sqlitePath string) {
-	dbLogger := newDBLogger()
+	initMinuteWithLogger(sqlitePath, newDBLogger())
+}
+
+func initMinuteWithLogger(sqlitePath string, dbLogger gormlogger.Interface) {
 	if sqlitePath == "" {
 		sqlitePath = appconfig.Load().DB.MinutePath
 	}

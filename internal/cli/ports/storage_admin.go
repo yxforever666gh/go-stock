@@ -28,6 +28,8 @@ type StorageAdmin interface {
 	Migrate(context.Context) error
 	Verify(context.Context) (DatabaseStatus, DatabaseStatus, error)
 	Backup(context.Context, string, string) error
+	Compact(context.Context, string) error
+	LegacyStrategyRowCounts(context.Context) (map[string]int64, error)
 	QuickCheck(context.Context) error
 	Close() error
 }

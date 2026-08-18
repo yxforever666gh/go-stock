@@ -14,6 +14,7 @@ $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
 $RuntimeRoot = [System.IO.Path]::GetFullPath((Join-Path $ProjectRoot "runtime"))
 $ReleasesRoot = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "releases"))
 $DeploymentsRoot = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "deployments"))
+$ArchivesRoot = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "archives"))
 $CurrentPointerPath = [System.IO.Path]::GetFullPath((Join-Path $RuntimeRoot "current.json"))
 
 function Get-FullPath {
@@ -66,6 +67,22 @@ function Read-ReleasePointer {
     if ((Get-FullPath (Split-Path -Parent $zoneInfo)) -ne $releaseDir) {
         throw "Release pointer artifacts are not in one directory: $Path"
     }
+    $archive = ""
+    $hasArchivePath = $pointer.PSObject.Properties.Name -contains "databaseArchive"
+    $hasArchiveHash = $pointer.PSObject.Properties.Name -contains "databaseArchiveSHA256"
+    if ($hasArchivePath -xor $hasArchiveHash) {
+        throw "Release pointer '$Path' has incomplete database archive credentials"
+    }
+    if ($hasArchivePath) {
+        if ([string]::IsNullOrWhiteSpace([string]$pointer.databaseArchive) -or
+            [string]::IsNullOrWhiteSpace([string]$pointer.databaseArchiveSHA256)) {
+            throw "Release pointer '$Path' has empty database archive credentials"
+        }
+        $archive = Assert-ChildPath ([string]$pointer.databaseArchive) $ArchivesRoot
+        if ((Get-SHA256 $archive) -ne ([string]$pointer.databaseArchiveSHA256).ToLowerInvariant()) {
+            throw "Permanent database archive hash mismatch: $archive"
+        }
+    }
     return [pscustomobject]@{
         Source = Get-FullPath $Path
         AppVersion = [string]$pointer.appVersion
@@ -73,6 +90,7 @@ function Read-ReleasePointer {
         Binary = $binary
         ZoneInfo = $zoneInfo
         ReleaseDir = $releaseDir
+        DatabaseArchive = $archive
     }
 }
 
@@ -160,7 +178,9 @@ if ($preservedReleaseDirs.Count -lt $KeepReleases) {
 $running = @(Get-CimInstance Win32_Process -Filter "name='go-stock-web.exe'" -ErrorAction SilentlyContinue)
 foreach ($process in $running) {
     if ([string]::IsNullOrWhiteSpace([string]$process.ExecutablePath)) { continue }
-    $executable = Assert-ChildPath ([string]$process.ExecutablePath) $ReleasesRoot
+    $executable = Get-FullPath ([string]$process.ExecutablePath)
+    $releasePrefix = $ReleasesRoot.TrimEnd('\') + '\'
+    if (-not $executable.StartsWith($releasePrefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
     $releaseDir = Get-FullPath (Split-Path -Parent $executable)
     if (-not $preservedReleaseDirs.Contains($releaseDir)) {
         throw "Running process $($process.ProcessId) uses a release scheduled for deletion: $releaseDir"
@@ -261,7 +281,10 @@ Write-Output "Project root: $ProjectRoot"
 Write-Output "Preserved database backups:"
 $preservedBackupDirs | Sort-Object | ForEach-Object { Write-Output "  $_" }
 Write-Output "Preserved releases:"
-$releaseDetails | ForEach-Object { Write-Output "  $($_.AppVersion) $($_.Commit) $($_.ReleaseDir)" }
+$releaseDetails | ForEach-Object {
+    Write-Output "  $($_.AppVersion) $($_.Commit) $($_.ReleaseDir)"
+    if ($_.DatabaseArchive) { Write-Output "    permanent archive: $($_.DatabaseArchive)" }
+}
 if ($targets.Count -eq 0) {
     Write-Output "No cleanup targets found."
     exit 0
