@@ -149,7 +149,7 @@ func (a *App) startAIAnalysis(origin string) error {
 // StartAIAnalysis starts one formal research run in the background. The UI
 // follows the persisted running report and only enables the button again after
 // that report reaches a terminal status.
-func (a *App) StartAIAnalysis() (bool, error) {
+func (a *App) startManualAIAnalysis() (bool, error) {
 	if err := a.startAIAnalysis("manual"); err != nil {
 		return false, err
 	}
@@ -184,7 +184,7 @@ func normalizedPage(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-func (a *App) ListAIAnalysisReports(limit, offset int) ([]research.AnalysisRunSummary, error) {
+func (a *App) listAIAnalysisReports(limit, offset int) ([]research.AnalysisRunSummary, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return nil, err
@@ -193,7 +193,7 @@ func (a *App) ListAIAnalysisReports(limit, offset int) ([]research.AnalysisRunSu
 	return runtime.Repository.ListAnalysis(context.Background(), limit, offset)
 }
 
-func (a *App) GetAIAnalysisReport(runID string) (research.AnalysisRun, error) {
+func (a *App) getAIAnalysisReport(runID string) (research.AnalysisRun, error) {
 	if strings.TrimSpace(runID) == "" {
 		return research.AnalysisRun{}, errors.New("runId is required")
 	}
@@ -204,7 +204,7 @@ func (a *App) GetAIAnalysisReport(runID string) (research.AnalysisRun, error) {
 	return runtime.Repository.Analysis(context.Background(), runID)
 }
 
-func (a *App) ListAIRecommendations(limit, offset int) ([]research.Recommendation, error) {
+func (a *App) listAIRecommendations(limit, offset int) ([]research.Recommendation, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return nil, err
@@ -213,7 +213,7 @@ func (a *App) ListAIRecommendations(limit, offset int) ([]research.Recommendatio
 	return runtime.Repository.ListRecommendations(context.Background(), limit, offset)
 }
 
-func (a *App) GetAIRecommendation(recommendationID string) (research.RecommendationDetail, error) {
+func (a *App) getAIRecommendation(recommendationID string) (research.RecommendationDetail, error) {
 	if strings.TrimSpace(recommendationID) == "" {
 		return research.RecommendationDetail{}, errors.New("recommendationId is required")
 	}
@@ -224,7 +224,7 @@ func (a *App) GetAIRecommendation(recommendationID string) (research.Recommendat
 	return runtime.Service.Detail(context.Background(), recommendationID)
 }
 
-func (a *App) GetAISimulatedAccount() (research.AccountOverview, error) {
+func (a *App) getAISimulatedAccount() (research.AccountOverview, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return research.AccountOverview{}, err

@@ -2,8 +2,6 @@ package main
 
 import (
 	"encoding/base64"
-	"fmt"
-	"os"
 	"strings"
 
 	"go-stock/backend/logger"
@@ -13,7 +11,7 @@ import (
 	"github.com/go-resty/resty/v2"
 )
 
-func (a *App) NewChatStream(stock, stockCode, question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) {
+func (a *App) runChatStream(stock, stockCode, question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) {
 	order := a.services.AI.ResolveAIFallbackOrder(aiConfigId)
 	if len(order) == 0 {
 		emitEvent(a.ctx, "newChatStream", "DONE")
@@ -59,15 +57,7 @@ func (a *App) NewChatStream(stock, stockCode, question string, aiConfigId int, s
 	emitEvent(a.ctx, "newChatStream", "DONE")
 }
 
-func (a *App) SaveAIResponseResult(stockCode, stockName, result, chatId, question string, aiConfigId int) {
-	a.services.AI.SaveAIResponseResult(a.ctx, stockCode, stockName, result, chatId, question, aiConfigId)
-}
-
-func (a *App) GetAIResponseResult(stock string) *models.AIResponseResult {
-	return a.services.AI.GetAIResponseResult(a.ctx, stock)
-}
-
-func (a *App) ShareAnalysis(stockCode, stockName string) string {
+func (a *App) shareAnalysis(stockCode, stockName string) string {
 	res := a.services.AI.GetAIResponseResult(a.ctx, stockCode)
 	if res == nil || len(res.Content) <= 100 {
 		return "分析结果异常"
@@ -90,37 +80,7 @@ func (a *App) ShareAnalysis(stockCode, stockName string) string {
 	return response.String()
 }
 
-func (a *App) SaveAsMarkdown(stockCode, stockName string) string {
-	res := a.services.AI.GetAIResponseResult(a.ctx, stockCode)
-	if res == nil || len(res.Content) <= 100 {
-		return "分析结果异常,无法保存。"
-	}
-	analysisTime := res.CreatedAt.Format("2006-01-02_15_04_05")
-	file, err := saveFileWithDialog(a.ctx, runtimeSaveFileOptions{
-		Title:           "保存为Markdown",
-		DefaultFilename: fmt.Sprintf("%s[%s]AI分析结果_%s.md", stockName, stockCode, analysisTime),
-		Filters: []runtimeFileFilter{
-			{
-				DisplayName: "Markdown",
-				Pattern:     "*.md;*.markdown",
-			},
-		},
-	})
-	if err != nil {
-		return err.Error()
-	}
-	err = os.WriteFile(file, []byte(res.Content), 0o644)
-	if err != nil {
-		return err.Error()
-	}
-	return "已保存至：" + file
-}
-
-func (a *App) GetPromptTemplates(name, promptType string) *[]models.PromptTemplate {
-	return a.services.AI.GetPromptTemplates(name, promptType)
-}
-
-func (a *App) AddPrompt(prompt models.Prompt) string {
+func (a *App) addPrompt(prompt models.Prompt) string {
 	promptTemplate := models.PromptTemplate{
 		ID:      prompt.ID,
 		Content: prompt.Content,
@@ -130,21 +90,17 @@ func (a *App) AddPrompt(prompt models.Prompt) string {
 	return a.services.AI.AddPrompt(promptTemplate)
 }
 
-func (a *App) DelPrompt(id uint) string {
-	return a.services.AI.DelPrompt(id)
-}
-
-func (a *App) GetVersionInfo() *models.VersionInfo {
+func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.6.6：旧策略历史已安全归档并退出活动库；市场行情、股票、基金、普通诊股和 AI 研究功能保持不变。"
+		content = "1.6.7：已收敛为本机 Web 架构；市场行情、股票、基金、普通诊股和 AI 研究功能保持不变。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,
-		Icon:              GetImageBase(icon),
-		Alipay:            GetImageBase(alipay),
-		Wxpay:             GetImageBase(wxpay),
-		Wxgzh:             GetImageBase(wxgzh),
+		Icon:              imageBase(icon),
+		Alipay:            imageBase(alipay),
+		Wxpay:             imageBase(wxpay),
+		Wxgzh:             imageBase(wxgzh),
 		Content:           content,
 		OfficialStatement: OFFICIAL_STATEMENT,
 		SelfUpdateEnabled: appconfig.Load().Update.SelfUpdateEnabled,
@@ -156,13 +112,9 @@ func manualUpdateHint() string {
 	return "当前发布包已关闭应用内自动更新。请先运行 stop.bat，替换为新的 zip 解压目录，再运行 start.bat；%LOCALAPPDATA%/go-stock-win 下的用户数据不会丢失。"
 }
 
-func GetImageBase(bytes []byte) string {
+func imageBase(bytes []byte) string {
 	if len(bytes) == 0 {
 		return ""
 	}
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(bytes)
-}
-
-func (a *App) GetAiConfigs() []*models.AIConfig {
-	return a.services.AI.GetAiConfigs()
 }

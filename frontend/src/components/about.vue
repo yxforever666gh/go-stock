@@ -1,7 +1,7 @@
 <script setup>
 import { h, onBeforeUnmount, onMounted, ref } from 'vue';
-import { CheckUpdate, GetVersionInfo, OpenURL } from '../services/app-api';
-import { Environment, EventsOff, EventsOn } from '../services/browser-runtime.mjs';
+import { CheckUpdate, GetVersionInfo } from '../services/system-api';
+import { BrowserOpenURL as OpenURL, Environment, EventsOff, EventsOn } from '../services/browser-runtime.mjs';
 import { NAvatar, NButton, useNotification } from 'naive-ui';
 
 const updateLog = ref('');
@@ -104,7 +104,7 @@ const handleUpdateAction = () => {
 </script>
 
 <template>
-  <n-space vertical size="large" style="--wails-draggable:no-drag">
+  <n-space vertical size="large">
     <n-card size="large">
       <n-divider title-placement="center">关于软件</n-divider>
       <n-space vertical>
@@ -121,9 +121,9 @@ const handleUpdateAction = () => {
           {{ manualUpdateHint }}
         </p>
         <div style="justify-self: center; text-align: left;">
-          <p>go-stock 是一个本地优先的股票分析工作台，基于 Go、Wails、Vue 3 和 Naive UI 构建，支持桌面模式与本地 Web 模式。</p>
+          <p>go-stock 是一个本地优先的股票分析工作台，基于 Go、Vue 3、SQLite 和 Naive UI 构建，通过本机 Web 服务运行。</p>
           <p>当前公开版聚焦真正可维护的核心能力：自选股、市场资讯、AI 分析报告、推荐收益跟踪、邮件报告与运行时任务管理。</p>
-          <p>当前 1.6.6 版本以“分级 AI 分析 → 推荐直接模拟买入 → 下一交易日 09:50 起定时复查 → AI 判断持有或卖出 → 净收益”为研究主链路。</p>
+          <p>当前 1.6.7 版本以“分级 AI 分析 → 推荐直接模拟买入 → 下一交易日 09:50 起定时复查 → AI 判断持有或卖出 → 净收益”为研究主链路。</p>
           <p>来源说明：当前仓库基于 <a href="https://github.com/ArvinLovegood/go-stock" target="_blank">ArvinLovegood/go-stock</a> 改编整理而来，不是原作者官方仓库；当前维护的是公开清理版与后续改动。</p>
           <p>公开仓库已经移除个人赞赏码、联系方式、赞助码入口、私有接入说明和本地工作区配置，只保留适合协作与二次开发的公开内容。</p>
           <p>
@@ -145,11 +145,11 @@ const handleUpdateAction = () => {
       <div style="justify-self: center; text-align: left;">
         <p>支持股票自选、市场行情、研究中心、AI 分析报告、推荐收益跟踪、邮件报告和运行时任务管理。</p>
         <p>支持 OpenAI 兼容接口、DeepSeek、Ollama、LM Studio、火山方舟等模型接入。</p>
-        <p>支持桌面模式与 <code>--web</code> 模式，共用核心业务逻辑，并可通过公开仓库继续二次开发。</p>
+        <p>通过仅监听本机的 Web 服务提供统一界面和 API，并可通过公开仓库继续二次开发。</p>
       </div>
       <n-divider title-placement="center">公开说明</n-divider>
       <div style="justify-self: center; text-align: left;">
-        <p>当前 1.6.6 已将旧策略历史永久归档并移出活动库；市场行情、股票、基金、普通诊股和研究中心继续保持完整。</p>
+        <p>当前活动库已将旧策略历史永久归档；市场行情、股票、基金、普通诊股和研究中心继续保持完整。</p>
         <p>如果你准备继续二次开发，建议优先阅读 README、CHANGELOG、Release Notes 和仓库中的公开发布检查清单。</p>
       </div>
       <n-divider title-placement="center">鸣谢</n-divider>
@@ -160,7 +160,7 @@ const handleUpdateAction = () => {
         </p>
         <p>
           感谢以下开源项目：
-          <a href="https://github.com/wailsapp/wails" target="_blank">Wails</a><n-divider vertical />
+          <a href="https://github.com/golang/go" target="_blank">Go</a><n-divider vertical />
           <a href="https://github.com/vuejs" target="_blank">Vue</a><n-divider vertical />
           <a href="https://github.com/tusen-ai/naive-ui" target="_blank">Naive UI</a>
         </p>

@@ -10,11 +10,11 @@
 
 ### 中文版
 
-基于 Go、Wails、Vue 3 的本地股票分析工具，支持桌面模式与 Web 模式，包含自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告能力；当前公开版基于 `ArvinLovegood/go-stock` 改编整理。
+基于 Go、Vue 3 和 SQLite 的本地 Web 股票分析工具，包含自选股、市场资讯、AI 分析报告、推荐收益跟踪与邮件报告能力；当前公开版基于 `ArvinLovegood/go-stock` 改编整理。
 
 ### English
 
-Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists, market insights, AI reports, recommendation tracking and email reporting; this public snapshot is adapted from `ArvinLovegood/go-stock`.
+Local-first web stock analysis tool built with Go, Vue 3 and SQLite, with watchlists, market insights, AI reports, recommendation tracking and email reporting; this public snapshot is adapted from `ArvinLovegood/go-stock`.
 
 ## About 区域建议
 
@@ -42,13 +42,13 @@ Local-first stock analysis tool built with Go, Wails and Vue 3, with watchlists,
 推荐 Topics：
 
 - `golang`
-- `wails`
+- `local-web-app`
 - `vue3`
 - `vite`
 - `naive-ui`
 - `echarts`
 - `sqlite`
-- `desktop-app`
+- `local-web-app`
 - `stock-analysis`
 - `ai`
 

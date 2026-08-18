@@ -41,8 +41,8 @@ test_case() {
 echo "1. 基础健康检查"
 echo "--------------------------------"
 test_case "服务健康状态" \
-    "curl -sf --max-time 5 $BASE_URL/healthz" \
-    '"ok":true'
+    "curl -sf --max-time 5 $BASE_URL/readyz" \
+    '"ready":true'
 
 test_case "页面可访问" \
     "curl -sf --max-time 5 $BASE_URL | grep -q '<title>'" \
@@ -51,9 +51,9 @@ test_case "页面可访问" \
 echo ""
 echo "2. API 端点测试"
 echo "--------------------------------"
-test_case "市场摘要API" \
-    "curl -sf $BASE_URL/api/market-summary/latest" \
-    '"ok"'
+test_case "系统信息 API" \
+    "curl -sf $BASE_URL/api/v1/system/info" \
+    '"version"'
 
 test_case "图标资源" \
     "curl -sf -I $BASE_URL/build/appicon.png | head -1" \

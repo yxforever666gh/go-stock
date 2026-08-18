@@ -2,14 +2,13 @@
 import {h, onBeforeUnmount, onMounted, ref} from "vue";
 import {
   AddPrompt, DelPrompt,
-  ExportConfig,
   GetConfig,
   GetPromptTemplates,
   TestAIConfig,
   UpdateConfig
-} from "../services/app-api";
+} from "../services/settings-api";
+import {ExportConfig} from "../services/exports-api";
 import {NTag, useMessage} from "naive-ui";
-import {models} from "../../wailsjs/go/models";
 import {EventsEmit} from "../services/browser-runtime.mjs";
 import MinuteProviderSettings from "./settings/MinuteProviderSettings.vue";
 import AiConfigSettings from "./settings/AiConfigSettings.vue";
@@ -192,7 +191,7 @@ function renumberAiConfigSorts() {
 
 // 添加一个新的AI配置到列表
 function addAiConfig() {
-  formValue.value.openAI.aiConfigs.push(new models.AIConfig({
+  formValue.value.openAI.aiConfigs.push({
     sort: formValue.value.openAI.aiConfigs.length + 1,
     disabled: false,
     name: '',
@@ -205,7 +204,7 @@ function addAiConfig() {
     timeOut: 300,
     httpProxy:"",
     httpProxyEnabled:false,
-  }));
+  });
   renumberAiConfigSorts()
   queueAutoSave()
 }
@@ -281,7 +280,7 @@ onBeforeUnmount(() => {
 
 function buildConfigPayload() {
   renumberAiConfigSorts()
-  return new models.SettingConfig({
+  return {
 	...persistedConfig.value,
     ID: formValue.value.ID,
     updateBasicInfoOnStart: formValue.value.updateBasicInfoOnStart,
@@ -319,7 +318,7 @@ function buildConfigPayload() {
     aiAnalysisConfigId: primaryAiConfigId(),
     aiAnalysisTimes: formValue.value.aiAnalysis.times,
     qgqpBId: formValue.value.qgqpBId
-  })
+  }
 }
 
 function aiConfigTestKey(aiConfig, index) {
@@ -579,7 +578,7 @@ function deletePrompt(ID) {
 </script>
 
 <template>
-  <n-flex justify="left" style="text-align: left; --wails-draggable:no-drag">
+  <n-flex justify="left" style="text-align: left">
     <n-form ref="formRef" :label-placement="'left'" :label-align="'left'">
       <n-space vertical size="large">
         <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => '基础设置')" size="small">

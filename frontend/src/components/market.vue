@@ -1,6 +1,7 @@
 <script setup>
 import { defineAsyncComponent, onBeforeMount, onBeforeUnmount, ref } from 'vue'
-import { GetConfig, GetIndustryRank, GetTelegraphList, GlobalStockIndexes, ReFleshTelegraphList } from '../services/app-api'
+import { GetConfig } from '../services/settings-api'
+import { GetIndustryRank, GetTelegraphList, GlobalStockIndexes, ReFleshTelegraphList } from '../services/market-api'
 import { EventsOff, EventsOn } from '../services/browser-runtime.mjs'
 import { useRoute } from 'vue-router'
 
@@ -92,7 +93,7 @@ onBeforeUnmount(() => {
 
 <template>
   <n-card>
-    <n-tabs type="line" animated @update-value="updateTab" :value="nowTab" style="--wails-draggable:no-drag">
+    <n-tabs type="line" animated @update-value="updateTab" :value="nowTab">
       <n-tab-pane v-for="(component, name) in marketTabComponents" :key="name" :name="name" :tab="name">
         <component
           :is="component"

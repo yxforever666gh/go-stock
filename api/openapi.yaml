@@ -1,16 +1,11 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.6
-  description: Local-only 1.6.6 API for market data and the direct-buy, evidence-backed AI sell lifecycle.
+  version: 1.6.7
+  description: Local-only Web API for market data, watchlists, diagnosis, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
 paths:
-  /healthz:
-    get:
-      deprecated: true
-      operationId: getLegacyHealth
-      responses: {"200": {description: Process health}}
   /livez:
     get:
       operationId: getLiveness
@@ -32,12 +27,185 @@ paths:
       operationId: getSystemHealth
       responses:
         "200": {description: Health, content: {application/json: {schema: {$ref: "#/components/schemas/HealthStatus"}}}}
+  /api/v1/system/info:
+    get: {operationId: getSystemInfo, responses: {"200": {description: Display version information}}}
+  /api/v1/system/update-check:
+    post:
+      operationId: checkForUpdates
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/UpdateCheckRequest"}}}}
+      responses: {"202": {description: Update check accepted, content: {application/json: {schema: {$ref: "#/components/schemas/AcceptedResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/system/shutdown:
+    post:
+      operationId: shutdownSystem
+      responses: {"200": {description: Shutdown requested, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "403": {$ref: "#/components/responses/Forbidden"}}
+  /api/v1/settings:
+    get: {operationId: getSettings, responses: {"200": {description: Settings}}}
+    put:
+      operationId: updateSettings
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
+      responses: {"200": {description: Settings updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/ai/configs:
+    get: {operationId: listAIConfigs, responses: {"200": {description: AI configurations}}}
+  /api/v1/ai/configs/test:
+    post:
+      operationId: testAIConfig
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AIConfigTestRequest"}}}}
+      responses: {"200": {description: AI configuration test result}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/ai/prompts:
+    get: {operationId: listPrompts, responses: {"200": {description: Prompt templates}}}
+    post:
+      operationId: createPrompt
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
+      responses: {"200": {description: Prompt created, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/ai/prompts/{id}:
+    delete: {operationId: deletePrompt, responses: {"200": {description: Prompt deleted}}}
+  /api/v1/groups:
+    get: {operationId: listGroups, responses: {"200": {description: Groups}}}
+    post:
+      operationId: createGroup
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
+      responses: {"200": {description: Group created, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/groups/initialize-sort:
+    post: {operationId: initializeGroupSort, responses: {"200": {description: Group sort initialized}}}
+  /api/v1/groups/{id}:
+    delete: {operationId: deleteGroup, responses: {"200": {description: Group deleted}}}
+  /api/v1/groups/{id}/sort:
+    put:
+      operationId: updateGroupSort
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/GroupSortRequest"}}}}
+      responses: {"200": {description: Group sort updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/groups/{id}/stocks:
+    post:
+      operationId: addGroupStock
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockCodeRequest"}}}}
+      responses: {"200": {description: Stock added to group, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/groups/{id}/stocks/{code}:
+    delete: {operationId: removeGroupStock, responses: {"200": {description: Stock removed from group}}}
+  /api/v1/stocks/search:
+    get: {operationId: searchStockMaster, responses: {"200": {description: Stock master search}}}
+  /api/v1/stocks/query:
+    post:
+      operationId: queryStocks
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockQueryRequest"}}}}
+      responses: {"200": {description: Indicator stock query}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/stocks/{code}/snapshot:
+    get: {operationId: getStockSnapshot, responses: {"200": {description: Stock snapshot}}}
+  /api/v1/stocks/{code}/kline:
+    get: {operationId: getStockKLine, responses: {"200": {description: Stock daily bars}}}
+  /api/v1/stocks/{code}/minute-line:
+    get: {operationId: getStockMinuteLine, responses: {"200": {description: Stock minute line}}}
+  /api/v1/watchlist/stocks:
+    get: {operationId: listFollowedStocks, responses: {"200": {description: Followed stocks}}}
+    post:
+      operationId: followStock
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockCodeRequest"}}}}
+      responses: {"200": {description: Stock followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/watchlist/stocks/{code}:
+    delete: {operationId: unfollowStock, responses: {"200": {description: Stock unfollowed}}}
+  /api/v1/watchlist/stocks/{code}/position:
+    put:
+      operationId: updateStockPosition
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockPositionRequest"}}}}
+      responses: {"200": {description: Position updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/watchlist/stocks/{code}/alarm:
+    put:
+      operationId: updateStockAlarm
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockAlarmRequest"}}}}
+      responses: {"200": {description: Alarm updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/watchlist/stocks/{code}/sort:
+    put:
+      operationId: updateStockSort
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockSortRequest"}}}}
+      responses: {"200": {description: Sort updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/watchlist/stocks/{code}/ai-cron:
+    put:
+      operationId: updateStockAICron
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockCronRequest"}}}}
+      responses: {"200": {description: AI cron updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/funds/search:
+    get: {operationId: searchFunds, responses: {"200": {description: Fund search}}}
+  /api/v1/watchlist/funds:
+    get: {operationId: listFollowedFunds, responses: {"200": {description: Followed funds}}}
+    post:
+      operationId: followFund
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/FundCodeRequest"}}}}
+      responses: {"200": {description: Fund followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/watchlist/funds/{code}:
+    delete: {operationId: unfollowFund, responses: {"200": {description: Fund unfollowed}}}
+  /api/v1/market/telegraphs:
+    get: {operationId: listTelegraphs, responses: {"200": {description: Telegraphs}}}
+  /api/v1/market/telegraphs/refresh:
+    post:
+      operationId: refreshTelegraphs
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/TelegraphRefreshRequest"}}}}
+      responses: {"200": {description: Telegraphs refreshed}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/market/indexes/global:
+    get: {operationId: getGlobalIndexes, responses: {"200": {description: Global indexes}}}
+  /api/v1/market/industries/rank:
+    get: {operationId: getIndustryRank, responses: {"200": {description: Industry rank}}}
+  /api/v1/market/industries/money-rank:
+    get: {operationId: getIndustryMoneyRank, responses: {"200": {description: Industry money rank}}}
+  /api/v1/market/stocks/money-rank:
+    get: {operationId: getStockMoneyRank, responses: {"200": {description: Stock money rank}}}
+  /api/v1/market/stocks/{code}/money-trend:
+    get: {operationId: getStockMoneyTrend, responses: {"200": {description: Stock money trend}}}
+  /api/v1/market/long-tiger:
+    get: {operationId: getLongTigerRank, responses: {"200": {description: Long tiger rank}}}
+  /api/v1/market/stocks/research-reports:
+    get: {operationId: listStockResearchReports, responses: {"200": {description: All recent stock research reports}}}
+  /api/v1/market/stocks/{code}/research-reports:
+    get: {operationId: getStockResearchReports, responses: {"200": {description: Stock research reports}}}
+  /api/v1/market/stocks/notices:
+    get: {operationId: listStockNotices, responses: {"200": {description: All recent stock notices}}}
+  /api/v1/market/stocks/{code}/notices:
+    get: {operationId: getStockNotices, responses: {"200": {description: Stock notices}}}
+  /api/v1/market/industries/research-reports:
+    get: {operationId: listIndustryResearchReports, responses: {"200": {description: All recent industry research reports}}}
+  /api/v1/market/industries/{code}/research-reports:
+    get: {operationId: getIndustryResearchReports, responses: {"200": {description: Industry research reports}}}
+  /api/v1/market/dictionary:
+    get: {operationId: getMarketDictionary, responses: {"200": {description: Market dictionary}}}
+  /api/v1/market/sentiment/weighted:
+    post:
+      operationId: analyzeWeightedSentiment
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SentimentRequest"}}}}
+      responses: {"200": {description: Weighted sentiment}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/market/hot/stocks:
+    get: {operationId: listHotStocks, responses: {"200": {description: Hot stocks}}}
+  /api/v1/market/hot/events:
+    get: {operationId: listHotEvents, responses: {"200": {description: Hot events}}}
+  /api/v1/market/hot/topics:
+    get: {operationId: listHotTopics, responses: {"200": {description: Hot topics}}}
+  /api/v1/market/calendars/investment:
+    get: {operationId: getInvestmentCalendar, responses: {"200": {description: Investment calendar}}}
+  /api/v1/market/calendars/cls:
+    get: {operationId: getCLSCalendar, responses: {"200": {description: CLS calendar}}}
+  /api/v1/ai/chat-runs:
+    post:
+      operationId: createChatRun
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ChatRunRequest"}}}}
+      responses: {"202": {description: Chat run accepted, content: {application/json: {schema: {$ref: "#/components/schemas/AcceptedResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/ai/responses:
+    post:
+      operationId: saveAIResponse
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AIResponseSaveRequest"}}}}
+      responses: {"200": {description: AI response saved, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/ai/responses/{stockCode}:
+    get: {operationId: getAIResponse, responses: {"200": {description: AI response}}}
+  /api/v1/ai/responses/{stockCode}/share:
+    post:
+      operationId: shareAIResponse
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ShareAnalysisRequest"}}}}
+      responses: {"200": {description: AI response shared, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/research/analysis-runs:
     get:
       operationId: listAnalysisRuns
       responses:
         "200": {description: Analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AnalysisRunSummary"}}}}}
-  /api/v1/research/analysis-run:
+    post:
+      operationId: startAnalysisRun
+      responses: {"202": {description: Analysis accepted, content: {application/json: {schema: {$ref: "#/components/schemas/AcceptedResponse"}}}}, "409": {description: Analysis already running, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}}
+  /api/v1/research/analysis-runs/{id}:
     get:
       operationId: getAnalysisRun
       responses:
@@ -47,7 +215,7 @@ paths:
       operationId: listRecommendations
       responses:
         "200": {description: Recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Recommendation"}}}}}
-  /api/v1/research/recommendation:
+  /api/v1/research/recommendations/{id}:
     get:
       operationId: getRecommendation
       responses:
@@ -60,25 +228,148 @@ paths:
   /api/v1/exports/markdown:
     post:
       operationId: exportMarkdown
-      responses: {"200": {description: Export}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/MarkdownExportRequest"}}}}
+      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/exports/config:
     post:
       operationId: exportConfig
-      responses: {"200": {description: Export}}
+      requestBody: {content: {application/json: {schema: {$ref: "#/components/schemas/ExportRequest"}}}}
+      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/exports/image:
     post:
       operationId: exportImage
-      responses: {"200": {description: Export}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ImageExportRequest"}}}}
+      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/exports/word:
     post:
       operationId: exportWord
-      responses: {"200": {description: Export}}
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/WordExportRequest"}}}}
+      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/events/ws:
     get:
       operationId: connectEventsWebSocket
       responses: {"101": {description: Event stream}}
 components:
+  responses:
+    BadRequest:
+      description: Invalid JSON request or parameters
+      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+    Forbidden:
+      description: Request is not from the bound loopback origin
+      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
   schemas:
+    JsonObject:
+      type: object
+      description: Provider- or configuration-defined JSON object whose stable fields are not owned by this transport layer.
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties: {error: {type: string}}
+    CommandResponse:
+      type: object
+      required: [ok]
+      properties: {ok: {type: boolean}, message: {type: string}}
+    AcceptedResponse:
+      type: object
+      required: [accepted]
+      properties: {accepted: {type: boolean}}
+    UpdateCheckRequest:
+      type: object
+      required: [flag]
+      properties: {flag: {type: integer}}
+    AIConfigTestRequest:
+      type: object
+      required: [id]
+      properties: {id: {type: integer}}
+    GroupSortRequest:
+      type: object
+      required: [sort]
+      properties: {sort: {type: integer}}
+    StockCodeRequest:
+      type: object
+      required: [stockCode]
+      properties: {stockCode: {type: string}}
+    StockQueryRequest:
+      type: object
+      required: [words]
+      properties: {words: {type: string}}
+    StockPositionRequest:
+      type: object
+      required: [price, volume]
+      properties: {price: {type: number}, volume: {type: integer, format: int64}}
+    StockAlarmRequest:
+      type: object
+      required: [value, alarmPrice]
+      properties: {value: {type: number}, alarmPrice: {type: number}}
+    StockSortRequest:
+      type: object
+      required: [sort]
+      properties: {sort: {type: integer, format: int64}}
+    StockCronRequest:
+      type: object
+      required: [cron]
+      properties: {cron: {type: string}}
+    FundCodeRequest:
+      type: object
+      required: [fundCode]
+      properties: {fundCode: {type: string}}
+    TelegraphRefreshRequest:
+      type: object
+      required: [source]
+      properties: {source: {type: string}}
+    SentimentRequest:
+      type: object
+      required: [text]
+      properties: {text: {type: string}}
+    ChatRunRequest:
+      type: object
+      required: [stock, stockCode, question, aiConfigId, enableTools, think]
+      properties:
+        stock: {type: string}
+        stockCode: {type: string}
+        question: {type: string}
+        aiConfigId: {type: integer}
+        sysPromptId: {type: integer}
+        enableTools: {type: boolean}
+        think: {type: boolean}
+    AIResponseSaveRequest:
+      type: object
+      required: [stockCode, stockName, result, chatId, question, aiConfigId]
+      properties:
+        stockCode: {type: string}
+        stockName: {type: string}
+        result: {type: string}
+        chatId: {type: string}
+        question: {type: string}
+        aiConfigId: {type: integer}
+    ShareAnalysisRequest:
+      type: object
+      required: [stockName]
+      properties: {stockName: {type: string}}
+    ExportRequest:
+      type: object
+      properties: {mode: {type: string, enum: [download, server]}}
+    MarkdownExportRequest:
+      type: object
+      required: [stockCode, stockName]
+      properties: {mode: {type: string, enum: [download, server]}, stockCode: {type: string}, stockName: {type: string}}
+    ImageExportRequest:
+      type: object
+      required: [name, base64Data]
+      properties: {mode: {type: string, enum: [download, server]}, name: {type: string}, base64Data: {type: string}}
+    WordExportRequest:
+      type: object
+      required: [filename, base64Data]
+      properties: {mode: {type: string, enum: [download, server]}, filename: {type: string}, base64Data: {type: string}}
+    ExportResponse:
+      type: object
+      required: [mode, filename]
+      properties:
+        mode: {type: string, enum: [download, server]}
+        filename: {type: string}
+        mime: {type: string}
+        contentBase64: {type: string}
+        path: {type: string}
     LivenessStatus:
       type: object
       required: [ok]

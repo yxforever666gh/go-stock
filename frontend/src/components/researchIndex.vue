@@ -224,7 +224,7 @@ onBeforeUnmount(() => {
 
 <template>
   <n-card ref="cardRef">
-    <n-tabs type="line" animated @update-value="updateTab" :value="nowTab" style="--wails-draggable:no-drag">
+    <n-tabs type="line" animated @update-value="updateTab" :value="nowTab">
       <n-tab-pane
           v-for="tab in tabs"
           :key="tab.name"

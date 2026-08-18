@@ -16,8 +16,8 @@ func (a *App) domReady(ctx context.Context) {
 		return
 	}
 
-	// Web mode invokes domReady directly without the desktop startup hook. The
-	// once-guard makes this a fallback only; desktop execution starts earlier.
+	// The Web bootstrap invokes domReady after the HTTP runtime is assembled.
+	// Keep the guard because tests and compatibility startup hooks may call it again.
 	config := a.services.Config.GetConfig()
 	a.registerRealtimeRuntime(config)
 	a.registerFundRuntime(config)
@@ -67,28 +67,19 @@ func (a *App) registerRealtimeRuntime(config *models.SettingConfig) {
 	})
 }
 
-func (a *App) registerNewsPollingCrons(interval int64, enablePush bool) {
+func (a *App) registerNewsPollingCrons(interval int64) {
 	a.registerCronTask("GetNewTelegraph", fmt.Sprintf("@every %ds", interval+10), func() {
 		news := a.services.Market.TelegraphList(30)
-		if enablePush {
-			go a.NewsPush(news)
-		}
 		go emitEvent(a.ctx, "newTelegraph", news)
 	})
 
 	a.registerCronTask("newSinaNews", fmt.Sprintf("@every %ds", interval+10), func() {
 		news := a.services.Market.GetSinaNews(30)
-		if enablePush {
-			go a.NewsPush(news)
-		}
 		go emitEvent(a.ctx, "newSinaNews", news)
 	})
 
 	a.registerCronTask("tradingViewNews", fmt.Sprintf("@every %ds", interval+10), func() {
 		news := a.services.Market.TradingViewNews()
-		if enablePush {
-			go a.NewsPush(news)
-		}
 		go emitEvent(a.ctx, "tradingViewNews", news)
 	})
 }
@@ -118,7 +109,7 @@ func (a *App) startImmediateRuntimeTasks(config *models.SettingConfig) {
 func (a *App) registerMaintenanceRuntime() {
 	if _, err := a.cron.AddFunc("0 0 2 * * *", func() {
 		logger.SugaredLogger.Errorf("Checking for updates...")
-		a.CheckStockBaseInfo(a.ctx)
+		a.checkStockBaseInfo(a.ctx)
 	}); err != nil {
 		a.recordSchedulerRegistrationError("CheckStockBaseInfo", "0 0 2 * * *", err)
 		logger.SugaredLogger.Errorf("注册 CheckStockBaseInfo 定时任务失败: %v", err)
@@ -127,7 +118,7 @@ func (a *App) registerMaintenanceRuntime() {
 
 func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 	if config.UpdateBasicInfoOnStart {
-		go a.CheckStockBaseInfo(a.ctx)
+		go a.checkStockBaseInfo(a.ctx)
 	}
 }
 
@@ -141,7 +132,7 @@ func (a *App) registerFollowAnalysisCrons() {
 		if follow.Cron == nil || *follow.Cron == "" {
 			continue
 		}
-		entryID, err := a.cron.AddFunc(*follow.Cron, a.AddCronTask(follow))
+		entryID, err := a.cron.AddFunc(*follow.Cron, a.addCronTask(follow))
 		if err != nil {
 			a.recordSchedulerRegistrationError("FollowAnalysis:"+follow.StockCode, *follow.Cron, err)
 			logger.SugaredLogger.Errorf("添加自动分析任务失败:%s cron=%s entryID:%v", follow.Name, *follow.Cron, entryID)

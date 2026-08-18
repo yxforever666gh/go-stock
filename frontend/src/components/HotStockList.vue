@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {onBeforeMount, onUnmounted, ref} from 'vue'
-import {HotStock} from "../services/app-api";
+import {HotStock} from "../services/market-api";
 import KLineChart from "./KLineChart.vue";
 import {ArrowBack, ArrowDown, ArrowUp} from "@vicons/ionicons5";
 

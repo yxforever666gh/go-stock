@@ -3,11 +3,11 @@ import test from 'node:test'
 
 import {
   BrowserOpenURL,
-  createBrowserRuntimeAdapter,
+  createBrowserRuntime,
 } from './browser-runtime.mjs'
 
 test('browser event listeners can subscribe, emit, unsubscribe, and be removed by name', () => {
-  const runtime = createBrowserRuntimeAdapter()
+  const runtime = createBrowserRuntime()
   const received = []
   const unsubscribe = runtime.EventsOn('price', (value) => received.push(value))
 
@@ -25,8 +25,9 @@ test('browser event listeners can subscribe, emit, unsubscribe, and be removed b
 test('browser URL and environment operations use native browser APIs', async () => {
   const calls = []
   const openedWindow = { opener: 'parent' }
-  const runtime = createBrowserRuntimeAdapter({
+  const runtime = createBrowserRuntime({
     windowObject: {
+      location: { href: 'http://127.0.0.1:34115/' },
       open: (...args) => {
         calls.push(args)
         return openedWindow
@@ -52,7 +53,7 @@ test('browser URL and environment operations use native browser APIs', async () 
   })
 })
 
-test('exported operations delegate to an existing Wails runtime', () => {
+test('exported operations use the active browser window', () => {
   const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const openedURLs = []
 
@@ -60,18 +61,21 @@ test('exported operations delegate to an existing Wails runtime', () => {
     configurable: true,
     writable: true,
     value: {
-      runtime: {
-        BrowserOpenURL(url) {
-          openedURLs.push(url)
-          return 'native-result'
-        },
+      location: { href: 'http://127.0.0.1:34115/' },
+      open(url, target, features) {
+        openedURLs.push([url, target, features])
+        return {}
       },
     },
   })
 
   try {
-    assert.equal(BrowserOpenURL('https://example.com/native'), 'native-result')
-    assert.deepEqual(openedURLs, ['https://example.com/native'])
+    BrowserOpenURL('https://example.com/report')
+    assert.deepEqual(openedURLs, [[
+      'https://example.com/report',
+      '_blank',
+      'noopener,noreferrer',
+    ]])
   } finally {
     if (originalWindow) {
       Object.defineProperty(globalThis, 'window', originalWindow)
@@ -96,7 +100,7 @@ test('browser events consume the fixed websocket event envelope', () => {
     }
   }
 
-  const runtime = createBrowserRuntimeAdapter({
+  const runtime = createBrowserRuntime({
     windowObject: {
       location: {
         host: '127.0.0.1:34115',
@@ -124,4 +128,66 @@ test('browser events consume the fixed websocket event envelope', () => {
 
   unsubscribe()
   assert.equal(FakeWebSocket.instances[0].closed, true)
+})
+
+test('browser websocket reconnects after an unexpected close', () => {
+  class FakeWebSocket {
+    static instances = []
+
+    constructor(url) {
+      this.url = url
+      FakeWebSocket.instances.push(this)
+    }
+
+    close() {}
+  }
+
+  const timers = []
+  const runtime = createBrowserRuntime({
+    windowObject: {
+      location: { host: '127.0.0.1:34115', protocol: 'http:' },
+      WebSocket: FakeWebSocket,
+      setTimeout(callback, delay) {
+        timers.push({ callback, delay })
+        return timers.length
+      },
+      clearTimeout() {},
+    },
+    reconnectDelayMs: 25,
+  })
+
+  runtime.EventsOn('news', () => {})
+  assert.equal(FakeWebSocket.instances.length, 1)
+  FakeWebSocket.instances[0].onclose()
+  assert.equal(timers.length, 1)
+  assert.equal(timers[0].delay, 25)
+
+  timers[0].callback()
+  assert.equal(FakeWebSocket.instances.length, 2)
+  runtime.dispose()
+})
+
+test('one-shot browser listeners run once and then close an idle socket', () => {
+  class FakeWebSocket {
+    constructor() {
+      this.closed = false
+    }
+
+    close() {
+      this.closed = true
+    }
+  }
+
+  const runtime = createBrowserRuntime({
+    windowObject: {
+      location: { host: '127.0.0.1:34115', protocol: 'http:' },
+      WebSocket: FakeWebSocket,
+    },
+  })
+  let calls = 0
+  runtime.EventsOnce('ready', () => { calls += 1 })
+  runtime.EventsEmit('ready')
+  runtime.EventsEmit('ready')
+
+  assert.equal(calls, 1)
 })

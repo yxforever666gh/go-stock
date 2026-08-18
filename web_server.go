@@ -12,7 +12,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -24,28 +23,10 @@ import (
 	"go-stock/internal/releaseinfo"
 )
 
-var (
-	contextType = reflect.TypeOf((*context.Context)(nil)).Elem()
-	errorType   = reflect.TypeOf((*error)(nil)).Elem()
-)
-
 const (
-	maxRPCRequestBodyBytes    int64 = 4 << 20
 	maxExportRequestBodyBytes int64 = 32 << 20
+	maxAPIRequestBodyBytes    int64 = 4 << 20
 )
-
-type rpcRequest struct {
-	ID     any               `json:"id"`
-	Method string            `json:"method"`
-	Args   []json.RawMessage `json:"args"`
-}
-
-type rpcResponse struct {
-	ID     any    `json:"id"`
-	OK     bool   `json:"ok"`
-	Result any    `json:"result,omitempty"`
-	Error  string `json:"error,omitempty"`
-}
 
 type exportRequest struct {
 	Mode string `json:"mode"`
@@ -184,31 +165,7 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 	mux := http.NewServeMux()
 	var server *http.Server
 	status := defaultWebStatusProvider{runtime: app.services.Runtime}
-	registerWebV1Routes(mux, app, hub, status)
-
-	mux.HandleFunc("/healthz", methodHandler(http.MethodGet, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      true,
-			"mode":    "web",
-			"version": Version,
-		})
-	}))
-
-	mux.HandleFunc("/api/shutdown", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-			return
-		}
-		if !isLocalRequest(r) {
-			writeJSON(w, http.StatusForbidden, map[string]any{"error": "shutdown is only allowed from localhost"})
-			return
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{
-			"ok":      true,
-			"message": "shutdown requested",
-		})
-
+	registerWebV1Routes(mux, app, hub, status, func() {
 		go func() {
 			time.Sleep(300 * time.Millisecond)
 			if app.cron != nil {
@@ -222,14 +179,6 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 				}
 			}
 		}()
-	})
-
-	mux.HandleFunc("/api/rpc", methodHandler(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
-		handleRPC(app, w, r)
-	}))
-
-	mux.HandleFunc("/api/ws", func(w http.ResponseWriter, r *http.Request) {
-		hub.HandleWS(w, r)
 	})
 
 	mux.HandleFunc("/build/appicon.png", func(w http.ResponseWriter, r *http.Request) {
@@ -268,38 +217,6 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 		_, _ = w.Write(icon2)
 	})
 
-	mux.HandleFunc("/api/export/markdown", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-			return
-		}
-		handleMarkdownExport(app, w, r)
-	})
-
-	mux.HandleFunc("/api/export/config", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-			return
-		}
-		handleConfigExport(app, w, r)
-	})
-
-	mux.HandleFunc("/api/export/image", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-			return
-		}
-		handleImageExport(w, r)
-	})
-
-	mux.HandleFunc("/api/export/word", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
-			return
-		}
-		handleWordExport(w, r)
-	})
-
 	staticFS, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return err
@@ -326,192 +243,6 @@ func isLocalRequest(r *http.Request) bool {
 	return isLoopbackRequest(r) && hasAllowedOrigin(r)
 }
 
-func handleRPC(app *App, w http.ResponseWriter, r *http.Request) {
-	var req rpcRequest
-	if err := decodeJSONRequest(w, r, &req, maxRPCRequestBodyBytes, false); err != nil {
-		writeRPCRequestError(w, req.ID, err)
-		return
-	}
-	req.Method = strings.TrimSpace(req.Method)
-	if req.Method == "" {
-		writeJSON(w, http.StatusBadRequest, rpcResponse{ID: req.ID, OK: false, Error: "method is required"})
-		return
-	}
-
-	result, err := invokeAppMethod(app, req.Method, req.Args)
-	if err != nil {
-		writeJSON(w, http.StatusOK, rpcResponse{ID: req.ID, OK: false, Error: err.Error()})
-		return
-	}
-	writeJSON(w, http.StatusOK, rpcResponse{ID: req.ID, OK: true, Result: result})
-}
-
-func invokeAppMethod(app *App, methodName string, args []json.RawMessage) (any, error) {
-	if !isRPCMethodAllowed(methodName) {
-		return nil, fmt.Errorf("method not allowed: %s", methodName)
-	}
-
-	appValue := reflect.ValueOf(app)
-	method := appValue.MethodByName(methodName)
-	if !method.IsValid() {
-		return nil, fmt.Errorf("unknown method: %s", methodName)
-	}
-
-	methodType := method.Type()
-	in := make([]reflect.Value, 0, methodType.NumIn())
-	argIndex := 0
-	for i := 0; i < methodType.NumIn(); i++ {
-		paramType := methodType.In(i)
-		if paramType == contextType {
-			ctx := app.ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			in = append(in, reflect.ValueOf(ctx))
-			continue
-		}
-
-		if argIndex >= len(args) {
-			in = append(in, reflect.Zero(paramType))
-			continue
-		}
-
-		decoded, err := decodeArg(args[argIndex], paramType)
-		if err != nil {
-			return nil, fmt.Errorf("arg %d decode failed: %w", argIndex+1, err)
-		}
-		in = append(in, decoded)
-		argIndex++
-	}
-
-	return normalizeMethodResults(methodType, method.Call(in))
-}
-
-func normalizeMethodResults(methodType reflect.Type, results []reflect.Value) (any, error) {
-	if len(results) == 0 {
-		return nil, nil
-	}
-	if len(results) == 1 {
-		return normalizeResult(results[0]), nil
-	}
-	if len(results) == 2 && methodType.NumOut() == 2 && methodType.Out(1).Implements(errorType) {
-		if results[1].IsNil() {
-			return normalizeResult(results[0]), nil
-		}
-		return nil, results[1].Interface().(error)
-	}
-	out := make([]any, 0, len(results))
-	for _, item := range results {
-		out = append(out, normalizeResult(item))
-	}
-	return out, nil
-}
-
-func isRPCMethodAllowed(methodName string) bool {
-	_, ok := rpcMethodAllowlist[methodName]
-	return ok
-}
-
-var rpcMethodAllowlist = map[string]struct{}{
-	"AddGroup":                       {},
-	"AddPrompt":                      {},
-	"AddStockGroup":                  {},
-	"AnalyzeSentiment":               {},
-	"AnalyzeSentimentWithFreqWeight": {},
-	"CheckStockBaseInfo":             {},
-	"CheckUpdate":                    {},
-	"ClsCalendar":                    {},
-	"DelPrompt":                      {},
-	"EMDictCode":                     {},
-	"ExportConfig":                   {},
-	"Follow":                         {},
-	"FollowFund":                     {},
-	"GetAIResponseResult":            {},
-	"GetAiConfigs":                   {},
-	"GetConfig":                      {},
-	"GetFollowList":                  {},
-	"GetFollowedFund":                {},
-	"GetGroupList":                   {},
-	"GetGroupStockList":              {},
-	"GetIndustryMoneyRankSina":       {},
-	"GetIndustryRank":                {},
-	"GetMoneyRankSina":               {},
-	"GetPromptTemplates":             {},
-	"GetStockCommonKLine":            {},
-	"GetStockKLine":                  {},
-	"GetStockList":                   {},
-	"GetStockMinutePriceLineData":    {},
-	"GetStockMoneyTrendByDay":        {},
-	"GetTelegraphList":               {},
-	"GetVersionInfo":                 {},
-	"GetfundList":                    {},
-	"GlobalStockIndexes":             {},
-	"Greet":                          {},
-	"HotEvent":                       {},
-	"HotStock":                       {},
-	"HotTopic":                       {},
-	"IndustryResearchReport":         {},
-	"InitializeGroupSort":            {},
-	"InvestCalendarTimeLine":         {},
-	"LongTigerRank":                  {},
-	"NewChatStream":                  {},
-	"NewsPush":                       {},
-	"OpenURL":                        {},
-	"ReFleshTelegraphList":           {},
-	"RemoveGroup":                    {},
-	"RemoveStockGroup":               {},
-	"SaveAIResponseResult":           {},
-	"SaveAsMarkdown":                 {},
-	"SaveImage":                      {},
-	"SaveWordFile":                   {},
-	"SearchStock":                    {},
-	"SendDingDingMessage":            {},
-	"SendDingDingMessageByType":      {},
-	"SetAlarmChangePercent":          {},
-	"SetCostPriceAndVolume":          {},
-	"SetStockAICron":                 {},
-	"SetStockSort":                   {},
-	"ShareAnalysis":                  {},
-	"StockNotice":                    {},
-	"StockResearchReport":            {},
-	"StartAIAnalysis":                {},
-	"ListAIAnalysisReports":          {},
-	"GetAIAnalysisReport":            {},
-	"ListAIRecommendations":          {},
-	"GetAIRecommendation":            {},
-	"GetAISimulatedAccount":          {},
-	"TestAIConfig":                   {},
-	"UnFollow":                       {},
-	"UnFollowFund":                   {},
-	"UpdateConfig":                   {},
-	"UpdateGroupSort":                {},
-}
-
-func decodeArg(raw json.RawMessage, targetType reflect.Type) (reflect.Value, error) {
-	trimmed := strings.TrimSpace(string(raw))
-	if trimmed == "" || trimmed == "null" {
-		return reflect.Zero(targetType), nil
-	}
-
-	v := reflect.New(targetType)
-	if err := json.Unmarshal(raw, v.Interface()); err != nil {
-		return reflect.Value{}, err
-	}
-	return v.Elem(), nil
-}
-
-func normalizeResult(v reflect.Value) any {
-	if !v.IsValid() {
-		return nil
-	}
-	if v.Kind() == reflect.Pointer || v.Kind() == reflect.Map || v.Kind() == reflect.Slice || v.Kind() == reflect.Interface || v.Kind() == reflect.Func {
-		if v.IsNil() {
-			return nil
-		}
-	}
-	return v.Interface()
-}
-
 func decodeJSONRequest(w http.ResponseWriter, r *http.Request, target any, limit int64, allowEmpty bool) error {
 	if r == nil || r.Body == nil {
 		if allowEmpty {
@@ -535,11 +266,6 @@ func decodeJSONRequest(w http.ResponseWriter, r *http.Request, target any, limit
 		return err
 	}
 	return nil
-}
-
-func writeRPCRequestError(w http.ResponseWriter, id any, err error) {
-	status, message := requestErrorResponse(err)
-	writeJSON(w, status, rpcResponse{ID: id, OK: false, Error: message})
 }
 
 func writeRequestError(w http.ResponseWriter, err error) {

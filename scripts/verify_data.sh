@@ -39,16 +39,16 @@ echo ""
 echo "3. 测试 API 端点..."
 
 # 健康检查
-HEALTH=$(curl -s "$BASE_URL/healthz")
-if echo "$HEALTH" | grep -q '"ok":true'; then
+HEALTH=$(curl -s "$BASE_URL/readyz")
+if echo "$HEALTH" | grep -q '"ready":true'; then
     echo "   ✅ 健康检查通过"
 else
     echo "   ❌ 健康检查失败"
 fi
 
-# 市场摘要
-SUMMARY=$(curl -s "$BASE_URL/api/market-summary/latest")
-echo "   ℹ️  市场摘要API响应: $(echo $SUMMARY | jq -c . 2>/dev/null || echo $SUMMARY)"
+# 系统信息
+SYSTEM_INFO=$(curl -s "$BASE_URL/api/v1/system/info")
+echo "   ℹ️  系统信息 API 响应: $(echo $SYSTEM_INFO | jq -c . 2>/dev/null || echo $SYSTEM_INFO)"
 
 # 4. 检查数据库数据
 echo ""

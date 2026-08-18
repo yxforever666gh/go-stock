@@ -386,11 +386,7 @@ func AddTools(tools []models.Tool) []models.Tool {
 	return tools
 }
 
-func (a *App) NewsPush(news *[]models.Telegraph) {
-	return
-}
-
-func (a *App) AddCronTask(follow models.FollowedStock) func() {
+func (a *App) addCronTask(follow models.FollowedStock) func() {
 	return func() {
 		go emitEvent(a.ctx, "warnMsg", "开始自动分析"+follow.Name+"_"+follow.StockCode)
 		var res strings.Builder
@@ -697,10 +693,3 @@ func normalizeMsgCode(codeAny any) int {
 //	}
 //	return path, true
 //}
-
-func onExit(a *App) {
-	// 清理操作
-	logger.SugaredLogger.Infof("systray onExit")
-	//systray.Quit()
-	//runtime.Quit(a.ctx)
-}

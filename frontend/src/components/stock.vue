@@ -3,31 +3,27 @@ import {computed, defineAsyncComponent, h, nextTick, onBeforeMount, onBeforeUnmo
 import {
   AddGroup,
   AddStockGroup,
-  Follow,
-  GetAiConfigs,
-  GetAIResponseResult,
-  GetConfig,
-  GetFollowList,
   GetGroupList,
-  GetPromptTemplates,
-  GetStockList,
-  GetVersionInfo,
-  Greet,
   InitializeGroupSort,
-  NewChatStream,
-  OpenURL,
   RemoveGroup,
   RemoveStockGroup,
-  SaveAIResponseResult,
-  SaveAsMarkdown,
+  UpdateGroupSort
+} from '../services/groups-api'
+import {
+  Follow,
+  GetFollowList,
+  GetStockList,
+  Greet,
   SetAlarmChangePercent,
   SetCostPriceAndVolume,
   SetStockAICron,
   SetStockSort,
-  ShareAnalysis,
-  UnFollow,
-  UpdateGroupSort
-} from '../services/app-api'
+  UnFollow
+} from '../services/stocks-api'
+import {GetAiConfigs, GetConfig, GetPromptTemplates} from '../services/settings-api'
+import {GetVersionInfo} from '../services/system-api'
+import {GetAIResponseResult, NewChatStream, SaveAIResponseResult, ShareAnalysis} from '../services/ai-api'
+import {SaveAsMarkdown} from '../services/exports-api'
 import {
   NAvatar,
   NButton,
@@ -41,6 +37,7 @@ import {
   useNotification
 } from 'naive-ui'
 import {
+  BrowserOpenURL as OpenURL,
   Environment,
   EventsEmit,
   EventsOff,
@@ -1217,7 +1214,7 @@ function searchStockReport(stockCode) {
 </script>
 
 <template>
-  <n-tabs type="card" style="--wails-draggable:no-drag" animated addable :data-currentGroupId="currentGroupId"
+  <n-tabs type="card" animated addable :data-currentGroupId="currentGroupId"
           :value="String(currentGroupId)" @add="addTab" @update:value="updateTab" placement="top" @close="(key)=>{delTab(key)}">
 
     <n-tab-pane closable name="0" :tab="'全部'">

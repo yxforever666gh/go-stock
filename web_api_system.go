@@ -1,0 +1,48 @@
+package main
+
+import "net/http"
+
+type updateCheckRequest struct {
+	Flag int `json:"flag"`
+}
+
+func registerSystemRoutes(mux *http.ServeMux, app *App, hub *WebEventHub, status webStatusProvider, shutdown func()) {
+	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
+		version := status.SystemVersion(r.Context())
+		code := http.StatusOK
+		if !version.Readiness.Ready {
+			code = http.StatusServiceUnavailable
+		}
+		writeJSON(w, code, version)
+	})
+	mux.HandleFunc("GET /api/v1/system/version", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, status.SystemVersion(r.Context()))
+	})
+	mux.HandleFunc("GET /api/v1/system/health", func(w http.ResponseWriter, r *http.Request) {
+		version := status.SystemVersion(r.Context())
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "mode": "web", "version": version.AppVersion})
+	})
+	mux.HandleFunc("GET /api/v1/system/info", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, app.versionInfo())
+	})
+	mux.HandleFunc("POST /api/v1/system/update-check", func(w http.ResponseWriter, r *http.Request) {
+		var req updateCheckRequest
+		if !decodeAPIRequest(w, r, &req) {
+			return
+		}
+		go app.checkUpdate(req.Flag)
+		writeJSON(w, http.StatusAccepted, acceptedResponse{Accepted: true})
+	})
+	mux.HandleFunc("POST /api/v1/system/shutdown", func(w http.ResponseWriter, r *http.Request) {
+		if !isLocalRequest(r) {
+			writeJSON(w, http.StatusForbidden, map[string]any{"error": "shutdown is only allowed from localhost"})
+			return
+		}
+		writeCommand(w, "shutdown requested")
+		shutdown()
+	})
+	mux.HandleFunc("GET /api/v1/events/ws", hub.HandleWS)
+}

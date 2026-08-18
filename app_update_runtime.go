@@ -16,7 +16,7 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-func (a *App) CheckUpdate(flag int) {
+func (a *App) checkUpdate(flag int) {
 	if !appconfig.Load().Update.SelfUpdateEnabled {
 		if flag == 1 {
 			a.emitReleaseNews("当前版本："+Version, manualUpdateHint())
@@ -42,16 +42,7 @@ func (a *App) CheckUpdate(flag int) {
 	}
 
 	a.enrichReleaseVersion(releaseVersion)
-	if !(IsWindows() || IsMacOS()) {
-		go emitEvent(a.ctx, "updateVersion", releaseVersion)
-		return
-	}
-
-	commitMessage := strings.TrimSpace(releaseVersion.Commit.Message)
-	a.emitReleaseNews(
-		"发现新版本："+releaseVersion.TagName,
-		commitMessage+"\n自动更新已禁用；请仅通过本机 Windows release pipeline 部署已校验的唯一产物。",
-	)
+	go emitEvent(a.ctx, "updateVersion", releaseVersion)
 }
 
 func (a *App) fetchLatestReleaseVersion() (*models.GitHubReleaseVersion, error) {
@@ -137,7 +128,7 @@ func (a *App) syncNews() {
 		}
 		if telegraph := buildSyncedTelegraph(news, a.services.AI.AnalyzeSentiment(news.Message).Description); telegraph != nil {
 			if a.persistSyncedTelegraph(telegraph, news.Tags) && time.Since(*telegraph.DataTime) < 5*time.Minute {
-				a.NewsPush(&[]models.Telegraph{*telegraph})
+				emitEvent(a.ctx, "newTelegraph", []models.Telegraph{*telegraph})
 			}
 		}
 	}

@@ -1,5 +1,5 @@
 <script setup>
-import {ReFleshTelegraphList} from "../services/app-api";
+import {ReFleshTelegraphList} from "../services/market-api";
 import {RefreshCircle, RefreshCircleSharp, RefreshOutline} from "@vicons/ionicons5";
 import {computed, h, onBeforeMount, onBeforeUnmount, onMounted,onUnmounted, ref} from 'vue'
 

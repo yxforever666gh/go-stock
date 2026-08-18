@@ -65,6 +65,71 @@ func register(mux *http.ServeMux) {
 	}
 }
 
+func TestValidateGoRoutesAcceptsGo122MethodPatterns(t *testing.T) {
+	tempDir := t.TempDir()
+	filename := filepath.Join(tempDir, "routes.go")
+	source := `package sample
+import "net/http"
+func register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /livez", nil)
+	mux.HandleFunc("POST /api/v1/items", nil)
+	mux.HandleFunc("DELETE /api/v1/items/{id}", nil)
+}`
+	if err := os.WriteFile(filename, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := &document{
+		Paths: map[string]pathItem{
+			"/livez":             {Get: &operation{OperationID: "getLiveness"}},
+			"/api/v1/items":      {Post: &operation{OperationID: "createItem"}},
+			"/api/v1/items/{id}": {Delete: &operation{OperationID: "deleteItem"}},
+		},
+	}
+	if err := validateGoRoutes(spec, []string{filename}); err != nil {
+		t.Fatalf("Go 1.22 route patterns were rejected: %v", err)
+	}
+}
+
+func TestValidateGoRoutesRejectsUndocumentedGo122Route(t *testing.T) {
+	tempDir := t.TempDir()
+	filename := filepath.Join(tempDir, "routes.go")
+	source := `package sample
+import "net/http"
+func register(mux *http.ServeMux) {
+	mux.HandleFunc("GET /livez", nil)
+	mux.HandleFunc("POST /api/v1/undocumented", nil)
+}`
+	if err := os.WriteFile(filename, []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	spec := &document{Paths: map[string]pathItem{
+		"/livez": {Get: &operation{OperationID: "getLiveness"}},
+	}}
+	err := validateGoRoutes(spec, []string{filename})
+	if err == nil || !strings.Contains(err.Error(), "POST /api/v1/undocumented") {
+		t.Fatalf("expected undocumented route failure, got %v", err)
+	}
+}
+
+func TestSplitRoutePattern(t *testing.T) {
+	tests := []struct {
+		pattern    string
+		wantMethod string
+		wantPath   string
+	}{
+		{pattern: "GET /livez", wantMethod: "get", wantPath: "/livez"},
+		{pattern: " delete   /api/v1/items/{id} ", wantMethod: "delete", wantPath: "/api/v1/items/{id}"},
+		{pattern: "/readyz", wantPath: "/readyz"},
+		{pattern: "CONNECT /api/v1/events/ws", wantPath: "CONNECT /api/v1/events/ws"},
+	}
+	for _, test := range tests {
+		method, path := splitRoutePattern(test.pattern)
+		if method != test.wantMethod || path != test.wantPath {
+			t.Errorf("splitRoutePattern(%q) = (%q, %q), want (%q, %q)", test.pattern, method, path, test.wantMethod, test.wantPath)
+		}
+	}
+}
+
 func TestValidateReferencesRejectsMissingTarget(t *testing.T) {
 	var source yaml.Node
 	if err := yaml.Unmarshal([]byte("openapi: 3.1.0\nvalue:\n  $ref: '#/components/schemas/Missing'\n"), &source); err != nil {

@@ -2,9 +2,11 @@ import { Environment } from '../services/browser-runtime.mjs'
 import {
   GetStockKLine,
   GetStockMinutePriceLineData,
+} from '../services/stocks-api'
+import {
   SaveImage,
   SaveWordFile,
-} from '../services/app-api'
+} from '../services/exports-api'
 
 let echartsLoader
 let html2canvasLoader

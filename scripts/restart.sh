@@ -102,7 +102,7 @@ start_service() {
     log "服务已启动，PID: $NEW_PID"
 
     for i in $(seq 1 60); do
-        if curl -fsS "http://$ADDR/healthz" >/dev/null 2>&1; then
+        if curl -fsS "http://$ADDR/readyz" >/dev/null 2>&1; then
             log "服务健康检查通过"
             return 0
         fi

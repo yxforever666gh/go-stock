@@ -20,9 +20,9 @@ show_menu() {
 
 check_health() {
     echo "正在检查服务健康状态..."
-    if curl -sf --max-time 5 http://127.0.0.1:34115/healthz > /dev/null 2>&1; then
+    if curl -sf --max-time 5 http://127.0.0.1:34115/readyz > /dev/null 2>&1; then
         echo "✅ 服务运行正常"
-        curl -s http://127.0.0.1:34115/healthz | jq . 2>/dev/null || curl -s http://127.0.0.1:34115/healthz
+        curl -s http://127.0.0.1:34115/readyz | jq . 2>/dev/null || curl -s http://127.0.0.1:34115/readyz
     else
         echo "❌ 服务未响应"
     fi

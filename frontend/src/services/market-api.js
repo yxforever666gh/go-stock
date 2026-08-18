@@ -1,0 +1,21 @@
+import { API_PATHS } from './api-types.generated'
+import { requestJSON, withPath, withQuery } from './http-client'
+
+export const GetTelegraphList = (source) => requestJSON(withQuery(API_PATHS.listTelegraphs, { source }))
+export const ReFleshTelegraphList = (source) => requestJSON(API_PATHS.refreshTelegraphs, { method: 'POST', body: { source } })
+export const GlobalStockIndexes = () => requestJSON(API_PATHS.getGlobalIndexes)
+export const GetIndustryRank = (sort, count) => requestJSON(withQuery(API_PATHS.getIndustryRank, { sort, count }))
+export const GetIndustryMoneyRankSina = (category, sort) => requestJSON(withQuery(API_PATHS.getIndustryMoneyRank, { category, sort }))
+export const GetMoneyRankSina = (sort) => requestJSON(withQuery(API_PATHS.getStockMoneyRank, { sort }))
+export const GetStockMoneyTrendByDay = (code, days) => requestJSON(withQuery(withPath(API_PATHS.getStockMoneyTrend, { code }), { days }))
+export const LongTigerRank = (date) => requestJSON(withQuery(API_PATHS.getLongTigerRank, { date }))
+export const StockResearchReport = (code) => requestJSON(code ? withPath(API_PATHS.getStockResearchReports, { code }) : API_PATHS.listStockResearchReports)
+export const StockNotice = (code) => requestJSON(code ? withPath(API_PATHS.getStockNotices, { code }) : API_PATHS.listStockNotices)
+export const IndustryResearchReport = (code) => requestJSON(code ? withPath(API_PATHS.getIndustryResearchReports, { code }) : API_PATHS.listIndustryResearchReports)
+export const EMDictCode = (code) => requestJSON(withQuery(API_PATHS.getMarketDictionary, { code }))
+export const AnalyzeSentimentWithFreqWeight = (text) => requestJSON(API_PATHS.analyzeWeightedSentiment, { method: 'POST', body: { text } })
+export const HotStock = (marketType) => requestJSON(withQuery(API_PATHS.listHotStocks, { marketType }))
+export const HotEvent = (size) => requestJSON(withQuery(API_PATHS.listHotEvents, { size }))
+export const HotTopic = (size) => requestJSON(withQuery(API_PATHS.listHotTopics, { size }))
+export const InvestCalendarTimeLine = (yearMonth) => requestJSON(withQuery(API_PATHS.getInvestmentCalendar, { yearMonth }))
+export const ClsCalendar = () => requestJSON(API_PATHS.getCLSCalendar)

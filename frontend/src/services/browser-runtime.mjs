@@ -1,10 +1,6 @@
 const DEFAULT_EVENTS_PATH = '/api/v1/events/ws'
 const DEFAULT_RECONNECT_DELAY_MS = 1000
 
-const browserRuntimeControls = new WeakMap()
-let installedBrowserRuntime = null
-let installedWindow = null
-
 function inferPlatform(navigatorObject) {
   const userAgent = (navigatorObject?.userAgent || '').toLowerCase()
   if (userAgent.includes('windows')) return 'windows'
@@ -23,7 +19,7 @@ function browserGlobals() {
   }
 }
 
-export function createBrowserRuntimeAdapter({
+export function createBrowserRuntime({
   windowObject,
   documentObject = windowObject?.document,
   navigatorObject = windowObject?.navigator,
@@ -32,372 +28,164 @@ export function createBrowserRuntimeAdapter({
   reconnectDelayMs = DEFAULT_RECONNECT_DELAY_MS,
 } = {}) {
   const listeners = new Map()
-  const runtimeConsole = windowObject?.console ?? globalThis.console
   let socket = null
   let reconnectTimer = null
   let disposed = false
 
-  const clearReconnectTimer = () => {
+  const disconnect = () => {
+    if (!socket) return
+    const active = socket
+    socket = null
+    active.onopen = null
+    active.onmessage = null
+    active.onerror = null
+    active.onclose = null
+    try { active.close() } catch (_) { /* already closed */ }
+  }
+
+  const clearReconnect = () => {
     if (reconnectTimer === null) return
     const clearTimer = windowObject?.clearTimeout?.bind(windowObject) ?? globalThis.clearTimeout
     clearTimer(reconnectTimer)
     reconnectTimer = null
   }
 
-  const disconnectSocket = () => {
-    if (!socket) return
-    const activeSocket = socket
-    socket = null
-    activeSocket.onopen = null
-    activeSocket.onmessage = null
-    activeSocket.onerror = null
-    activeSocket.onclose = null
-    try {
-      activeSocket.close()
-    } catch (_) {
-      // A failed websocket handshake may already have closed the connection.
-    }
-  }
-
-  const stopSocketWhenIdle = () => {
+  const stopWhenIdle = () => {
     if (listeners.size !== 0) return
-    clearReconnectTimer()
-    disconnectSocket()
+    clearReconnect()
+    disconnect()
   }
 
-  const emitEvent = (eventName, ...args) => {
+  const emit = (eventName, ...args) => {
     const entries = listeners.get(eventName)
-    if (!entries || entries.size === 0) return
-
-    for (const entry of Array.from(entries)) {
-      try {
-        entry.callback(...args)
-      } catch (error) {
-        runtimeConsole?.error?.(`[browser-runtime] event callback failed: ${eventName}`, error)
-      }
-
-      if (entry.remaining > 0) {
-        entry.remaining -= 1
-        if (entry.remaining === 0) {
-          entries.delete(entry)
-        }
-      }
+    if (!entries) return
+    for (const entry of [...entries]) {
+      try { entry.callback(...args) } catch (error) { globalThis.console?.error?.(`[browser-events] ${eventName}`, error) }
+      if (entry.remaining > 0 && --entry.remaining === 0) entries.delete(entry)
     }
-
-    if (entries.size === 0) {
-      listeners.delete(eventName)
-      stopSocketWhenIdle()
-    }
+    if (entries.size === 0) listeners.delete(eventName)
+    stopWhenIdle()
   }
 
-  const hasSocketPrerequisites = () => (
-    !disposed
-    && listeners.size > 0
-    && typeof WebSocketClass === 'function'
-    && !!windowObject?.location?.host
-  )
+  const canConnect = () => !disposed && listeners.size > 0 && typeof WebSocketClass === 'function' && !!windowObject?.location?.host
 
   const scheduleReconnect = () => {
-    if (!hasSocketPrerequisites() || reconnectTimer !== null) return
+    if (!canConnect() || reconnectTimer !== null) return
     const setTimer = windowObject?.setTimeout?.bind(windowObject) ?? globalThis.setTimeout
     reconnectTimer = setTimer(() => {
       reconnectTimer = null
-      ensureSocket()
+      connect()
     }, reconnectDelayMs)
   }
 
-  const ensureSocket = () => {
-    if (socket || !hasSocketPrerequisites()) return
-
+  const connect = () => {
+    if (socket || !canConnect()) return
     const protocol = windowObject.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    let nextSocket
-    try {
-      nextSocket = new WebSocketClass(`${protocol}//${windowObject.location.host}${eventsPath}`)
-    } catch (error) {
-      runtimeConsole?.error?.('[browser-runtime] websocket connection failed', error)
+    let next
+    try { next = new WebSocketClass(`${protocol}//${windowObject.location.host}${eventsPath}`) } catch (_) {
       scheduleReconnect()
       return
     }
-    socket = nextSocket
-
-    nextSocket.onmessage = (event) => {
+    socket = next
+    next.onmessage = (message) => {
       try {
-        const message = JSON.parse(event.data)
-        if (typeof message?.event === 'string' && message.event) {
-          emitEvent(message.event, message.payload)
-        }
+        const payload = JSON.parse(message.data)
+        if (payload?.event) emit(payload.event, payload.payload)
       } catch (error) {
-        runtimeConsole?.error?.('[browser-runtime] websocket message parse failed', error)
+        globalThis.console?.error?.('[browser-events] invalid websocket message', error)
       }
     }
-
-    nextSocket.onclose = () => {
-      if (socket === nextSocket) {
-        socket = null
-      }
+    next.onclose = () => {
+      if (socket === next) socket = null
       scheduleReconnect()
     }
-
-    nextSocket.onerror = () => {
-      try {
-        nextSocket.close()
-      } catch (_) {
-        // Ignore close failures on broken websocket handshakes.
-      }
+    next.onerror = () => {
+      try { next.close() } catch (_) { /* broken handshake */ }
     }
   }
 
-  const eventsOnMultiple = (eventName, callback, maxCallbacks) => {
-    if (!eventName || typeof callback !== 'function') {
-      return () => {}
-    }
-    if (!listeners.has(eventName)) {
-      listeners.set(eventName, new Set())
-    }
-    const entry = {
-      callback,
-      remaining: typeof maxCallbacks === 'number' && maxCallbacks > 0 ? maxCallbacks : -1,
-    }
+  const onMultiple = (eventName, callback, maxCallbacks = -1) => {
+    if (!eventName || typeof callback !== 'function') return () => {}
+    if (!listeners.has(eventName)) listeners.set(eventName, new Set())
+    const entry = { callback, remaining: maxCallbacks > 0 ? maxCallbacks : -1 }
     listeners.get(eventName).add(entry)
-    ensureSocket()
-
+    connect()
     return () => {
-      const entries = listeners.get(eventName)
-      if (!entries) return
-      entries.delete(entry)
-      if (entries.size === 0) {
-        listeners.delete(eventName)
-      }
-      stopSocketWhenIdle()
+      listeners.get(eventName)?.delete(entry)
+      if (listeners.get(eventName)?.size === 0) listeners.delete(eventName)
+      stopWhenIdle()
     }
   }
 
-  const eventsOff = (...eventNames) => {
-    eventNames.filter(Boolean).forEach((eventName) => listeners.delete(eventName))
-    stopSocketWhenIdle()
-  }
-
-  const runtime = {
-    LogPrint: (...args) => runtimeConsole?.log?.(...args),
-    LogTrace: (...args) => runtimeConsole?.debug?.(...args),
-    LogDebug: (...args) => runtimeConsole?.debug?.(...args),
-    LogInfo: (...args) => runtimeConsole?.info?.(...args),
-    LogWarning: (...args) => runtimeConsole?.warn?.(...args),
-    LogError: (...args) => runtimeConsole?.error?.(...args),
-    LogFatal: (...args) => runtimeConsole?.error?.(...args),
-    EventsOnMultiple: eventsOnMultiple,
-    EventsOn: (eventName, callback) => eventsOnMultiple(eventName, callback, -1),
-    EventsOnce: (eventName, callback) => eventsOnMultiple(eventName, callback, 1),
-    EventsOff: eventsOff,
-    EventsOffAll() {
+  return {
+    EventsOnMultiple: onMultiple,
+    EventsOn: (name, callback) => onMultiple(name, callback, -1),
+    EventsOnce: (name, callback) => onMultiple(name, callback, 1),
+    EventsOff: (...names) => {
+      names.filter(Boolean).forEach((name) => listeners.delete(name))
+      stopWhenIdle()
+    },
+    EventsOffAll: () => {
       listeners.clear()
-      stopSocketWhenIdle()
+      stopWhenIdle()
     },
-    EventsEmit: emitEvent,
-    WindowReload() {
-      windowObject?.location?.reload?.()
-    },
-    WindowReloadApp() {
-      windowObject?.location?.reload?.()
-    },
-    WindowSetAlwaysOnTop() {},
-    WindowSetSystemDefaultTheme() {},
-    WindowSetLightTheme() {},
-    WindowSetDarkTheme() {},
-    WindowCenter() {},
-    WindowSetTitle(title) {
-      if (documentObject && typeof title === 'string') {
-        documentObject.title = title
-      }
-    },
-    WindowFullscreen() {
-      return documentObject?.documentElement?.requestFullscreen?.()
-    },
-    WindowUnfullscreen() {
-      return documentObject?.exitFullscreen?.()
-    },
-    WindowIsFullscreen() {
-      return !!documentObject?.fullscreenElement
-    },
-    WindowGetSize() {
-      return { width: windowObject?.innerWidth ?? 0, height: windowObject?.innerHeight ?? 0 }
-    },
-    WindowSetSize() {},
-    WindowSetMaxSize() {},
-    WindowSetMinSize() {},
-    WindowSetPosition() {},
-    WindowGetPosition() {
-      return { x: windowObject?.screenX ?? 0, y: windowObject?.screenY ?? 0 }
-    },
-    WindowHide() {},
-    WindowShow() {},
-    WindowMaximise() {},
-    WindowToggleMaximise() {},
-    WindowUnmaximise() {},
-    WindowIsMaximised() {
-      return false
-    },
-    WindowMinimise() {},
-    WindowUnminimise() {},
-    WindowSetBackgroundColour() {},
-    ScreenGetAll() {
-      return []
-    },
-    WindowIsMinimised() {
-      return false
-    },
-    WindowIsNormal() {
-      return true
-    },
+    EventsEmit: emit,
     BrowserOpenURL(url) {
-      if (!url) return
-      let parsedURL
-      try {
-        parsedURL = new URL(url, windowObject?.location?.href)
-      } catch (_) {
-        return
-      }
-      if (parsedURL.protocol !== 'http:' && parsedURL.protocol !== 'https:') {
-        return
-      }
-      const openedWindow = windowObject?.open?.(parsedURL.href, '_blank', 'noopener,noreferrer')
-      if (openedWindow) {
-        try {
-          openedWindow.opener = null
-        } catch (_) {
-          // The noopener feature already protects cross-origin windows that reject assignment.
-        }
+      let parsed
+      try { parsed = new URL(url, windowObject?.location?.href) } catch (_) { return }
+      if (!['http:', 'https:'].includes(parsed.protocol)) return
+      const opened = windowObject?.open?.(parsed.href, '_blank', 'noopener,noreferrer')
+      if (opened) {
+        try { opened.opener = null } catch (_) { /* noopener already applied */ }
       }
     },
-    Environment() {
+    Environment: () => {
       const platform = inferPlatform(navigatorObject)
       return Promise.resolve({ platform, arch: 'web', os: platform })
     },
-    Quit() {
-      windowObject?.close?.()
+    WindowFullscreen: () => documentObject?.documentElement?.requestFullscreen?.(),
+    WindowUnfullscreen: () => documentObject?.exitFullscreen?.(),
+    WindowIsFullscreen: () => !!documentObject?.fullscreenElement,
+    WindowReload: () => windowObject?.location?.reload?.(),
+    WindowSetTitle: (title) => {
+      if (documentObject && typeof title === 'string') documentObject.title = title
     },
-    Hide() {},
-    Show() {},
-    ClipboardGetText() {
-      return navigatorObject?.clipboard?.readText?.() ?? Promise.resolve('')
-    },
-    ClipboardSetText(text) {
-      return navigatorObject?.clipboard?.writeText?.(text ?? '') ?? Promise.resolve()
-    },
-    OnFileDrop() {
-      return () => {}
-    },
-    OnFileDropOff() {},
-    CanResolveFilePaths() {
-      return false
-    },
-    ResolveFilePaths(files) {
-      return Promise.resolve(files ?? [])
-    },
-  }
-
-  browserRuntimeControls.set(runtime, {
+    ClipboardGetText: () => navigatorObject?.clipboard?.readText?.() ?? Promise.resolve(''),
+    ClipboardSetText: (text) => navigatorObject?.clipboard?.writeText?.(text ?? '') ?? Promise.resolve(),
     dispose() {
       disposed = true
       listeners.clear()
-      clearReconnectTimer()
-      disconnectSocket()
+      clearReconnect()
+      disconnect()
     },
-  })
-  return runtime
+  }
 }
 
-export function installBrowserRuntimeCompatibility(options = {}) {
-  const globals = browserGlobals()
-  const { windowObject } = globals
-  if (!windowObject) return null
-
-  if (windowObject.runtime && !browserRuntimeControls.has(windowObject.runtime)) {
-    return windowObject.runtime
-  }
-
-  if (!installedBrowserRuntime || installedWindow !== windowObject) {
-    browserRuntimeControls.get(installedBrowserRuntime)?.dispose()
-    installedBrowserRuntime = createBrowserRuntimeAdapter({ ...globals, ...options })
-    installedWindow = windowObject
-  }
-
-  if (!windowObject.runtime) {
-    windowObject.runtime = installedBrowserRuntime
-  }
-  return windowObject.runtime
-}
+let installedRuntime = null
+let installedWindow = null
 
 function currentRuntime() {
-  const windowObject = globalThis.window
-  if (windowObject?.runtime) return windowObject.runtime
-  if (windowObject) return installBrowserRuntimeCompatibility()
-
-  if (!installedBrowserRuntime || installedWindow) {
-    browserRuntimeControls.get(installedBrowserRuntime)?.dispose()
-    installedBrowserRuntime = createBrowserRuntimeAdapter()
-    installedWindow = null
+  const globals = browserGlobals()
+  if (!installedRuntime || installedWindow !== globals.windowObject) {
+    installedRuntime?.dispose?.()
+    installedRuntime = createBrowserRuntime(globals)
+    installedWindow = globals.windowObject
   }
-  return installedBrowserRuntime
+  return installedRuntime
 }
 
-function callRuntime(method, args) {
-  const runtime = currentRuntime()
-  const implementation = runtime?.[method]
-  if (typeof implementation !== 'function') return undefined
-  return implementation.apply(runtime, args)
-}
-
-export const LogPrint = (...args) => callRuntime('LogPrint', args)
-export const LogTrace = (...args) => callRuntime('LogTrace', args)
-export const LogDebug = (...args) => callRuntime('LogDebug', args)
-export const LogInfo = (...args) => callRuntime('LogInfo', args)
-export const LogWarning = (...args) => callRuntime('LogWarning', args)
-export const LogError = (...args) => callRuntime('LogError', args)
-export const LogFatal = (...args) => callRuntime('LogFatal', args)
-export const EventsOnMultiple = (...args) => callRuntime('EventsOnMultiple', args)
-export const EventsOn = (eventName, callback) => EventsOnMultiple(eventName, callback, -1)
-export const EventsOnce = (eventName, callback) => EventsOnMultiple(eventName, callback, 1)
-export const EventsOff = (...args) => callRuntime('EventsOff', args)
-export const EventsOffAll = (...args) => callRuntime('EventsOffAll', args)
-export const EventsEmit = (...args) => callRuntime('EventsEmit', args)
-export const WindowReload = (...args) => callRuntime('WindowReload', args)
-export const WindowReloadApp = (...args) => callRuntime('WindowReloadApp', args)
-export const WindowSetAlwaysOnTop = (...args) => callRuntime('WindowSetAlwaysOnTop', args)
-export const WindowSetSystemDefaultTheme = (...args) => callRuntime('WindowSetSystemDefaultTheme', args)
-export const WindowSetLightTheme = (...args) => callRuntime('WindowSetLightTheme', args)
-export const WindowSetDarkTheme = (...args) => callRuntime('WindowSetDarkTheme', args)
-export const WindowCenter = (...args) => callRuntime('WindowCenter', args)
-export const WindowSetTitle = (...args) => callRuntime('WindowSetTitle', args)
-export const WindowFullscreen = (...args) => callRuntime('WindowFullscreen', args)
-export const WindowUnfullscreen = (...args) => callRuntime('WindowUnfullscreen', args)
-export const WindowIsFullscreen = (...args) => callRuntime('WindowIsFullscreen', args)
-export const WindowGetSize = (...args) => callRuntime('WindowGetSize', args)
-export const WindowSetSize = (...args) => callRuntime('WindowSetSize', args)
-export const WindowSetMaxSize = (...args) => callRuntime('WindowSetMaxSize', args)
-export const WindowSetMinSize = (...args) => callRuntime('WindowSetMinSize', args)
-export const WindowSetPosition = (...args) => callRuntime('WindowSetPosition', args)
-export const WindowGetPosition = (...args) => callRuntime('WindowGetPosition', args)
-export const WindowHide = (...args) => callRuntime('WindowHide', args)
-export const WindowShow = (...args) => callRuntime('WindowShow', args)
-export const WindowMaximise = (...args) => callRuntime('WindowMaximise', args)
-export const WindowToggleMaximise = (...args) => callRuntime('WindowToggleMaximise', args)
-export const WindowUnmaximise = (...args) => callRuntime('WindowUnmaximise', args)
-export const WindowIsMaximised = (...args) => callRuntime('WindowIsMaximised', args)
-export const WindowMinimise = (...args) => callRuntime('WindowMinimise', args)
-export const WindowUnminimise = (...args) => callRuntime('WindowUnminimise', args)
-export const WindowSetBackgroundColour = (...args) => callRuntime('WindowSetBackgroundColour', args)
-export const ScreenGetAll = (...args) => callRuntime('ScreenGetAll', args)
-export const WindowIsMinimised = (...args) => callRuntime('WindowIsMinimised', args)
-export const WindowIsNormal = (...args) => callRuntime('WindowIsNormal', args)
-export const BrowserOpenURL = (...args) => callRuntime('BrowserOpenURL', args)
-export const Environment = (...args) => callRuntime('Environment', args)
-export const Quit = (...args) => callRuntime('Quit', args)
-export const Hide = (...args) => callRuntime('Hide', args)
-export const Show = (...args) => callRuntime('Show', args)
-export const ClipboardGetText = (...args) => callRuntime('ClipboardGetText', args)
-export const ClipboardSetText = (...args) => callRuntime('ClipboardSetText', args)
-export const OnFileDrop = (...args) => callRuntime('OnFileDrop', args)
-export const OnFileDropOff = (...args) => callRuntime('OnFileDropOff', args)
-export const CanResolveFilePaths = (...args) => callRuntime('CanResolveFilePaths', args)
-export const ResolveFilePaths = (...args) => callRuntime('ResolveFilePaths', args)
+export const EventsOnMultiple = (...args) => currentRuntime().EventsOnMultiple(...args)
+export const EventsOn = (...args) => currentRuntime().EventsOn(...args)
+export const EventsOnce = (...args) => currentRuntime().EventsOnce(...args)
+export const EventsOff = (...args) => currentRuntime().EventsOff(...args)
+export const EventsOffAll = (...args) => currentRuntime().EventsOffAll(...args)
+export const EventsEmit = (...args) => currentRuntime().EventsEmit(...args)
+export const BrowserOpenURL = (...args) => currentRuntime().BrowserOpenURL(...args)
+export const Environment = (...args) => currentRuntime().Environment(...args)
+export const WindowFullscreen = (...args) => currentRuntime().WindowFullscreen(...args)
+export const WindowUnfullscreen = (...args) => currentRuntime().WindowUnfullscreen(...args)
+export const WindowIsFullscreen = (...args) => currentRuntime().WindowIsFullscreen(...args)
+export const WindowReload = (...args) => currentRuntime().WindowReload(...args)
+export const WindowSetTitle = (...args) => currentRuntime().WindowSetTitle(...args)
+export const ClipboardGetText = (...args) => currentRuntime().ClipboardGetText(...args)
+export const ClipboardSetText = (...args) => currentRuntime().ClipboardSetText(...args)

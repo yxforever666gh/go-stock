@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import {onBeforeMount, onUnmounted, ref} from 'vue'
-import {HotTopic, OpenURL} from "../services/app-api";
-import {Environment} from "../services/browser-runtime.mjs";
+import {HotTopic} from "../services/market-api";
+import {BrowserOpenURL as OpenURL, Environment} from "../services/browser-runtime.mjs";
 const list  = ref([])
 const task =ref()
 

@@ -8,8 +8,8 @@ import (
 	"go-stock/internal/migrations"
 )
 
-// ConfigureRuntimeEventEmitter keeps the legacy AI event bridge inside the
-// composition root while Web and desktop event delivery are being separated.
+// ConfigureRuntimeEventEmitter connects service events to the WebSocket hub at
+// the composition root.
 func ConfigureRuntimeEventEmitter(emitter func(context.Context, string, any)) {
 	data.SetRuntimeEventEmitter(emitter)
 }

@@ -6,41 +6,16 @@ import (
 	"go-stock/backend/models"
 )
 
-func (a *App) Greet(stockCode string) *models.StockInfo {
+func (a *App) stockSnapshot(stockCode string) *models.StockInfo {
 	follow := a.services.Stock.GetFollowedStockDetail(stockCode)
+	if follow == nil {
+		return nil
+	}
 	stockInfo := getStockInfoWithService(a.services.Stock, *follow)
 	return stockInfo
 }
 
-func (a *App) Follow(stockCode string) string {
-	return a.services.Stock.Follow(stockCode)
-}
-
-func (a *App) UnFollow(stockCode string) string {
-	return a.services.Stock.UnFollow(stockCode)
-}
-
-func (a *App) GetFollowList(groupId int) *[]models.FollowedStock {
-	return a.services.Stock.GetFollowList(groupId)
-}
-
-func (a *App) GetStockList(key string) []models.StockBasic {
-	return a.services.Stock.GetStockList(key)
-}
-
-func (a *App) SetCostPriceAndVolume(stockCode string, price float64, volume int64) string {
-	return a.services.Stock.SetCostPriceAndVolume(stockCode, price, volume)
-}
-
-func (a *App) SetAlarmChangePercent(val, alarmPrice float64, stockCode string) string {
-	return a.services.Stock.SetAlarmChangePercent(val, alarmPrice, stockCode)
-}
-
-func (a *App) SetStockSort(sort int64, stockCode string) {
-	a.services.Stock.SetStockSort(sort, stockCode)
-}
-
-func (a *App) SetStockAICron(cronText, stockCode string) {
+func (a *App) setStockAICron(cronText, stockCode string) {
 	a.services.Stock.SetStockAICron(cronText, stockCode)
 	if strings.HasPrefix(stockCode, "gb_") {
 		stockCode = strings.ToUpper(stockCode)
@@ -54,22 +29,10 @@ func (a *App) SetStockAICron(cronText, stockCode string) {
 	if follow == nil {
 		return
 	}
-	id, err := a.cron.AddFunc(cronText, a.AddCronTask(*follow))
+	id, err := a.cron.AddFunc(cronText, a.addCronTask(*follow))
 	if err != nil {
 		a.recordSchedulerRegistrationError("FollowAnalysis:"+stockCode, cronText, err)
 		return
 	}
 	a.setCronEntry(stockCode, id)
-}
-
-func (a *App) GetStockKLine(stockCode, stockName string, days int64) *[]models.KLineData {
-	return a.services.Stock.GetStockKLine(stockCode, days)
-}
-
-func (a *App) GetStockMinutePriceLineData(stockCode, stockName string) map[string]any {
-	return a.services.Stock.GetStockMinutePriceLineData(stockCode, stockName)
-}
-
-func (a *App) GetStockCommonKLine(stockCode, stockName string, days int64) *[]models.KLineData {
-	return a.services.Stock.GetStockCommonKLine(stockCode, days)
 }

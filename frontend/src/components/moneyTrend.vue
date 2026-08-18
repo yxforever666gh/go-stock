@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {onMounted, ref} from "vue";
-import {GetStockMoneyTrendByDay} from "../services/app-api";
+import {GetStockMoneyTrendByDay} from "../services/market-api";
 import * as echarts from "echarts";
 
 const {code, name, darkTheme, days, chartHeight} = defineProps({

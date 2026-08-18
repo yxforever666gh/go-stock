@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {onBeforeMount, onUnmounted, ref} from 'vue'
-import {HotEvent} from "../services/app-api";
+import {HotEvent} from "../services/market-api";
 const list  = ref([])
 
 const task =ref()

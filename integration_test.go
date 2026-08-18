@@ -28,10 +28,3 @@ func initDatabaseForTest(t *testing.T, path string) {
 		db.MinuteDao = nil
 	})
 }
-
-func requireDesktopTest(t *testing.T) {
-	t.Helper()
-	if os.Getenv("RUN_DESKTOP_TESTS") != "1" {
-		t.Skip("skip desktop test; set RUN_DESKTOP_TESTS=1 to enable")
-	}
-}

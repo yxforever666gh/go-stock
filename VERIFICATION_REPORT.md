@@ -20,8 +20,8 @@
    - ✅ Vue应用挂载点存在
 
 2. **API 端点**
-   - ✅ /healthz 端点正常
-   - ✅ /api/market-summary/latest 端点响应
+   - ✅ /readyz 端点正常
+   - ✅ /api/v1/system/info 端点响应
    - ✅ /build/appicon.png 资源可访问
    - ✅ /favicon.ico 资源可访问
 
@@ -59,11 +59,9 @@
 
 ## ⚠️ 注意事项
 
-### 市场摘要API
-市场摘要API (`/api/market-summary/latest`) 返回 `ok: false`，这是正常的，因为：
-1. 该API默认只返回最近生成的市场资讯摘要
-2. 如果没有配置AI模型或未触发定时任务，会返回空数据
-3. 这不影响其他功能的正常使用
+### 系统信息 API
+`/api/v1/system/info` 返回当前版本与运行环境；服务就绪状态统一由
+`/readyz` 判断。
 
 ### 数据显示
 页面数据显示正常，包括：

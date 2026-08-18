@@ -31,7 +31,7 @@ func TestIsUSTradingTime(t *testing.T) {
 func TestCheckStockBaseInfo(t *testing.T) {
 	requireIntegration(t)
 	initDatabaseForTest(t, "./data/stock.db")
-	NewApp().CheckStockBaseInfo(context.Background())
+	NewApp().checkStockBaseInfo(context.Background())
 }
 
 func TestStockInfoUSJSONUnmarshal(t *testing.T) {
@@ -65,13 +65,4 @@ func TestUpdateCheck(t *testing.T) {
 		t.Fatal("expected non-empty release tag")
 	}
 	logger.SugaredLogger.Infof("releaseVersion:%+v", releaseVersion)
-}
-
-func TestGetScreenResolution(t *testing.T) {
-	requireDesktopTest(t)
-	x, y, w, h, err := getScreenResolution()
-	if err != nil {
-		t.Fatalf("get screen resolution error:%s", err.Error())
-	}
-	logger.SugaredLogger.Infof("x:%d,y:%d,w:%d,h:%d", x, y, w, h)
 }

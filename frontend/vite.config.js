@@ -107,7 +107,11 @@ export default defineConfig({
               changeOrigin: true,
               ws: true
           },
-          '/healthz': {
+          '/livez': {
+              target: 'http://127.0.0.1:34115',
+              changeOrigin: true
+          },
+          '/readyz': {
               target: 'http://127.0.0.1:34115',
               changeOrigin: true
           }

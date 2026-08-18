@@ -2,7 +2,7 @@
 import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NTag, useMessage} from 'naive-ui'
 import {MdPreview} from 'md-editor-v3'
-import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/app-api'
+import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/research-api'
 
 const message = useMessage()
 const loading = ref(false)

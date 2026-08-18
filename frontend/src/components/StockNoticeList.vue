@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {onBeforeMount, ref} from 'vue'
-import {GetStockList, StockNotice} from "../services/app-api";
+import {GetStockList} from "../services/stocks-api";
+import {StockNotice} from "../services/market-api";
 import {BrowserOpenURL} from "../services/browser-runtime.mjs";
 import {RefreshCircleSharp} from "@vicons/ionicons5";
 import _ from "lodash";

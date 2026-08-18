@@ -1,7 +1,6 @@
 <script setup>
 import 'md-editor-v3/lib/style.css'
 import {
-  Quit,
   WindowFullscreen,
   WindowUnfullscreen,
   WindowSetTitle,
@@ -9,7 +8,9 @@ import {
 import { onBeforeMount, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { darkTheme, dateZhCN, zhCN } from 'naive-ui'
-import { GetConfig, GetGroupList, GetVersionInfo } from './services/app-api'
+import { GetConfig } from './services/settings-api'
+import { GetGroupList } from './services/groups-api'
+import { GetVersionInfo, Shutdown } from './services/system-api'
 import {
   applyFeatureMenuVisibility,
   createMenuOptions,
@@ -80,22 +81,15 @@ function syncFeatureFlags(res) {
 async function requestShutdown() {
   shuttingDown.value = true
   try {
-    const response = await fetch('/api/shutdown', { method: 'POST' })
-    if (!response.ok) {
-      throw new Error(`shutdown failed: ${response.status}`)
-    }
+    await Shutdown()
     shutdownMessage.value = '项目已退出，可以关闭此页面'
     window.setTimeout(() => {
       window.close()
     }, 600)
   } catch (error) {
-    console.warn('[go-stock] web shutdown failed, falling back to runtime quit', error)
-    try {
-      Quit()
-    } catch (_) {
-      shutdownMessage.value = '退出失败，请关闭启动脚本或手动停止进程'
-      shuttingDown.value = false
-    }
+    console.warn('[go-stock] web shutdown failed', error)
+    shutdownMessage.value = '退出失败，请关闭启动脚本或手动停止进程'
+    shuttingDown.value = false
   }
 }
 
@@ -185,7 +179,7 @@ onMounted(() => {
                     </n-spin>
                   </n-gi>
                   <n-gi style="position: fixed;bottom:0;z-index: 9;width: 100%;">
-                    <n-card size="small" style="--wails-draggable:no-drag">
+                    <n-card size="small">
                       <div class="app-bottom-bar">
                       <n-menu style="font-size: 18px;"
                               v-model:value="activeKey"

@@ -84,7 +84,7 @@ go func(stockCode string) {
 
 创建 `scripts/monitor-and-restart.sh`，提供：
 
-1. **健康检查**: 每 60 秒检查 `/healthz` 端点
+1. **健康检查**: 每 60 秒检查 `/readyz` 端点
 2. **自动重启**: 连续失败 3 次后自动重启
 3. **端口清理**: 重启前清理占用的端口
 4. **崩溃记录**: 记录崩溃时的进程信息
@@ -130,7 +130,7 @@ go build -o go-stock .  # ✅ 编译成功
 
 ### 3. 健康检查测试
 ```bash
-curl http://127.0.0.1:34115/healthz
+curl http://127.0.0.1:34115/readyz
 # ✅ {"mode":"web","ok":true,"version":""}
 ```
 

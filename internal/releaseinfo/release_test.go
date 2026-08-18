@@ -4,7 +4,7 @@ import "testing"
 
 func TestReleaseIdentity160(t *testing.T) {
 	manifest := Manifest()
-	if manifest.AppVersion != "1.6.6" || manifest.MainSchemaVersion != 9 || manifest.MinuteSchemaVersion != 2 {
+	if manifest.AppVersion != "1.6.7" || manifest.MainSchemaVersion != 9 || manifest.MinuteSchemaVersion != 2 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
 	status := SystemVersion()

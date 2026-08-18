@@ -1,7 +1,7 @@
 <script setup>
 import {onBeforeUnmount, onMounted, ref, watch} from "vue";
 import * as echarts from 'echarts';
-import {GetStockMinutePriceLineData} from "../services/app-api"; // 如果您使用多个组件，请将此样式导入放在您的主文件中
+import {GetStockMinutePriceLineData} from "../services/stocks-api"; // 如果您使用多个组件，请将此样式导入放在您的主文件中
 const {stockCode,stockName,lastPrice,openPrice,darkTheme} = defineProps({
   stockCode: {
     type: String,

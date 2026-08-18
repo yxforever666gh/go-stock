@@ -565,6 +565,4 @@ func (*compatibilityServiceAdapter) SendDingDingMessage(message string) string {
 	return data.NewDingDingAPI().SendDingDingMessage(message)
 }
 
-func (*compatibilityServiceAdapter) SendAlert(title, subtitle, content, icon string) {
-	data.NewAlertWindowsApi(title, subtitle, content, icon).SendNotification()
-}
+func (*compatibilityServiceAdapter) SendAlert(_, _, _, _ string) {}

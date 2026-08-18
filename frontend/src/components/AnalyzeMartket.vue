@@ -1,6 +1,6 @@
 <script setup>
 
-import {AnalyzeSentimentWithFreqWeight,GlobalStockIndexes} from "../services/app-api";
+import {AnalyzeSentimentWithFreqWeight,GlobalStockIndexes} from "../services/market-api";
 import * as echarts from "echarts";
 import {onMounted,onUnmounted, ref} from "vue";
 import _ from "lodash";
@@ -301,10 +301,10 @@ function  handleChart(){
       </template>
       <n-grid :cols="24" :y-gap="0">
         <n-gi span="6">
-          <div ref="gaugeChartRef" style="width: 100%;height: auto;--wails-draggable:no-drag" :style="{height:chartHeight+'px'}" ></div>
+          <div ref="gaugeChartRef" style="width: 100%;height: auto" :style="{height:chartHeight+'px'}" ></div>
         </n-gi>
         <n-gi span="18">
-          <div ref="chartRef" style="width: 100%;height: auto;--wails-draggable:no-drag" :style="{height:chartHeight+'px'}" ></div>
+          <div ref="chartRef" style="width: 100%;height: auto" :style="{height:chartHeight+'px'}" ></div>
         </n-gi>
       </n-grid>
     </n-collapse-item>

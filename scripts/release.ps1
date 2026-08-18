@@ -141,7 +141,7 @@ function Invoke-Build {
     finally { Pop-Location }
     $buildTime = [DateTime]::UtcNow.ToString("o")
     $ldflags = "-s -w -X go-stock/internal/releaseinfo.Commit=$($context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
-    Invoke-Checked "go" @("build", "-trimpath", "-tags", "webonly", "-ldflags", $ldflags, "-o", $context.Binary, ".") "Release build failed"
+    Invoke-Checked "go" @("build", "-trimpath", "-ldflags", $ldflags, "-o", $context.Binary, ".") "Release build failed"
     Copy-Item -LiteralPath (Get-ZoneInfoSource) -Destination $context.ZoneInfo -Force
     $pointer = New-Pointer $context
     Write-JSONAtomic (Join-Path $context.ReleaseDir "build.json") $pointer

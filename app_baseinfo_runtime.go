@@ -6,7 +6,7 @@ import (
 	"go-stock/backend/logger"
 )
 
-func (a *App) CheckStockBaseInfo(ctx context.Context) {
+func (a *App) checkStockBaseInfo(ctx context.Context) {
 	defer PanicHandler()
 	defer func() {
 		go emitEvent(ctx, "loadingMsg", "done")

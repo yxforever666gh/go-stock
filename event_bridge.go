@@ -3,17 +3,10 @@ package main
 import (
 	"context"
 	"sync"
-	"sync/atomic"
 )
-
-var runtimeEventsEnabled atomic.Bool
 
 var webEventHubMu sync.RWMutex
 var webEventHub *WebEventHub
-
-func setRuntimeEventsEnabled(enabled bool) {
-	runtimeEventsEnabled.Store(enabled)
-}
 
 func setWebEventHub(hub *WebEventHub) {
 	webEventHubMu.Lock()
@@ -22,10 +15,6 @@ func setWebEventHub(hub *WebEventHub) {
 }
 
 func emitEvent(ctx context.Context, eventName string, payload any) {
-	if runtimeEventsEnabled.Load() && ctx != nil {
-		emitDesktopEvent(ctx, eventName, payload)
-	}
-
 	webEventHubMu.RLock()
 	hub := webEventHub
 	webEventHubMu.RUnlock()

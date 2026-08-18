@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import {h, ref} from 'vue'
-import {SearchStock, OpenURL, Follow} from "../services/app-api";
+import {SearchStock, Follow} from "../services/stocks-api";
 import {useMessage, NText, NTag, NButton} from 'naive-ui'
-import {Environment} from "../services/browser-runtime.mjs"
+import {BrowserOpenURL as OpenURL, Environment} from "../services/browser-runtime.mjs"
 
 const message = useMessage()
 const search = ref('')
@@ -173,13 +173,13 @@ function openCenteredWindow(url, width, height) {
 <template>
   <n-grid :cols="1" style="max-height: calc(100vh - 165px)">
     <n-gi>
-      <n-flex style="--wails-draggable:no-drag">
+      <n-flex>
         <n-input-group style="text-align: left">
           <n-input :rows="1" clearable v-model:value="search" placeholder="请输入选股指标或者要求"/>
           <n-button type="primary" @click="Search">搜索A股</n-button>
         </n-input-group>
       </n-flex>
-      <n-flex justify="start" v-if="traceInfo" style="margin: 5px 0;--wails-draggable:no-drag">
+      <n-flex justify="start" v-if="traceInfo" style="margin: 5px 0">
 
         <n-ellipsis line-clamp="1" :tooltip="true">
           <n-text type="info" :bordered="false">选股条件：</n-text>

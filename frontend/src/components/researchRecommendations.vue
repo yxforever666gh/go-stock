@@ -2,7 +2,7 @@
 import {h, onMounted, ref} from 'vue'
 import {NButton, NTag, NText, useMessage} from 'naive-ui'
 import {MdPreview} from 'md-editor-v3'
-import {GetAIRecommendation, ListAIRecommendations} from '../services/app-api'
+import {GetAIRecommendation, ListAIRecommendations} from '../services/research-api'
 import StockSparkLine from './stockSparkLine.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 

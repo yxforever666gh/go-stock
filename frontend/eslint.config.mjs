@@ -3,7 +3,7 @@ import vueParser from 'vue-eslint-parser'
 
 export default [
   {
-    ignores: ['dist/**', 'node_modules/**', 'wailsjs/**'],
+    ignores: ['dist/**', 'node_modules/**'],
   },
   {
     files: ['src/**/*.{js,mjs,ts,vue}'],

@@ -2,7 +2,7 @@ SHELL := /bin/bash
 
 GO_PACKAGES := $(shell go list ./... | grep -v '/frontend/node_modules/')
 
-.PHONY: ci test test-go test-go-race test-integration test-desktop lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web build-desktop
+.PHONY: ci test test-go test-go-race test-integration lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web
 
 test: test-go
 
@@ -14,9 +14,6 @@ test-go-race:
 
 test-integration:
 	RUN_INTEGRATION_TESTS=1 go test $(GO_PACKAGES)
-
-test-desktop:
-	RUN_DESKTOP_TESTS=1 go test . -run TestGetScreenResolution -count=1
 
 lint: lint-go lint-frontend
 
@@ -50,10 +47,7 @@ run-web:
 	GO_STOCK_WEB_ADDR=$${GO_STOCK_WEB_ADDR:-127.0.0.1:34115} \
 	GO_STOCK_DB_LOG_LEVEL=$${GO_STOCK_DB_LOG_LEVEL:-silent} \
 	GO_STOCK_LOG_LEVEL=$${GO_STOCK_LOG_LEVEL:-warn} \
-	go run -tags webonly . --web
+	go run .
 
 build-web-binary:
-	go build -tags webonly -o go-stock-web .
-
-build-desktop:
-	./scripts/build.sh
+	go build -o go-stock-web .

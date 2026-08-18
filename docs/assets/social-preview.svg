@@ -57,7 +57,7 @@
   <text x="108" y="292" fill="#0F766E" font-family="DejaVu Sans, sans-serif" font-size="26" font-weight="700">LOCAL-FIRST AI STOCK ANALYSIS WORKBENCH</text>
 
   <text x="108" y="360" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="30" font-weight="600">Desktop + Web</text>
-  <text x="302" y="360" fill="#64748B" font-family="DejaVu Sans, sans-serif" font-size="28">Wails / Vue 3 / Go / SQLite</text>
+  <text x="302" y="360" fill="#64748B" font-family="DejaVu Sans, sans-serif" font-size="28">Vue 3 / Go / SQLite / Local Web</text>
 
   <text x="108" y="418" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Watchlists</text>
   <text x="288" y="418" fill="#1F2937" font-family="DejaVu Sans, sans-serif" font-size="28">Market Insights</text>

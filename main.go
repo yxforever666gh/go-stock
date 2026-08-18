@@ -53,7 +53,7 @@ func main() {
 		os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	cfg := appconfig.Load()
-	webMode := flag.Bool("web", false, "run localhost web mode")
+	flag.Bool("web", false, "deprecated compatibility flag; web mode is always enabled")
 	webListenAddr := flag.String("web-addr", cfg.Web.ListenAddr, "web mode listen address")
 	flag.Parse()
 	cfg.Web.ListenAddr = normalizeWebListenAddr(*webListenAddr)
@@ -72,28 +72,18 @@ func main() {
 	bootstrap.ConfigureRuntimeEventEmitter(emitEvent)
 
 	log.SugaredLogger.Info("starting...")
-	log.SugaredLogger.Info(startupBanner(cfg, *webMode))
+	log.SugaredLogger.Info(startupBanner(cfg))
 	logStartupConfig(cfg)
 	//log.SugaredLogger.Infof("build key: %s", BuildKey)
 
-	// Create an instance of the app structure
 	app := NewAppWithServices(appRuntime.Services)
-	if *webMode {
-		log.SugaredLogger.Infof("starting web mode at http://%s", cfg.Web.ListenAddr)
-		setRuntimeEventsEnabled(false)
-		app.ctx = context.Background()
-		hub := NewWebEventHub()
-		setWebEventHub(hub)
-		go app.domReady(app.ctx)
+	log.SugaredLogger.Infof("starting web mode at http://%s", cfg.Web.ListenAddr)
+	app.ctx = context.Background()
+	hub := NewWebEventHub()
+	setWebEventHub(hub)
+	go app.domReady(app.ctx)
 
-		err := runWebMode(app, cfg.Web.ListenAddr, hub)
-		if err != nil {
-			log.SugaredLogger.Fatal(err)
-		}
-		return
-	}
-
-	if err := runDesktopApp(app); err != nil {
+	if err := runWebMode(app, cfg.Web.ListenAddr, hub); err != nil {
 		log.SugaredLogger.Fatal(err)
 	}
 }

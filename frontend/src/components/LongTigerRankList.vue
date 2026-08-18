@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {onBeforeMount, ref} from 'vue'
-import {LongTigerRank} from "../services/app-api";
+import {LongTigerRank} from "../services/market-api";
 import {BrowserOpenURL} from "../services/browser-runtime.mjs";
 import {ArrowDownOutline} from "@vicons/ionicons5";
 import _ from "lodash";

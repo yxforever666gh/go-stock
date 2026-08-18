@@ -4,13 +4,13 @@ import {Add} from "@vicons/ionicons5";
 import {NButton, NEllipsis, NText, useMessage} from "naive-ui";
 import {
   FollowFund,
-  GetConfig,
   GetFollowedFund,
   GetfundList,
-  GetVersionInfo, OpenURL,
   UnFollowFund
-} from "../services/app-api";
-import {Environment} from "../services/browser-runtime.mjs";
+} from "../services/funds-api";
+import {GetConfig} from "../services/settings-api";
+import {GetVersionInfo} from "../services/system-api";
+import {BrowserOpenURL as OpenURL, Environment} from "../services/browser-runtime.mjs";
 
 const icon = ref(null)
 const message = useMessage()

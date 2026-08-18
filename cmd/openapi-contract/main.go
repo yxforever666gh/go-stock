@@ -70,7 +70,7 @@ func main() {
 	var write bool
 	flag.StringVar(&specPath, "spec", "api/openapi.yaml", "OpenAPI source file")
 	flag.StringVar(&outputPath, "output", "frontend/src/services/api-types.generated.ts", "generated TypeScript output")
-	flag.StringVar(&goFiles, "go-files", "web_api.go,web_server.go", "comma-separated Go HTTP route files")
+	flag.StringVar(&goFiles, "go-files", "web_api.go,web_api_system.go,web_api_settings.go,web_api_groups.go,web_api_stocks.go,web_api_funds.go,web_api_market.go,web_api_ai.go,web_api_research.go", "comma-separated Go HTTP route files")
 	flag.BoolVar(&write, "write", false, "write generated output instead of checking it")
 	flag.Parse()
 
@@ -281,11 +281,17 @@ func validateGoRoutes(spec *document, filenames []string) error {
 			if !ok || selector.Sel.Name != "HandleFunc" {
 				return true
 			}
-			path, ok := stringLiteral(call.Args[0])
-			if !ok || !isGovernedRoute(path) {
+			pattern, ok := stringLiteral(call.Args[0])
+			if !ok {
 				return true
 			}
-			method := handlerMethod(call.Args[1])
+			method, path := splitRoutePattern(pattern)
+			if !isGovernedRoute(path) {
+				return true
+			}
+			if method == "" {
+				method = handlerMethod(call.Args[1])
+			}
 			if method != "" {
 				found[route{Path: path, Method: method}] = struct{}{}
 			}
@@ -313,7 +319,21 @@ func validateGoRoutes(spec *document, filenames []string) error {
 }
 
 func isGovernedRoute(path string) bool {
-	return path == "/healthz" || path == "/livez" || path == "/readyz" || strings.HasPrefix(path, "/api/v1/")
+	return path == "/livez" || path == "/readyz" || strings.HasPrefix(path, "/api/v1/")
+}
+
+func splitRoutePattern(pattern string) (string, string) {
+	parts := strings.SplitN(strings.TrimSpace(pattern), " ", 2)
+	if len(parts) != 2 {
+		return "", strings.TrimSpace(pattern)
+	}
+	method := strings.ToLower(strings.TrimSpace(parts[0]))
+	switch method {
+	case "get", "post", "put", "patch", "delete":
+		return method, strings.TrimSpace(parts[1])
+	default:
+		return "", strings.TrimSpace(pattern)
+	}
 }
 
 func stringLiteral(expr ast.Expr) (string, bool) {

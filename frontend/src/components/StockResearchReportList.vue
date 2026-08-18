@@ -1,6 +1,7 @@
 <script setup>
 import {onBeforeMount, ref} from 'vue'
-import {GetStockList, StockResearchReport} from "../services/app-api";
+import {GetStockList} from "../services/stocks-api";
+import {StockResearchReport} from "../services/market-api";
 import {ArrowDownOutline, CaretDown, CaretUp, PulseOutline, Refresh, RefreshCircleSharp,} from "@vicons/ionicons5";
 
 import KLineChart from "./KLineChart.vue";

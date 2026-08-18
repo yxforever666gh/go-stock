@@ -3,7 +3,7 @@
 import {CaretDown, CaretUp, RefreshCircleOutline} from "@vicons/ionicons5";
 import {NText,useMessage} from "naive-ui";
 import {onBeforeUnmount, onMounted, onUnmounted, ref} from "vue";
-import {GetIndustryMoneyRankSina} from "../services/app-api";
+import {GetIndustryMoneyRankSina} from "../services/market-api";
 import KLineChart from "./KLineChart.vue";
 
 const props = defineProps({

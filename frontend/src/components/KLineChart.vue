@@ -1,6 +1,6 @@
 <script setup>
 
-import {GetStockKLine} from "../services/app-api";
+import {GetStockKLine} from "../services/stocks-api";
 import * as echarts from "echarts";
 import {onMounted, ref} from "vue";
 import _ from "lodash";
@@ -385,7 +385,7 @@ function calculateMA(dayCount,values) {
 </script>
 
 <template>
-  <div ref="kLineChartRef" style="width: 100%;height: auto;--wails-draggable:no-drag" :style="{height:chartHeight+'px'}" ></div>
+  <div ref="kLineChartRef" style="width: 100%;height: auto" :style="{height:chartHeight+'px'}" ></div>
 </template>
 
 <style scoped>
