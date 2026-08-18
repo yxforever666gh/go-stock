@@ -100,8 +100,8 @@ function Invoke-Build {
     try { Invoke-Checked "npm" @("run", "ci") "Frontend verification failed" }
     finally { Pop-Location }
     $buildTime = [DateTime]::UtcNow.ToString("o")
-    $ldflags = "-X go-stock/internal/releaseinfo.Commit=$($context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
-    Invoke-Checked "go" @("build", "-tags", "webonly", "-ldflags", $ldflags, "-o", $context.Binary, ".") "Release build failed"
+    $ldflags = "-s -w -X go-stock/internal/releaseinfo.Commit=$($context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
+    Invoke-Checked "go" @("build", "-trimpath", "-tags", "webonly", "-ldflags", $ldflags, "-o", $context.Binary, ".") "Release build failed"
     Copy-Item -LiteralPath (Get-ZoneInfoSource) -Destination $context.ZoneInfo -Force
     $pointer = New-Pointer $context
     Write-JSONAtomic (Join-Path $context.ReleaseDir "build.json") $pointer

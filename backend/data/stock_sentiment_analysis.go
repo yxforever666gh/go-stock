@@ -69,9 +69,6 @@ var (
 //go:embed data/dict/base.txt
 var baseDict string
 
-//go:embed data/dict/zh/s_1.txt
-var zhDict string
-
 func InitAnalyzeSentiment() {
 	defer func() {
 		if r := recover(); r != nil {

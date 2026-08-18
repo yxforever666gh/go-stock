@@ -1,8 +1,5 @@
 import {defineConfig} from 'vite'
 import vue from '@vitejs/plugin-vue'
-import AutoImport from 'unplugin-auto-import/vite';
-import Components from 'unplugin-vue-components/vite';
-import { TDesignResolver } from '@tdesign-vue-next/auto-import-resolver';
 
 function packageNameFromId(id) {
     const marker = '/node_modules/'
@@ -31,16 +28,6 @@ function packageRelativePath(id, pkgName) {
 export default defineConfig({
   plugins: [
       vue(),
-      AutoImport({
-          resolvers: [TDesignResolver({
-              library: 'chat'
-          })],
-      }),
-      Components({
-          resolvers: [TDesignResolver({
-              library: 'chat'
-          })],
-      }),
   ],
   build: {
       chunkSizeWarningLimit: 1600,
@@ -61,12 +48,6 @@ export default defineConfig({
                   }
                   if (pkgName === 'naive-ui' || pkgName.startsWith('@vicons/')) {
                       return 'vendor-ui-naive'
-                  }
-                  if (
-                      pkgName === 'tdesign-vue-next' ||
-                      pkgName === 'tdesign-icons-vue-next'
-                  ) {
-                      return 'vendor-chat'
                   }
                   if (pkgName === 'echarts' || pkgName === 'zrender') {
                       return 'vendor-chart'

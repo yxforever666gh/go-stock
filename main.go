@@ -33,12 +33,6 @@ var wxgzh []byte
 //go:embed build/stock_basic.json
 var stocksBin []byte
 
-//go:embed build/stock_base_info_hk.json
-var stocksBinHK []byte
-
-//go:embed build/stock_base_info_us.json
-var stocksBinUS []byte
-
 //go:generate cp -R ./data ./build/bin
 
 var Version string
