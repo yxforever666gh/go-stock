@@ -1,5 +1,5 @@
 param(
-    [string]$ShortcutName = "Go-Stock 1.7.0",
+    [string]$ShortcutName = "Go-Stock 1.7.1",
     [string]$DesktopPath = [Environment]::GetFolderPath("Desktop")
 )
 
@@ -21,7 +21,7 @@ $Shortcut.TargetPath = $PowerShell.Source
 $Shortcut.Arguments = '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "' + $RestartScript + '" open -ResearchCenter'
 $Shortcut.WorkingDirectory = $ProjectRoot
 $Shortcut.IconLocation = $IconPath + ",0"
-$Shortcut.Description = "Start Go-Stock 1.7.0 and open Research Center"
+$Shortcut.Description = "Start Go-Stock 1.7.1 and open Research Center"
 $Shortcut.Save()
 
 Write-Output $ShortcutPath

@@ -35,12 +35,16 @@ func (provider *chartTestProvider) Refresh(context.Context, string, time.Time, t
 
 type chartTestCalendar struct {
 	open       map[string]bool
+	err        error
 	strictCall int
 	cachedCall int
 }
 
 func (calendar *chartTestCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, error) {
 	calendar.strictCall++
+	if calendar.err != nil {
+		return false, calendar.err
+	}
 	return calendar.open[value.Format("2006-01-02")], nil
 }
 
@@ -131,6 +135,25 @@ func TestRecommendationChartRefreshRejectsSameRecommendationConcurrently(t *test
 	close(provider.release)
 	if err := <-finished; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRecommendationChartRefreshFallsBackWhenStrictCalendarFails(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 19, 10, 30, 0, 0, shanghaiLocation)
+	recommendation := seedChartRecommendation(t, repo, now)
+	provider := &chartTestProvider{refreshed: ChartProviderSnapshot{RefreshedAt: now}}
+	calendar := &chartTestCalendar{err: errors.New("calendar upstream unavailable")}
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, calendar)
+	service.SetRecommendationChartProvider(provider)
+	service.now = func() time.Time { return now }
+
+	chart, err := service.RecommendationChart(context.Background(), recommendation.RecommendationID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.refreshCalls != 1 || len(chart.ProviderErrors) != 1 || chart.ProviderErrors[0].Provider != "trade_calendar" {
+		t.Fatalf("calendar fallback was not exposed as partial provider state: calls=%d errors=%+v", provider.refreshCalls, chart.ProviderErrors)
 	}
 }
 

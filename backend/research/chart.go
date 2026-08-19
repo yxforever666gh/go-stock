@@ -106,8 +106,20 @@ func (s *Service) RecommendationChart(ctx context.Context, recommendationID stri
 	now := s.now()
 	from, to := chartRange(detail, now)
 	sessionDates, err := chartTradingSessions(ctx, s.calendar, from, to, refresh)
+	calendarFallback := false
 	if err != nil {
-		return RecommendationChart{}, err
+		if !refresh {
+			return RecommendationChart{}, err
+		}
+		// A chart refresh is best-effort. The minute providers can still return
+		// real cached/upstream bars when the strict holiday calendar is
+		// temporarily unavailable; use weekday sessions and expose the degraded
+		// state instead of turning the whole refresh into an HTTP 503.
+		sessionDates, err = chartTradingSessions(ctx, WeekdayCalendar{}, from, to, false)
+		if err != nil {
+			return RecommendationChart{}, err
+		}
+		calendarFallback = true
 	}
 	// Include a short look-behind only to find the first session's previous
 	// close. Bars before rangeFrom are never exposed to clients.
@@ -120,6 +132,10 @@ func (s *Service) RecommendationChart(ctx context.Context, recommendationID stri
 	}
 	if err != nil {
 		return RecommendationChart{}, err
+	}
+	if calendarFallback {
+		snapshot.ProviderErrors = append(snapshot.ProviderErrors, ChartProviderError{Provider: "trade_calendar",
+			Message: "严格交易日历暂时不可用，已按工作日继续补齐；节假日覆盖状态可能不完整"})
 	}
 	return buildRecommendationChart(detail, snapshot, from, to, sessionDates), nil
 }
