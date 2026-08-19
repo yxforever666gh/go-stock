@@ -325,7 +325,57 @@ func (r *Repository) Analysis(ctx context.Context, runID string) (AnalysisRun, e
 func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int) ([]Recommendation, error) {
 	var result []Recommendation
 	err := r.db.WithContext(ctx).Order("signal_at DESC, id DESC").Limit(limit).Offset(offset).Find(&result).Error
-	return result, err
+	if err != nil || len(result) == 0 {
+		return result, err
+	}
+	ids := make([]string, 0, len(result))
+	for _, recommendation := range result {
+		ids = append(ids, recommendation.RecommendationID)
+	}
+	var trades []SimulatedTrade
+	if err = r.db.WithContext(ctx).Where("recommendation_id IN ?", ids).Order("traded_at ASC, id ASC").Find(&trades).Error; err != nil {
+		return nil, err
+	}
+	var positions []Position
+	if err = r.db.WithContext(ctx).Where("recommendation_id IN ?", ids).Find(&positions).Error; err != nil {
+		return nil, err
+	}
+	tradesByRecommendation := make(map[string][]SimulatedTrade, len(result))
+	for _, trade := range trades {
+		tradesByRecommendation[trade.RecommendationID] = append(tradesByRecommendation[trade.RecommendationID], trade)
+	}
+	positionsByRecommendation := make(map[string]*Position, len(positions))
+	for index := range positions {
+		positionsByRecommendation[positions[index].RecommendationID] = &positions[index]
+	}
+	for index := range result {
+		enrichRecommendationAmounts(&result[index], tradesByRecommendation[result[index].RecommendationID], positionsByRecommendation[result[index].RecommendationID])
+	}
+	return result, nil
+}
+
+func enrichRecommendationAmounts(recommendation *Recommendation, trades []SimulatedTrade, position *Position) {
+	if recommendation == nil {
+		return
+	}
+	recommendation.BuyAmount, recommendation.SellAmount, recommendation.CurrentAmount = 0, 0, 0
+	for _, trade := range trades {
+		switch trade.Side {
+		case "buy":
+			recommendation.BuyAmount += -trade.NetCashFlow
+		case "sell":
+			recommendation.SellAmount += trade.NetCashFlow
+		}
+	}
+	if position != nil && position.Status == "open" {
+		enrichPositionValue(position)
+		recommendation.CurrentAmount = position.NetSellValue
+	}
+	comparisonAmount := recommendation.SellAmount + recommendation.CurrentAmount
+	if recommendation.BuyAmount > 0 && comparisonAmount > 0 {
+		recommendation.NetPnL = comparisonAmount - recommendation.BuyAmount
+		recommendation.NetYieldRate = recommendation.NetPnL / recommendation.BuyAmount
+	}
 }
 
 func (r *Repository) Detail(ctx context.Context, recommendationID string) (RecommendationDetail, error) {

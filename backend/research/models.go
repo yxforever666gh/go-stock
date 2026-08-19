@@ -94,6 +94,9 @@ type Recommendation struct {
 	TotalFees           float64    `json:"totalFees"`
 	NetPnL              float64    `json:"netPnl"`
 	NetYieldRate        float64    `json:"netYieldRate"`
+	BuyAmount           float64    `json:"buyAmount" gorm:"-"`
+	SellAmount          float64    `json:"sellAmount" gorm:"-"`
+	CurrentAmount       float64    `json:"currentAmount" gorm:"-"`
 	LastDecision        string     `json:"lastDecision" gorm:"size:32"`
 	LastDecisionAt      *time.Time `json:"lastDecisionAt"`
 	DataPauseSeconds    int64      `json:"dataPauseSeconds" gorm:"not null;default:0"`

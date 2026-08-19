@@ -46,8 +46,8 @@ const columns = [
 async function refresh() {
   loading.value = true
   try {
-    const [accountResult, recommendationResult] = await Promise.all([GetAISimulatedAccount(), ListAIRecommendations(200, 0)])
-    account.value = accountResult
+    account.value = await GetAISimulatedAccount()
+    const recommendationResult = await ListAIRecommendations(200, 0)
     rows.value = (recommendationResult || []).filter(item => item.activatedAt || ['missed_cash', 'missed_untradable'].includes(item.status))
   } catch (error) { message.error(error?.message || String(error)) }
   finally { loading.value = false }

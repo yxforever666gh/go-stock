@@ -458,6 +458,9 @@ components:
         totalFees: {type: number}
         netPnl: {type: number}
         netYieldRate: {type: number}
+        buyAmount: {type: number, description: Actual net cash paid for the simulated buy, including buy-side costs.}
+        sellAmount: {type: number, description: Actual net cash received from the simulated sell, after sell-side costs.}
+        currentAmount: {type: number, description: Open position value at the latest price after estimated sell-side costs.}
         dataPauseSeconds: {type: integer, format: int64}
     LifecycleMessage:
       type: object

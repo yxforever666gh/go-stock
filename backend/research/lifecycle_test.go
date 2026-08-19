@@ -240,6 +240,87 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	}
 }
 
+func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 19, 10, 0, 0, 0, shanghaiLocation)
+	openRecommendation := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
+	if err := repo.DB().Model(&Recommendation{}).Where("recommendation_id = ?", openRecommendation.RecommendationID).
+		Updates(map[string]any{"activated_at": now.AddDate(0, 0, -1), "activation_price": 10.0, "quantity": 100}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.DB().Create(&SimulatedTrade{TradeID: newID(), RecommendationID: openRecommendation.RecommendationID,
+		StockCode: openRecommendation.StockCode, Side: "buy", TradedAt: now.AddDate(0, 0, -1), Quantity: 100, NetCashFlow: -1005}).Error; err != nil {
+		t.Fatal(err)
+	}
+	seedOpenPosition(t, repo, openRecommendation, now.AddDate(0, 0, -1))
+	if err := repo.DB().Model(&Position{}).Where("recommendation_id = ?", openRecommendation.RecommendationID).
+		Update("current_price", 11.0).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	closedRecommendation := seedRecommendation(t, repo, "closed", now.AddDate(0, 0, -2), now, "")
+	closedAt := now.Add(-time.Hour)
+	if err := repo.DB().Model(&Recommendation{}).Where("recommendation_id = ?", closedRecommendation.RecommendationID).
+		Updates(map[string]any{"activated_at": now.AddDate(0, 0, -2), "activation_price": 10.0, "quantity": 100, "closed_at": closedAt}).Error; err != nil {
+		t.Fatal(err)
+	}
+	closedTrades := []SimulatedTrade{
+		{TradeID: newID(), RecommendationID: closedRecommendation.RecommendationID, StockCode: closedRecommendation.StockCode,
+			Side: "buy", TradedAt: now.AddDate(0, 0, -2), Quantity: 100, NetCashFlow: -1005},
+		{TradeID: newID(), RecommendationID: closedRecommendation.RecommendationID, StockCode: closedRecommendation.StockCode,
+			Side: "sell", TradedAt: closedAt, Quantity: 100, NetCashFlow: 1088},
+	}
+	if err := repo.DB().Create(&closedTrades).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := repo.ListRecommendations(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := make(map[string]Recommendation, len(rows))
+	for _, row := range rows {
+		byID[row.RecommendationID] = row
+	}
+	openRow := byID[openRecommendation.RecommendationID]
+	wantCurrent := CalculateSellCost(11, 100).NetCashFlow
+	if openRow.BuyAmount != 1005 || math.Abs(openRow.CurrentAmount-wantCurrent) > 0.001 || openRow.SellAmount != 0 {
+		t.Fatalf("open amounts=%+v wantCurrent=%.4f", openRow, wantCurrent)
+	}
+	if math.Abs(openRow.NetYieldRate-(wantCurrent-1005)/1005) > 0.000001 {
+		t.Fatalf("open net yield=%f", openRow.NetYieldRate)
+	}
+	closedRow := byID[closedRecommendation.RecommendationID]
+	if closedRow.BuyAmount != 1005 || closedRow.SellAmount != 1088 || closedRow.CurrentAmount != 0 || closedRow.NetPnL != 83 {
+		t.Fatalf("closed amounts=%+v", closedRow)
+	}
+	if math.Abs(closedRow.NetYieldRate-83.0/1005.0) > 0.000001 {
+		t.Fatalf("closed net yield=%f", closedRow.NetYieldRate)
+	}
+
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{{
+		Code: openRecommendation.StockCode, Name: openRecommendation.StockName, Market: "SH", Price: 11, At: now,
+	}}}, weekdayTradingCalendar{})
+	openDetail, err := service.Detail(context.Background(), openRecommendation.RecommendationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if openDetail.Recommendation.BuyAmount != openRow.BuyAmount ||
+		math.Abs(openDetail.Recommendation.CurrentAmount-openRow.CurrentAmount) > 0.001 ||
+		math.Abs(openDetail.Recommendation.NetYieldRate-openRow.NetYieldRate) > 0.000001 {
+		t.Fatalf("open detail/list mismatch: detail=%+v list=%+v", openDetail.Recommendation, openRow)
+	}
+	closedDetail, err := service.Detail(context.Background(), closedRecommendation.RecommendationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closedDetail.Recommendation.BuyAmount != closedRow.BuyAmount ||
+		closedDetail.Recommendation.SellAmount != closedRow.SellAmount ||
+		math.Abs(closedDetail.Recommendation.NetYieldRate-closedRow.NetYieldRate) > 0.000001 {
+		t.Fatalf("closed detail/list mismatch: detail=%+v list=%+v", closedDetail.Recommendation, closedRow)
+	}
+}
+
 func TestHoldingFallbackUsesOnlyStockHistoryAndFixedNextSlot(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)

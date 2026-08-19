@@ -450,6 +450,7 @@ func (s *Service) Detail(ctx context.Context, recommendationID string) (Recommen
 		}
 		enrichPositionValue(position)
 	}
+	enrichRecommendationAmounts(&detail.Recommendation, detail.Trades, detail.Position)
 	return detail, nil
 }
 
