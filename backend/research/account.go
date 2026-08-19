@@ -541,7 +541,11 @@ func (s *Service) performanceMetrics(ctx context.Context, overview AccountOvervi
 		}
 	}
 	metrics.TurnoverRate = safeRate(tradeTotals.Notional, averageNAV)
-	metrics.CapitalUtilization = timeWeightedUtilization(curve, safeRate(overview.PositionValue, overview.NetAssetValue))
+	// Current deployable capital is the only fully observed valuation between
+	// daily snapshots. Treat it as a point-in-time utilization metric; averaging
+	// sparse pre/post-deposit rows would overweight duplicate timestamps and can
+	// severely understate a portfolio opened later in the day.
+	metrics.CapitalUtilization = safeRate(overview.PositionValue, overview.NetAssetValue)
 	var missed, executed int64
 	if err := s.repository.db.WithContext(ctx).Model(&Recommendation{}).
 		Where("status IN ?", []string{"missed_cash", "missed_untradable"}).Count(&missed).Error; err != nil {
@@ -553,31 +557,6 @@ func (s *Service) performanceMetrics(ctx context.Context, overview AccountOvervi
 	}
 	metrics.MissedExecutionRate = safeRate(float64(missed), float64(missed+executed))
 	return metrics, nil
-}
-
-func timeWeightedUtilization(curve []AccountPerformancePoint, fallback float64) float64 {
-	weighted, duration := 0.0, 0.0
-	for index := 0; index+1 < len(curve); index++ {
-		seconds := curve[index+1].ValuedAt.Sub(curve[index].ValuedAt).Seconds()
-		if seconds <= 0 || curve[index].NetAssetValue <= 0 {
-			continue
-		}
-		weighted += safeRate(curve[index].PositionValue, curve[index].NetAssetValue) * seconds
-		duration += seconds
-	}
-	if duration > 0 {
-		return weighted / duration
-	}
-	values := make([]float64, 0, len(curve))
-	for _, point := range curve {
-		if point.NetAssetValue > 0 {
-			values = append(values, safeRate(point.PositionValue, point.NetAssetValue))
-		}
-	}
-	if len(values) > 0 {
-		return average(values)
-	}
-	return fallback
 }
 
 func maximumDrawdown(curve []AccountPerformancePoint) float64 {

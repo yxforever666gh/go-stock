@@ -312,7 +312,7 @@ func TestPerformanceMetricsUseClosedTradesCostsAndValuationCurve(t *testing.T) {
 	if math.Abs(metrics.MaxDrawdown-0.1) > 1e-9 || math.Abs(metrics.MissedExecutionRate-0.5) > 1e-9 {
 		t.Fatalf("risk metrics=%+v", metrics)
 	}
-	wantUtilization := (0.2 + 0.5 + 0) / 3
+	wantUtilization := 0.25
 	if math.Abs(metrics.CapitalUtilization-wantUtilization) > 1e-9 || metrics.AverageHoldingMinutes != 1440 {
 		t.Fatalf("utilization metrics=%+v", metrics)
 	}
