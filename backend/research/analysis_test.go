@@ -215,17 +215,35 @@ func TestScheduledCalendarFailureCreatesNoAnalysisRecord(t *testing.T) {
 	}
 }
 
-func TestAnalysisIsBlockedByQueuedDirectBuy(t *testing.T) {
+func TestAnalysisSkipsCapacityBeforeCollectingOrCallingAI(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
 	due := now.Add(time.Hour)
 	_ = seedRecommendation(t, repo, "buy_pending", now, due, "")
+	second := seedRecommendation(t, repo, "buy_pending", now.Add(time.Millisecond), due, "")
+	if err := repo.DB().Model(&Recommendation{}).Where("recommendation_id = ?", second.RecommendationID).
+		Update("stock_code", "sz000001").Error; err != nil {
+		t.Fatal(err)
+	}
 	ai := &scriptedAI{}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeManual})
-	if err != nil || run.Status != "skipped_open_position" || run.FailureReason != "账户存在持仓或待买入任务" || len(ai.requests) != 0 {
+	if err != nil || run.Status != "skipped_capacity" || !strings.Contains(run.FailureReason, "未调用 AI") || len(ai.requests) != 0 || run.SourceStatusJSON != "" {
 		t.Fatalf("run=%+v calls=%d err=%v", run, len(ai.requests), err)
+	}
+}
+
+func TestFinalReportHonorsDynamicCapacityAndMatchesPersistedRows(t *testing.T) {
+	report := "决策。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|甲|sh600000|A|R1|S1|\n|乙|sz000001|B|R2|S2|"
+	if _, err := parseFinalReportWithLimit(report, 1); err == nil {
+		t.Fatal("two-row report unexpectedly accepted for one remaining slot")
+	}
+	one := []recommendationRow{{StockName: "乙", StockCode: "sz000001", AISummary: "B", MainRisk: "R2", SourceRefs: "S2"}}
+	normalized := replaceFinalReportRows(report, one)
+	rows, err := parseFinalReportWithLimit(normalized, 1)
+	if err != nil || len(rows) != 1 || rows[0].StockCode != "sz000001" || strings.Contains(normalized, "|甲|") {
+		t.Fatalf("normalized=%q rows=%+v err=%v", normalized, rows, err)
 	}
 }
 

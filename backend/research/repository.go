@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"math"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -11,6 +13,70 @@ import (
 )
 
 type Repository struct{ db *gorm.DB }
+
+const MaxPortfolioExposures = 10
+
+var (
+	ErrCapacityReached   = errors.New("portfolio recommendation capacity reached")
+	ErrDuplicateExposure = errors.New("stock already has a pending recommendation or open position")
+)
+
+// lockAccountForWrite turns SQLite's deferred transaction into a write
+// transaction before any capacity or cash reads. SQLite ignores SELECT FOR
+// UPDATE, while this no-op UPDATE acquires the database writer lock without
+// changing cash or UpdatedAt. It therefore also protects callers using a
+// second Repository/Service instance in the same process (or another process).
+func lockAccountForWrite(tx *gorm.DB) error {
+	result := tx.Exec("UPDATE research_v160_simulated_accounts SET cash = cash WHERE id = ?", 1)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("simulated account is unavailable")
+	}
+	return nil
+}
+
+func isSQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
+}
+
+func transactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation func(*gorm.DB) error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = database.WithContext(ctx).Transaction(operation)
+		if !isSQLiteBusy(err) {
+			return err
+		}
+		delay := time.Duration(20*(1<<attempt)) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return err
+}
+
+// RecommendationCapacity is the admission-control snapshot used before an AI
+// run and rechecked transactionally when a recommendation is persisted. A
+// queued buy reserves the full per-trade budget so multiple recommendations
+// cannot collectively promise more cash than the account owns.
+type RecommendationCapacity struct {
+	OpenPositions      int64
+	PendingBuys        int64
+	ExposureCount      int64
+	RemainingPositions int
+	Cash               float64
+	ReservedCash       float64
+	UnreservedCash     float64
+	AffordableSlots    int
+	AllowedNew         int
+}
 
 func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
 
@@ -28,14 +94,46 @@ func (r *Repository) HasOpenPosition(ctx context.Context) (bool, error) {
 }
 
 func (r *Repository) HasBlockingExposure(ctx context.Context) (bool, error) {
-	open, err := r.HasOpenPosition(ctx)
-	if err != nil || open {
-		return open, err
+	capacity, err := r.RecommendationCapacity(ctx)
+	return capacity.AllowedNew == 0, err
+}
+
+func recommendationCapacity(tx *gorm.DB) (RecommendationCapacity, error) {
+	var result RecommendationCapacity
+	if err := tx.Model(&Position{}).Where("status = ?", "open").Count(&result.OpenPositions).Error; err != nil {
+		return result, err
 	}
-	var queued int64
-	err = r.db.WithContext(ctx).Model(&Recommendation{}).
-		Where("status IN ?", []string{"buy_pending", "pending"}).Count(&queued).Error
-	return queued > 0, err
+	if err := tx.Model(&Recommendation{}).Where("status IN ?", []string{"buy_pending", "pending"}).Count(&result.PendingBuys).Error; err != nil {
+		return result, err
+	}
+	var account SimulatedAccount
+	if err := tx.First(&account, 1).Error; err != nil {
+		return result, err
+	}
+	result.ExposureCount = result.OpenPositions + result.PendingBuys
+	result.RemainingPositions = MaxPortfolioExposures - int(result.ExposureCount)
+	if result.RemainingPositions < 0 {
+		result.RemainingPositions = 0
+	}
+	result.Cash = account.Cash
+	if err := tx.Model(&Recommendation{}).Where("status IN ?", []string{"buy_pending", "pending"}).
+		Select("COALESCE(SUM(reserved_cash), 0)").Scan(&result.ReservedCash).Error; err != nil {
+		return result, err
+	}
+	result.UnreservedCash = math.Max(0, result.Cash-result.ReservedCash)
+	result.AffordableSlots = int(math.Floor((result.UnreservedCash + 1e-7) / MaxCashPerTrade))
+	result.AllowedNew = result.RemainingPositions
+	if result.AffordableSlots < result.AllowedNew {
+		result.AllowedNew = result.AffordableSlots
+	}
+	if result.AllowedNew > 2 {
+		result.AllowedNew = 2
+	}
+	return result, nil
+}
+
+func (r *Repository) RecommendationCapacity(ctx context.Context) (RecommendationCapacity, error) {
+	return recommendationCapacity(r.db.WithContext(ctx))
 }
 
 func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
@@ -80,6 +178,50 @@ func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *R
 		}
 		if len(initialMessages) > 0 {
 			return tx.Create(&initialMessages).Error
+		}
+		return nil
+	})
+}
+
+// CreateRecommendationWithinCapacity is the final admission check. The
+// recommendation, initial memory and initial lifecycle event are committed as
+// one unit so a failed run can never leave an invisible queued buy behind.
+func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage, initialDecision *DecisionEvent) error {
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
+		var duplicateRecommendations int64
+		if err := tx.Model(&Recommendation{}).
+			Where("stock_code = ? AND status IN ?", recommendation.StockCode, []string{"buy_pending", "pending", "active", "sell_pending"}).
+			Count(&duplicateRecommendations).Error; err != nil {
+			return err
+		}
+		var duplicatePositions int64
+		if err := tx.Model(&Position{}).Where("stock_code = ? AND status = ?", recommendation.StockCode, "open").
+			Count(&duplicatePositions).Error; err != nil {
+			return err
+		}
+		if duplicateRecommendations > 0 || duplicatePositions > 0 {
+			return ErrDuplicateExposure
+		}
+		capacity, err := recommendationCapacity(tx)
+		if err != nil {
+			return err
+		}
+		if capacity.AllowedNew < 1 {
+			return ErrCapacityReached
+		}
+		if err := tx.Create(recommendation).Error; err != nil {
+			return err
+		}
+		if len(initialMessages) > 0 {
+			if err := tx.Create(&initialMessages).Error; err != nil {
+				return err
+			}
+		}
+		if initialDecision != nil {
+			return tx.Create(initialDecision).Error
 		}
 		return nil
 	})
@@ -170,6 +312,9 @@ func (r *Repository) Position(ctx context.Context, recommendationID string) (Pos
 
 func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quote, nextCheck time.Time, now time.Time) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
 		var recommendation Recommendation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ?", recommendationID).First(&recommendation).Error; err != nil {
 			return err
@@ -214,7 +359,7 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 		if err := tx.Model(&Recommendation{}).Where("recommendation_id = ?", recommendationID).Updates(map[string]any{
 			"status": "active", "activated_at": quote.At, "activation_price": cost.ExecutionPrice,
 			"quantity": quantity, "total_fees": cost.TotalFees, "next_check_at": nextCheck,
-			"last_decision": "模拟买入", "last_decision_at": now,
+			"last_decision": "模拟买入", "last_decision_at": now, "reserved_cash": 0,
 		}).Error; err != nil {
 			return err
 		}
@@ -226,9 +371,12 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 
 func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, decisionType, reason string, now time.Time, quote *Quote) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
 		result := tx.Model(&Recommendation{}).
 			Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").
-			Updates(map[string]any{"status": status, "next_check_at": nil, "last_decision": decisionType, "last_decision_at": now})
+			Updates(map[string]any{"status": status, "next_check_at": nil, "last_decision": decisionType, "last_decision_at": now, "reserved_cash": 0})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -244,8 +392,30 @@ func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, deci
 	})
 }
 
+func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendationID, reason string, next, now time.Time) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
+		result := tx.Model(&Recommendation{}).
+			Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").
+			Updates(map[string]any{"next_check_at": next, "last_decision": "买入处理重试", "last_decision_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("recommendation is no longer awaiting direct buy")
+		}
+		return tx.Create(&DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
+			DecisionType: "买入处理重试", DecidedAt: now, Reason: reason, DataStatus: "internal_error"}).Error
+	})
+}
+
 func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Quote) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
 		var recommendation Recommendation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ?", recommendationID).First(&recommendation).Error; err != nil {
 			return err

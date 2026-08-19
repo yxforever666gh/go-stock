@@ -1,8 +1,20 @@
 <script setup>
 import {computed, h, onMounted, ref} from 'vue'
 import {NButton, NTag, NText, useMessage} from 'naive-ui'
-import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/research-api'
-import {formatInteger, formatMoney, formatPercent, formatPrice} from '../utils/number-format'
+import {
+  GetAIRecommendation,
+  GetAISimulatedAccount,
+  GetAISimulatedAccountPerformance,
+  ListAIRecommendations,
+  ListAISimulatedAccountCashFlows,
+} from '../services/research-api'
+import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
+import {
+  formatHoldingMinutes,
+  normalizeAccountOverview,
+  normalizeCashFlows,
+  normalizePerformance,
+} from '../utils/research-performance'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
@@ -10,17 +22,29 @@ import ResearchTradeChart from './ResearchTradeChart.vue'
 const message = useMessage()
 const loading = ref(false)
 const account = ref(null)
+const performance = ref(null)
+const cashFlows = ref([])
 const rows = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
 
 const positionsByRecommendation = computed(() => new Map((account.value?.positions || []).map(item => [item.recommendationId, item])))
+const fundingProgress = computed(() => Number(account.value?.contributionProgress || 0))
+const exposureCount = computed(() => Number(account.value?.currentPositions || 0) + Number(account.value?.pendingBuys || 0))
+const performanceMetrics = computed(() => performance.value?.metrics || normalizePerformance().metrics)
+
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
+function dateOnly(value) { return value ? String(value).slice(0, 10) : '--' }
 function colorType(value) { return Number(value || 0) >= 0 ? 'error' : 'success' }
 function positionFor(row) { return positionsByRecommendation.value.get(row.recommendationId) }
 function rowFees(row) { const position = positionFor(row); return position ? Number(position.buyFees || 0) + Number(position.estimatedSellFees || 0) : Number(row.totalFees || 0) }
 function rowNetPnl(row) { return positionFor(row)?.netPnl ?? row.netPnl }
 function rowNetYield(row) { return positionFor(row)?.netYieldRate ?? row.netYieldRate }
+function optionalMoney(value) { return value === null || value === undefined ? '--' : formatMoney(value) }
+function optionalPercent(value) { return value === null || value === undefined ? '--' : formatPercent(value) }
+function optionalUnsignedPercent(value) { return value === null || value === undefined ? '--' : `${formatNumber(Math.abs(Number(value)) * 100, 2)}%` }
+function optionalNumber(value, digits = 2) { return value === null || value === undefined ? '--' : formatNumber(value, digits) }
+
 const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
 function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'buy_pending' || status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
 
@@ -42,12 +66,50 @@ const columns = [
   {title: '净收益率', key: 'netYieldRate', width: 120, render: row => h(NText, {type: colorType(rowNetYield(row))}, {default: () => formatPercent(rowNetYield(row))})},
 ]
 
+const cashFlowColumns = [
+  {title: '类型', key: 'type', width: 130, render: row => row.type === 'initial_deposit' ? '初始入金' : row.type === 'scheduled_deposit' ? '计划入金' : row.type},
+  {title: '交易日', key: 'tradingDate', width: 120, render: row => dateOnly(row.tradingDate)},
+  {title: '生效时间', key: 'effectiveAt', width: 180, render: row => dateTime(row.effectiveAt)},
+  {title: '金额', key: 'amount', width: 150, render: row => formatMoney(row.amount)},
+  {title: '入金前净值', key: 'netAssetValueBefore', width: 150, render: row => optionalMoney(row.netAssetValueBefore)},
+  {title: '入金后净值', key: 'netAssetValueAfter', width: 150, render: row => optionalMoney(row.netAssetValueAfter)},
+  {title: '入金前单位净值', key: 'unitValueBefore', width: 150, render: row => optionalNumber(row.unitValueBefore, 6)},
+  {title: '新增份额', key: 'unitsIssued', width: 135, render: row => optionalNumber(row.unitsIssued, 4)},
+]
+
+const curveColumns = [
+  {title: '估值时间', key: 'valuedAt', width: 180, render: row => dateTime(row.valuedAt)},
+  {title: '交易日', key: 'tradingDate', width: 120, render: row => dateOnly(row.tradingDate)},
+  {title: '快照类型', key: 'snapshotType', width: 130, render: row => ({pre_deposit: '入金前', post_deposit: '入金后', daily_close: '收盘', current: '当前'}[row.snapshotType] || row.snapshotType)},
+  {title: '现金', key: 'cash', width: 145, render: row => formatMoney(row.cash)},
+  {title: '持仓净值', key: 'positionValue', width: 145, render: row => formatMoney(row.positionValue)},
+  {title: '账户净值', key: 'netAssetValue', width: 145, render: row => formatMoney(row.netAssetValue)},
+  {title: '累计投入', key: 'cumulativeNetContribution', width: 145, render: row => formatMoney(row.cumulativeNetContribution)},
+  {title: '单位净值', key: 'unitValue', width: 125, render: row => formatNumber(row.unitValue, 6)},
+  {title: 'TWR', key: 'timeWeightedReturn', width: 115, render: row => h(NText, {type: colorType(row.timeWeightedReturn)}, {default: () => formatPercent(row.timeWeightedReturn)})},
+]
+
 async function refresh() {
   loading.value = true
   try {
-    account.value = await GetAISimulatedAccount()
-    const recommendationResult = await ListAIRecommendations(200, 0)
-    rows.value = (recommendationResult || []).filter(item => item.activatedAt || ['missed_cash', 'missed_untradable'].includes(item.status))
+    const [accountResult, recommendationResult, cashFlowResult] = await Promise.allSettled([
+      GetAISimulatedAccount(),
+      ListAIRecommendations(200, 0),
+      ListAISimulatedAccountCashFlows(),
+    ])
+    if (accountResult.status === 'rejected') throw accountResult.reason
+    const normalizedAccount = normalizeAccountOverview(accountResult.value || {})
+    account.value = normalizedAccount
+    rows.value = recommendationResult.status === 'fulfilled'
+      ? (recommendationResult.value || []).filter(item => item.activatedAt || ['missed_cash', 'missed_untradable'].includes(item.status))
+      : []
+    cashFlows.value = normalizeCashFlows(cashFlowResult.status === 'fulfilled' ? cashFlowResult.value : [])
+    let performanceResult
+    try { performanceResult = {status: 'fulfilled', value: await GetAISimulatedAccountPerformance()} }
+    catch (reason) { performanceResult = {status: 'rejected', reason} }
+    performance.value = normalizePerformance(performanceResult.status === 'fulfilled' ? performanceResult.value : {}, normalizedAccount)
+    const optionalFailures = [recommendationResult, cashFlowResult, performanceResult].filter(item => item.status === 'rejected')
+    if (optionalFailures.length) message.warning(`部分评估数据暂不可用（${optionalFailures.length} 项），已展示当前账户数据`)
   } catch (error) { message.error(error?.message || String(error)) }
   finally { loading.value = false }
 }
@@ -63,16 +125,77 @@ onMounted(refresh)
 </script>
 
 <template>
-  <n-space vertical>
-    <n-grid :cols="5" :x-gap="12" v-if="account">
-      <n-gi><n-statistic label="账户现金" :value="formatMoney(account.cash)"/></n-gi>
-      <n-gi><n-statistic label="持仓可卖出净值" :value="formatMoney(account.positionValue)"/></n-gi>
-      <n-gi><n-statistic label="账户净值" :value="formatMoney(account.netAssetValue)"/></n-gi>
-      <n-gi><n-statistic label="总净收益" :value="formatMoney(account.netProfit)"/></n-gi>
-      <n-gi><n-statistic label="总净收益率" :value="formatPercent(account.netYieldRate)"/></n-gi>
-    </n-grid>
+  <n-space vertical size="large">
+    <section v-if="account" class="account-overview-grid">
+      <n-card size="small" class="primary-metric-card">
+        <n-statistic label="策略净收益率（TWR）" :value="formatPercent(performance?.timeWeightedReturn ?? account.timeWeightedReturn)"/>
+        <n-text depth="3" class="metric-note">已剔除追加入金对收益率的影响</n-text>
+      </n-card>
+      <n-card size="small"><n-statistic label="账户净值" :value="formatMoney(account.netAssetValue)"/><n-text depth="3" class="metric-note">估值 {{ dateTime(performance?.valuedAt || account.valuedAt) }}</n-text></n-card>
+      <n-card size="small"><n-statistic label="净收益额" :value="formatMoney(performance?.netProfit ?? account.netProfit)"/><n-text depth="3" class="metric-note">净值减累计净入金</n-text></n-card>
+      <n-card size="small"><n-statistic label="累计投入回报率" :value="formatPercent(performance?.cumulativeCapitalReturn ?? account.cumulativeCapitalReturn)"/><n-text depth="3" class="metric-note">净收益额 ÷ 累计净入金</n-text></n-card>
+      <n-card size="small"><n-statistic label="账户现金" :value="formatMoney(account.cash)"/><n-text depth="3" class="metric-note">持仓可卖出净值 {{ formatMoney(account.positionValue) }}</n-text></n-card>
+      <n-card size="small"><n-statistic label="单位净值" :value="formatNumber(performance?.unitValue ?? 1, 6)"/><n-text depth="3" class="metric-note">用于时间加权收益计算</n-text></n-card>
+    </section>
+
+    <n-card v-if="account" size="small" title="资金与持仓容量">
+      <div class="funding-capacity-grid">
+        <div class="funding-progress-block">
+          <n-flex justify="space-between" align="center">
+            <n-text strong>累计投入 {{ formatMoney(account.cumulativeNetContribution) }} / {{ formatMoney(account.targetContribution) }}</n-text>
+            <n-text depth="3">{{ formatNumber(fundingProgress, 0) }}%</n-text>
+          </n-flex>
+          <n-progress type="line" :percentage="fundingProgress" :show-indicator="false" status="success"/>
+          <n-flex justify="space-between" class="progress-footnote">
+            <n-text depth="3">追加入金 {{ account.completedDeposits }} / {{ account.plannedDeposits }} 次，每次 {{ formatMoney(account.depositAmount) }}</n-text>
+            <n-text depth="3">剩余 {{ account.remainingDeposits }} 次</n-text>
+          </n-flex>
+        </div>
+        <div class="capacity-summary">
+          <div><n-text depth="3">持仓容量</n-text><strong>{{ exposureCount }} / {{ account.maxPositions }}</strong></div>
+          <div><n-text depth="3">当前持仓</n-text><strong>{{ account.currentPositions }}</strong></div>
+          <div><n-text depth="3">待买入</n-text><strong>{{ account.pendingBuys }}</strong></div>
+          <div><n-text depth="3">剩余位置</n-text><strong>{{ account.remainingPositions }}</strong></div>
+        </div>
+      </div>
+      <n-alert v-if="account.nextContributionAt" type="info" :show-icon="false" class="next-funding-alert">
+        下一次计划入金：{{ dateTime(account.nextContributionAt) }}；仅在应用于交易日开盘前运行时执行，错过将顺延。
+      </n-alert>
+      <n-alert v-else-if="account.remainingDeposits === 0" type="success" :show-icon="false" class="next-funding-alert">四次计划入金已全部完成。</n-alert>
+    </n-card>
+
+    <n-card size="small" title="策略评估">
+      <template #header-extra>
+        <n-tag :type="performanceMetrics.sampleAssessmentType" :bordered="false">{{ performanceMetrics.sampleAssessment }}</n-tag>
+      </template>
+      <div class="strategy-metrics-grid">
+        <div class="strategy-metric"><span>已平仓样本</span><strong>{{ formatInteger(performanceMetrics.closedTrades) }} 笔</strong></div>
+        <div class="strategy-metric"><span>胜率</span><strong>{{ optionalUnsignedPercent(performanceMetrics.winRate) }}</strong></div>
+        <div class="strategy-metric"><span>平均盈利率</span><strong>{{ optionalPercent(performanceMetrics.averageGainRate) }}</strong></div>
+        <div class="strategy-metric"><span>平均亏损率</span><strong>{{ optionalPercent(performanceMetrics.averageLossRate) }}</strong></div>
+        <div class="strategy-metric"><span>盈亏比</span><strong>{{ optionalNumber(performanceMetrics.payoffRatio) }}</strong></div>
+        <div class="strategy-metric"><span>最大回撤</span><strong>{{ optionalUnsignedPercent(performanceMetrics.maxDrawdown) }}</strong></div>
+        <div class="strategy-metric"><span>总费用</span><strong>{{ optionalMoney(performanceMetrics.totalFees) }}</strong></div>
+        <div class="strategy-metric"><span>换手率</span><strong>{{ optionalUnsignedPercent(performanceMetrics.turnoverRate) }}</strong></div>
+        <div class="strategy-metric"><span>资金利用率</span><strong>{{ optionalUnsignedPercent(performanceMetrics.capitalUtilization) }}</strong></div>
+        <div class="strategy-metric"><span>平均持有时间</span><strong>{{ formatHoldingMinutes(performanceMetrics.averageHoldingMinutes) }}</strong></div>
+        <div class="strategy-metric"><span>错过成交率</span><strong>{{ optionalUnsignedPercent(performanceMetrics.missedExecutionRate) }}</strong></div>
+        <div class="strategy-metric"><span>行业集中度</span><strong>{{ performanceMetrics.industryConcentration === null ? '暂无结构化行业数据' : optionalUnsignedPercent(performanceMetrics.industryConcentration) }}</strong></div>
+      </div>
+      <n-text depth="3" class="assessment-note">少于 30 笔为样本不足，30–99 笔仅作初步观察，达到 100 笔后再进行阶段性评价。行业集中度会在形成可靠的结构化行业归属后启用，不从 AI 自由文本猜测。</n-text>
+    </n-card>
+
+    <n-collapse arrow-placement="right">
+      <n-collapse-item title="资金流水" name="cash-flows">
+        <n-data-table :columns="cashFlowColumns" :data="cashFlows" :loading="loading" :scroll-x="1190" :row-key="row => row.flowId"/>
+      </n-collapse-item>
+      <n-collapse-item title="账户净值与 TWR 数据" name="performance-curve">
+        <n-data-table :columns="curveColumns" :data="performance?.curve || []" :loading="loading" :scroll-x="1250" :row-key="(row, index) => `${row.valuedAt}-${row.snapshotType}-${index}`"/>
+      </n-collapse-item>
+    </n-collapse>
+
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">净收益口径：现金 + 持仓按最新价扣预估卖出成本 − 100,000 元。</n-text>
+      <n-text depth="3">净收益额 = 账户净值 − 累计净入金；TWR 用于比较策略表现，不会把追加资金误算为盈利。</n-text>
       <n-button :loading="loading" @click="refresh">刷新估值</n-button>
     </n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1500" :row-key="row => row.recommendationId"/>
@@ -115,8 +238,98 @@ onMounted(refresh)
 </template>
 
 <style scoped>
+.account-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+}
+
+.primary-metric-card {
+  border-color: rgba(24, 160, 88, 0.45);
+  background: linear-gradient(145deg, rgba(24, 160, 88, 0.09), transparent 70%);
+}
+
+.metric-note,
+.assessment-note {
+  display: block;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.funding-capacity-grid {
+  display: grid;
+  grid-template-columns: minmax(300px, 1.4fr) minmax(340px, 1fr);
+  gap: 28px;
+  align-items: center;
+}
+
+.funding-progress-block {
+  display: grid;
+  gap: 9px;
+}
+
+.progress-footnote {
+  gap: 12px;
+}
+
+.capacity-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(70px, 1fr));
+  gap: 8px;
+}
+
+.capacity-summary > div,
+.strategy-metric {
+  border: 1px solid var(--n-border-color);
+  border-radius: 6px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+
+.capacity-summary span,
+.strategy-metric span {
+  display: block;
+  color: var(--n-text-color-3);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.capacity-summary strong,
+.strategy-metric strong {
+  font-size: 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.next-funding-alert {
+  margin-top: 14px;
+}
+
+.strategy-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 10px;
+}
+
 .research-detail-card {
   width: min(1600px, 96vw);
   max-height: 96vh;
+}
+
+@media (max-width: 900px) {
+  .funding-capacity-grid {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+}
+
+@media (max-width: 560px) {
+  .capacity-summary {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .strategy-metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 </style>

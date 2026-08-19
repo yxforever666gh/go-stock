@@ -149,6 +149,20 @@ var mainMigrations = []migration{
 		definition:  func() string { return strings.Join(legacyStrategyTables, "\n") },
 		apply:       applyLegacyStrategyArchiveCleanup,
 	},
+	{
+		id: 10, name: "research_multi_position_funding_performance",
+		description: "App 1.7.0 adds external contribution flows, a four-deposit funding plan, unitized account valuation snapshots and queued-buy cash reservations without rewriting account cash or trading history.",
+		definition: func() string {
+			return strings.Join([]string{
+				"research_v170_account_cash_flows",
+				"research_v170_funding_plans",
+				"research_v170_account_snapshots",
+				"research_v160_recommendations.reserved_cash REAL NOT NULL DEFAULT 0",
+				"initial contribution sequence 0 amount 100000; four future scheduled deposits of 100000; target 500000",
+			}, "\n")
+		},
+		apply: applyResearchMultiPositionFunding,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -237,6 +251,61 @@ func applyResearchV160Schema(tx *gorm.DB) error {
 		return fmt.Errorf("initialize 1.6.0 simulated account: %w", err)
 	}
 	return nil
+}
+
+func applyResearchMultiPositionFunding(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if err := tx.AutoMigrate(&research.AccountCashFlow{}, &research.FundingPlan{}, &research.AccountValuationSnapshot{}, &research.Recommendation{}); err != nil {
+		return fmt.Errorf("create 1.7.0 funding and performance schema: %w", err)
+	}
+	var account research.SimulatedAccount
+	if err := tx.First(&account, 1).Error; err != nil {
+		return fmt.Errorf("load simulated account for funding migration: %w", err)
+	}
+	now := time.Now()
+	effectiveAt := account.CreatedAt
+	if effectiveAt.IsZero() {
+		effectiveAt = now
+	}
+	localEffective := research.ShanghaiTime(effectiveAt)
+	initialFlow := research.AccountCashFlow{
+		FlowID:   uuid.NewSHA1(uuid.NameSpaceOID, []byte("go-stock-1.7.0-initial-contribution")).String(),
+		Sequence: 0, Type: "initial_deposit", Amount: research.InitialCash, EffectiveAt: effectiveAt,
+		TradingDate: localEffective.Format("2006-01-02"), NetAssetValueBefore: 0,
+		NetAssetValueAfter: research.InitialCash, UnitValueBefore: 1, UnitsIssued: research.InitialCash,
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&initialFlow).Error; err != nil {
+		return fmt.Errorf("register initial contribution: %w", err)
+	}
+	plan := research.FundingPlan{
+		ID: 1, InitialContribution: research.InitialCash, TargetContribution: research.TargetContribution,
+		DepositAmount: research.ScheduledDepositAmount, PlannedDeposits: research.ScheduledDepositCount,
+		StartAfterTradingDate: research.ShanghaiTime(now).Format("2006-01-02"),
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&plan).Error; err != nil {
+		return fmt.Errorf("initialize funding plan: %w", err)
+	}
+	baseline := research.AccountValuationSnapshot{
+		SnapshotID: "initial-deposit-baseline", SnapshotType: "initial_deposit",
+		TradingDate: localEffective.Format("2006-01-02"), ValuedAt: effectiveAt,
+		Cash: research.InitialCash, PositionValue: 0, NetAssetValue: research.InitialCash,
+		CumulativeNetContribution: research.InitialCash, UnitValue: 1, TimeWeightedReturn: 0,
+		ValuationStatus: "baseline",
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&baseline).Error; err != nil {
+		return fmt.Errorf("initialize account valuation baseline: %w", err)
+	}
+	// Raw SQL deliberately avoids GORM's UpdatedAt callback: schema migration
+	// must not rewrite the historical modification time of queued records, and
+	// the zero guard makes a repeated migration a true no-op.
+	if err := tx.Exec(`UPDATE research_v160_recommendations
+		SET reserved_cash = ?
+		WHERE status IN ('buy_pending', 'pending') AND reserved_cash = 0`, research.MaxCashPerTrade).Error; err != nil {
+		return fmt.Errorf("backfill queued-buy reservations: %w", err)
+	}
+	return verifyMainSchema10Runtime(tx)
 }
 
 func applyAIConfigModelSwitchFallbackOrder(tx *gorm.DB) error {
@@ -583,6 +652,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 10 {
+		if err := verifyMainSchema10Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -691,6 +765,37 @@ func verifyMainSchema9Runtime(database *gorm.DB) error {
 		if indexCount != 0 {
 			return fmt.Errorf("main schema 9 still has %d indexes for archived legacy strategy table %s", indexCount, table)
 		}
+	}
+	return nil
+}
+
+func verifyMainSchema10Runtime(database *gorm.DB) error {
+	if database == nil {
+		return errors.New("main database is unavailable")
+	}
+	for _, model := range []any{&research.AccountCashFlow{}, &research.FundingPlan{}, &research.AccountValuationSnapshot{}} {
+		if !database.Migrator().HasTable(model) {
+			return fmt.Errorf("main schema 10 table for %T is missing", model)
+		}
+	}
+	if !database.Migrator().HasColumn(&research.Recommendation{}, "ReservedCash") {
+		return errors.New("main schema 10 recommendation reserved_cash is missing")
+	}
+	var initialCount int64
+	if err := database.Model(&research.AccountCashFlow{}).
+		Where("sequence = ? AND type = ? AND amount = ?", 0, "initial_deposit", research.InitialCash).
+		Count(&initialCount).Error; err != nil {
+		return err
+	}
+	if initialCount != 1 {
+		return fmt.Errorf("main schema 10 has %d valid initial contribution rows, expected 1", initialCount)
+	}
+	var plan research.FundingPlan
+	if err := database.First(&plan, 1).Error; err != nil {
+		return fmt.Errorf("main schema 10 funding plan is unavailable: %w", err)
+	}
+	if plan.TargetContribution != research.TargetContribution || plan.DepositAmount != research.ScheduledDepositAmount || plan.PlannedDeposits != research.ScheduledDepositCount {
+		return fmt.Errorf("main schema 10 funding plan is invalid: %+v", plan)
 	}
 	return nil
 }

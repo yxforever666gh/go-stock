@@ -52,8 +52,16 @@ func registerResearchRoutes(mux *http.ServeMux, app *App) {
 		}
 		writeResearchResult(w, item, err)
 	})
-	mux.HandleFunc("GET /api/v1/research/account", func(w http.ResponseWriter, _ *http.Request) {
-		item, err := app.getAISimulatedAccount()
+	mux.HandleFunc("GET /api/v1/research/account", func(w http.ResponseWriter, r *http.Request) {
+		item, err := app.getAISimulatedAccountContext(r.Context())
+		writeResearchResult(w, item, err)
+	})
+	mux.HandleFunc("GET /api/v1/research/account/cash-flows", func(w http.ResponseWriter, r *http.Request) {
+		items, err := app.getAIAccountCashFlowsContext(r.Context())
+		writeResearchResult(w, items, err)
+	})
+	mux.HandleFunc("GET /api/v1/research/account/performance", func(w http.ResponseWriter, r *http.Request) {
+		item, err := app.getAIAccountPerformanceContext(r.Context())
 		writeResearchResult(w, item, err)
 	})
 }

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.9
+  version: 1.7.0
   description: Local-only Web API for market data, watchlists, diagnosis, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -238,6 +238,18 @@ paths:
       operationId: getSimulatedAccount
       responses:
         "200": {description: Simulated account and net yield, content: {application/json: {schema: {$ref: "#/components/schemas/AccountOverview"}}}}
+  /api/v1/research/account/cash-flows:
+    get:
+      operationId: listAccountCashFlows
+      description: Lists external simulated-account contributions; trading cash flows are excluded.
+      responses:
+        "200": {description: Account contribution ledger, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AccountCashFlow"}}}}}
+  /api/v1/research/account/performance:
+    get:
+      operationId: getAccountPerformance
+      description: Returns unitized TWR, valuation points and strategy-quality metrics.
+      responses:
+        "200": {description: Account performance, content: {application/json: {schema: {$ref: "#/components/schemas/AccountPerformance"}}}}
   /api/v1/exports/markdown:
     post:
       operationId: exportMarkdown
@@ -475,6 +487,7 @@ components:
         sellAmount: {type: number, description: Actual net cash received from the simulated sell, after sell-side costs.}
         currentAmount: {type: number, description: Open position value at the latest price after estimated sell-side costs.}
         dataPauseSeconds: {type: integer, format: int64}
+        reservedCash: {type: number, description: Cash reserved while the recommendation is waiting for its one-shot buy attempt.}
     LifecycleMessage:
       type: object
       properties: {sequence: {type: integer}, role: {type: string}, phase: {type: string}, content: {type: string}, responseId: {type: string}, createdAt: {type: string, format: date-time}}
@@ -579,13 +592,86 @@ components:
         trades: {type: array, items: {$ref: "#/components/schemas/RecommendationChartTrade"}}
     AccountOverview:
       type: object
-      required: [initialCash, cash, positionValue, netAssetValue, netProfit, netYieldRate, valuedAt, positions]
+      required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, targetContribution, depositAmount, plannedDeposits, completedDeposits, remainingDeposits, currentPositions, pendingBuys, maxPositions, remainingPositions, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, positions]
       properties:
         initialCash: {type: number}
         cash: {type: number}
         positionValue: {type: number}
         netAssetValue: {type: number}
+        cumulativeNetContribution: {type: number}
+        targetContribution: {type: number}
+        depositAmount: {type: number}
+        plannedDeposits: {type: integer}
+        completedDeposits: {type: integer}
+        remainingDeposits: {type: integer}
+        nextContributionAt: {type: string, format: date-time}
+        currentPositions: {type: integer}
+        pendingBuys: {type: integer}
+        maxPositions: {type: integer}
+        remainingPositions: {type: integer}
         netProfit: {type: number}
-        netYieldRate: {type: number}
+        netYieldRate: {type: number, description: Compatibility alias of timeWeightedReturn.}
+        timeWeightedReturn: {type: number, description: Unitized time-weighted return excluding external contributions.}
+        cumulativeCapitalReturn: {type: number, description: Net profit divided by cumulative net contribution.}
         valuedAt: {type: string, format: date-time}
         positions: {type: array, items: {$ref: "#/components/schemas/Position"}}
+    AccountCashFlow:
+      type: object
+      required: [flowId, sequence, type, amount, effectiveAt, tradingDate, netAssetValueBefore, netAssetValueAfter, unitValueBefore, unitsIssued, createdAt]
+      properties:
+        flowId: {type: string}
+        sequence: {type: integer}
+        type: {type: string, enum: [initial_deposit, scheduled_deposit]}
+        amount: {type: number}
+        effectiveAt: {type: string, format: date-time}
+        tradingDate: {type: string, format: date}
+        netAssetValueBefore: {type: number}
+        netAssetValueAfter: {type: number}
+        unitValueBefore: {type: number}
+        unitsIssued: {type: number}
+        createdAt: {type: string, format: date-time}
+    AccountPerformancePoint:
+      type: object
+      required: [valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeNetContribution, unitValue, timeWeightedReturn, valuationStatus]
+      properties:
+        valuedAt: {type: string, format: date-time}
+        tradingDate: {type: string, format: date}
+        snapshotType: {type: string, enum: [initial_deposit, pre_deposit, post_deposit, daily_close, current]}
+        cash: {type: number}
+        positionValue: {type: number}
+        netAssetValue: {type: number}
+        cumulativeNetContribution: {type: number}
+        unitValue: {type: number}
+        timeWeightedReturn: {type: number}
+        valuationStatus: {type: string}
+    StrategyPerformanceMetrics:
+      type: object
+      required: [closedTrades, winRate, averageGainRate, averageLossRate, payoffRatio, maxDrawdown, totalFees, turnoverRate, capitalUtilization, averageHoldingMinutes, missedExecutionRate, industryConcentration, industryConcentrationStatus, sampleLevel]
+      properties:
+        closedTrades: {type: integer}
+        winRate: {type: number}
+        averageGainRate: {type: number}
+        averageLossRate: {type: number}
+        payoffRatio: {type: number}
+        maxDrawdown: {type: number}
+        totalFees: {type: number}
+        turnoverRate: {type: number}
+        capitalUtilization: {type: number}
+        averageHoldingMinutes: {type: number}
+        missedExecutionRate: {type: number}
+        industryConcentration: {type: number, nullable: true}
+        industryConcentrationStatus: {type: string, enum: [available, unavailable_no_structured_industry_data]}
+        sampleLevel: {type: string, enum: [样本不足, 初步观察, 可进行阶段性评价]}
+    AccountPerformance:
+      type: object
+      required: [valuedAt, unitValue, timeWeightedReturn, cumulativeCapitalReturn, netProfit, netAssetValue, cumulativeNetContribution, curve, metrics]
+      properties:
+        valuedAt: {type: string, format: date-time}
+        unitValue: {type: number}
+        timeWeightedReturn: {type: number}
+        cumulativeCapitalReturn: {type: number}
+        netProfit: {type: number}
+        netAssetValue: {type: number}
+        cumulativeNetContribution: {type: number}
+        curve: {type: array, items: {$ref: "#/components/schemas/AccountPerformancePoint"}}
+        metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}

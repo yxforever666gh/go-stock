@@ -7,6 +7,7 @@ import (
 	"math"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -127,6 +128,11 @@ func researchTestRepo(t *testing.T) *Repository {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlDB.SetMaxOpenConns(1)
 	if err = db.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{}, &SimulatedAccount{}, &SimulatedTrade{}, &Position{}); err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +141,157 @@ func researchTestRepo(t *testing.T) *Repository {
 		t.Fatal(err)
 	}
 	return repo
+}
+
+func TestRecommendationCapacityAtEightNineAndTenExposures(t *testing.T) {
+	for _, testCase := range []struct {
+		open, want int
+	}{{8, 2}, {9, 1}, {10, 0}} {
+		t.Run(fmt.Sprintf("open_%d", testCase.open), func(t *testing.T) {
+			repo := researchTestRepo(t)
+			if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 500000.0).Error; err != nil {
+				t.Fatal(err)
+			}
+			for index := 0; index < testCase.open; index++ {
+				position := Position{RecommendationID: fmt.Sprintf("position-%02d", index), StockCode: fmt.Sprintf("sh%06d", 600000+index),
+					StockName: fmt.Sprintf("股票%d", index), Market: "SH", Quantity: 100, EntryAt: time.Now(), EntryPrice: 10, Status: "open"}
+				if err := repo.DB().Create(&position).Error; err != nil {
+					t.Fatal(err)
+				}
+			}
+			capacity, err := repo.RecommendationCapacity(context.Background())
+			if err != nil || capacity.AllowedNew != testCase.want || capacity.ExposureCount != int64(testCase.open) {
+				t.Fatalf("capacity=%+v err=%v", capacity, err)
+			}
+		})
+	}
+}
+
+func TestConcurrentRecommendationAdmissionNeverExceedsTenOrCash(t *testing.T) {
+	repo := researchTestRepo(t)
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 500000.0).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 14, 15, 30, 0, 0, shanghaiLocation)
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, weekdayTradingCalendar{})
+	service.now = func() time.Time { return now }
+	runID := seedRun(t, repo, now)
+	var wait sync.WaitGroup
+	var resultMu sync.Mutex
+	accepted, rejected := 0, 0
+	for index := 0; index < 20; index++ {
+		index := index
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			recommendation := Recommendation{RecommendationID: newID(), AnalysisRunID: runID,
+				StockCode: fmt.Sprintf("sh%06d", 600000+index), StockName: fmt.Sprintf("股票%d", index), SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
+			err := service.EnqueueRecommendation(context.Background(), &recommendation, nil)
+			resultMu.Lock()
+			defer resultMu.Unlock()
+			if err == nil {
+				accepted++
+			} else if errors.Is(err, ErrCapacityReached) {
+				rejected++
+			} else {
+				t.Errorf("unexpected admission error: %v", err)
+			}
+		}()
+	}
+	wait.Wait()
+	capacity, err := repo.RecommendationCapacity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted != 10 || rejected != 10 || capacity.PendingBuys != 10 || capacity.ReservedCash != 500000 || capacity.ExposureCount != 10 {
+		t.Fatalf("accepted=%d rejected=%d capacity=%+v", accepted, rejected, capacity)
+	}
+}
+
+type parallelHoldingContexts struct{}
+
+func (parallelHoldingContexts) CollectLifecycleContext(_ context.Context, request LifecycleContextRequest) (LifecycleObservationDraft, error) {
+	draft := readyLifecycleDraft(request.Now, "ready")
+	draft.Quote.Code, draft.Quote.Name = request.Recommendation.StockCode, request.Recommendation.StockName
+	return draft, nil
+}
+
+type concurrencyTrackingAI struct {
+	mu      sync.Mutex
+	active  int
+	maximum int
+	calls   map[string]int
+	started chan struct{}
+	release <-chan struct{}
+}
+
+func (client *concurrencyTrackingAI) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
+	client.mu.Lock()
+	client.active++
+	if client.active > client.maximum {
+		client.maximum = client.active
+	}
+	client.calls[request.RecommendationID]++
+	client.mu.Unlock()
+	client.started <- struct{}{}
+	select {
+	case <-ctx.Done():
+		return CompletionResult{}, ctx.Err()
+	case <-client.release:
+	}
+	client.mu.Lock()
+	client.active--
+	client.mu.Unlock()
+	return CompletionResult{Content: `{"action":"持有","reason":"量价结构仍稳定","sourceRefs":[],"dataSufficiency":"充足"}`}, nil
+}
+
+func TestTenDueHoldingsRunAtMostFiveConcurrentlyWithoutDuplicateScans(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	for index := 0; index < 10; index++ {
+		recommendation := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
+		recommendation.StockCode, recommendation.StockName = fmt.Sprintf("sh%06d", 600000+index), fmt.Sprintf("股票%d", index)
+		if err := repo.DB().Model(&Recommendation{}).Where("recommendation_id = ?", recommendation.RecommendationID).
+			Updates(map[string]any{"stock_code": recommendation.StockCode, "stock_name": recommendation.StockName}).Error; err != nil {
+			t.Fatal(err)
+		}
+		seedOpenPosition(t, repo, recommendation, now.AddDate(0, 0, -1))
+	}
+	release := make(chan struct{})
+	ai := &concurrencyTrackingAI{calls: make(map[string]int), started: make(chan struct{}, 10), release: release}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, parallelHoldingContexts{})
+	service.now = func() time.Time { return now }
+	done := make(chan error, 1)
+	go func() { done <- service.ProcessDue(context.Background()) }()
+	for index := 0; index < 5; index++ {
+		select {
+		case <-ai.started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("five lifecycle workers did not start")
+		}
+	}
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatalf("overlapping scan: %v", err)
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("lifecycle scan did not finish")
+	}
+	ai.mu.Lock()
+	defer ai.mu.Unlock()
+	if ai.maximum != 5 || len(ai.calls) != 10 {
+		t.Fatalf("max=%d calls=%+v", ai.maximum, ai.calls)
+	}
+	for recommendationID, calls := range ai.calls {
+		if calls != 1 {
+			t.Fatalf("recommendation %s called %d times", recommendationID, calls)
+		}
+	}
 }
 
 func seedRun(t *testing.T, repo *Repository, now time.Time) string {
@@ -150,6 +307,9 @@ func seedRecommendation(t *testing.T, repo *Repository, status string, signal, d
 	t.Helper()
 	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, signal), StockCode: "sh600000", StockName: "浦发银行", SignalAt: signal,
 		AISummary: "量价与资金保持强势", MainRisk: "板块退潮", Status: status, PreviousResponseID: previous, NextCheckAt: &due}
+	if status == "buy_pending" || status == "pending" {
+		rec.ReservedCash = MaxCashPerTrade
+	}
 	initial := []LifecycleMessage{{RecommendationID: rec.RecommendationID, Sequence: 1, Role: "system", Phase: "initial", Content: "ONLY:" + rec.RecommendationID, CreatedAt: signal}}
 	if err := repo.CreateRecommendation(context.Background(), &rec, initial); err != nil {
 		t.Fatal(err)
@@ -230,12 +390,16 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	for index, code := range []string{"sh600000", "sz000001", "sh600001"} {
 		rec := Recommendation{RecommendationID: newID(), AnalysisRunID: runID, StockCode: code, StockName: []string{"甲", "乙", "丙"}[index], SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
 		if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
+			if index == 2 && errors.Is(err, ErrCapacityReached) {
+				statuses = append(statuses, "capacity_rejected")
+				continue
+			}
 			t.Fatal(err)
 		}
 		stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
 		statuses = append(statuses, stored.Status)
 	}
-	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "missed_cash" {
+	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "capacity_rejected" {
 		t.Fatalf("statuses=%v", statuses)
 	}
 }

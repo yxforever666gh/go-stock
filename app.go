@@ -35,6 +35,7 @@ type App struct {
 	researchRuntime   *data.ResearchRuntime
 	aiAnalysisRunMu   sync.Mutex
 	aiAnalysisRunning bool
+	aiLifecycleRunMu  sync.Mutex
 }
 
 const aiAnalysisEntryPrefix = "AIAnalysisCustom_"

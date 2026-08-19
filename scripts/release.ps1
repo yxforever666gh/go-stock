@@ -226,11 +226,11 @@ function New-RollbackReceipt {
 
 function New-DatabaseArchive {
     param($PreviousPointer, $NewPointer)
-    if ([int]$PreviousPointer.mainSchemaVersion -ne 8 -or [int]$NewPointer.mainSchemaVersion -ne 9) {
-        throw "Maintenance deployment only supports main schema 8 -> 9"
+    if ([int]$NewPointer.mainSchemaVersion -ne ([int]$PreviousPointer.mainSchemaVersion + 1)) {
+        throw "Maintenance deployment only supports a one-version main schema upgrade"
     }
     if ([int]$PreviousPointer.minuteSchemaVersion -ne [int]$NewPointer.minuteSchemaVersion) {
-        throw "Schema 9 deployment must not change the minute database schema"
+        throw "Main schema maintenance deployment must not change the minute database schema"
     }
     New-Item -ItemType Directory -Force -Path $ArchivesRoot | Out-Null
     $name = "pre-$($NewPointer.appVersion)-schema$($NewPointer.mainSchemaVersion)-$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')).zip"

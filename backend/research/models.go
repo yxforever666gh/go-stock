@@ -3,9 +3,12 @@ package research
 import "time"
 
 const (
-	AppVersion      = "1.6.9"
-	InitialCash     = 100000.0
-	MaxCashPerTrade = 50000.0
+	AppVersion             = "1.7.0"
+	InitialCash            = 100000.0
+	MaxCashPerTrade        = 50000.0
+	TargetContribution     = 500000.0
+	ScheduledDepositAmount = 100000.0
+	ScheduledDepositCount  = 4
 )
 
 type AnalysisRun struct {
@@ -100,6 +103,7 @@ type Recommendation struct {
 	LastDecision        string     `json:"lastDecision" gorm:"size:32"`
 	LastDecisionAt      *time.Time `json:"lastDecisionAt"`
 	DataPauseSeconds    int64      `json:"dataPauseSeconds" gorm:"not null;default:0"`
+	ReservedCash        float64    `json:"reservedCash" gorm:"not null;default:0"`
 	CreatedAt           time.Time  `json:"createdAt"`
 	UpdatedAt           time.Time  `json:"updatedAt"`
 }
@@ -201,6 +205,58 @@ type SimulatedAccount struct {
 
 func (SimulatedAccount) TableName() string { return "research_v160_simulated_accounts" }
 
+// AccountCashFlow records external contributions independently from trading
+// cash flows so deposits can never be mistaken for strategy profit.
+type AccountCashFlow struct {
+	ID                  uint      `json:"id" gorm:"primaryKey"`
+	FlowID              string    `json:"flowId" gorm:"size:36;uniqueIndex;not null"`
+	Sequence            int       `json:"sequence" gorm:"uniqueIndex;not null"`
+	Type                string    `json:"type" gorm:"size:32;index;not null"`
+	Amount              float64   `json:"amount" gorm:"not null"`
+	EffectiveAt         time.Time `json:"effectiveAt" gorm:"index;not null"`
+	TradingDate         string    `json:"tradingDate" gorm:"size:10;index;not null"`
+	NetAssetValueBefore float64   `json:"netAssetValueBefore" gorm:"not null"`
+	NetAssetValueAfter  float64   `json:"netAssetValueAfter" gorm:"not null"`
+	UnitValueBefore     float64   `json:"unitValueBefore" gorm:"not null"`
+	UnitsIssued         float64   `json:"unitsIssued" gorm:"not null"`
+	CreatedAt           time.Time `json:"createdAt"`
+}
+
+func (AccountCashFlow) TableName() string { return "research_v170_account_cash_flows" }
+
+type FundingPlan struct {
+	ID                     uint      `json:"id" gorm:"primaryKey"`
+	InitialContribution    float64   `json:"initialContribution" gorm:"not null"`
+	TargetContribution     float64   `json:"targetContribution" gorm:"not null"`
+	DepositAmount          float64   `json:"depositAmount" gorm:"not null"`
+	PlannedDeposits        int       `json:"plannedDeposits" gorm:"not null"`
+	CompletedDeposits      int       `json:"completedDeposits" gorm:"not null;default:0"`
+	StartAfterTradingDate  string    `json:"startAfterTradingDate" gorm:"size:10;not null"`
+	LastDepositTradingDate string    `json:"lastDepositTradingDate" gorm:"size:10"`
+	CreatedAt              time.Time `json:"createdAt"`
+	UpdatedAt              time.Time `json:"updatedAt"`
+}
+
+func (FundingPlan) TableName() string { return "research_v170_funding_plans" }
+
+type AccountValuationSnapshot struct {
+	ID                        uint      `json:"id" gorm:"primaryKey"`
+	SnapshotID                string    `json:"snapshotId" gorm:"size:64;uniqueIndex;not null"`
+	SnapshotType              string    `json:"snapshotType" gorm:"size:32;index;not null"`
+	TradingDate               string    `json:"tradingDate" gorm:"size:10;index:idx_v170_snapshot_date_type,priority:1;not null"`
+	ValuedAt                  time.Time `json:"valuedAt" gorm:"index;not null"`
+	Cash                      float64   `json:"cash" gorm:"not null"`
+	PositionValue             float64   `json:"positionValue" gorm:"not null"`
+	NetAssetValue             float64   `json:"netAssetValue" gorm:"not null"`
+	CumulativeNetContribution float64   `json:"cumulativeNetContribution" gorm:"not null"`
+	UnitValue                 float64   `json:"unitValue" gorm:"not null"`
+	TimeWeightedReturn        float64   `json:"timeWeightedReturn" gorm:"not null"`
+	ValuationStatus           string    `json:"valuationStatus" gorm:"size:32;not null"`
+	CreatedAt                 time.Time `json:"createdAt"`
+}
+
+func (AccountValuationSnapshot) TableName() string { return "research_v170_account_snapshots" }
+
 type SimulatedTrade struct {
 	ID               uint      `json:"id" gorm:"primaryKey"`
 	TradeID          string    `json:"tradeId" gorm:"size:36;uniqueIndex;not null"`
@@ -250,14 +306,78 @@ type Position struct {
 func (Position) TableName() string { return "research_v160_positions" }
 
 type AccountOverview struct {
-	InitialCash   float64    `json:"initialCash"`
-	Cash          float64    `json:"cash"`
-	PositionValue float64    `json:"positionValue"`
-	NetAssetValue float64    `json:"netAssetValue"`
-	NetProfit     float64    `json:"netProfit"`
-	NetYieldRate  float64    `json:"netYieldRate"`
-	ValuedAt      time.Time  `json:"valuedAt"`
-	Positions     []Position `json:"positions"`
+	InitialCash               float64    `json:"initialCash"`
+	Cash                      float64    `json:"cash"`
+	PositionValue             float64    `json:"positionValue"`
+	NetAssetValue             float64    `json:"netAssetValue"`
+	CumulativeNetContribution float64    `json:"cumulativeNetContribution"`
+	TargetContribution        float64    `json:"targetContribution"`
+	DepositAmount             float64    `json:"depositAmount"`
+	PlannedDeposits           int        `json:"plannedDeposits"`
+	CompletedDeposits         int        `json:"completedDeposits"`
+	RemainingDeposits         int        `json:"remainingDeposits"`
+	NextContributionAt        *time.Time `json:"nextContributionAt,omitempty"`
+	CurrentPositions          int        `json:"currentPositions"`
+	PendingBuys               int        `json:"pendingBuys"`
+	MaxPositions              int        `json:"maxPositions"`
+	RemainingPositions        int        `json:"remainingPositions"`
+	NetProfit                 float64    `json:"netProfit"`
+	NetYieldRate              float64    `json:"netYieldRate"`
+	TimeWeightedReturn        float64    `json:"timeWeightedReturn"`
+	CumulativeCapitalReturn   float64    `json:"cumulativeCapitalReturn"`
+	ValuedAt                  time.Time  `json:"valuedAt"`
+	Positions                 []Position `json:"positions"`
+}
+
+type AccountPerformancePoint struct {
+	ValuedAt                  time.Time `json:"valuedAt"`
+	TradingDate               string    `json:"tradingDate"`
+	SnapshotType              string    `json:"snapshotType"`
+	Cash                      float64   `json:"cash"`
+	PositionValue             float64   `json:"positionValue"`
+	NetAssetValue             float64   `json:"netAssetValue"`
+	CumulativeNetContribution float64   `json:"cumulativeNetContribution"`
+	UnitValue                 float64   `json:"unitValue"`
+	TimeWeightedReturn        float64   `json:"timeWeightedReturn"`
+	ValuationStatus           string    `json:"valuationStatus"`
+}
+
+type StrategyPerformanceMetrics struct {
+	ClosedTrades                int      `json:"closedTrades"`
+	WinRate                     float64  `json:"winRate"`
+	AverageGainRate             float64  `json:"averageGainRate"`
+	AverageLossRate             float64  `json:"averageLossRate"`
+	PayoffRatio                 float64  `json:"payoffRatio"`
+	MaxDrawdown                 float64  `json:"maxDrawdown"`
+	TotalFees                   float64  `json:"totalFees"`
+	TurnoverRate                float64  `json:"turnoverRate"`
+	CapitalUtilization          float64  `json:"capitalUtilization"`
+	AverageHoldingMinutes       float64  `json:"averageHoldingMinutes"`
+	MissedExecutionRate         float64  `json:"missedExecutionRate"`
+	IndustryConcentration       *float64 `json:"industryConcentration"`
+	IndustryConcentrationStatus string   `json:"industryConcentrationStatus"`
+	SampleLevel                 string   `json:"sampleLevel"`
+}
+
+type AccountPerformance struct {
+	ValuedAt                  time.Time                  `json:"valuedAt"`
+	UnitValue                 float64                    `json:"unitValue"`
+	TimeWeightedReturn        float64                    `json:"timeWeightedReturn"`
+	CumulativeCapitalReturn   float64                    `json:"cumulativeCapitalReturn"`
+	NetProfit                 float64                    `json:"netProfit"`
+	NetAssetValue             float64                    `json:"netAssetValue"`
+	CumulativeNetContribution float64                    `json:"cumulativeNetContribution"`
+	Curve                     []AccountPerformancePoint  `json:"curve"`
+	Metrics                   StrategyPerformanceMetrics `json:"metrics"`
+}
+
+type FundingProcessResult struct {
+	Applied            bool             `json:"applied"`
+	Reason             string           `json:"reason"`
+	CashFlow           *AccountCashFlow `json:"cashFlow,omitempty"`
+	CompletedDeposits  int              `json:"completedDeposits"`
+	RemainingDeposits  int              `json:"remainingDeposits"`
+	NextContributionAt *time.Time       `json:"nextContributionAt,omitempty"`
 }
 
 type RecommendationDetail struct {

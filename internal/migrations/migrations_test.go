@@ -360,7 +360,79 @@ func TestSchema9DropsOnlyArchivedLegacyStrategyTables(t *testing.T) {
 	}
 }
 
-func TestEmptyDatabasesUpgradeDirectlyToSchema9(t *testing.T) {
+func TestSchema10RegistersInitialContributionWithoutChangingAccountOrPositions(t *testing.T) {
+	database := openMigrationTestDB(t)
+	if err := applyResearchV160Schema(database); err != nil {
+		t.Fatal(err)
+	}
+	if database.Migrator().HasColumn(&research.Recommendation{}, "ReservedCash") {
+		if err := database.Migrator().DropColumn(&research.Recommendation{}, "ReservedCash"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	now := time.Date(2026, 8, 19, 10, 0, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
+	pendingUpdatedAt := now.Add(-2 * time.Hour)
+	pending := research.Recommendation{RecommendationID: "schema10-pending", AnalysisRunID: "schema10-run",
+		StockCode: "sz000001", StockName: "平安银行", SignalAt: now.Add(-24 * time.Hour), Status: "pending",
+		CreatedAt: pendingUpdatedAt.Add(-time.Hour), UpdatedAt: pendingUpdatedAt}
+	if err := database.Omit("ReservedCash").Create(&pending).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Model(&research.SimulatedAccount{}).Where("id = ?", 1).Update("cash", 23456.78).Error; err != nil {
+		t.Fatal(err)
+	}
+	position := research.Position{RecommendationID: "schema10-position", StockCode: "sh600000", StockName: "浦发银行", Market: "SH",
+		Quantity: 100, EntryAt: now, EntryPrice: 10, CurrentPrice: 10.2, CurrentPriceAt: &now, Status: "open"}
+	if err := database.Create(&position).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchMultiPositionFunding(database); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchMultiPositionFunding(database); err != nil {
+		t.Fatalf("schema 10 migration must be idempotent: %v", err)
+	}
+	var account research.SimulatedAccount
+	if err := database.First(&account, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if account.Cash != 23456.78 || account.InitialCash != research.InitialCash {
+		t.Fatalf("migration changed account: %+v", account)
+	}
+	var storedPosition research.Position
+	if err := database.Where("recommendation_id = ?", position.RecommendationID).First(&storedPosition).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPosition.Quantity != position.Quantity || storedPosition.Status != "open" {
+		t.Fatalf("migration changed position: %+v", storedPosition)
+	}
+	var storedPending research.Recommendation
+	if err := database.Where("recommendation_id = ?", pending.RecommendationID).First(&storedPending).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedPending.ReservedCash != research.MaxCashPerTrade || !storedPending.UpdatedAt.Equal(pendingUpdatedAt) {
+		t.Fatalf("queued recommendation migration changed history: reserved=%f updated=%v want=%v", storedPending.ReservedCash, storedPending.UpdatedAt, pendingUpdatedAt)
+	}
+	var flows []research.AccountCashFlow
+	if err := database.Order("sequence asc").Find(&flows).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 1 || flows[0].Sequence != 0 || flows[0].Amount != research.InitialCash {
+		t.Fatalf("cash flows=%+v", flows)
+	}
+	var plan research.FundingPlan
+	if err := database.First(&plan, 1).Error; err != nil {
+		t.Fatal(err)
+	}
+	if plan.CompletedDeposits != 0 || plan.PlannedDeposits != 4 || plan.TargetContribution != 500000 {
+		t.Fatalf("funding plan=%+v", plan)
+	}
+	if err := verifyMainSchema10Runtime(database); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEmptyDatabasesUpgradeDirectlyToSchema10(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	if err := MigrateAll(mainDB, minuteDB); err != nil {
@@ -377,12 +449,12 @@ func TestEmptyDatabasesUpgradeDirectlyToSchema9(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 9 || minuteStatus.CurrentVersion != 2 {
+	if mainStatus.CurrentVersion != 10 || minuteStatus.CurrentVersion != 2 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 }
 
-func TestPublished15BaselineUpgradesDirectlyToSchema9(t *testing.T) {
+func TestPublished15BaselineUpgradesDirectlyToSchema10(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := database.AutoMigrate(&MigrationRecord{}); err != nil {
 		t.Fatal(err)
@@ -409,7 +481,7 @@ func TestPublished15BaselineUpgradesDirectlyToSchema9(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentVersion != 9 || len(status.Pending) != 0 {
+	if status.CurrentVersion != 10 || len(status.Pending) != 0 {
 		t.Fatalf("upgraded status=%+v", status)
 	}
 	if database.Migrator().HasTable("ai_recommend_stocks") {

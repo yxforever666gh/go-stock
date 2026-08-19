@@ -337,9 +337,17 @@ func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code st
 		return research.Quote{}, errors.New("realtime quote price is invalid")
 	}
 	previousClose, _ := strconv.ParseFloat(strings.TrimSpace(row.PreClose), 64)
-	quoteAt, _ := time.ParseInLocation("2006-01-02 15:04:05", strings.TrimSpace(row.Date)+" "+strings.TrimSpace(row.Time), shanghaiDataLocation())
+	quoteText := strings.TrimSpace(row.Date) + " " + strings.TrimSpace(row.Time)
+	var quoteAt time.Time
+	for _, layout := range []string{"2006-01-02 15:04:05", "2006-01-02 15:04", "20060102 15:04:05", "20060102 15:04"} {
+		parsed, parseErr := time.ParseInLocation(layout, quoteText, shanghaiDataLocation())
+		if parseErr == nil {
+			quoteAt = parsed
+			break
+		}
+	}
 	if quoteAt.IsZero() {
-		quoteAt = time.Now()
+		return research.Quote{}, errors.New("realtime quote time is invalid")
 	}
 	volume, _ := strconv.ParseFloat(strings.TrimSpace(row.Volume), 64)
 	amount, _ := strconv.ParseFloat(strings.TrimSpace(row.Amount), 64)

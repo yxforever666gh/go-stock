@@ -93,7 +93,7 @@ func (a *App) addPrompt(prompt models.Prompt) string {
 func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.6.9：分钟图支持私人源、腾讯、新浪与 AKShare 按设置优先级自动回退，单源异常不再中断补齐。"
+		content = "1.7.0：模拟账户支持分期入金、最多十只并行敞口和剔除入金影响的 TWR 策略评估。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

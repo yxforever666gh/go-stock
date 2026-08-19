@@ -58,8 +58,11 @@ type Service struct {
 	chartProvider   RecommendationChartProvider
 	calendar        TradingCalendar
 	now             func() time.Time
-	serial          sync.Mutex
+	serial          sync.Mutex // serializes capacity admission and direct buys
 	analysisMu      sync.Mutex
+	lifecycleScanMu sync.Mutex
+	lifecycleMu     sync.Mutex
+	lifecycleActive map[string]struct{}
 	chartMu         sync.Mutex
 	chartRefreshing map[string]struct{}
 }
@@ -76,7 +79,7 @@ func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calen
 		provider = quoteLifecycleContextProvider{quotes: quotes}
 	}
 	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar, now: time.Now,
-		chartRefreshing: make(map[string]struct{})}
+		lifecycleActive: make(map[string]struct{}), chartRefreshing: make(map[string]struct{})}
 }
 
 // SetRecommendationChartProvider installs the minute-cache adapter used by
@@ -110,6 +113,15 @@ func (provider quoteLifecycleContextProvider) CollectLifecycleContext(ctx contex
 
 func (s *Service) Repository() *Repository { return s.repository }
 
+// recommendationCapacity waits for a possibly in-progress scheduled deposit
+// or direct buy, then releases the trade lock immediately. The multi-stage AI
+// run must never hold this lock while waiting on external services.
+func (s *Service) recommendationCapacity(ctx context.Context) (RecommendationCapacity, error) {
+	s.serial.Lock()
+	defer s.serial.Unlock()
+	return s.repository.RecommendationCapacity(ctx)
+}
+
 // EnqueueRecommendation persists one AI recommendation and either attempts its
 // single direct buy immediately or schedules that attempt for the next valid
 // trading session. The same serial lock is shared with the lifecycle scanner so
@@ -123,25 +135,31 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 		return err
 	}
 	recommendation.Status, recommendation.NextCheckAt = "buy_pending", &next
-	if err := s.repository.CreateRecommendation(ctx, recommendation, initial); err != nil {
-		return err
-	}
-	if err := s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
-		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入"}); err != nil {
+	recommendation.ReservedCash = MaxCashPerTrade
+	initialDecision := &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
+		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入"}
+	if err := s.repository.CreateRecommendationWithinCapacity(ctx, recommendation, initial, initialDecision); err != nil {
 		return err
 	}
 	if next.After(now) {
 		return nil
 	}
 	if err := s.attemptBuy(ctx, recommendation, now); err != nil {
-		return s.recordError(ctx, *recommendation, now, err)
+		// Admission already committed successfully. An internal calendar/database
+		// fault must not turn the parent analysis into a failed report while the
+		// queued recommendation remains visible and reserved. Leave it retryable.
+		_ = s.deferBuyProcessingError(ctx, recommendation.RecommendationID, now, err)
 	}
 	return nil
 }
 
 func (s *Service) ProcessDue(ctx context.Context) error {
-	s.serial.Lock()
-	defer s.serial.Unlock()
+	// A minute cron tick must not accumulate behind a slow model response. The
+	// next tick simply observes that this scan is still running and exits.
+	if !s.lifecycleScanMu.TryLock() {
+		return nil
+	}
+	defer s.lifecycleScanMu.Unlock()
 	now := s.now()
 	trading, err := s.calendar.IsTradingDay(ctx, now)
 	if err != nil {
@@ -170,12 +188,70 @@ func (s *Service) ProcessDue(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Direct buys remain strictly ordered by due time/signal/id so competing
+	// recommendations consume cash deterministically.
 	for index := range due {
-		if err := s.processOne(ctx, &due[index], now); err != nil {
-			_ = s.recordError(ctx, due[index], now, err)
+		if due[index].Status != "buy_pending" {
+			continue
 		}
+		s.serial.Lock()
+		taskNow := s.now()
+		processErr := s.processOne(ctx, &due[index], taskNow)
+		if processErr != nil {
+			_ = s.recordError(ctx, due[index], taskNow, processErr)
+		}
+		s.serial.Unlock()
 	}
-	return nil
+
+	// Holding/sell-pending stocks have isolated messages and may collect data
+	// and wait for their models independently. At most five are active at once.
+	sem := make(chan struct{}, 5)
+	var wait sync.WaitGroup
+	var errorMu sync.Mutex
+	var resultErr error
+	for index := range due {
+		recommendation := due[index]
+		if recommendation.Status != "active" && recommendation.Status != "sell_pending" {
+			continue
+		}
+		if !s.beginLifecycle(recommendation.RecommendationID) {
+			continue
+		}
+		sem <- struct{}{}
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			defer func() { <-sem }()
+			defer s.endLifecycle(recommendation.RecommendationID)
+			taskNow := s.now()
+			if err := s.processOne(ctx, &recommendation, taskNow); err != nil {
+				recordErr := s.recordError(ctx, recommendation, taskNow, err)
+				errorMu.Lock()
+				if recordErr != nil {
+					resultErr = errors.Join(resultErr, err, recordErr)
+				}
+				errorMu.Unlock()
+			}
+		}()
+	}
+	wait.Wait()
+	return resultErr
+}
+
+func (s *Service) beginLifecycle(recommendationID string) bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if _, exists := s.lifecycleActive[recommendationID]; exists {
+		return false
+	}
+	s.lifecycleActive[recommendationID] = struct{}{}
+	return true
+}
+
+func (s *Service) endLifecycle(recommendationID string) {
+	s.lifecycleMu.Lock()
+	delete(s.lifecycleActive, recommendationID)
+	s.lifecycleMu.Unlock()
 }
 
 func (s *Service) processOne(ctx context.Context, recommendation *Recommendation, now time.Time) error {
@@ -407,8 +483,7 @@ func (s *Service) deferSell(ctx context.Context, recommendationID string, now ti
 
 func (s *Service) recordError(ctx context.Context, recommendation Recommendation, now time.Time, processErr error) error {
 	if recommendation.Status == "buy_pending" {
-		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
-			"一次性买入处理失败: "+processErr.Error(), now, nil)
+		return s.deferBuyProcessingError(ctx, recommendation.RecommendationID, now, processErr)
 	}
 	next, err := NextSellCheck(ctx, s.calendar, now)
 	if err != nil {
@@ -421,31 +496,17 @@ func (s *Service) recordError(ctx context.Context, recommendation Recommendation
 		DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error(), DataStatus: "model_error"})
 }
 
+func (s *Service) deferBuyProcessingError(ctx context.Context, recommendationID string, now time.Time, processErr error) error {
+	next, err := NextTradingSessionOpen(ctx, s.calendar, now.Add(time.Minute))
+	if err != nil {
+		return err
+	}
+	return s.repository.DeferBuyProcessingError(ctx, recommendationID,
+		"一次性买入内部处理失败，尚未向市场提交模拟成交: "+processErr.Error(), next, now)
+}
+
 func (s *Service) AccountOverview(ctx context.Context) (AccountOverview, error) {
-	account, err := s.repository.Account(ctx)
-	if err != nil {
-		return AccountOverview{}, err
-	}
-	positions, err := s.repository.OpenPositions(ctx)
-	if err != nil {
-		return AccountOverview{}, err
-	}
-	value := 0.0
-	now := s.now()
-	for index := range positions {
-		quote, quoteErr := s.quotes.CurrentQuote(ctx, positions[index].StockCode)
-		if quoteErr == nil && quote.Price > 0 {
-			positions[index].CurrentPrice, positions[index].CurrentPriceAt = quote.Price, &quote.At
-			_ = s.repository.UpdatePositionQuote(ctx, positions[index].ID, quote)
-		}
-		if positions[index].CurrentPrice > 0 {
-			enrichPositionValue(&positions[index])
-			value += positions[index].NetSellValue
-		}
-	}
-	nav := account.Cash + value
-	return AccountOverview{InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: value, NetAssetValue: nav,
-		NetProfit: nav - account.InitialCash, NetYieldRate: (nav - account.InitialCash) / account.InitialCash, ValuedAt: now, Positions: positions}, nil
+	return s.accountOverview(ctx, true)
 }
 
 func (s *Service) Detail(ctx context.Context, recommendationID string) (RecommendationDetail, error) {

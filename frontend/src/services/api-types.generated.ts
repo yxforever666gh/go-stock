@@ -17,6 +17,7 @@ export const API_PATHS = {
   followFund: "/api/v1/watchlist/funds",
   followStock: "/api/v1/watchlist/stocks",
   getAIResponse: "/api/v1/ai/responses/{stockCode}",
+  getAccountPerformance: "/api/v1/research/account/performance",
   getAnalysisRun: "/api/v1/research/analysis-runs/{id}",
   getCLSCalendar: "/api/v1/market/calendars/cls",
   getGlobalIndexes: "/api/v1/market/indexes/global",
@@ -44,6 +45,7 @@ export const API_PATHS = {
   getSystemVersion: "/api/v1/system/version",
   initializeGroupSort: "/api/v1/groups/initialize-sort",
   listAIConfigs: "/api/v1/ai/configs",
+  listAccountCashFlows: "/api/v1/research/account/cash-flows",
   listAnalysisRuns: "/api/v1/research/analysis-runs",
   listFollowedFunds: "/api/v1/watchlist/funds",
   listFollowedStocks: "/api/v1/watchlist/stocks",
@@ -95,14 +97,66 @@ export type AcceptedResponse = {
   accepted: boolean
 }
 
+export type AccountCashFlow = {
+  amount: number
+  createdAt: string
+  effectiveAt: string
+  flowId: string
+  netAssetValueAfter: number
+  netAssetValueBefore: number
+  sequence: number
+  tradingDate: string
+  type: "initial_deposit" | "scheduled_deposit"
+  unitValueBefore: number
+  unitsIssued: number
+}
+
 export type AccountOverview = {
   cash: number
+  completedDeposits: number
+  cumulativeCapitalReturn: number
+  cumulativeNetContribution: number
+  currentPositions: number
+  depositAmount: number
   initialCash: number
+  maxPositions: number
   netAssetValue: number
   netProfit: number
   netYieldRate: number
+  nextContributionAt?: string
+  pendingBuys: number
+  plannedDeposits: number
   positionValue: number
   positions: Array<Position>
+  remainingDeposits: number
+  remainingPositions: number
+  targetContribution: number
+  timeWeightedReturn: number
+  valuedAt: string
+}
+
+export type AccountPerformance = {
+  cumulativeCapitalReturn: number
+  cumulativeNetContribution: number
+  curve: Array<AccountPerformancePoint>
+  metrics: StrategyPerformanceMetrics
+  netAssetValue: number
+  netProfit: number
+  timeWeightedReturn: number
+  unitValue: number
+  valuedAt: string
+}
+
+export type AccountPerformancePoint = {
+  cash: number
+  cumulativeNetContribution: number
+  netAssetValue: number
+  positionValue: number
+  snapshotType: "initial_deposit" | "pre_deposit" | "post_deposit" | "daily_close" | "current"
+  timeWeightedReturn: number
+  tradingDate: string
+  unitValue: number
+  valuationStatus: string
   valuedAt: string
 }
 
@@ -286,6 +340,7 @@ export type Recommendation = {
   nextCheckAt?: string
   quantity?: number
   recommendationId: string
+  reservedCash?: number
   sellAmount?: number
   signalAt: string
   sourceRefs?: string
@@ -399,6 +454,23 @@ export type StockQueryRequest = {
 
 export type StockSortRequest = {
   sort: number
+}
+
+export type StrategyPerformanceMetrics = {
+  averageGainRate: number
+  averageHoldingMinutes: number
+  averageLossRate: number
+  capitalUtilization: number
+  closedTrades: number
+  industryConcentration: number | null
+  industryConcentrationStatus: "available" | "unavailable_no_structured_industry_data"
+  maxDrawdown: number
+  missedExecutionRate: number
+  payoffRatio: number
+  sampleLevel: "样本不足" | "初步观察" | "可进行阶段性评价"
+  totalFees: number
+  turnoverRate: number
+  winRate: number
 }
 
 export type SystemVersionStatus = {

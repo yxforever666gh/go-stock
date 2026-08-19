@@ -13,6 +13,11 @@ import (
 	"go-stock/backend/research"
 )
 
+const (
+	researchFundingEntryKey  = "ResearchAccountFunding"
+	researchSnapshotEntryKey = "ResearchAccountDailyCloseSnapshot"
+)
+
 func (a *App) replaceResearchRuntime(configID int) error {
 	runtime, err := data.NewResearchRuntime(configID)
 	if err != nil {
@@ -41,14 +46,28 @@ func (a *App) getResearchRuntime() (*data.ResearchRuntime, error) {
 }
 
 func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
+	// Account contributions and daily valuation snapshots belong to the
+	// simulated portfolio, not to the model switch. Register them even when AI
+	// analysis is disabled or every model configuration is turned off.
+	a.ensureResearchAccountCrons()
 	for key, entryID := range a.snapshotCronEntries() {
 		if strings.HasPrefix(key, aiAnalysisEntryPrefix) || key == aiLifecycleEntryKey {
 			a.cron.Remove(entryID)
 			a.deleteCronEntry(key)
 		}
 	}
+	// The lifecycle scanner also performs one-shot pending buys and retries a
+	// previously approved sell. Those transitions must continue even when new
+	// AI analysis is disabled or no model is currently callable.
+	entryID, lifecycleErr := a.cron.AddFunc("@every 1m", func() { a.processDueAILifecycle() })
+	if lifecycleErr != nil {
+		a.recordSchedulerRegistrationError(aiLifecycleEntryKey, "@every 1m", lifecycleErr)
+		return
+	}
+	a.setCronEntry(aiLifecycleEntryKey, entryID)
+	go a.processDueAILifecycle()
 	if setting == nil || setting.Settings == nil || !setting.AIAnalysisEnabled {
-		logger.SugaredLogger.Info("AI 分析定时任务已关闭")
+		logger.SugaredLogger.Info("AI 新推荐定时任务已关闭；持仓生命周期与账户任务继续运行")
 		return
 	}
 	selected, err := data.ResolveAIAnalysisConfig(setting)
@@ -78,14 +97,79 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 		}
 		a.setCronEntry(fmt.Sprintf("%s%d", aiAnalysisEntryPrefix, index), entryID)
 	}
-	entryID, err := a.cron.AddFunc("@every 1m", func() { a.processDueAILifecycle() })
-	if err != nil {
-		a.recordSchedulerRegistrationError(aiLifecycleEntryKey, "@every 1m", err)
+	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描待买入和固定卖出检查时点", times)
+}
+
+func (a *App) ensureResearchAccountCrons() {
+	if _, exists := a.getCronEntry(researchFundingEntryKey); !exists {
+		entryID, err := a.cron.AddFunc("0 * * * * *", func() { a.processScheduledResearchFunding() })
+		if err != nil {
+			a.recordSchedulerRegistrationError(researchFundingEntryKey, "0 * * * * *", err)
+		} else {
+			a.setCronEntry(researchFundingEntryKey, entryID)
+			go a.processScheduledResearchFunding()
+		}
+	}
+	if _, exists := a.getCronEntry(researchSnapshotEntryKey); !exists {
+		entryID, err := a.cron.AddFunc("0 * 15 * * *", func() { a.processScheduledResearchSnapshot() })
+		if err != nil {
+			a.recordSchedulerRegistrationError(researchSnapshotEntryKey, "0 * 15 * * *", err)
+		} else {
+			a.setCronEntry(researchSnapshotEntryKey, entryID)
+			go a.processScheduledResearchSnapshot()
+		}
+	}
+}
+
+func (a *App) processScheduledResearchFunding() {
+	now := time.Now()
+	local := research.ShanghaiTime(now)
+	if local.Hour() != 9 || local.Minute() < 20 || local.Minute() >= 30 {
 		return
 	}
-	a.setCronEntry(aiLifecycleEntryKey, entryID)
-	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描待买入和固定卖出检查时点", times)
-	go a.processDueAILifecycle()
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		logger.SugaredLogger.Errorf("模拟账户入金运行时不可用: %v", err)
+		return
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := runtime.Service.ProcessScheduledFunding(ctx, now)
+	if err != nil {
+		logger.SugaredLogger.Errorf("模拟账户定时入金失败: %v", err)
+		return
+	}
+	if result.Applied && result.CashFlow != nil {
+		logger.SugaredLogger.Infof("模拟账户定时入金完成: sequence=%d amount=%.2f tradingDate=%s remaining=%d",
+			result.CashFlow.Sequence, result.CashFlow.Amount, result.CashFlow.TradingDate, result.RemainingDeposits)
+	}
+}
+
+func (a *App) processScheduledResearchSnapshot() {
+	now := time.Now()
+	local := research.ShanghaiTime(now)
+	if local.Hour() < 15 || (local.Hour() == 15 && local.Minute() < 5) {
+		return
+	}
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		logger.SugaredLogger.Errorf("模拟账户收盘快照运行时不可用: %v", err)
+		return
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	applied, err := runtime.Service.ProcessScheduledSnapshot(ctx, now)
+	if err != nil {
+		logger.SugaredLogger.Errorf("模拟账户收盘快照失败: %v", err)
+		return
+	}
+	if applied {
+		logger.SugaredLogger.Infof("模拟账户收盘快照完成: tradingDate=%s", local.Format("2006-01-02"))
+	}
 }
 
 func (a *App) runScheduledAIAnalysis() {
@@ -157,6 +241,13 @@ func (a *App) startManualAIAnalysis() (bool, error) {
 }
 
 func (a *App) processDueAILifecycle() {
+	// Protect across runtime replacements as well as ordinary cron overlap. A
+	// slow model call must not let a later one-minute tick process the same due
+	// recommendation through a newly constructed Service instance.
+	if !a.aiLifecycleRunMu.TryLock() {
+		return
+	}
+	defer a.aiLifecycleRunMu.Unlock()
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		logger.SugaredLogger.Errorf("AI 生命周期运行时不可用: %v", err)
@@ -240,9 +331,37 @@ func (a *App) getAIRecommendationChart(recommendationID string, refresh bool) (r
 }
 
 func (a *App) getAISimulatedAccount() (research.AccountOverview, error) {
+	return a.getAISimulatedAccountContext(context.Background())
+}
+
+func (a *App) getAISimulatedAccountContext(ctx context.Context) (research.AccountOverview, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return research.AccountOverview{}, err
 	}
-	return runtime.Service.AccountOverview(context.Background())
+	return runtime.Service.AccountOverview(ctx)
+}
+
+func (a *App) getAIAccountCashFlows() ([]research.AccountCashFlow, error) {
+	return a.getAIAccountCashFlowsContext(context.Background())
+}
+
+func (a *App) getAIAccountCashFlowsContext(ctx context.Context) ([]research.AccountCashFlow, error) {
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		return nil, err
+	}
+	return runtime.Service.CashFlows(ctx)
+}
+
+func (a *App) getAIAccountPerformance() (research.AccountPerformance, error) {
+	return a.getAIAccountPerformanceContext(context.Background())
+}
+
+func (a *App) getAIAccountPerformanceContext(ctx context.Context) (research.AccountPerformance, error) {
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		return research.AccountPerformance{}, err
+	}
+	return runtime.Service.AccountPerformance(ctx)
 }

@@ -149,13 +149,15 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		}
 		return run, stageErr
 	}
-	hasPosition, err := r.service.repository.HasBlockingExposure(ctx)
+	capacity, err := r.service.recommendationCapacity(ctx)
 	if err != nil {
 		return finishFailure(err)
 	}
-	if hasPosition {
+	if capacity.AllowedNew == 0 {
 		completed := r.service.now()
-		run.Status, run.CompletedAt, run.FailureReason = "skipped_open_position", &completed, "账户存在持仓或待买入任务"
+		run.Status, run.CompletedAt, run.FailureReason = "skipped_capacity", &completed,
+			fmt.Sprintf("容量不足，未调用 AI（敞口 %d/%d，可用现金 %.2f 元，待买预留 %.2f 元）",
+				capacity.ExposureCount, MaxPortfolioExposures, capacity.Cash, capacity.ReservedCash)
 		return run, r.service.repository.SaveAnalysis(ctx, &run)
 	}
 
@@ -226,18 +228,18 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	run.StockReport = strings.Join(stockReports, "\n\n")
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
-	finalResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(now, run.MarketReport, run.SectorReport, run.StockReport, shortlist)})
+	finalResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(now, run.MarketReport, run.SectorReport, run.StockReport, shortlist, capacity.AllowedNew)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("决策层失败: %w", err))
 	}
-	rows, parseErr := parseFinalReport(finalResult.Content)
+	rows, parseErr := parseFinalReportWithLimit(finalResult.Content, capacity.AllowedNew)
 	if parseErr != nil {
-		repairResult, repairErr := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_report_repair", Prompt: repairFinalReportPrompt(finalResult.Content, parseErr)})
+		repairResult, repairErr := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_report_repair", Prompt: repairFinalReportPrompt(finalResult.Content, parseErr, capacity.AllowedNew)})
 		if repairErr != nil {
 			return finishFailure(fmt.Errorf("报告修复失败: %w", repairErr))
 		}
 		finalResult = repairResult
-		rows, parseErr = parseFinalReport(finalResult.Content)
+		rows, parseErr = parseFinalReportWithLimit(finalResult.Content, capacity.AllowedNew)
 		if parseErr != nil {
 			return finishFailure(fmt.Errorf("报告修复后仍不合规: %w", parseErr))
 		}
@@ -245,6 +247,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	run.FinalReport = strings.TrimSpace(finalResult.Content)
 
 	inserted := 0
+	acceptedRows := make([]recommendationRow, 0, capacity.AllowedNew)
 	allowedFinalCodes := make(map[string]bool, len(shortlist))
 	for _, item := range shortlist {
 		if code, ok := NormalizeMainlandCode(item.StockCode); ok {
@@ -252,7 +255,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		}
 	}
 	for _, row := range rows {
-		if inserted >= 2 {
+		if inserted >= capacity.AllowedNew {
 			break
 		}
 		code, ok := NormalizeMainlandCode(row.StockCode)
@@ -279,15 +282,24 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 			SignalAt: signalAt, AISummary: row.AISummary,
 			MainRisk: row.MainRisk, SourceRefs: row.SourceRefs,
 		}
+		row.StockCode, row.StockName = code, quote.Name
 		initial := []LifecycleMessage{
 			{RecommendationID: recommendation.RecommendationID, Sequence: 1, Role: "system", Phase: "initial", Content: isolatedInitialContext(run, recommendation), Model: finalResult.Model, CreatedAt: signalAt},
 			{RecommendationID: recommendation.RecommendationID, Sequence: 2, Role: "assistant", Phase: "initial", Content: row.markdownRow(), Model: finalResult.Model, CreatedAt: signalAt},
 		}
 		if err := r.service.EnqueueRecommendation(ctx, &recommendation, initial); err != nil {
+			if errors.Is(err, ErrDuplicateExposure) {
+				continue
+			}
+			if errors.Is(err, ErrCapacityReached) {
+				break
+			}
 			return finishFailure(err)
 		}
 		inserted++
+		acceptedRows = append(acceptedRows, row)
 	}
+	run.FinalReport = replaceFinalReportRows(run.FinalReport, acceptedRows)
 	completed := r.service.now()
 	run.CompletedAt, run.RecommendationCount = &completed, inserted
 	if inserted == 0 {
@@ -335,13 +347,21 @@ func stockStagePrompt(now time.Time, market, sector string, candidates []StockCa
 	return "你是沪深A股个股研究员。现在是" + now.Format(time.RFC3339) + "。逐只参考实时行情、日/分钟K线、公告、研报、财务、概念、资金流和新闻。本批最多保留3只；可以0只。最终被推荐的股票会由系统按最新可交易行情直接模拟买入，不设置激活条件。不要给买入区间、止损或止盈。只返回严格 JSON：{\"analysis\":\"Markdown\",\"shortlist\":[{\"stockName\":\"名称\",\"stockCode\":\"sh600000\",\"aiSummary\":\"摘要\",\"mainRisk\":\"风险\",\"sourceRefs\":\"S001,S002\"}]}。\n大盘：\n" + market + "\n板块：\n" + sector + "\n候选：" + string(candidateJSON) + "\n来源：\n" + sourceCorpus(filterSourcesForCandidates(sources, candidates), 64000)
 }
 
-func finalStagePrompt(now time.Time, market, sector, stocks string, shortlist []recommendationRow) string {
+func finalStagePrompt(now time.Time, market, sector, stocks string, shortlist []recommendationRow, maxRecommendations int) string {
+	if maxRecommendations < 0 {
+		maxRecommendations = 0
+	}
+	if maxRecommendations > 2 {
+		maxRecommendations = 2
+	}
 	shortlistJSON, _ := json.Marshal(shortlist)
-	return "你是最终投资研究决策员。现在是" + now.Format(time.RFC3339) + "。综合三级结果，推荐0到2只、允许明确空仓。周期通常中短线且一般不超过10天但不是硬规则。推荐会触发系统按最新可交易行情直接模拟买入，但不代表真实购买。不要输出激活条件、买入区间、止损、止盈、失效条件、基准或超额收益。输出完整 Markdown 报告，末尾必须严格包含下面5列表格且不可增加/删除/改名；空仓也保留表头和分隔行但无数据行。\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n大盘：\n" + market + "\n板块：\n" + sector + "\n个股：\n" + stocks + "\n最多15只候选：" + string(shortlistJSON)
+	return fmt.Sprintf("你是最终投资研究决策员。现在是%s。综合三级结果，本轮账户容量最多允许推荐%d只，请推荐0到%d只并允许明确空仓。周期通常中短线且一般不超过10天但不是硬规则。推荐会触发系统按最新可交易行情直接模拟买入，但不代表真实购买。不要输出激活条件、买入区间、止损、止盈、失效条件、基准或超额收益。输出完整 Markdown 报告，末尾必须严格包含下面5列表格且不可增加/删除/改名；空仓也保留表头和分隔行但无数据行。\n%s\n|---|---|---|---|---|\n大盘：\n%s\n板块：\n%s\n个股：\n%s\n最多15只候选：%s",
+		now.Format(time.RFC3339), maxRecommendations, maxRecommendations, finalReportTableHeader, market, sector, stocks, string(shortlistJSON))
 }
 
-func repairFinalReportPrompt(report string, parseErr error) string {
-	return "以下报告格式不合规（" + parseErr.Error() + "）。只修复格式和最多2行限制，不改变事实。返回完整 Markdown；末尾必须为：\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n\n原报告：\n" + report
+func repairFinalReportPrompt(report string, parseErr error, maxRecommendations int) string {
+	return fmt.Sprintf("以下报告格式不合规（%s）。只修复格式和最多%d行限制，不改变事实。返回完整 Markdown；末尾必须为：\n%s\n|---|---|---|---|---|\n\n原报告：\n%s",
+		parseErr.Error(), maxRecommendations, finalReportTableHeader, report)
 }
 
 func parseSectorEnvelope(content string) (sectorEnvelope, error) {
@@ -402,6 +422,13 @@ func parseStrictJSON(content string, target any) error {
 }
 
 func parseFinalReport(report string) ([]recommendationRow, error) {
+	return parseFinalReportWithLimit(report, 2)
+}
+
+func parseFinalReportWithLimit(report string, maxRecommendations int) ([]recommendationRow, error) {
+	if maxRecommendations < 0 {
+		maxRecommendations = 0
+	}
 	lines := strings.Split(strings.ReplaceAll(report, "\r\n", "\n"), "\n")
 	headerIndex := -1
 	for i, line := range lines {
@@ -426,10 +453,36 @@ func parseFinalReport(report string) ([]recommendationRow, error) {
 		}
 		rows = append(rows, recommendationRow{StockName: columns[0], StockCode: columns[1], AISummary: columns[2], MainRisk: columns[3], SourceRefs: columns[4]})
 	}
-	if len(rows) > 2 {
-		return nil, errors.New("final report returned more than 2 recommendations")
+	if len(rows) > maxRecommendations {
+		return nil, fmt.Errorf("final report returned more than %d recommendations", maxRecommendations)
 	}
 	return rows, nil
+}
+
+// replaceFinalReportRows makes the persisted report's fixed table reflect
+// exactly the recommendations that passed code, quote, duplicate and capacity
+// admission. The model narrative remains unchanged.
+func replaceFinalReportRows(report string, rows []recommendationRow) string {
+	lines := strings.Split(strings.ReplaceAll(strings.TrimSpace(report), "\r\n", "\n"), "\n")
+	headerIndex := -1
+	for index, line := range lines {
+		if normalizeTableLine(line) == normalizeTableLine(finalReportTableHeader) {
+			headerIndex = index
+		}
+	}
+	if headerIndex < 0 || headerIndex+1 >= len(lines) {
+		return strings.TrimSpace(report)
+	}
+	end := headerIndex + 2
+	for end < len(lines) && strings.TrimSpace(lines[end]) != "" && len(splitTableRow(lines[end])) == 5 {
+		end++
+	}
+	replacement := append([]string(nil), lines[:headerIndex+2]...)
+	for _, row := range rows {
+		replacement = append(replacement, row.markdownRow())
+	}
+	replacement = append(replacement, lines[end:]...)
+	return strings.TrimSpace(strings.Join(replacement, "\n"))
 }
 
 func normalizeTableLine(line string) string {

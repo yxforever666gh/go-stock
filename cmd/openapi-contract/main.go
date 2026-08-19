@@ -58,6 +58,7 @@ type schema struct {
 	Enum       []any              `yaml:"enum"`
 	Const      any                `yaml:"const"`
 	Items      *schema            `yaml:"items"`
+	Nullable   bool               `yaml:"nullable"`
 }
 
 type route struct {
@@ -412,6 +413,15 @@ func generateTypeScript(spec *document) ([]byte, error) {
 func tsType(item *schema, indent int) (string, error) {
 	if item == nil {
 		return "unknown", nil
+	}
+	if item.Nullable {
+		copy := *item
+		copy.Nullable = false
+		value, err := tsType(&copy, indent)
+		if err != nil {
+			return "", err
+		}
+		return value + " | null", nil
 	}
 	if item.Ref != "" {
 		return schemaRefName(item.Ref)
