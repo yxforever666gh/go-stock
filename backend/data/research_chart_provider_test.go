@@ -3,9 +3,12 @@ package data
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"go-stock/backend/db"
 )
 
 func TestResearchChartProviderLoadCachedRejectsAdjustedBars(t *testing.T) {
@@ -40,4 +43,102 @@ func TestChartProviderNormalizesCodesAndSanitizesErrors(t *testing.T) {
 	if strings.Contains(message, "secret-value") || strings.Contains(message, "token-value") || !strings.Contains(message, "[REDACTED]") {
 		t.Fatalf("unsanitized message=%q", message)
 	}
+}
+
+func TestEnabledChartMinuteProvidersPrivatePriorityFallsBackToPublicSources(t *testing.T) {
+	initMinuteCacheTestDB(t, "chart-provider-private-fallback.db")
+	setChartProviderSettings(t, map[string]any{
+		"minute_provider_mode":    "private",
+		"private_minute_enabled":  true,
+		"private_minute_base_url": "https://minute.example.test",
+		"private_minute_api_key":  "test-key",
+		"private_minute_level":    "1min",
+		"akshare_enabled":         true,
+		"sina_minute_enabled":     true,
+		"tencent_minute_enabled":  true,
+	})
+
+	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	want := []string{"diemeng", "tencent", "sina", "akshare"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("private-priority providers = %v; want %v", got, want)
+	}
+}
+
+func TestEnabledChartMinuteProvidersPublicPriorityFallsBackToPrivateSource(t *testing.T) {
+	initMinuteCacheTestDB(t, "chart-provider-public-fallback.db")
+	setChartProviderSettings(t, map[string]any{
+		"minute_provider_mode":    "public",
+		"private_minute_enabled":  true,
+		"private_minute_base_url": "https://minute.example.test",
+		"private_minute_api_key":  "test-key",
+		"private_minute_level":    "1min",
+		"akshare_enabled":         true,
+		"sina_minute_enabled":     true,
+		"tencent_minute_enabled":  true,
+	})
+
+	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	want := []string{"tencent", "sina", "akshare", "diemeng"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("public-priority providers = %v; want %v", got, want)
+	}
+}
+
+func TestEnabledChartMinuteProvidersHonorsIndividualSwitches(t *testing.T) {
+	initMinuteCacheTestDB(t, "chart-provider-disabled-sources.db")
+	setChartProviderSettings(t, map[string]any{
+		"minute_provider_mode":    "private",
+		"private_minute_enabled":  true,
+		"private_minute_base_url": "https://minute.example.test",
+		"private_minute_api_key":  "test-key",
+		"private_minute_level":    "1min",
+		"akshare_enabled":         false,
+		"sina_minute_enabled":     true,
+		"tencent_minute_enabled":  false,
+	})
+
+	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	want := []string{"diemeng", "sina"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("providers with switches = %v; want %v", got, want)
+	}
+}
+
+func TestEnabledChartMinuteProvidersSkipsPrivateSourceUnlessItProvidesOneMinuteBars(t *testing.T) {
+	initMinuteCacheTestDB(t, "chart-provider-private-level.db")
+	setChartProviderSettings(t, map[string]any{
+		"minute_provider_mode":    "private",
+		"private_minute_enabled":  true,
+		"private_minute_base_url": "https://minute.example.test",
+		"private_minute_api_key":  "test-key",
+		"private_minute_level":    "5min",
+		"akshare_enabled":         true,
+		"sina_minute_enabled":     true,
+		"tencent_minute_enabled":  true,
+	})
+
+	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	want := []string{"tencent", "sina", "akshare"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("providers with non-1min private source = %v; want %v", got, want)
+	}
+}
+
+func setChartProviderSettings(t *testing.T, values map[string]any) {
+	t.Helper()
+	// GetSettingConfig creates the singleton settings row for a fresh test DB.
+	// Using a map below is intentional: disabled switches must persist false.
+	_ = GetSettingConfig()
+	if err := db.Dao.Model(&Settings{}).Where("1 = 1").Updates(values).Error; err != nil {
+		t.Fatalf("update chart provider settings: %v", err)
+	}
+}
+
+func chartProviderNames(items []chartMinuteProvider) []string {
+	result := make([]string, 0, len(items))
+	for _, item := range items {
+		result = append(result, item.name)
+	}
+	return result
 }

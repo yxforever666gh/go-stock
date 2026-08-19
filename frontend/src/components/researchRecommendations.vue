@@ -3,6 +3,7 @@ import {h, onMounted, ref} from 'vue'
 import {NButton, NTag, NText, useMessage} from 'naive-ui'
 import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/research-api'
 import {useDraggableDataTableColumns} from '../composables/useDraggableDataTableColumns'
+import {formatInteger, formatMoney, formatPercent, formatPrice} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
@@ -15,8 +16,6 @@ const detail = ref(null)
 
 const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
-function money(value) { return `¥${Number(value || 0).toFixed(2)}` }
-function percent(value) { const number = Number(value || 0) * 100; return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%` }
 function hasBuy(row) { return Boolean(row.activatedAt) && Number(row.buyAmount || 0) > 0 }
 function colorType(value) { return Number(value || 0) >= 0 ? 'error' : 'success' }
 function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'buy_pending' || status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
@@ -28,10 +27,10 @@ const defaultColumns = [
   {title: 'AI 摘要', key: 'aiSummary', minWidth: 260, ellipsis: {tooltip: true}},
   {title: '主要风险', key: 'mainRisk', minWidth: 220, ellipsis: {tooltip: true}},
   {title: '当前状态', key: 'status', width: 135, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
-  {title: '买入金额', key: 'buyAmount', width: 130, render: row => hasBuy(row) ? money(row.buyAmount) : '--'},
-  {title: '卖出金额', key: 'sellAmount', width: 130, render: row => Number(row.sellAmount || 0) > 0 ? money(row.sellAmount) : '--'},
-  {title: '当前金额', key: 'currentAmount', width: 130, render: row => Number(row.currentAmount || 0) > 0 ? money(row.currentAmount) : '--'},
-  {title: '净收益率', key: 'netYieldRate', width: 120, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate)}, {default: () => percent(row.netYieldRate)}) : '--'},
+  {title: '买入金额', key: 'buyAmount', width: 140, render: row => hasBuy(row) ? formatMoney(row.buyAmount) : '--'},
+  {title: '卖出金额', key: 'sellAmount', width: 140, render: row => Number(row.sellAmount || 0) > 0 ? formatMoney(row.sellAmount) : '--'},
+  {title: '当前金额', key: 'currentAmount', width: 140, render: row => Number(row.currentAmount || 0) > 0 ? formatMoney(row.currentAmount) : '--'},
+  {title: '净收益率', key: 'netYieldRate', width: 120, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate)}, {default: () => formatPercent(row.netYieldRate)}) : '--'},
   {title: '来源', key: 'sourceRefs', minWidth: 150, ellipsis: {tooltip: true}},
 ]
 const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research-recommendations:column-order:v1')
@@ -88,10 +87,13 @@ onMounted(refresh)
             <n-divider title-placement="left">成交与净收益</n-divider>
             <n-data-table :columns="[
               {title:'方向', key:'side'}, {title:'成交时间', key:'tradedAt', render:r=>dateTime(r.tradedAt)},
-              {title:'成交价', key:'executionPrice'}, {title:'数量', key:'quantity'}, {title:'费用', key:'totalFees'}, {title:'净现金流', key:'netCashFlow'}
+              {title:'成交价', key:'executionPrice', render:r=>formatPrice(r.executionPrice)},
+              {title:'数量', key:'quantity', render:r=>formatInteger(r.quantity)},
+              {title:'费用', key:'totalFees', render:r=>formatMoney(r.totalFees)},
+              {title:'净现金流', key:'netCashFlow', render:r=>formatMoney(r.netCashFlow)}
             ]" :data="detail.trades || []"/>
             <n-alert v-if="detail.position" type="info" style="margin-top:12px">
-              数量 {{ detail.position.quantity }}，买入价 {{ detail.position.entryPrice?.toFixed?.(3) ?? detail.position.entryPrice }}，净收益 {{ detail.position.netPnl?.toFixed?.(2) ?? detail.position.netPnl }} 元
+              数量 {{ formatInteger(detail.position.quantity) }}，买入价 {{ formatPrice(detail.position.entryPrice) }}，净收益 {{ formatMoney(detail.position.netPnl) }}
             </n-alert>
           </template>
         </n-spin>

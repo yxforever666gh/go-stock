@@ -1,5 +1,6 @@
 <script setup>
 import {computed, h} from 'vue'
+import {formatInteger, formatNumber, formatPercent} from '../utils/number-format'
 
 const props = defineProps({detail: {type: Object, required: true}})
 
@@ -16,8 +17,8 @@ function quoteOf(item) { return parseJSON(item.quoteJson, {}) }
 function minuteOf(item) { return parseJSON(item.minuteSummaryJson, {}) }
 function sourcesOf(item) { return parseJSON(item.evidenceJson, []) }
 function sourceRefsOf(item) { return parseJSON(item.sourceRefs, []) }
-function percent(value) { return Number.isFinite(Number(value)) ? `${(Number(value) * 100).toFixed(2)}%` : '--' }
-function number(value, digits = 2) { return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '--' }
+function percent(value) { return Number.isFinite(Number(value)) ? formatPercent(value) : '--' }
+function number(value, digits = 2) { return Number.isFinite(Number(value)) ? formatNumber(value, digits) : '--' }
 function readableContent(value) {
   if (!value) return '无新增内容'
   const parsed = parseJSON(value, null)
@@ -59,12 +60,12 @@ const buyPending = computed(() => {
         <n-descriptions-item label="行情时间">{{ dateTime(quoteOf(item).at) }}</n-descriptions-item>
         <n-descriptions-item label="分钟最新价">{{ number(minuteOf(item).latestPrice, 3) }}</n-descriptions-item>
         <n-descriptions-item label="分钟最新时间">{{ dateTime(minuteOf(item).latestAt) }}</n-descriptions-item>
-        <n-descriptions-item label="有效分钟记录">{{ minuteOf(item).totalBars || 0 }}</n-descriptions-item>
+        <n-descriptions-item label="有效分钟记录">{{ formatInteger(minuteOf(item).totalBars || 0) }}</n-descriptions-item>
       </n-descriptions>
 
       <n-data-table v-if="(minuteOf(item).windows || []).length" style="margin-top: 10px" size="small" :columns="[
-        {title:'窗口', key:'minutes', render:row => `${row.minutes} 分钟`},
-        {title:'记录数', key:'bars'},
+        {title:'窗口', key:'minutes', render:row => `${formatInteger(row.minutes)} 分钟`},
+        {title:'记录数', key:'bars', render:row => formatInteger(row.bars)},
         {title:'区间涨跌', key:'returnRate', render:row => percent(row.returnRate)},
         {title:'最高', key:'high', render:row => number(row.high, 3)},
         {title:'最低', key:'low', render:row => number(row.low, 3)},

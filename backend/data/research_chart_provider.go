@@ -92,8 +92,13 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 				Message: date + " 没有已启用且适用于该日期的一分钟数据源"})
 			continue
 		}
-		for _, item := range providers {
+		for providerIndex, item := range providers {
+			fallbackSuffix := ""
+			if providerIndex < len(providers)-1 {
+				fallbackSuffix = "，已继续尝试下一来源"
+			}
 			bars, source, fetchErr := item.fetch(canonical, winStart, winEnd)
+			accepted := 0
 			if len(bars) > 0 {
 				proven := make([]minuteBar, 0, len(bars))
 				for _, bar := range bars {
@@ -112,13 +117,23 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 						Message: date + " 返回的数据无法证明为未复权，已拒绝写入"})
 				} else if _, upsertErr := upsertMinuteBarsToCache(canonical, proven, source); upsertErr != nil {
 					errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name, Message: sanitizeChartError(upsertErr)})
+				} else {
+					accepted = len(proven)
 				}
 			}
 			if fetchErr != nil {
-				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name, Message: date + "：" + sanitizeChartError(fetchErr)})
+				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+					Message: date + "：" + sanitizeChartError(fetchErr) + fallbackSuffix})
+			} else if len(bars) == 0 {
+				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+					Message: date + " 返回空数据" + fallbackSuffix})
 			}
 			if chartAnyCacheWindowCovered(keys, winStart, winEnd) {
 				break
+			}
+			if accepted > 0 && fetchErr == nil {
+				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+					Message: fmt.Sprintf("%s 已写入 %d 条分钟数据但覆盖仍不完整%s", date, accepted, fallbackSuffix)})
 			}
 		}
 	}
@@ -150,13 +165,33 @@ func enabledChartMinuteProviders(day time.Time) []chartMinuteProvider {
 	if settings != nil {
 		mode = normalizeMinuteProviderMode(settings.MinuteProviderMode)
 	}
-	if mode == "private" {
-		if settings != nil && (!settings.PrivateMinuteEnabled || normalizePrivateMinuteLevel(settings.PrivateMinuteLevel) != "1min") {
-			return nil
-		}
-		return []chartMinuteProvider{{name: "diemeng", fetch: fetchMinuteBarsWithDiemeng}}
+
+	// The mode controls priority, not exclusivity. A private provider is useful
+	// for longer history, while the public providers are independent fallbacks
+	// for recent/intraday gaps. Keeping them in one ordered chain means an empty
+	// response or upstream failure automatically advances to the next enabled
+	// source without discarding bars already cached by earlier attempts.
+	privateProviders := make([]chartMinuteProvider, 0, 1)
+	if settings != nil && settings.PrivateMinuteEnabled &&
+		normalizePrivateMinuteLevel(settings.PrivateMinuteLevel) == "1min" &&
+		strings.TrimSpace(settings.PrivateMinuteBaseURL) != "" &&
+		strings.TrimSpace(settings.PrivateMinuteAPIKey) != "" {
+		privateProviders = append(privateProviders, chartMinuteProvider{name: "diemeng", fetch: fetchMinuteBarsWithDiemeng})
 	}
 
+	publicProviders := enabledPublicChartMinuteProviders(settings, day)
+	result := make([]chartMinuteProvider, 0, len(privateProviders)+len(publicProviders))
+	if mode == "private" {
+		result = append(result, privateProviders...)
+		result = append(result, publicProviders...)
+		return result
+	}
+	result = append(result, publicProviders...)
+	result = append(result, privateProviders...)
+	return result
+}
+
+func enabledPublicChartMinuteProviders(settings *Settings, day time.Time) []chartMinuteProvider {
 	akshare, sina, tencent := true, true, true
 	if settings != nil {
 		akshare, sina, tencent = settings.AkshareEnabled, settings.SinaMinuteEnabled, settings.TencentMinuteEnabled

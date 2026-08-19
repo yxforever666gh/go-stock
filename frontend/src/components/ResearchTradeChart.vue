@@ -3,6 +3,7 @@ import * as echarts from 'echarts'
 import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useMessage} from 'naive-ui'
 import {GetAIRecommendationChart, RefreshAIRecommendationChart} from '../services/research-api'
+import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 
 const props = defineProps({
   recommendationId: {type: String, required: true},
@@ -30,27 +31,23 @@ const hasBuyTrade = computed(() => trades.value.some(item => String(item.side).t
 const isPartial = computed(() => chartData.value?.status === 'partial')
 const isEmpty = computed(() => chartData.value?.status === 'empty' || (!initialLoading.value && bars.value.length === 0))
 const currentYield = computed(() => Number(chartData.value?.currentNetYieldRate || 0))
+const barSourceLabels = computed(() => [...new Set(bars.value.map(item => minuteSourceLabel(item.source)).filter(Boolean))])
+
+function minuteSourceLabel(value) {
+  const source = String(value || '').trim().toLowerCase()
+  if (!source) return ''
+  if (source === 'tencent') return '腾讯'
+  if (source === 'sina') return '新浪'
+  if (source === 'diemeng' || source === 'diemeng_dump') return '私人来源'
+  if (source.startsWith('akshare:em')) return 'AKShare（东方财富）'
+  if (source.startsWith('akshare:sina')) return 'AKShare（新浪）'
+  if (source.startsWith('akshare')) return 'AKShare'
+  return value
+}
 
 function finite(value, fallback = 0) {
   const number = Number(value)
   return Number.isFinite(number) ? number : fallback
-}
-
-function money(value) {
-  const number = finite(value)
-  return `${number < 0 ? '-' : ''}¥${Math.abs(number).toFixed(2)}`
-}
-
-function percent(value) {
-  const number = finite(value) * 100
-  return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%`
-}
-
-function compactNumber(value) {
-  const number = finite(value)
-  if (Math.abs(number) >= 100000000) return `${(number / 100000000).toFixed(2)}亿`
-  if (Math.abs(number) >= 10000) return `${(number / 10000).toFixed(2)}万`
-  return number.toFixed(0)
 }
 
 function dateTime(value) {
@@ -102,11 +99,11 @@ function tooltipHTML(params) {
   })
   return [
     `<strong>${escapeHTML(dateTime(bar.at))}</strong>`,
-    `开盘：${finite(bar.open).toFixed(3)}　最高：${finite(bar.high).toFixed(3)}`,
-    `最低：${finite(bar.low).toFixed(3)}　收盘：${finite(bar.close).toFixed(3)}`,
-    `涨跌幅：<span style="color:${change >= 0 ? '#d03050' : '#18a058'}">${percent(change)}</span>`,
-    `成交量：${escapeHTML(compactNumber(bar.volume))}　成交额：${escapeHTML(compactNumber(bar.amount))}`,
-    profitAvailable ? `预估净收益：<span style="color:${finite(bar.netPnl) >= 0 ? '#d03050' : '#18a058'}">${escapeHTML(money(bar.netPnl))}（${escapeHTML(percent(bar.netYieldRate))}）</span>` : '预估净收益：--',
+    `开盘：${formatPrice(bar.open)}　最高：${formatPrice(bar.high)}`,
+    `最低：${formatPrice(bar.low)}　收盘：${formatPrice(bar.close)}`,
+    `涨跌幅：<span style="color:${change >= 0 ? '#d03050' : '#18a058'}">${formatPercent(change)}</span>`,
+    `成交量：${escapeHTML(formatInteger(bar.volume))}　成交额：${escapeHTML(formatNumber(bar.amount, 2))}`,
+    profitAvailable ? `预估净收益：<span style="color:${finite(bar.netPnl) >= 0 ? '#d03050' : '#18a058'}">${escapeHTML(formatMoney(bar.netPnl))}（${escapeHTML(formatPercent(bar.netYieldRate))}）</span>` : '预估净收益：--',
     `来源：${escapeHTML(bar.source || '--')}`,
   ].join('<br>')
 }
@@ -125,7 +122,7 @@ function tradeMarkPoints(categories) {
       itemStyle: {color: isBuy ? '#d03050' : '#18a058'},
       label: {show: true, color: '#fff', fontWeight: 'bold', formatter: isBuy ? 'B' : 'S'},
       tooltip: {
-        formatter: `${isBuy ? '买入' : '卖出'} ${escapeHTML(dateTime(item.tradedAt))}<br>成交价：${finite(item.executionPrice).toFixed(3)}<br>数量：${finite(item.quantity).toFixed(0)}<br>费用：${money(item.totalFees)}${item.markerSnapped ? '<br>标记已吸附至最近分钟柱' : ''}`,
+        formatter: `${isBuy ? '买入' : '卖出'} ${escapeHTML(dateTime(item.tradedAt))}<br>成交价：${formatPrice(item.executionPrice)}<br>数量：${formatInteger(item.quantity)}<br>费用：${formatMoney(item.totalFees)}${item.markerSnapped ? '<br>标记已吸附至最近分钟柱' : ''}`,
       },
     }]
   })
@@ -138,9 +135,9 @@ function buildMarkPoints(categories) {
   const latest = bars.value.at(-1)
   return [
     ...tradeMarkPoints(categories),
-    {name: '区间最高', coord: [highest.at, finite(highest.high)], value: finite(highest.high).toFixed(3), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'top', color: '#d03050', formatter: '高 {c}'}},
-    {name: '区间最低', coord: [lowest.at, finite(lowest.low)], value: finite(lowest.low).toFixed(3), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'bottom', color: '#18a058', formatter: '低 {c}'}},
-    {name: '最新', coord: [latest.at, finite(latest.close)], value: finite(latest.close).toFixed(3), symbol: 'circle', symbolSize: 10, label: {show: true, position: 'right', color: '#2080f0', formatter: '最新 {c}'}},
+    {name: '区间最高', coord: [highest.at, finite(highest.high)], value: formatPrice(highest.high), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'top', color: '#d03050', formatter: '高 {c}'}},
+    {name: '区间最低', coord: [lowest.at, finite(lowest.low)], value: formatPrice(lowest.low), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'bottom', color: '#18a058', formatter: '低 {c}'}},
+    {name: '最新', coord: [latest.at, finite(latest.close)], value: formatPrice(latest.close), symbol: 'circle', symbolSize: 10, label: {show: true, position: 'right', color: '#2080f0', formatter: '最新 {c}'}},
   ]
 }
 
@@ -164,8 +161,8 @@ function renderChart() {
     ? bars.value.map(item => finite(item.close))
     : bars.value.map(item => [finite(item.open), finite(item.close), finite(item.low), finite(item.high)])
   const markLines = []
-  if (buyPrice > 0) markLines.push({name: '买入均价', yAxis: buyPrice, label: {formatter: `买入 ${buyPrice.toFixed(3)}`}, lineStyle: {color: '#d03050', type: 'dashed'}})
-  if (latestPrice > 0) markLines.push({name: '最新价', yAxis: latestPrice, label: {formatter: `最新 ${latestPrice.toFixed(3)}`}, lineStyle: {color: '#2080f0', type: 'dotted'}})
+  if (buyPrice > 0) markLines.push({name: '买入均价', yAxis: buyPrice, label: {formatter: `买入 ${formatPrice(buyPrice)}`}, lineStyle: {color: '#d03050', type: 'dashed'}})
+  if (latestPrice > 0) markLines.push({name: '最新价', yAxis: latestPrice, label: {formatter: `最新 ${formatPrice(latestPrice)}`}, lineStyle: {color: '#2080f0', type: 'dotted'}})
   const mainSeries = {
     name: mode.value === 'line' ? '分时' : '1分钟K',
     type: mode.value === 'line' ? 'line' : 'candlestick',
@@ -197,8 +194,8 @@ function renderChart() {
       {type: 'category', gridIndex: 1, data: categories, boundaryGap: true, axisLabel: {show: false}, axisTick: {show: false}},
     ],
     yAxis: [
-      {type: 'value', scale: true, position: 'right', axisLabel: {formatter: value => finite(value).toFixed(2)}, axisLine: {show: true}, axisTick: {show: true}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.35}}},
-      {type: 'value', scale: true, gridIndex: 1, position: 'right', splitNumber: 2, axisLabel: {formatter: compactNumber}, axisLine: {show: true}, axisTick: {show: true}, splitLine: {show: false}},
+      {type: 'value', scale: true, position: 'right', axisLabel: {formatter: value => formatNumber(value, 2)}, axisLine: {show: true}, axisTick: {show: true}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.35}}},
+      {type: 'value', scale: true, gridIndex: 1, position: 'right', splitNumber: 2, axisLabel: {formatter: formatInteger}, axisLine: {show: true}, axisTick: {show: true}, splitLine: {show: false}},
     ],
     dataZoom: [
       {type: 'inside', xAxisIndex: [0, 1], start: visibleStart, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true},
@@ -299,9 +296,9 @@ onBeforeUnmount(() => {
         <n-button @click="resetRange">范围复位</n-button>
       </n-flex>
       <n-flex align="center" :wrap="true">
-        <n-statistic label="最新价" :value="chartData?.currentPrice ? Number(chartData.currentPrice).toFixed(3) : '--'"/>
-        <n-statistic label="预估净收益" :value="chartData && hasBuyTrade ? money(chartData.currentNetPnl) : '--'"/>
-        <n-text :type="currentYield >= 0 ? 'error' : 'success'" strong>{{ chartData && hasBuyTrade ? percent(currentYield) : '--' }}</n-text>
+        <n-statistic label="最新价" :value="chartData?.currentPrice ? formatPrice(chartData.currentPrice) : '--'"/>
+        <n-statistic label="预估净收益" :value="chartData && hasBuyTrade ? formatMoney(chartData.currentNetPnl) : '--'"/>
+        <n-text :type="currentYield >= 0 ? 'error' : 'success'" strong>{{ chartData && hasBuyTrade ? formatPercent(currentYield) : '--' }}</n-text>
         <n-button type="primary" :loading="refreshing" @click="refreshChart(false)">刷新行情</n-button>
       </n-flex>
     </n-flex>
@@ -330,7 +327,10 @@ onBeforeUnmount(() => {
       <n-empty v-if="!bars.length && !initialLoading && !refreshing" description="暂无分钟走势" class="chart-empty"/>
     </n-spin>
     <n-flex justify="space-between" class="chart-footnote">
-      <n-text depth="3">十字光标可查看 OHLC、量价来源及扣除全部交易成本后的逐分钟净收益；滚轮缩放，按住拖动平移。</n-text>
+      <n-text depth="3">
+        <template v-if="barSourceLabels.length">图表来源：{{ barSourceLabels.join('、') }}；</template>
+        十字光标可查看 OHLC、量价来源及扣除全部交易成本后的逐分钟净收益；滚轮缩放，按住拖动平移。
+      </n-text>
       <n-text depth="3">数据截至 {{ dateTime(chartData?.refreshedAt || chartData?.quoteAt) }}</n-text>
     </n-flex>
   </section>

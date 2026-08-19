@@ -2,6 +2,7 @@
 import {computed, h, onMounted, ref} from 'vue'
 import {NButton, NTag, NText, useMessage} from 'naive-ui'
 import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/research-api'
+import {formatInteger, formatMoney, formatPercent, formatPrice} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
@@ -15,8 +16,6 @@ const detail = ref(null)
 
 const positionsByRecommendation = computed(() => new Map((account.value?.positions || []).map(item => [item.recommendationId, item])))
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
-function money(value) { const number = Number(value || 0); return `${number >= 0 ? '' : '-'}¥${Math.abs(number).toFixed(2)}` }
-function percent(value) { const number = Number(value || 0) * 100; return `${number >= 0 ? '+' : ''}${number.toFixed(2)}%` }
 function colorType(value) { return Number(value || 0) >= 0 ? 'error' : 'success' }
 function positionFor(row) { return positionsByRecommendation.value.get(row.recommendationId) }
 function rowFees(row) { const position = positionFor(row); return position ? Number(position.buyFees || 0) + Number(position.estimatedSellFees || 0) : Number(row.totalFees || 0) }
@@ -30,17 +29,17 @@ const columns = [
   {title: '代码', key: 'stockCode', width: 110},
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
   {title: '交易状态', key: 'status', width: 145, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
-  {title: '买入时间/价格', key: 'activatedAt', minWidth: 210, render: row => row.activatedAt ? `${dateTime(row.activatedAt)} / ${Number(row.activationPrice).toFixed(3)}` : '--'},
-  {title: '数量', key: 'quantity', width: 90},
+  {title: '买入时间/价格', key: 'activatedAt', minWidth: 210, render: row => row.activatedAt ? `${dateTime(row.activatedAt)} / ${formatPrice(row.activationPrice)}` : '--'},
+  {title: '数量', key: 'quantity', width: 100, render: row => row.activatedAt ? formatInteger(row.quantity) : '--'},
   {title: '当前或卖出时间/价格', key: 'closedAt', minWidth: 220, render: row => {
     const position = positionsByRecommendation.value.get(row.recommendationId)
-    if (row.closedAt) return `${dateTime(row.closedAt)} / ${Number(row.closePrice).toFixed(3)}`
-    if (position) return `${dateTime(position.currentPriceAt)} / ${Number(position.currentPrice).toFixed(3)}`
+    if (row.closedAt) return `${dateTime(row.closedAt)} / ${formatPrice(row.closePrice)}`
+    if (position) return `${dateTime(position.currentPriceAt)} / ${formatPrice(position.currentPrice)}`
     return '--'
   }},
-  {title: '费用', key: 'totalFees', width: 110, render: row => money(rowFees(row))},
-  {title: '净收益额', key: 'netPnl', width: 120, render: row => h(NText, {type: colorType(rowNetPnl(row))}, {default: () => money(rowNetPnl(row))})},
-  {title: '净收益率', key: 'netYieldRate', width: 120, render: row => h(NText, {type: colorType(rowNetYield(row))}, {default: () => percent(rowNetYield(row))})},
+  {title: '费用', key: 'totalFees', width: 120, render: row => formatMoney(rowFees(row))},
+  {title: '净收益额', key: 'netPnl', width: 135, render: row => h(NText, {type: colorType(rowNetPnl(row))}, {default: () => formatMoney(rowNetPnl(row))})},
+  {title: '净收益率', key: 'netYieldRate', width: 120, render: row => h(NText, {type: colorType(rowNetYield(row))}, {default: () => formatPercent(rowNetYield(row))})},
 ]
 
 async function refresh() {
@@ -66,11 +65,11 @@ onMounted(refresh)
 <template>
   <n-space vertical>
     <n-grid :cols="5" :x-gap="12" v-if="account">
-      <n-gi><n-statistic label="账户现金" :value="money(account.cash)"/></n-gi>
-      <n-gi><n-statistic label="持仓可卖出净值" :value="money(account.positionValue)"/></n-gi>
-      <n-gi><n-statistic label="账户净值" :value="money(account.netAssetValue)"/></n-gi>
-      <n-gi><n-statistic label="总净收益" :value="money(account.netProfit)"/></n-gi>
-      <n-gi><n-statistic label="总净收益率" :value="percent(account.netYieldRate)"/></n-gi>
+      <n-gi><n-statistic label="账户现金" :value="formatMoney(account.cash)"/></n-gi>
+      <n-gi><n-statistic label="持仓可卖出净值" :value="formatMoney(account.positionValue)"/></n-gi>
+      <n-gi><n-statistic label="账户净值" :value="formatMoney(account.netAssetValue)"/></n-gi>
+      <n-gi><n-statistic label="总净收益" :value="formatMoney(account.netProfit)"/></n-gi>
+      <n-gi><n-statistic label="总净收益率" :value="formatPercent(account.netYieldRate)"/></n-gi>
     </n-grid>
     <n-flex justify="space-between" align="center">
       <n-text depth="3">净收益口径：现金 + 持仓按最新价扣预估卖出成本 − 100,000 元。</n-text>
@@ -86,8 +85,8 @@ onMounted(refresh)
           <template v-if="detail">
             <n-descriptions bordered :column="3">
               <n-descriptions-item label="股票">{{ detail.recommendation.stockName }}（{{ detail.recommendation.stockCode }}）</n-descriptions-item>
-              <n-descriptions-item label="净收益">{{ money(detail.position?.netPnl ?? detail.recommendation.netPnl) }}</n-descriptions-item>
-              <n-descriptions-item label="净收益率">{{ percent(detail.position?.netYieldRate ?? detail.recommendation.netYieldRate) }}</n-descriptions-item>
+              <n-descriptions-item label="净收益">{{ formatMoney(detail.position?.netPnl ?? detail.recommendation.netPnl) }}</n-descriptions-item>
+              <n-descriptions-item label="净收益率">{{ formatPercent(detail.position?.netYieldRate ?? detail.recommendation.netYieldRate) }}</n-descriptions-item>
               <n-descriptions-item v-if="detail.recommendation.activationCondition" label="旧制历史激活条件" :span="3">{{ detail.recommendation.activationCondition }}</n-descriptions-item>
             </n-descriptions>
             <n-divider title-placement="left">持仓期分钟走势</n-divider>
@@ -98,9 +97,15 @@ onMounted(refresh)
             <ResearchLifecycleTimeline :detail="detail"/>
             <n-divider>成交记录</n-divider>
             <n-data-table :columns="[
-              {title:'方向',key:'side'}, {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)}, {title:'市场价',key:'marketPrice'},
-              {title:'成交价',key:'executionPrice'}, {title:'数量',key:'quantity'}, {title:'佣金',key:'commission'},
-              {title:'印花税',key:'stampDuty'}, {title:'过户费',key:'transferFee'}, {title:'滑点',key:'slippageAmount'}, {title:'净现金流',key:'netCashFlow'}
+              {title:'方向',key:'side'}, {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},
+              {title:'市场价',key:'marketPrice',render:r=>formatPrice(r.marketPrice)},
+              {title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},
+              {title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},
+              {title:'佣金',key:'commission',render:r=>formatMoney(r.commission)},
+              {title:'印花税',key:'stampDuty',render:r=>formatMoney(r.stampDuty)},
+              {title:'过户费',key:'transferFee',render:r=>formatMoney(r.transferFee)},
+              {title:'滑点',key:'slippageAmount',render:r=>formatMoney(r.slippageAmount)},
+              {title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}
             ]" :data="detail.trades || []" :scroll-x="1100"/>
           </template>
         </n-spin>

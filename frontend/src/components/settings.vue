@@ -67,7 +67,7 @@ const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
 const minuteProviderModeOptions = [
   {label: '公共源优先', value: 'public'},
-  {label: '私人分钟线来源', value: 'private'},
+  {label: '私人源优先', value: 'private'},
 ]
 const akshareMinuteSourceOptions = [
   {label: '自动', value: 'auto'},
@@ -382,21 +382,18 @@ async function testAiConfig(index) {
 }
 
 function getMinuteSourceConfigError() {
-  if (formValue.value.minuteProviderMode === 'public') {
-    if (!formValue.value.akshareEnabled && !formValue.value.sinaMinuteEnabled && !formValue.value.tencentMinuteEnabled) {
-      return "公共分钟线模式下，至少保留一个公共数据源"
+  if (formValue.value.privateMinute.enabled) {
+    if (!String(formValue.value.privateMinute.baseUrl || "").trim()) {
+      return "已启用私人分钟线来源，请填写调用 URL"
     }
-    return ""
+    if (!String(formValue.value.privateMinute.apiKey || "").trim()) {
+      return "已启用私人分钟线来源，请填写 API Key"
+    }
   }
-
-  if (!formValue.value.privateMinute.enabled) {
-    return "私人分钟线模式下，请先启用私人分钟线来源"
-  }
-  if (!String(formValue.value.privateMinute.baseUrl || "").trim()) {
-    return "请填写私人分钟线来源的调用 URL"
-  }
-  if (!String(formValue.value.privateMinute.apiKey || "").trim()) {
-    return "请填写私人分钟线来源的 API Key"
+  const publicEnabled = formValue.value.akshareEnabled || formValue.value.sinaMinuteEnabled || formValue.value.tencentMinuteEnabled
+  const privateOneMinuteEnabled = formValue.value.privateMinute.enabled && formValue.value.privateMinute.level === '1min'
+  if (!publicEnabled && !privateOneMinuteEnabled) {
+    return "至少启用一个适用于 1 分钟图的分钟数据源"
   }
   return ""
 }

@@ -1,6 +1,7 @@
 <script setup>
 import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NTag, useMessage} from 'naive-ui'
+import {formatInteger, formatNumber} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/research-api'
 
@@ -38,7 +39,7 @@ function sourceSummary(value) {
   try {
     const sources = JSON.parse(value || '[]')
     const failed = sources.filter(item => item.error)
-    return `${sources.length} 个来源，${failed.length} 个失败`
+    return `${formatInteger(sources.length)} 个来源，${formatInteger(failed.length)} 个失败`
   } catch (_) {
     return '--'
   }
@@ -47,7 +48,7 @@ function sourceSummary(value) {
 function summarySourceStatus(row) {
   const total = Number(row?.sourceCount || 0)
   const failed = Number(row?.failedSourceCount || 0)
-  return `${total} 个来源，${failed} 个失败`
+  return `${formatInteger(total)} 个来源，${formatInteger(failed)} 个失败`
 }
 
 function sourceRows(value) {
@@ -95,11 +96,11 @@ const attemptColumns = [
   {title: '阶段', key: 'phase', width: 150},
   {title: '模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
   {title: 'API 格式', key: 'apiProtocol', width: 145},
-  {title: '次数', key: 'attempt', width: 80, render: row => `${row.attempt}/${row.maxAttempts}`},
+  {title: '次数', key: 'attempt', width: 90, render: row => `${formatInteger(row.attempt)}/${formatInteger(row.maxAttempts)}`},
   {title: '状态', key: 'status', width: 110, render: row => h(NTag, {type: attemptStatusType(row.status), bordered: false}, {default: () => attemptStatusLabels[row.status] || row.status})},
   {title: '最后事件', key: 'lastEventType', minWidth: 180, ellipsis: {tooltip: true}, render: row => row.lastEventType || '--'},
   {title: '最后活动', key: 'lastActivityAt', width: 170, render: row => dateTime(row.lastActivityAt)},
-  {title: '耗时', key: 'durationMs', width: 90, render: row => `${(Number(row.durationMs || 0) / 1000).toFixed(1)}s`},
+  {title: '耗时', key: 'durationMs', width: 100, render: row => `${formatNumber(Number(row.durationMs || 0) / 1000, 1)}s`},
   {title: '错误', key: 'errorMessage', minWidth: 260, ellipsis: {tooltip: true}, render: row => row.errorMessage ? `[${row.errorCategory || 'error'}] ${row.errorMessage}` : '--'},
   {title: '后续动作', key: 'nextAction', width: 130, render: row => attemptActionLabels[row.nextAction] || row.nextAction || '--'},
 ]
@@ -118,7 +119,7 @@ const columns = [
   {title: '完成时间', key: 'completedAt', width: 170, render: row => dateTime(row.completedAt)},
   {title: 'Provider / 模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
   {title: '状态', key: 'status', width: 130, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
-  {title: '推荐数', key: 'recommendationCount', width: 90},
+  {title: '推荐数', key: 'recommendationCount', width: 90, render: row => formatInteger(row.recommendationCount)},
   {title: '来源状态', key: 'sourceCount', minWidth: 150, render: row => summarySourceStatus(row)},
   {title: '空仓/失败原因', key: 'failureReason', minWidth: 210, ellipsis: {tooltip: true}, render: row => row.failureReason || '--'},
   {title: '操作', key: 'actions', width: 110, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => '查看报告'})},

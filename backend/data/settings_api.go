@@ -73,19 +73,18 @@ func UpdateConfig(s *SettingConfig) string {
 			s.AIAnalysisConfigID = 0
 		}
 	}
-	if s.MinuteProviderMode == "private" {
-		if !s.PrivateMinuteEnabled {
-			return "保存失败: 私人分钟线模式需要先启用私人分钟线来源"
-		}
+	if s.PrivateMinuteEnabled {
 		if s.PrivateMinuteBaseURL == "" {
-			return "保存失败: 私人分钟线模式下，请填写调用 URL"
+			return "保存失败: 已启用私人分钟线来源，请填写调用 URL"
 		}
 		if s.PrivateMinuteAPIKey == "" {
-			return "保存失败: 私人分钟线模式下，请填写 API Key"
+			return "保存失败: 已启用私人分钟线来源，请填写 API Key"
 		}
 	}
-	if s.MinuteProviderMode == "public" && !s.AkshareEnabled && !s.SinaMinuteEnabled && !s.TencentMinuteEnabled {
-		return "保存失败: 公共分钟线模式下，至少保留一个公共数据源"
+	publicMinuteEnabled := s.AkshareEnabled || s.SinaMinuteEnabled || s.TencentMinuteEnabled
+	privateOneMinuteEnabled := s.PrivateMinuteEnabled && s.PrivateMinuteLevel == "1min"
+	if !publicMinuteEnabled && !privateOneMinuteEnabled {
+		return "保存失败: 至少启用一个适用于 1 分钟图的分钟数据源"
 	}
 	if s.PrivateMinuteTimeoutSec <= 0 {
 		s.PrivateMinuteTimeoutSec = appconfig.DefaultDiemengTimeoutSec

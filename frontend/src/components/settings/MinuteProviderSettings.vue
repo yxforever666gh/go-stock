@@ -33,11 +33,11 @@ const emit = defineEmits(['immediate-change', 'text-blur'])
     <n-grid :cols="24" :x-gap="24" style="text-align: left">
       <n-form-item-gi :span="24">
         <n-alert type="info" :show-icon="false">
-          公共源更适合实时与短周期分钟线。若要覆盖更长时间的历史分钟线，请切换到私人分钟线来源并填写调用 URL 与 API Key。
+          这里设置的是回退优先级，不是互斥模式。当前来源报错、返回空数据或覆盖不完整时，会按顺序自动尝试下一个已启用来源；已取得的数据会保留。
         </n-alert>
       </n-form-item-gi>
 
-      <n-form-item-gi :span="8" label="分钟线模式：" path="minuteProviderMode">
+      <n-form-item-gi :span="8" label="来源优先级：" path="minuteProviderMode">
         <n-radio-group v-model:value="formValue.minuteProviderMode" @update:value="emit('immediate-change')">
           <n-space>
             <n-radio-button
@@ -58,6 +58,13 @@ const emit = defineEmits(['immediate-change', 'text-blur'])
             @update:value="emit('immediate-change')"
         />
       </n-form-item-gi>
+      <n-form-item-gi :span="24">
+        <n-alert type="success" :show-icon="false">
+          {{ formValue.minuteProviderMode === 'private'
+            ? '回退顺序：私人来源 → 腾讯 → 新浪 → AKShare（新浪/东方财富）'
+            : '回退顺序：腾讯 → 新浪 → AKShare（新浪/东方财富）→ 私人来源' }}。关闭的数据源不会被调用。
+        </n-alert>
+      </n-form-item-gi>
 
       <n-form-item-gi :span="4" label="AKShare：" path="akshareEnabled">
         <n-switch v-model:value="formValue.akshareEnabled" @update:value="emit('immediate-change')"/>
@@ -70,7 +77,7 @@ const emit = defineEmits(['immediate-change', 'text-blur'])
       </n-form-item-gi>
       <n-form-item-gi :span="24">
         <n-alert type="warning" :show-icon="false">
-          私人分钟线来源不会在页面中展示具体服务商名称；这里只提供通用 URL 与 API Key 配置入口。
+          私人来源仅在启用、配置完整且分钟级别为 1 分钟时参与研究图表回退；公共源更适合实时与短周期，私人源可用于补充较长历史。
         </n-alert>
       </n-form-item-gi>
 
