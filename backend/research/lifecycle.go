@@ -55,10 +55,13 @@ type Service struct {
 	ai              AIClient
 	quotes          QuoteProvider
 	contextProvider LifecycleContextProvider
+	chartProvider   RecommendationChartProvider
 	calendar        TradingCalendar
 	now             func() time.Time
 	serial          sync.Mutex
 	analysisMu      sync.Mutex
+	chartMu         sync.Mutex
+	chartRefreshing map[string]struct{}
 }
 
 func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calendar TradingCalendar, providers ...LifecycleContextProvider) *Service {
@@ -72,7 +75,17 @@ func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calen
 	if provider == nil {
 		provider = quoteLifecycleContextProvider{quotes: quotes}
 	}
-	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar, now: time.Now}
+	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar, now: time.Now,
+		chartRefreshing: make(map[string]struct{})}
+}
+
+// SetRecommendationChartProvider installs the minute-cache adapter used by
+// the research chart endpoints. It is separate from the lifecycle collector:
+// a cached chart read must never trigger an upstream request.
+func (s *Service) SetRecommendationChartProvider(provider RecommendationChartProvider) {
+	s.chartMu.Lock()
+	s.chartProvider = provider
+	s.chartMu.Unlock()
 }
 
 // quoteLifecycleContextProvider keeps direct service construction useful for

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.6.7
+  version: 1.6.8
   description: Local-only Web API for market data, watchlists, diagnosis, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -220,6 +220,19 @@ paths:
       operationId: getRecommendation
       responses:
         "200": {description: Recommendation detail, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationDetail"}}}}
+  /api/v1/research/recommendations/{id}/chart:
+    get:
+      operationId: getRecommendationChart
+      description: Reads the persisted unadjusted minute cache and never calls an upstream provider.
+      responses:
+        "200": {description: Cached professional chart data, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
+  /api/v1/research/recommendations/{id}/chart/refresh:
+    post:
+      operationId: refreshRecommendationChart
+      description: Fills missing minute coverage using only enabled providers, refreshes the quote, and returns the chart data.
+      responses:
+        "200": {description: Refreshed professional chart data, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
+        "409": {description: The same recommendation is already being refreshed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /api/v1/research/account:
     get:
       operationId: getSimulatedAccount
@@ -504,6 +517,66 @@ components:
         position: {$ref: "#/components/schemas/Position"}
         activationTradingElapsedSeconds: {type: integer, format: int64}
         activationRemainingSeconds: {type: integer, format: int64}
+    RecommendationChartBar:
+      type: object
+      required: [at, open, high, low, close, volume, amount, source, netPnl, netYieldRate]
+      properties:
+        at: {type: string, format: date-time}
+        open: {type: number}
+        high: {type: number}
+        low: {type: number}
+        close: {type: number}
+        volume: {type: number}
+        amount: {type: number}
+        source: {type: string}
+        netPnl: {type: number, description: Full-cost estimated net profit at this minute.}
+        netYieldRate: {type: number, description: Full-cost estimated net yield at this minute.}
+    RecommendationChartTrade:
+      type: object
+      required: [side, tradedAt, marketPrice, executionPrice, quantity, totalFees, netCashFlow, markerSnapped]
+      properties:
+        side: {type: string, enum: [buy, sell]}
+        tradedAt: {type: string, format: date-time}
+        marketPrice: {type: number}
+        executionPrice: {type: number}
+        quantity: {type: integer, format: int64}
+        totalFees: {type: number}
+        netCashFlow: {type: number}
+        markerAt: {type: string, format: date-time, description: Nearest bar in the same trading segment within five minutes; omitted if unavailable.}
+        markerSnapped: {type: boolean}
+    RecommendationChartSession:
+      type: object
+      required: [date, previousClose, status]
+      properties:
+        date: {type: string, format: date}
+        previousClose: {type: number}
+        status: {type: string, enum: [complete, partial, missing]}
+    ChartProviderError:
+      type: object
+      required: [provider, message]
+      properties:
+        provider: {type: string}
+        message: {type: string}
+    RecommendationChart:
+      type: object
+      required: [recommendationId, stockCode, stockName, status, rangeFrom, rangeTo, refreshedAt, currentPrice, currentNetPnl, currentNetYieldRate, missingSessions, providerErrors, sessions, bars, trades]
+      properties:
+        recommendationId: {type: string}
+        stockCode: {type: string}
+        stockName: {type: string}
+        status: {type: string, enum: [complete, partial, empty]}
+        rangeFrom: {type: string, format: date-time}
+        rangeTo: {type: string, format: date-time}
+        refreshedAt: {type: string, format: date-time}
+        quoteAt: {type: string, format: date-time}
+        currentPrice: {type: number}
+        currentNetPnl: {type: number}
+        currentNetYieldRate: {type: number}
+        missingSessions: {type: array, items: {type: string, format: date}}
+        providerErrors: {type: array, items: {$ref: "#/components/schemas/ChartProviderError"}}
+        sessions: {type: array, items: {$ref: "#/components/schemas/RecommendationChartSession"}}
+        bars: {type: array, items: {$ref: "#/components/schemas/RecommendationChartBar"}}
+        trades: {type: array, items: {$ref: "#/components/schemas/RecommendationChartTrade"}}
     AccountOverview:
       type: object
       required: [initialCash, cash, positionValue, netAssetValue, netProfit, netYieldRate, valuedAt, positions]

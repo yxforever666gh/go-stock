@@ -7,3 +7,5 @@ export const GetAIAnalysisReport = (id) => requestJSON(withPath(API_PATHS.getAna
 export const ListAIRecommendations = (limit, offset) => requestJSON(withQuery(API_PATHS.listRecommendations, { limit, offset }))
 export const GetAIRecommendation = (id) => requestJSON(withPath(API_PATHS.getRecommendation, { id }))
 export const GetAISimulatedAccount = () => requestJSON(API_PATHS.getSimulatedAccount)
+export const GetAIRecommendationChart = (id) => requestJSON(withPath(API_PATHS.getRecommendationChart, { id }))
+export const RefreshAIRecommendationChart = (id) => requestJSON(withPath(API_PATHS.refreshRecommendationChart, { id }), { method: 'POST' })

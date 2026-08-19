@@ -224,6 +224,21 @@ func (a *App) getAIRecommendation(recommendationID string) (research.Recommendat
 	return runtime.Service.Detail(context.Background(), recommendationID)
 }
 
+func (a *App) getAIRecommendationChart(recommendationID string, refresh bool) (research.RecommendationChart, error) {
+	if strings.TrimSpace(recommendationID) == "" {
+		return research.RecommendationChart{}, errors.New("recommendationId is required")
+	}
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		return research.RecommendationChart{}, err
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return runtime.Service.RecommendationChart(ctx, recommendationID, refresh)
+}
+
 func (a *App) getAISimulatedAccount() (research.AccountOverview, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {

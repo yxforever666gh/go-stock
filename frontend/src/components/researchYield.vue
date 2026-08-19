@@ -1,10 +1,10 @@
 <script setup>
 import {computed, h, onMounted, ref} from 'vue'
 import {NButton, NTag, NText, useMessage} from 'naive-ui'
-import {MdPreview} from 'md-editor-v3'
 import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/research-api'
-import StockSparkLine from './stockSparkLine.vue'
+import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
+import ResearchTradeChart from './ResearchTradeChart.vue'
 
 const message = useMessage()
 const loading = ref(false)
@@ -80,8 +80,8 @@ onMounted(refresh)
   </n-space>
 
   <n-modal v-model:show="detailVisible">
-    <n-card style="width:min(1180px, 95vw); max-height:92vh" title="收益与成交详情" closable @close="detailVisible=false">
-      <n-scrollbar style="max-height:80vh">
+    <n-card class="research-detail-card" title="收益与成交详情" closable @close="detailVisible=false">
+      <n-scrollbar style="max-height:87vh">
         <n-spin :show="!detail">
           <template v-if="detail">
             <n-descriptions bordered :column="3">
@@ -90,10 +90,10 @@ onMounted(refresh)
               <n-descriptions-item label="净收益率">{{ percent(detail.position?.netYieldRate ?? detail.recommendation.netYieldRate) }}</n-descriptions-item>
               <n-descriptions-item v-if="detail.recommendation.activationCondition" label="旧制历史激活条件" :span="3">{{ detail.recommendation.activationCondition }}</n-descriptions-item>
             </n-descriptions>
-            <n-divider>分钟图</n-divider>
-            <StockSparkLine :stock-code="detail.recommendation.stockCode" :stock-name="detail.recommendation.stockName" :last-price="detail.position?.currentPrice || detail.recommendation.closePrice" :open-price="detail.recommendation.activationPrice"/>
+            <n-divider title-placement="left">持仓期分钟走势</n-divider>
+            <ResearchTradeChart :recommendation-id="detail.recommendation.recommendationId" :fallback-trades="detail.trades || []"/>
             <n-divider>完整 AI 报告</n-divider>
-            <MdPreview :model-value="detail.analysis.finalReport || '暂无报告'"/>
+            <AppMarkdownPreview :model-value="detail.analysis.finalReport || '暂无报告'"/>
             <n-divider>交易与 AI 判断时间线</n-divider>
             <ResearchLifecycleTimeline :detail="detail"/>
             <n-divider>成交记录</n-divider>
@@ -108,3 +108,10 @@ onMounted(refresh)
     </n-card>
   </n-modal>
 </template>
+
+<style scoped>
+.research-detail-card {
+  width: min(1600px, 96vw);
+  max-height: 96vh;
+}
+</style>

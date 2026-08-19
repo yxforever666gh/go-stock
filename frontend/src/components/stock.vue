@@ -51,10 +51,10 @@ import '@vavt/v3-extension/lib/asset/ExportPDF.css';
 import {useRoute, useRouter} from 'vue-router'
 import MoneyTrend from "./moneyTrend.vue";
 import StockSparkLine from "./stockSparkLine.vue";
+import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import { useStockHeavyFeatures } from '../composables/useStockHeavyFeatures'
 
 const MdEditor = defineAsyncComponent(() => import('md-editor-v3').then((mod) => mod.MdEditor))
-const MdPreview = defineAsyncComponent(() => import('md-editor-v3').then((mod) => mod.MdPreview))
 const ExportPDF = defineAsyncComponent(() => import('@vavt/v3-extension').then((mod) => mod.ExportPDF))
 
 const route = useRoute()
@@ -1619,18 +1619,19 @@ function searchStockReport(stockCode) {
     <div ref="kLineChartRef" style="width: 1000px; height: 500px;"></div>
   </n-modal>
 
-  <n-modal transform-origin="center" v-model:show="modalShow4" preset="card" style="width: 800px;"
+  <n-modal transform-origin="center" v-model:show="modalShow4" preset="card" style="width: min(1080px, 94vw);"
            :title="'['+data.name+']AI分析'">
     <n-spin size="small" :show="data.loading">
-      <MdEditor v-if="enableEditor" :toolbars="toolbars" ref="mdEditorRef" style="height: 440px;text-align: left"
+      <MdEditor v-if="enableEditor" :toolbars="toolbars" ref="mdEditorRef"
+                class="app-markdown-surface app-markdown-editor" style="height: 440px;text-align: left"
                 :modelValue="data.airesult" :theme="theme">
         <template #defToolbars>
           <ExportPDF :file-name="data.name+'['+data.code+']AI分析报告'" style="text-align: left"
                      :modelValue="data.airesult" @onProgress="handleProgress"/>
         </template>
       </MdEditor>
-      <MdPreview v-if="!enableEditor" ref="mdPreviewRef" style="height: 440px;text-align: left"
-                 :modelValue="data.airesult" :theme="theme"/>
+      <AppMarkdownPreview v-if="!enableEditor" ref="mdPreviewRef" style="height: 440px;text-align: left"
+                          :modelValue="data.airesult" :theme="theme"/>
     </n-spin>
     <template #footer>
       <n-flex justify="space-between" ref="tipsRef">
@@ -1700,14 +1701,6 @@ function searchStockReport(stockCode) {
 </template>
 
 <style scoped>
-.md-editor-preview h3 {
-  text-align: center !important;
-}
-
-.md-editor-preview p {
-  text-align: left !important;
-}
-
 /* 添加闪烁效果的CSS类 */
 .blink-border {
   animation: blink-border 1s linear infinite;

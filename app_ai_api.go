@@ -93,7 +93,7 @@ func (a *App) addPrompt(prompt models.Prompt) string {
 func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.6.7：已收敛为本机 Web 架构；市场行情、股票、基金、普通诊股和 AI 研究功能保持不变。"
+		content = "1.6.8：研究详情新增完整持仓期专业交易图表，全站 Markdown 预览统一为左对齐阅读排版。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

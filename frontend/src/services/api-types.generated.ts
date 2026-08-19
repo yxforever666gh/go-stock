@@ -29,6 +29,7 @@ export const API_PATHS = {
   getMarketDictionary: "/api/v1/market/dictionary",
   getReadiness: "/readyz",
   getRecommendation: "/api/v1/research/recommendations/{id}",
+  getRecommendationChart: "/api/v1/research/recommendations/{id}/chart",
   getSettings: "/api/v1/settings",
   getSimulatedAccount: "/api/v1/research/account",
   getStockKLine: "/api/v1/stocks/{code}/kline",
@@ -57,6 +58,7 @@ export const API_PATHS = {
   listStockResearchReports: "/api/v1/market/stocks/research-reports",
   listTelegraphs: "/api/v1/market/telegraphs",
   queryStocks: "/api/v1/stocks/query",
+  refreshRecommendationChart: "/api/v1/research/recommendations/{id}/chart/refresh",
   refreshTelegraphs: "/api/v1/market/telegraphs/refresh",
   removeGroupStock: "/api/v1/groups/{id}/stocks/{code}",
   saveAIResponse: "/api/v1/ai/responses",
@@ -134,6 +136,11 @@ export type AnalysisRunSummary = {
   sourceCount: number
   startedAt: string
   status: string
+}
+
+export type ChartProviderError = {
+  message: string
+  provider: string
 }
 
 export type ChatRunRequest = {
@@ -286,6 +293,56 @@ export type Recommendation = {
   stockCode: string
   stockName: string
   totalFees?: number
+}
+
+export type RecommendationChart = {
+  bars: Array<RecommendationChartBar>
+  currentNetPnl: number
+  currentNetYieldRate: number
+  currentPrice: number
+  missingSessions: Array<string>
+  providerErrors: Array<ChartProviderError>
+  quoteAt?: string
+  rangeFrom: string
+  rangeTo: string
+  recommendationId: string
+  refreshedAt: string
+  sessions: Array<RecommendationChartSession>
+  status: "complete" | "partial" | "empty"
+  stockCode: string
+  stockName: string
+  trades: Array<RecommendationChartTrade>
+}
+
+export type RecommendationChartBar = {
+  amount: number
+  at: string
+  close: number
+  high: number
+  low: number
+  netPnl: number
+  netYieldRate: number
+  open: number
+  source: string
+  volume: number
+}
+
+export type RecommendationChartSession = {
+  date: string
+  previousClose: number
+  status: "complete" | "partial" | "missing"
+}
+
+export type RecommendationChartTrade = {
+  executionPrice: number
+  markerAt?: string
+  markerSnapped: boolean
+  marketPrice: number
+  netCashFlow: number
+  quantity: number
+  side: "buy" | "sell"
+  totalFees: number
+  tradedAt: string
 }
 
 export type RecommendationDetail = {

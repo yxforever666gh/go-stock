@@ -1,7 +1,7 @@
 <script setup>
 import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NTag, useMessage} from 'naive-ui'
-import {MdPreview} from 'md-editor-v3'
+import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/research-api'
 
 const message = useMessage()
@@ -218,11 +218,11 @@ onBeforeUnmount(stopPolling)
               <n-descriptions-item label="来源">{{ sourceSummary(detail.sourceStatusJson) }}</n-descriptions-item>
             </n-descriptions>
             <n-divider title-placement="left">完整决策报告</n-divider>
-            <MdPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
+            <AppMarkdownPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
             <n-collapse>
-              <n-collapse-item title="大盘层" name="market"><MdPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
-              <n-collapse-item title="板块层" name="sector"><MdPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
-              <n-collapse-item title="个股层" name="stock"><MdPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="大盘层" name="market"><AppMarkdownPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="板块层" name="sector"><AppMarkdownPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
+              <n-collapse-item title="个股层" name="stock"><AppMarkdownPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
               <n-collapse-item title="模型调用记录" name="attempts">
                 <n-data-table :columns="attemptColumns" :data="attemptRows(detail.modelAttemptLogJson)" :scroll-x="1650" size="small"/>
               </n-collapse-item>

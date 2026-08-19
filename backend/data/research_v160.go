@@ -371,6 +371,17 @@ func (ResearchTradingCalendar) IsTradingDay(_ context.Context, value time.Time) 
 	return IsCNOpenTradeDayStrict(value)
 }
 
+// IsTradingDayCached is used by the read-only chart endpoint. A cache miss is
+// reported as unknown so the caller can use a non-network weekday fallback;
+// only an explicit chart refresh is allowed to populate the remote calendar.
+func (ResearchTradingCalendar) IsTradingDayCached(value time.Time) (bool, bool) {
+	local := value.In(cnLocation())
+	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
+		return false, true
+	}
+	return globalCNTradeCalCache.lookup(local)
+}
+
 type ResearchSourceCollector struct {
 	news          *MarketNewsApi
 	stocks        *StockDataApi
@@ -609,6 +620,7 @@ func NewResearchRuntime(configID int) (*ResearchRuntime, error) {
 	quoteProvider := NewResearchQuoteProvider()
 	lifecycleCollector := NewResearchLifecycleContextCollector(quoteProvider)
 	service := research.NewService(repository, NewResearchAIClient(configID), quoteProvider, ResearchTradingCalendar{}, lifecycleCollector)
+	service.SetRecommendationChartProvider(NewResearchChartProvider(quoteProvider))
 	return &ResearchRuntime{Repository: repository, Service: service, Runner: research.NewAnalysisRunner(service, NewResearchSourceCollector())}, nil
 }
 
