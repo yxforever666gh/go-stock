@@ -36,8 +36,5 @@ jobs:
         run: npm ci
         working-directory: frontend
 
-      - name: Install golangci-lint
-        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
-
       - name: Run quality gate
         run: make ci

@@ -11,7 +11,7 @@ import (
 func registerResearchRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET /api/v1/research/analysis-runs", func(w http.ResponseWriter, r *http.Request) {
 		limit, offset := webPage(r)
-		items, err := app.listAIAnalysisReports(limit, offset)
+		items, err := app.listAIAnalysisReports(r.Context(), limit, offset)
 		writeResearchResult(w, items, err)
 	})
 	mux.HandleFunc("POST /api/v1/research/analysis-runs", func(w http.ResponseWriter, _ *http.Request) {
@@ -23,20 +23,20 @@ func registerResearchRoutes(mux *http.ServeMux, app *App) {
 		writeJSON(w, http.StatusAccepted, acceptedResponse{Accepted: ok})
 	})
 	mux.HandleFunc("GET /api/v1/research/analysis-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		item, err := app.getAIAnalysisReport(r.PathValue("id"))
+		item, err := app.getAIAnalysisReport(r.Context(), r.PathValue("id"))
 		writeResearchResult(w, item, err)
 	})
 	mux.HandleFunc("GET /api/v1/research/recommendations", func(w http.ResponseWriter, r *http.Request) {
 		limit, offset := webPage(r)
-		items, err := app.listAIRecommendations(limit, offset)
+		items, err := app.listAIRecommendations(r.Context(), limit, offset)
 		writeResearchResult(w, items, err)
 	})
 	mux.HandleFunc("GET /api/v1/research/recommendations/{id}", func(w http.ResponseWriter, r *http.Request) {
-		item, err := app.getAIRecommendation(r.PathValue("id"))
+		item, err := app.getAIRecommendation(r.Context(), r.PathValue("id"))
 		writeResearchResult(w, item, err)
 	})
 	mux.HandleFunc("GET /api/v1/research/recommendations/{id}/chart", func(w http.ResponseWriter, r *http.Request) {
-		item, err := app.getAIRecommendationChart(r.PathValue("id"), false)
+		item, err := app.getAIRecommendationChart(r.Context(), r.PathValue("id"), false)
 		writeResearchResult(w, item, err)
 	})
 	mux.HandleFunc("POST /api/v1/research/recommendations/{id}/chart/refresh", func(w http.ResponseWriter, r *http.Request) {
@@ -45,7 +45,7 @@ func registerResearchRoutes(mux *http.ServeMux, app *App) {
 		// the browser closes or the application shuts down.
 		controller := http.NewResponseController(w)
 		_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Minute))
-		item, err := app.getAIRecommendationChart(r.PathValue("id"), true)
+		item, err := app.getAIRecommendationChart(r.Context(), r.PathValue("id"), true)
 		if errors.Is(err, research.ErrChartRefreshInProgress) {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 			return

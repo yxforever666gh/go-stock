@@ -21,10 +21,8 @@ func (a *App) domReady(ctx context.Context) {
 	config := a.services.Config.GetConfig()
 	a.registerRealtimeRuntime(config)
 	a.registerFundRuntime(config)
-	a.registerTelegraphRuntime(config)
 	a.registerMaintenanceRuntime()
 	a.registerConfiguredCronRuntimes(config)
-	a.registerFollowAnalysisCrons()
 	if err := a.startSchedulerAfterAssembly(); err != nil {
 		releaseinfo.MarkSchedulerReady(false)
 		releaseinfo.MarkNotReady(err)
@@ -41,13 +39,13 @@ func (a *App) domReady(ctx context.Context) {
 }
 
 func (a *App) emitDomReadyDone() {
-	go func() {
+	a.goTask(func(ctx context.Context) {
 		time.Sleep(2 * time.Second)
 		if !releaseinfo.Readiness().Ready {
 			return
 		}
-		emitEvent(a.ctx, "loadingMsg", "done")
-	}()
+		emitEvent(ctx, "loadingMsg", "done")
+	})
 }
 
 func (a *App) registerRealtimeRuntime(config *models.SettingConfig) {
@@ -70,17 +68,17 @@ func (a *App) registerRealtimeRuntime(config *models.SettingConfig) {
 func (a *App) registerNewsPollingCrons(interval int64) {
 	a.registerCronTask("GetNewTelegraph", fmt.Sprintf("@every %ds", interval+10), func() {
 		news := a.services.Market.TelegraphList(30)
-		go emitEvent(a.ctx, "newTelegraph", news)
+		emitEvent(a.taskContext(), "newTelegraph", news)
 	})
 
 	a.registerCronTask("newSinaNews", fmt.Sprintf("@every %ds", interval+10), func() {
 		news := a.services.Market.GetSinaNews(30)
-		go emitEvent(a.ctx, "newSinaNews", news)
+		emitEvent(a.taskContext(), "newSinaNews", news)
 	})
 
 	a.registerCronTask("tradingViewNews", fmt.Sprintf("@every %ds", interval+10), func() {
 		news := a.services.Market.TradingViewNews()
-		go emitEvent(a.ctx, "tradingViewNews", news)
+		emitEvent(a.taskContext(), "tradingViewNews", news)
 	})
 }
 
@@ -93,16 +91,12 @@ func (a *App) registerFundRuntime(config *models.SettingConfig) {
 	})
 }
 
-func (a *App) registerTelegraphRuntime(config *models.SettingConfig) {
-	return
-}
-
 func (a *App) startImmediateRuntimeTasks(config *models.SettingConfig) {
-	go a.services.Market.EnsureMarketDataSelfCheck("app_dom_ready")
-	go MonitorStockPrices(a)
+	a.goTask(func(context.Context) { a.services.Market.EnsureMarketDataSelfCheck("app_dom_ready") })
+	a.goTask(func(context.Context) { MonitorStockPrices(a) })
 	if config.EnableFund {
-		go MonitorFundPrices(a)
-		go a.services.Fund.AllFund()
+		a.goTask(func(context.Context) { MonitorFundPrices(a) })
+		a.goTask(func(context.Context) { a.services.Fund.AllFund() })
 	}
 }
 
@@ -118,28 +112,12 @@ func (a *App) registerMaintenanceRuntime() {
 
 func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 	if config.UpdateBasicInfoOnStart {
-		go a.checkStockBaseInfo(a.ctx)
+		a.goTask(a.checkStockBaseInfo)
 	}
 }
 
 func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
 	a.reloadAIAnalysisCron(config)
-}
-
-func (a *App) registerFollowAnalysisCrons() {
-	followList := a.services.Stock.GetFollowList(0)
-	for _, follow := range *followList {
-		if follow.Cron == nil || *follow.Cron == "" {
-			continue
-		}
-		entryID, err := a.cron.AddFunc(*follow.Cron, a.addCronTask(follow))
-		if err != nil {
-			a.recordSchedulerRegistrationError("FollowAnalysis:"+follow.StockCode, *follow.Cron, err)
-			logger.SugaredLogger.Errorf("添加自动分析任务失败:%s cron=%s entryID:%v", follow.Name, *follow.Cron, entryID)
-			continue
-		}
-		a.setCronEntry(follow.StockCode, entryID)
-	}
 }
 
 func (a *App) registerCronTask(key, spec string, task func()) {

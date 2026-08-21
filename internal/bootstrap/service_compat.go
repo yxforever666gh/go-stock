@@ -1,11 +1,9 @@
 package bootstrap
 
 import (
-	"context"
-	"errors"
-	"time"
+	"fmt"
+	"strings"
 
-	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"go-stock/internal/service"
@@ -13,70 +11,53 @@ import (
 	"gorm.io/gorm"
 )
 
-func (a *compatibilityServiceAdapter) CreateTaskRun(ctx context.Context, run *models.CronTaskRun) error {
-	if run == nil {
-		return errors.New("cron task run is required")
+func legacyCommandResult(message string) (string, error) {
+	trimmed := strings.TrimSpace(message)
+	switch {
+	case strings.Contains(trimmed, "不存在"):
+		return trimmed, fmt.Errorf("%w: %s", service.ErrNotFound, trimmed)
+	case strings.Contains(trimmed, "已经"), strings.Contains(trimmed, "最多"):
+		return trimmed, fmt.Errorf("%w: %s", service.ErrConflict, trimmed)
+	case strings.Contains(trimmed, "失败"), trimmed == "":
+		return trimmed, fmt.Errorf("%w: %s", service.ErrOperationFailed, trimmed)
+	default:
+		return trimmed, nil
 	}
-	return a.main.WithContext(ctx).Create(run).Error
 }
 
-func (a *compatibilityServiceAdapter) UpdateTaskRun(ctx context.Context, run *models.CronTaskRun) error {
-	if run == nil || run.ID == 0 {
-		return errors.New("persisted cron task run is required")
-	}
-	return a.main.WithContext(ctx).
-		Model(&models.CronTaskRun{}).
-		Where("id = ?", run.ID).
-		Updates(map[string]any{
-			"status":        run.Status,
-			"error_message": run.ErrorMessage,
-			"attempts":      run.Attempts,
-		}).Error
+type aiConfigAdapter struct {
+	main *gorm.DB
 }
 
-func (a *compatibilityServiceAdapter) LatestAIResponseSince(ctx context.Context, stockName, question string, since time.Time) (models.AIResponseResult, error) {
-	var latest models.AIResponseResult
-	err := a.main.WithContext(ctx).
-		Model(&models.AIResponseResult{}).
-		Where("stock_name = ? AND question = ? AND created_at >= ?", stockName, question, since).
-		Order("id desc").
-		Limit(1).
-		Find(&latest).Error
-	return latest, err
+type fundAdapter struct{}
+
+type groupAdapter struct {
+	main *gorm.DB
 }
 
-func (a *compatibilityServiceAdapter) EarliestTaskRun(ctx context.Context, taskName string, from, to time.Time, statuses []string) (models.CronTaskRun, error) {
-	var earliest models.CronTaskRun
-	err := a.main.WithContext(ctx).
-		Model(&models.CronTaskRun{}).
-		Where("task_name = ? AND triggered_at >= ? AND triggered_at < ? AND status IN ?", taskName, from, to, statuses).
-		Order("id asc").
-		First(&earliest).Error
-	return earliest, err
+type marketAdapter struct {
+	main *gorm.DB
 }
 
-type compatibilityServiceAdapter struct {
+type stockAdapter struct {
 	main            *gorm.DB
 	stockMasterSeed func() ([]models.StockBasic, models.StockMasterRefreshResult, error)
 }
 
-func (a *compatibilityServiceAdapter) StockMasterHealth(ctx context.Context) (models.StockMasterHealth, error) {
-	return data.EvaluateStockMasterHealth(ctx, a.main, time.Now().UTC())
-}
-
-func newCompatibilityServiceOperations(main *gorm.DB, seed ...func() ([]models.StockBasic, models.StockMasterRefreshResult, error)) service.ServiceOperations {
-	adapter := &compatibilityServiceAdapter{main: main}
+func newCompatibilityServiceDependencies(main *gorm.DB, seed ...func() ([]models.StockBasic, models.StockMasterRefreshResult, error)) service.Dependencies {
+	stock := &stockAdapter{main: main}
 	if len(seed) > 0 {
-		adapter.stockMasterSeed = seed[0]
+		stock.stockMasterSeed = seed[0]
 	}
-	return service.ServiceOperations{
-		AI:     adapter,
-		Config: adapter,
-		Fund:   adapter,
-		Group:  adapter,
-		Market: adapter,
-		Notify: adapter,
-		Stock:  adapter,
+	return service.Dependencies{
+		Clock:       systemClock{},
+		Initializer: legacyApplicationInitializer{},
+		AI:          &aiConfigAdapter{main: main},
+		Config:      &aiConfigAdapter{main: main},
+		Fund:        &fundAdapter{},
+		Group:       &groupAdapter{main: main},
+		Market:      &marketAdapter{main: main},
+		Stock:       stock,
 	}
 }
 
@@ -90,7 +71,7 @@ func productionRuntimeDependencies(storage Storage, seed ...StockMasterSeedLoade
 	}
 	return RuntimeDependencies{
 		Storage:  storage,
-		Services: newCompatibilityServiceDependenciesWithOperations(storage, newCompatibilityServiceOperations(storage.Main, seedLoaders...)),
+		Services: newCompatibilityServiceDependencies(storage.Main, seedLoaders...),
 	}
 }
 

@@ -14,11 +14,10 @@ import (
 )
 
 type AppRuntime struct {
-	Config    appconfig.AppConfig
-	Storage   Storage
-	Clock     service.Clock
-	Providers service.ProviderSet
-	Services  service.AppServices
+	Config   appconfig.AppConfig
+	Storage  Storage
+	Clock    service.Clock
+	Services service.AppServices
 }
 
 func InitApplication(cfg appconfig.AppConfig, seed ...StockMasterSeedLoader) (AppRuntime, error) {

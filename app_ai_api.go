@@ -4,96 +4,14 @@ import (
 	"encoding/base64"
 	"strings"
 
-	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	appconfig "go-stock/internal/config"
-
-	"github.com/go-resty/resty/v2"
 )
-
-func (a *App) runChatStream(stock, stockCode, question string, aiConfigId int, sysPromptId *int, enableTools bool, think bool) {
-	order := a.services.AI.ResolveAIFallbackOrder(aiConfigId)
-	if len(order) == 0 {
-		emitEvent(a.ctx, "newChatStream", "DONE")
-		return
-	}
-
-	var lastMsgs []map[string]any
-	for idx, targetAIConfigID := range order {
-		msgs := a.services.AI.NewChatStream(a.ctx, stock, stockCode, question, targetAIConfigID, sysPromptId, resolveChatTools(enableTools, a.AiTools), think)
-		currentMsgs := make([]map[string]any, 0, 128)
-		bufferedErrors := make([]map[string]any, 0, 8)
-		for msg := range msgs {
-			currentMsgs = append(currentMsgs, msg)
-			if normalizeMsgCode(msg["code"]) == 0 {
-				bufferedErrors = append(bufferedErrors, msg)
-				continue
-			}
-			msg["aiConfigId"] = targetAIConfigID
-			emitEvent(a.ctx, "newChatStream", msg)
-		}
-		lastMsgs = currentMsgs
-		if !shouldChatFailover(currentMsgs) {
-			if !chatAttemptHasVisibleContent(currentMsgs) {
-				for _, msg := range bufferedErrors {
-					emitEvent(a.ctx, "newChatStream", msg)
-				}
-			}
-			break
-		}
-		if idx == len(order)-1 {
-			for _, msg := range bufferedErrors {
-				emitEvent(a.ctx, "newChatStream", msg)
-			}
-			break
-		}
-		if idx < len(order)-1 {
-			logger.SugaredLogger.Warnf("股票分析AI请求失败，自动切换备用模型。from=%d to=%d attempt=%d", targetAIConfigID, order[idx+1], idx+2)
-			go emitEvent(a.ctx, "warnMsg", "股票分析已自动切换到备用模型继续重试")
-		}
-	}
-
-	_ = lastMsgs
-	emitEvent(a.ctx, "newChatStream", "DONE")
-}
-
-func (a *App) shareAnalysis(stockCode, stockName string) string {
-	res := a.services.AI.GetAIResponseResult(a.ctx, stockCode)
-	if res == nil || len(res.Content) <= 100 {
-		return "分析结果异常"
-	}
-	uploadURL := shareUploadURL()
-	if uploadURL == "" {
-		return "公开版未配置分享服务，请改用 Markdown、图片或 Word 导出。"
-	}
-	analysisTime := res.CreatedAt.Format("2006/01/02")
-	logger.SugaredLogger.Infof("%s analysisTime:%s", res.CreatedAt, analysisTime)
-	response, err := resty.New().SetHeader("ua-x", "go-stock").R().SetFormData(map[string]string{
-		"text":         res.Content,
-		"stockCode":    stockCode,
-		"stockName":    stockName,
-		"analysisTime": analysisTime,
-	}).Post(uploadURL)
-	if err != nil {
-		return err.Error()
-	}
-	return response.String()
-}
-
-func (a *App) addPrompt(prompt models.Prompt) string {
-	promptTemplate := models.PromptTemplate{
-		ID:      prompt.ID,
-		Content: prompt.Content,
-		Name:    prompt.Name,
-		Type:    prompt.Type,
-	}
-	return a.services.AI.AddPrompt(promptTemplate)
-}
 
 func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.7.1：补充可审计的历史资金与买入纠正工具；模拟账户继续支持分期入金、最多十只并行敞口和 TWR 策略评估。"
+		content = "1.7.3：收敛领域服务与后台任务生命周期，统一 Web-only 启动入口，市场、研究和模拟账户能力保持不变。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

@@ -55,6 +55,12 @@ function Invoke-Checked {
     if ($exitCode -ne 0) { throw "$Failure (exit $exitCode)" }
 }
 
+function Get-GoPackages {
+    $packages = @(& go list ./...)
+    if ($LASTEXITCODE -ne 0) { throw "Cannot list Go packages" }
+    return @($packages | Where-Object { $_ -notmatch '/frontend/node_modules/' })
+}
+
 function Get-SHA256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing file: $Path" }
@@ -133,8 +139,9 @@ function Invoke-Build {
     if ($LASTEXITCODE -ne 0) { throw "Cannot inspect git worktree" }
     if ($dirty) { throw "Release builds require a clean git worktree" }
     New-Item -ItemType Directory -Force -Path $context.ReleaseDir | Out-Null
-    Invoke-Checked "go" @("test", "./...") "Go tests failed"
-    Invoke-Checked "go" @("vet", "./...") "Go vet failed"
+    $goPackages = @(Get-GoPackages)
+    Invoke-Checked "go" (@("test") + $goPackages) "Go tests failed"
+    Invoke-Checked "go" (@("vet") + $goPackages) "Go vet failed"
     Invoke-Checked "go" @("run", "./cmd/openapi-contract") "OpenAPI contract check failed"
     Push-Location (Join-Path $ProjectRoot "frontend")
     try { Invoke-Checked "npm" @("run", "ci") "Frontend verification failed" }
@@ -172,7 +179,7 @@ function Start-Pointer {
     $env:GO_STOCK_MINUTE_DB_PATH = $MinuteDB
     $env:ZONEINFO = $Pointer.zoneInfo
     try {
-        $process = Start-Process -FilePath $Pointer.binary -ArgumentList "--web" -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru
+        $process = Start-Process -FilePath $Pointer.binary -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru
     } finally {
         $env:GO_STOCK_WEB_ADDR = $previous.Web; $env:GO_STOCK_DB_PATH = $previous.DB
         $env:GO_STOCK_MINUTE_DB_PATH = $previous.Minute; $env:ZONEINFO = $previous.Zone

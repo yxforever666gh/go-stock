@@ -27,10 +27,6 @@ type stockSortRequest struct {
 	Sort int64 `json:"sort"`
 }
 
-type stockCronRequest struct {
-	Cron string `json:"cron"`
-}
-
 func registerStockRoutes(mux *http.ServeMux, app *App) {
 	mux.HandleFunc("GET /api/v1/stocks/search", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, app.services.Stock.GetStockList(r.URL.Query().Get("key")))
@@ -64,24 +60,32 @@ func registerStockRoutes(mux *http.ServeMux, app *App) {
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		writeCommand(w, app.services.Stock.Follow(strings.TrimSpace(req.StockCode)))
+		if strings.TrimSpace(req.StockCode) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stockCode is required"})
+			return
+		}
+		message, err := app.services.Stock.Follow(strings.TrimSpace(req.StockCode))
+		writeCommandResult(w, message, err)
 	})
 	mux.HandleFunc("DELETE /api/v1/watchlist/stocks/{code}", func(w http.ResponseWriter, r *http.Request) {
-		writeCommand(w, app.services.Stock.UnFollow(r.PathValue("code")))
+		message, err := app.services.Stock.UnFollow(r.PathValue("code"))
+		writeCommandResult(w, message, err)
 	})
 	mux.HandleFunc("PUT /api/v1/watchlist/stocks/{code}/position", func(w http.ResponseWriter, r *http.Request) {
 		var req stockPositionRequest
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		writeCommand(w, app.services.Stock.SetCostPriceAndVolume(r.PathValue("code"), req.Price, req.Volume))
+		message, err := app.services.Stock.SetCostPriceAndVolume(r.PathValue("code"), req.Price, req.Volume)
+		writeCommandResult(w, message, err)
 	})
 	mux.HandleFunc("PUT /api/v1/watchlist/stocks/{code}/alarm", func(w http.ResponseWriter, r *http.Request) {
 		var req stockAlarmRequest
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		writeCommand(w, app.services.Stock.SetAlarmChangePercent(req.Value, req.AlarmPrice, r.PathValue("code")))
+		message, err := app.services.Stock.SetAlarmChangePercent(req.Value, req.AlarmPrice, r.PathValue("code"))
+		writeCommandResult(w, message, err)
 	})
 	mux.HandleFunc("PUT /api/v1/watchlist/stocks/{code}/sort", func(w http.ResponseWriter, r *http.Request) {
 		var req stockSortRequest
@@ -89,14 +93,6 @@ func registerStockRoutes(mux *http.ServeMux, app *App) {
 			return
 		}
 		app.services.Stock.SetStockSort(req.Sort, r.PathValue("code"))
-		writeCommand(w, "saved")
-	})
-	mux.HandleFunc("PUT /api/v1/watchlist/stocks/{code}/ai-cron", func(w http.ResponseWriter, r *http.Request) {
-		var req stockCronRequest
-		if !decodeAPIRequest(w, r, &req) {
-			return
-		}
-		app.setStockAICron(req.Cron, r.PathValue("code"))
 		writeCommand(w, "saved")
 	})
 }

@@ -2,11 +2,11 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.7.1
+## 当前版本：App 1.7.3
 
-Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本保留市场行情、股票自选、普通诊股和基金，并建立研究中心从 AI 分析到模拟交易净收益的完整流程。
+Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本保留市场行情、股票自选和基金，并建立研究中心从 AI 分析到模拟交易净收益的完整流程。
 
-[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.7.1 发布说明](./RELEASE_NOTES_1.7.1.md)
+[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.7.3 发布说明](./RELEASE_NOTES_1.7.3.md)
 
 > 本仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 演化，不是原作者官方仓库。
 
@@ -37,8 +37,8 @@ Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 
 
 - 市场行情：保留快讯、指数、行业排名、资金流、龙虎榜、公告、研报、热点、选股与名站信息。
 - 研究中心：仅保留 `AI分析报告`、`股票推荐记录`、`股票收益率` 三个页签。
-- 设置：`AI 分析` 区块提供启用开关、AI 配置和自动分析时间；研究中心可手动开始一轮正式分析。
-- 普通诊股：继续使用既有 AI 配置，不与推荐生命周期会话混用。
+- 设置：按通用、数据接口、AI 分析和配置管理分组；分钟线接口与 AI 模型都可拖动排序并独立启停。
+- AI 分析：自动开关只控制定时触发，研究中心手动分析始终调用同一分析后端和同一组模型；持仓复查的开始时间与间隔可配置。
 
 ## AI 配置
 
@@ -48,11 +48,11 @@ Responses API 优先使用 `previous_response_id` 延续单股会话；中转站
 
 ## 数据库
 
-- 主库 schema：`9`
+- 主库 schema：`11`
 - 分钟库 schema：`2`
 - 1.6.x 表统一使用 `research_v160_` 前缀
 
-schema 3 创建分析运行、推荐、生命周期消息、AI 决策事件、模拟账户、交易和持仓表；schema 4 增加逐模型启用状态；schema 5 增加脱敏的模型调用诊断记录；schema 7 增加生命周期证据快照；schema 8 将旧待激活记录迁移到一次性直接买入流程；schema 9 在永久归档后删除 1.5 旧策略表；schema 10 增加分期入金、资金预留、单位净值与策略评估快照。分钟库保持 schema 2。
+schema 3 创建分析运行、推荐、生命周期消息、AI 决策事件、模拟账户、交易和持仓表；schema 4 增加逐模型启用状态；schema 5 增加脱敏的模型调用诊断记录；schema 7 增加生命周期证据快照；schema 8 将旧待激活记录迁移到一次性直接买入流程；schema 9 在永久归档后删除 1.5 旧策略表；schema 10 增加分期入金、资金预留、单位净值与策略评估快照；schema 11 增加分钟线接口顺序和持仓复查时间配置。分钟库保持 schema 2。
 
 ## 本地运行
 
@@ -66,7 +66,19 @@ cd ..
 go run .
 ```
 
-默认监听 `http://127.0.0.1:34115`。`--web` 在 1.6.x 内仍可作为无效果兼容参数使用。
+默认监听 `http://127.0.0.1:34115`，可用 `--web-addr` 修改监听地址。
+
+已部署的 Windows 发布物可直接双击 `启动项目.cmd`；如只需启动服务、不打开浏览器，可运行：
+
+```powershell
+.\启动项目.cmd -NoBrowser
+```
+
+网络来源审计已从主程序移到独立开发工具，需要时运行：
+
+```powershell
+.\scripts\network-audit.ps1
+```
 
 ## 验证
 

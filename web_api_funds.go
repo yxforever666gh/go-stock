@@ -1,6 +1,9 @@
 package main
 
-import "net/http"
+import (
+	"net/http"
+	"strings"
+)
 
 type fundCodeRequest struct {
 	FundCode string `json:"fundCode"`
@@ -18,9 +21,15 @@ func registerFundRoutes(mux *http.ServeMux, app *App) {
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		writeCommand(w, app.services.Fund.FollowFund(req.FundCode))
+		if strings.TrimSpace(req.FundCode) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fundCode is required"})
+			return
+		}
+		message, err := app.services.Fund.FollowFund(strings.TrimSpace(req.FundCode))
+		writeCommandResult(w, message, err)
 	})
 	mux.HandleFunc("DELETE /api/v1/watchlist/funds/{code}", func(w http.ResponseWriter, r *http.Request) {
-		writeCommand(w, app.services.Fund.UnFollowFund(r.PathValue("code")))
+		message, err := app.services.Fund.UnFollowFund(r.PathValue("code"))
+		writeCommandResult(w, message, err)
 	})
 }

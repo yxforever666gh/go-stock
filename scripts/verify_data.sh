@@ -93,8 +93,8 @@ fi
 echo ""
 echo "7. 进程状态..."
 
-if pgrep -f "go-stock.*--web" > /dev/null; then
-    PID=$(pgrep -f "go-stock.*--web")
+if pgrep -x "go-stock" > /dev/null; then
+    PID=$(pgrep -x "go-stock")
     UPTIME=$(ps -p $PID -o etime= | tr -d ' ')
     MEM=$(ps -p $PID -o rss= | awk '{printf "%.1f MB", $1/1024}')
     echo "   ✅ 进程运行中"

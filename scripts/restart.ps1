@@ -2,7 +2,8 @@ param(
     [ValidateSet("start", "stop", "restart", "rebuild", "status", "open", "help")]
     [string]$Command = "restart",
     [switch]$OpenBrowser,
-    [switch]$ResearchCenter
+    [switch]$ResearchCenter,
+    [switch]$NoBrowser
 )
 
 $ErrorActionPreference = "Stop"
@@ -214,7 +215,7 @@ function Start-ServiceProcess {
         Assert-ListenerMatchesPointer $pointer $listener
         if (-not (Test-ExactReadiness $pointer)) { throw "Pointer process is listening but exact readiness failed" }
         Write-Log "Pointer service is already ready: $ReadyURL"
-        if ($OpenBrowser) { Start-Process (Get-OpenURL) }
+        if ($OpenBrowser -and -not $NoBrowser) { Start-Process (Get-OpenURL) }
         return
     }
     New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
@@ -227,7 +228,7 @@ function Start-ServiceProcess {
     if (-not $env:GO_STOCK_DB_LOG_LEVEL) { $env:GO_STOCK_DB_LOG_LEVEL = "silent" }
     if (-not $env:GO_STOCK_LOG_LEVEL) { $env:GO_STOCK_LOG_LEVEL = "warn" }
     try {
-        $process = Start-Process -FilePath $pointer.binary -ArgumentList "--web" -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
+        $process = Start-Process -FilePath $pointer.binary -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput $outLog -RedirectStandardError $errLog -PassThru
     } finally {
         $env:GO_STOCK_WEB_ADDR, $env:ZONEINFO = $oldWebAddr, $oldZoneInfo
         $env:GO_STOCK_DB_LOG_LEVEL, $env:GO_STOCK_LOG_LEVEL = $oldDBLog, $oldLog
@@ -235,7 +236,7 @@ function Start-ServiceProcess {
     $process.Id | Set-Content -LiteralPath $PidFile
     Write-Log "Started pointer artifact PID: $($process.Id)"
     Wait-ExactReadiness $pointer $process.Id
-    if ($OpenBrowser) { Start-Process (Get-OpenURL) }
+    if ($OpenBrowser -and -not $NoBrowser) { Start-Process (Get-OpenURL) }
 }
 
 function Show-Status {

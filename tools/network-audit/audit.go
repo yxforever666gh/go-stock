@@ -1,4 +1,4 @@
-package cli
+package main
 
 import (
 	"context"
@@ -16,6 +16,7 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/internal/bootstrap"
+	appcli "go-stock/internal/cli"
 	cliports "go-stock/internal/cli/ports"
 
 	"github.com/go-resty/resty/v2"
@@ -66,6 +67,57 @@ type networkAuditRunner struct {
 	provider cliports.MarketAuditProvider
 }
 
+type auditOptions struct {
+	DataDir string
+	DBPath  string
+	JSON    bool
+}
+
+type searchRow struct {
+	Code string
+	Name string
+}
+
+func marshalPrettyJSON(value any) ([]byte, error) {
+	return json.MarshalIndent(value, "", "  ")
+}
+
+func extractSearchRows(result map[string]any) []searchRow {
+	dataMap, ok := result["data"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	var rawRows []any
+	for _, key := range []string{"list", "items", "data", "records", "result"} {
+		if rows, exists := dataMap[key].([]any); exists {
+			rawRows = rows
+			break
+		}
+	}
+	rows := make([]searchRow, 0, len(rawRows))
+	for _, raw := range rawRows {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		rows = append(rows, searchRow{
+			Code: pickSearchString(item, "code", "stockCode", "securityCode", "symbol", "f12"),
+			Name: pickSearchString(item, "name", "stockName", "securityName", "f14"),
+		})
+	}
+	return rows
+}
+
+func pickSearchString(item map[string]any, keys ...string) string {
+	for _, key := range keys {
+		value := strings.TrimSpace(fmt.Sprint(item[key]))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
 type auditSkipError struct {
 	message string
 }
@@ -78,7 +130,7 @@ func skipAudit(format string, args ...any) error {
 	return &auditSkipError{message: fmt.Sprintf(format, args...)}
 }
 
-func runNetworkAudit(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+func runNetworkAudit(args []string, g auditOptions, stdout, stderr io.Writer) error {
 	fs := flag.NewFlagSet("network-audit", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -97,7 +149,7 @@ func runNetworkAudit(args []string, g GlobalOptions, stdout, stderr io.Writer) e
 	return runNetworkAuditWithProvider(provider, jsonOut, reportDir, g, stdout, stderr, proxyEnv)
 }
 
-func runNetworkAuditWithProvider(provider cliports.MarketAuditProvider, jsonOut bool, reportDir string, g GlobalOptions, stdout, stderr io.Writer, proxyEnv map[string]string) error {
+func runNetworkAuditWithProvider(provider cliports.MarketAuditProvider, jsonOut bool, reportDir string, g auditOptions, stdout, stderr io.Writer, proxyEnv map[string]string) error {
 	if provider == nil {
 		return errors.New("network audit provider is required")
 	}
@@ -161,7 +213,7 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 	fundAPI := r.provider.Fund()
 	crawlTimeout := auditDurationSeconds(cfg.CrawlTimeOut, 20)
 
-	searchFingerprint, fpErr := ResolveFingerprint("")
+	searchFingerprint, fpErr := appcli.ResolveFingerprint("")
 	if fpErr != nil {
 		r.report.Notes = append(r.report.Notes, "东财 fingerprint 未配置，部分搜索接口将跳过")
 	}
@@ -829,9 +881,6 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 	})
 
 	r.runProbe("ai", "provider_connectivity", "chat/completions", true, func() (map[string]any, string, error) {
-		if !cfg.OpenAiEnable {
-			return nil, "", skipAudit("open_ai_enable=0")
-		}
 		if len(cfg.AiConfigs) == 0 {
 			return nil, "", skipAudit("未配置 ai_config")
 		}
@@ -1354,15 +1403,16 @@ func buildNetworkAuditEnvironment(cfg *models.SettingConfig, provider cliports.M
 		"config": map[string]any{
 			"httpProxyEnabled":         cfg.HttpProxyEnabled,
 			"forceNoProxyForFetch":     cfg.ForceNoProxyForFetch,
-			"minuteProviderMode":       cfg.MinuteProviderMode,
+			"minuteProviderOrder":      cfg.MinuteProviderOrder,
 			"privateMinuteEnabled":     cfg.PrivateMinuteEnabled,
 			"akshareEnabled":           cfg.AkshareEnabled,
 			"sinaMinuteEnabled":        cfg.SinaMinuteEnabled,
 			"tencentMinuteEnabled":     cfg.TencentMinuteEnabled,
 			"eastmoneyMinuteEnabled":   cfg.EastmoneyMinuteEnabled,
 			"aiAnalysisTimes":          cfg.AIAnalysisTimes,
-			"aiAnalysisEnabled":        cfg.AIAnalysisEnabled,
-			"openAIEnable":             cfg.OpenAiEnable,
+			"aiAnalysisAutoEnabled":    cfg.AIAnalysisEnabled,
+			"aiReviewStartTime":        cfg.AIReviewStartTime,
+			"aiReviewIntervalMinutes":  cfg.AIReviewIntervalMinutes,
 			"qgqpBidConfigured":        strings.TrimSpace(cfg.QgqpBId) != "",
 			"tushareTokenConfigured":   strings.TrimSpace(cfg.TushareToken) != "",
 			"dingRobotConfigured":      strings.TrimSpace(cfg.DingRobot) != "",
@@ -1371,7 +1421,6 @@ func buildNetworkAuditEnvironment(cfg *models.SettingConfig, provider cliports.M
 			"privateMinuteBaseURL":     provider.DiemengBaseURL(),
 			"privateMinuteTimeoutSec":  cfg.PrivateMinuteTimeoutSec,
 			"akshareMinuteSourceMode":  cfg.AkshareMinuteSourceMode,
-			"browserPath":              cfg.BrowserPath,
 		},
 	}
 }
@@ -1380,12 +1429,13 @@ func buildNetworkAuditSettings(cfg *models.SettingConfig, provider cliports.Mark
 	return map[string]any{
 		"dingPushEnable":          cfg.DingPushEnable,
 		"dingRobotConfigured":     strings.TrimSpace(cfg.DingRobot) != "",
-		"openAIEnable":            cfg.OpenAiEnable,
 		"httpProxyEnabled":        cfg.HttpProxyEnabled,
 		"forceNoProxyForFetch":    cfg.ForceNoProxyForFetch,
-		"aiAnalysisEnabled":       cfg.AIAnalysisEnabled,
+		"aiAnalysisAutoEnabled":   cfg.AIAnalysisEnabled,
 		"aiAnalysisTimes":         splitCSV(cfg.AIAnalysisTimes),
-		"minuteProviderMode":      cfg.MinuteProviderMode,
+		"aiReviewStartTime":       cfg.AIReviewStartTime,
+		"aiReviewIntervalMinutes": cfg.AIReviewIntervalMinutes,
+		"minuteProviderOrder":     cfg.MinuteProviderOrder,
 		"privateMinuteEnabled":    cfg.PrivateMinuteEnabled,
 		"privateMinuteBaseURL":    provider.DiemengBaseURL(),
 		"privateMinuteTimeoutSec": cfg.PrivateMinuteTimeoutSec,
@@ -1394,7 +1444,6 @@ func buildNetworkAuditSettings(cfg *models.SettingConfig, provider cliports.Mark
 		"tencentMinuteEnabled":    cfg.TencentMinuteEnabled,
 		"eastmoneyMinuteEnabled":  cfg.EastmoneyMinuteEnabled,
 		"akshareMinuteSourceMode": cfg.AkshareMinuteSourceMode,
-		"browserPath":             cfg.BrowserPath,
 		"qgqpBidConfigured":       strings.TrimSpace(cfg.QgqpBId) != "",
 		"tushareTokenConfigured":  strings.TrimSpace(cfg.TushareToken) != "",
 	}

@@ -5,18 +5,11 @@ export const API_PATHS = {
   analyzeWeightedSentiment: "/api/v1/market/sentiment/weighted",
   checkForUpdates: "/api/v1/system/update-check",
   connectEventsWebSocket: "/api/v1/events/ws",
-  createChatRun: "/api/v1/ai/chat-runs",
   createGroup: "/api/v1/groups",
-  createPrompt: "/api/v1/ai/prompts",
   deleteGroup: "/api/v1/groups/{id}",
-  deletePrompt: "/api/v1/ai/prompts/{id}",
   exportConfig: "/api/v1/exports/config",
-  exportImage: "/api/v1/exports/image",
-  exportMarkdown: "/api/v1/exports/markdown",
-  exportWord: "/api/v1/exports/word",
   followFund: "/api/v1/watchlist/funds",
   followStock: "/api/v1/watchlist/stocks",
-  getAIResponse: "/api/v1/ai/responses/{stockCode}",
   getAccountPerformance: "/api/v1/research/account/performance",
   getAnalysisRun: "/api/v1/research/analysis-runs/{id}",
   getCLSCalendar: "/api/v1/market/calendars/cls",
@@ -40,9 +33,7 @@ export const API_PATHS = {
   getStockNotices: "/api/v1/market/stocks/{code}/notices",
   getStockResearchReports: "/api/v1/market/stocks/{code}/research-reports",
   getStockSnapshot: "/api/v1/stocks/{code}/snapshot",
-  getSystemHealth: "/api/v1/system/health",
   getSystemInfo: "/api/v1/system/info",
-  getSystemVersion: "/api/v1/system/version",
   initializeGroupSort: "/api/v1/groups/initialize-sort",
   listAIConfigs: "/api/v1/ai/configs",
   listAccountCashFlows: "/api/v1/research/account/cash-flows",
@@ -54,7 +45,6 @@ export const API_PATHS = {
   listHotStocks: "/api/v1/market/hot/stocks",
   listHotTopics: "/api/v1/market/hot/topics",
   listIndustryResearchReports: "/api/v1/market/industries/research-reports",
-  listPrompts: "/api/v1/ai/prompts",
   listRecommendations: "/api/v1/research/recommendations",
   listStockNotices: "/api/v1/market/stocks/notices",
   listStockResearchReports: "/api/v1/market/stocks/research-reports",
@@ -63,10 +53,8 @@ export const API_PATHS = {
   refreshRecommendationChart: "/api/v1/research/recommendations/{id}/chart/refresh",
   refreshTelegraphs: "/api/v1/market/telegraphs/refresh",
   removeGroupStock: "/api/v1/groups/{id}/stocks/{code}",
-  saveAIResponse: "/api/v1/ai/responses",
   searchFunds: "/api/v1/funds/search",
   searchStockMaster: "/api/v1/stocks/search",
-  shareAIResponse: "/api/v1/ai/responses/{stockCode}/share",
   shutdownSystem: "/api/v1/system/shutdown",
   startAnalysisRun: "/api/v1/research/analysis-runs",
   testAIConfig: "/api/v1/ai/configs/test",
@@ -74,7 +62,6 @@ export const API_PATHS = {
   unfollowStock: "/api/v1/watchlist/stocks/{code}",
   updateGroupSort: "/api/v1/groups/{id}/sort",
   updateSettings: "/api/v1/settings",
-  updateStockAICron: "/api/v1/watchlist/stocks/{code}/ai-cron",
   updateStockAlarm: "/api/v1/watchlist/stocks/{code}/alarm",
   updateStockPosition: "/api/v1/watchlist/stocks/{code}/position",
   updateStockSort: "/api/v1/watchlist/stocks/{code}/sort",
@@ -82,15 +69,6 @@ export const API_PATHS = {
 
 export type AIConfigTestRequest = {
   id: number
-}
-
-export type AIResponseSaveRequest = {
-  aiConfigId: number
-  chatId: string
-  question: string
-  result: string
-  stockCode: string
-  stockName: string
 }
 
 export type AcceptedResponse = {
@@ -197,16 +175,6 @@ export type ChartProviderError = {
   provider: string
 }
 
-export type ChatRunRequest = {
-  aiConfigId: number
-  enableTools: boolean
-  question: string
-  stock: string
-  stockCode: string
-  sysPromptId?: number
-  think: boolean
-}
-
 export type CommandResponse = {
   message?: string
   ok: boolean
@@ -248,18 +216,6 @@ export type GroupSortRequest = {
   sort: number
 }
 
-export type HealthStatus = {
-  mode: string
-  ok: boolean
-  version: string
-}
-
-export type ImageExportRequest = {
-  base64Data: string
-  mode?: "download" | "server"
-  name: string
-}
-
 export type JsonObject = unknown
 
 export type LifecycleMessage = {
@@ -289,12 +245,6 @@ export type LifecycleObservation = {
 
 export type LivenessStatus = {
   ok: boolean
-}
-
-export type MarkdownExportRequest = {
-  mode?: "download" | "server"
-  stockCode: string
-  stockName: string
 }
 
 export type Position = {
@@ -416,10 +366,6 @@ export type SentimentRequest = {
   text: string
 }
 
-export type ShareAnalysisRequest = {
-  stockName: string
-}
-
 export type SimulatedTrade = {
   executionPrice?: number
   marketPrice?: number
@@ -437,10 +383,6 @@ export type StockAlarmRequest = {
 
 export type StockCodeRequest = {
   stockCode: string
-}
-
-export type StockCronRequest = {
-  cron: string
 }
 
 export type StockPositionRequest = {
@@ -491,10 +433,4 @@ export type TelegraphRefreshRequest = {
 
 export type UpdateCheckRequest = {
   flag: number
-}
-
-export type WordExportRequest = {
-  base64Data: string
-  filename: string
-  mode?: "download" | "server"
 }

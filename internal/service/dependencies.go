@@ -15,15 +15,15 @@ type ApplicationInitializer interface {
 	InitializeSentiment(context.Context) error
 }
 
-// ProviderSet is intentionally empty in 1.6.0. Market/research providers are
-// owned by their services instead of a legacy strategy composition graph.
-type ProviderSet struct{}
-
 type Dependencies struct {
 	Clock       Clock
 	Initializer ApplicationInitializer
-	Providers   ProviderSet
-	Operations  ServiceOperations
+	AI          AIService
+	Config      ConfigService
+	Fund        FundService
+	Group       GroupService
+	Market      MarketService
+	Stock       StockService
 }
 
 func (d Dependencies) Validate() error {
@@ -33,7 +33,7 @@ func (d Dependencies) Validate() error {
 	if d.Initializer == nil {
 		return errors.Join(ErrInvalidDependencies, errors.New("application initializer is required"))
 	}
-	if err := d.Operations.Validate(); err != nil {
+	if err := validateServices(d.AI, d.Config, d.Fund, d.Group, d.Market, d.Stock); err != nil {
 		return errors.Join(ErrInvalidDependencies, err)
 	}
 	return nil

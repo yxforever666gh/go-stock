@@ -23,7 +23,4 @@ async function exportFile(path, body) {
   return result?.path || ''
 }
 
-export const SaveAsMarkdown = (stockCode, stockName) => exportFile(API_PATHS.exportMarkdown, { stockCode, stockName })
 export const ExportConfig = () => exportFile(API_PATHS.exportConfig, {})
-export const SaveImage = (name, base64Data) => exportFile(API_PATHS.exportImage, { name, base64Data })
-export const SaveWordFile = (filename, base64Data) => exportFile(API_PATHS.exportWord, { filename, base64Data })

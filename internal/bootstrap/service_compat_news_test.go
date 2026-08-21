@@ -15,7 +15,7 @@ func TestPersistSyncedTelegraphDeduplicatesAndPersistsTagsAtomically(t *testing.
 	if err := database.AutoMigrate(&models.Telegraph{}, &models.Tags{}, &models.TelegraphTags{}); err != nil {
 		t.Fatalf("migrate news tables: %v", err)
 	}
-	adapter := compatibilityServiceAdapter{main: database}
+	adapter := marketAdapter{main: database}
 	news := &models.Telegraph{Title: "headline", Content: "body"}
 	created, err := adapter.PersistSyncedTelegraph(context.Background(), news, []string{"subject", "rotating_light"})
 	if err != nil || !created {
@@ -48,7 +48,7 @@ func TestPersistSyncedTelegraphRollsBackNewsWhenTagAssociationFails(t *testing.T
 	if err := database.AutoMigrate(&models.Telegraph{}, &models.Tags{}); err != nil {
 		t.Fatalf("migrate partial news tables: %v", err)
 	}
-	adapter := compatibilityServiceAdapter{main: database}
+	adapter := marketAdapter{main: database}
 	created, err := adapter.PersistSyncedTelegraph(context.Background(), &models.Telegraph{Title: "headline"}, []string{"subject"})
 	if err == nil || created {
 		t.Fatalf("partial persist = created:%v err:%v, want rollback error", created, err)

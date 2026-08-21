@@ -30,6 +30,11 @@ type SettingsApi struct {
 var strictAnalysisTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
 
 const defaultAIAnalysisTimes = "09:30,11:30,14:30"
+const defaultAIReviewStartTime = "09:50"
+const defaultAIReviewIntervalMinutes = 15
+
+var minuteProviderIDs = []string{"tencent", "sina", "akshare", "private"}
+
 const (
 	AIAPIProtocolChatCompletions  = models.AIAPIProtocolChatCompletions
 	AIAPIProtocolOpenAIResponses  = models.AIAPIProtocolOpenAIResponses
@@ -51,7 +56,17 @@ func UpdateConfig(s *SettingConfig) string {
 	if s == nil || s.Settings == nil {
 		return "保存失败: 配置为空"
 	}
-	s.MinuteProviderMode = normalizeMinuteProviderMode(s.MinuteProviderMode)
+	if s.AIAnalysisAutoEnabled != nil {
+		s.AIAnalysisEnabled = *s.AIAnalysisAutoEnabled
+	} else if s.LegacyAIAnalysisEnable != nil {
+		s.AIAnalysisEnabled = *s.LegacyAIAnalysisEnable
+	}
+	providerOrder, err := NormalizeMinuteProviderOrder(s.MinuteProviderOrder, s.MinuteProviderMode)
+	if err != nil {
+		return "保存失败: " + err.Error()
+	}
+	s.Settings.MinuteProviderOrder = strings.Join(providerOrder, ",")
+	s.MinuteProviderMode = legacyMinuteProviderMode(providerOrder)
 	s.PrivateMinuteBaseURL = strings.TrimSpace(s.PrivateMinuteBaseURL)
 	s.PrivateMinuteAPIKey = strings.TrimSpace(s.PrivateMinuteAPIKey)
 	s.PrivateMinuteProxyMode = normalizePrivateMinuteProxyMode(s.PrivateMinuteProxyMode)
@@ -66,6 +81,12 @@ func UpdateConfig(s *SettingConfig) string {
 		return "保存失败: AI 分析启用时请至少填写一个分析时间，例如 09:30,11:30,14:30"
 	}
 	s.AIAnalysisTimes = strings.Join(normalizedAnalysisTimes, ",")
+	reviewStart, reviewInterval, err := NormalizeAIReviewSchedule(s.AIReviewStartTime, s.AIReviewIntervalMinutes)
+	if err != nil {
+		return "保存失败: " + err.Error()
+	}
+	s.AIReviewStartTime = reviewStart
+	s.AIReviewIntervalMinutes = reviewInterval
 	if s.AiConfigs != nil {
 		if primary := SelectPrimaryAIConfig(s.AiConfigs); primary != nil {
 			s.AIAnalysisConfigID = primary.ID
@@ -99,11 +120,8 @@ func UpdateConfig(s *SettingConfig) string {
 		"ding_robot":                       s.DingRobot,
 		"update_basic_info_on_start":       s.UpdateBasicInfoOnStart,
 		"refresh_interval":                 s.RefreshInterval,
-		"open_ai_enable":                   s.OpenAiEnable,
 		"tushare_token":                    s.TushareToken,
-		"prompt":                           s.Prompt,
 		"check_update":                     s.CheckUpdate,
-		"question_template":                s.QuestionTemplate,
 		"crawl_time_out":                   s.CrawlTimeOut,
 		"k_days":                           s.KDays,
 		"enable_danmu":                     s.EnableDanmu,
@@ -121,7 +139,10 @@ func UpdateConfig(s *SettingConfig) string {
 		"ai_analysis_enabled":              s.AIAnalysisEnabled,
 		"ai_analysis_config_id":            s.AIAnalysisConfigID,
 		"ai_analysis_times":                s.AIAnalysisTimes,
+		"ai_review_start_time":             s.AIReviewStartTime,
+		"ai_review_interval_minutes":       s.AIReviewIntervalMinutes,
 		"minute_provider_mode":             s.MinuteProviderMode,
+		"minute_provider_order":            s.Settings.MinuteProviderOrder,
 		"minute_long_history_hint_enabled": s.MinuteLongHistoryHint,
 		"private_minute_enabled":           s.PrivateMinuteEnabled,
 		"private_minute_base_url":          s.PrivateMinuteBaseURL,
@@ -244,6 +265,7 @@ func GetSettingConfig() *SettingConfig {
 		applySettingDefaults(settings)
 		settingConfig.Settings = settings
 		settingConfig.AiConfigs = aiConfigs
+		applySettingConfigView(settingConfig)
 		applyRuntimeOverrideFromSettings(settings)
 		return settingConfig
 	}
@@ -273,6 +295,7 @@ func GetSettingConfig() *SettingConfig {
 	}
 	settingConfig.Settings = settings
 	settingConfig.AiConfigs = aiConfigs
+	applySettingConfigView(settingConfig)
 	if preferred := SelectPrimaryAIConfig(aiConfigs); preferred != nil {
 		settings.AIAnalysisConfigID = preferred.ID
 	} else {
@@ -321,10 +344,18 @@ func applySettingDefaults(settings *Settings) {
 		settings.AIAnalysisTimes = defaultAIAnalysisTimes
 		settings.AIAnalysisEnabled = true
 	}
+	if strings.TrimSpace(settings.AIReviewStartTime) == "" {
+		settings.AIReviewStartTime = defaultAIReviewStartTime
+	}
+	if settings.AIReviewIntervalMinutes < 5 || settings.AIReviewIntervalMinutes > 120 {
+		settings.AIReviewIntervalMinutes = defaultAIReviewIntervalMinutes
+	}
 	if settings.MinuteProviderMode == "" {
 		settings.MinuteProviderMode = "public"
 	}
 	settings.MinuteProviderMode = normalizeMinuteProviderMode(settings.MinuteProviderMode)
+	order, _ := NormalizeMinuteProviderOrder(splitProviderOrder(settings.MinuteProviderOrder), settings.MinuteProviderMode)
+	settings.MinuteProviderOrder = strings.Join(order, ",")
 	if settings.PrivateMinuteProxyMode == "" {
 		settings.PrivateMinuteProxyMode = appconfig.DefaultDiemengProxyMode
 	}
@@ -416,6 +447,88 @@ func NormalizeAIAnalysisTimes(input string) ([]string, error) {
 		return []string{}, nil
 	}
 	return times, nil
+}
+
+func NormalizeAIReviewSchedule(start string, interval int) (string, int, error) {
+	start = strings.TrimSpace(start)
+	if start == "" {
+		start = defaultAIReviewStartTime
+	}
+	if !strictAnalysisTimeRegexp.MatchString(start) {
+		return "", 0, fmt.Errorf("持仓复查起始时间格式无效：%s", start)
+	}
+	parsed, err := strconv.Atoi(strings.ReplaceAll(start, ":", ""))
+	if err != nil || parsed < 930 || parsed > 1130 {
+		return "", 0, errors.New("持仓复查起始时间必须在 09:30 至 11:30 之间")
+	}
+	if interval == 0 {
+		interval = defaultAIReviewIntervalMinutes
+	}
+	if interval < 5 || interval > 120 {
+		return "", 0, errors.New("持仓复查间隔必须在 5 至 120 分钟之间")
+	}
+	return start, interval, nil
+}
+
+func NormalizeMinuteProviderOrder(input []string, legacyMode string) ([]string, error) {
+	if len(input) == 0 {
+		if normalizeMinuteProviderMode(legacyMode) == "private" {
+			input = []string{"private", "tencent", "sina", "akshare"}
+		} else {
+			input = append([]string(nil), minuteProviderIDs...)
+		}
+	}
+	allowed := make(map[string]struct{}, len(minuteProviderIDs))
+	for _, id := range minuteProviderIDs {
+		allowed[id] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(minuteProviderIDs))
+	result := make([]string, 0, len(minuteProviderIDs))
+	for _, raw := range input {
+		id := strings.ToLower(strings.TrimSpace(raw))
+		if id == "" {
+			continue
+		}
+		if _, ok := allowed[id]; !ok {
+			return nil, fmt.Errorf("未知分钟数据源：%s", raw)
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		result = append(result, id)
+	}
+	for _, id := range minuteProviderIDs {
+		if _, ok := seen[id]; !ok {
+			result = append(result, id)
+		}
+	}
+	return result, nil
+}
+
+func splitProviderOrder(value string) []string {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
+}
+
+func legacyMinuteProviderMode(order []string) string {
+	if len(order) > 0 && order[0] == "private" {
+		return "private"
+	}
+	return "public"
+}
+
+func applySettingConfigView(config *SettingConfig) {
+	if config == nil || config.Settings == nil {
+		return
+	}
+	order, _ := NormalizeMinuteProviderOrder(splitProviderOrder(config.Settings.MinuteProviderOrder), config.Settings.MinuteProviderMode)
+	config.MinuteProviderOrder = order
+	autoEnabled := config.Settings.AIAnalysisEnabled
+	config.AIAnalysisAutoEnabled = &autoEnabled
+	config.LegacyAIAnalysisEnable = nil
 }
 
 func applyPrivateMinuteSettingsFromEnv(settings *Settings) {

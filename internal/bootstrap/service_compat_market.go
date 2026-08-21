@@ -8,7 +8,6 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/models"
 	cliports "go-stock/internal/cli/ports"
-	"go-stock/internal/service"
 
 	"github.com/coocood/freecache"
 	"gorm.io/gorm"
@@ -29,23 +28,6 @@ func (legacyApplicationInitializer) InitializeSentiment(ctx context.Context) err
 	}
 	data.InitAnalyzeSentiment()
 	return nil
-}
-
-// newCompatibilityServiceDependencies is the only place where legacy data
-// constructors are assembled into application ports. Keeping this bridge in
-// the bootstrap compatibility adapter makes the composition root explicit
-// while the old package is being retired.
-func newCompatibilityServiceDependencies(storage Storage) service.Dependencies {
-	return newCompatibilityServiceDependenciesWithOperations(storage, newCompatibilityServiceOperations(storage.Main))
-}
-
-func newCompatibilityServiceDependenciesWithOperations(storage Storage, operations service.ServiceOperations) service.Dependencies {
-	clock := systemClock{}
-	return service.Dependencies{
-		Clock:       clock,
-		Initializer: legacyApplicationInitializer{},
-		Operations:  operations,
-	}
 }
 
 // marketAuditCompatibilityAdapter is the one legacy bridge used by the CLI
@@ -387,11 +369,11 @@ func (a *marketAuditTushareCompatibilityAdapter) GetStockMinuteBars(tsCode strin
 	return result, nil
 }
 
-func (*compatibilityServiceAdapter) AnalyzeNews(text string, save bool) {
+func (*marketAdapter) AnalyzeNews(text string, save bool) {
 	data.NewsAnalyze(text, save)
 }
 
-func (a *compatibilityServiceAdapter) PersistSyncedTelegraph(ctx context.Context, telegraph *models.Telegraph, tags []string) (bool, error) {
+func (a *marketAdapter) PersistSyncedTelegraph(ctx context.Context, telegraph *models.Telegraph, tags []string) (bool, error) {
 	if telegraph == nil {
 		return false, nil
 	}
@@ -437,111 +419,118 @@ func (a *compatibilityServiceAdapter) PersistSyncedTelegraph(ctx context.Context
 	return created, err
 }
 
-func (*compatibilityServiceAdapter) EnsureMarketDataSelfCheck(reason string) {
+func (*marketAdapter) EnsureMarketDataSelfCheck(reason string) {
 	data.EnsureDiemengSelfCheckAsync(reason)
 }
 
-func (*compatibilityServiceAdapter) IsCNOpenTradeDay(day time.Time) bool {
+func (*marketAdapter) IsCNOpenTradeDay(day time.Time) bool {
 	return data.IsCNOpenTradeDay(day)
 }
 
-func (*compatibilityServiceAdapter) IsCNOpenTradeDayStrict(day time.Time) (bool, error) {
+func (*marketAdapter) IsCNOpenTradeDayStrict(day time.Time) (bool, error) {
 	return data.IsCNOpenTradeDayStrict(day)
 }
 
-func (*compatibilityServiceAdapter) GetFundList(key string) []models.FundBasic {
+func (*fundAdapter) GetFundList(key string) []models.FundBasic {
 	return data.NewFundApi().GetFundList(key)
 }
 
-func (*compatibilityServiceAdapter) GetFollowedFund() []models.FollowedFund {
+func (*fundAdapter) GetFollowedFund() []models.FollowedFund {
 	return data.NewFundApi().GetFollowedFund()
 }
 
-func (*compatibilityServiceAdapter) FollowFund(code string) string {
-	return data.NewFundApi().FollowFund(code)
+func (*fundAdapter) FollowFund(code string) (string, error) {
+	return legacyCommandResult(data.NewFundApi().FollowFund(code))
 }
 
-func (*compatibilityServiceAdapter) UnFollowFund(code string) string {
-	return data.NewFundApi().UnFollowFund(code)
+func (*fundAdapter) UnFollowFund(code string) (string, error) {
+	return legacyCommandResult(data.NewFundApi().UnFollowFund(code))
 }
 
-func (*compatibilityServiceAdapter) AllFund() {
+func (*fundAdapter) AllFund() {
 	data.NewFundApi().AllFund()
 }
 
-func (*compatibilityServiceAdapter) CrawlFundBasic(code string) (*models.FundBasic, error) {
+func (*fundAdapter) CrawlFundBasic(code string) (*models.FundBasic, error) {
 	return data.NewFundApi().CrawlFundBasic(code)
 }
 
-func (*compatibilityServiceAdapter) CrawlFundNetEstimatedUnit(code string) {
+func (*fundAdapter) CrawlFundNetEstimatedUnit(code string) {
 	data.NewFundApi().CrawlFundNetEstimatedUnit(code)
 }
 
-func (*compatibilityServiceAdapter) CrawlFundNetUnitValue(code string) {
+func (*fundAdapter) CrawlFundNetUnitValue(code string) {
 	data.NewFundApi().CrawlFundNetUnitValue(code)
 }
 
-func (*compatibilityServiceAdapter) LongTigerRank(date string) *[]models.LongTigerRankData {
+func (*marketAdapter) LongTigerRank(date string) *[]models.LongTigerRankData {
 	return data.NewMarketNewsApi().LongTiger(date)
 }
 
-func (*compatibilityServiceAdapter) StockResearchReport(code string, days int) []any {
+func (*marketAdapter) StockResearchReport(code string, days int) []any {
 	return data.NewMarketNewsApi().StockResearchReport(code, days)
 }
 
-func (*compatibilityServiceAdapter) StockNotice(code string) []any {
+func (*marketAdapter) StockNotice(code string) []any {
 	return data.NewMarketNewsApi().StockNotice(code)
 }
 
-func (*compatibilityServiceAdapter) IndustryResearchReport(code string, days int) []any {
+func (*marketAdapter) IndustryResearchReport(code string, days int) []any {
 	return data.NewMarketNewsApi().IndustryResearchReport(code, days)
 }
 
-func (*compatibilityServiceAdapter) EMDictCode(code string, cache *freecache.Cache) []any {
+func (*marketAdapter) EMDictCode(code string, cache *freecache.Cache) []any {
 	return data.NewMarketNewsApi().EMDictCode(code, cache)
 }
 
-func (*compatibilityServiceAdapter) HotStock(marketType string, size int) *[]models.HotItem {
+func (*marketAdapter) HotStock(marketType string, size int) *[]models.HotItem {
 	return data.NewMarketNewsApi().XUEQIUHotStock(size, marketType)
 }
 
-func (*compatibilityServiceAdapter) HotEvent(size int) *[]models.HotEvent {
+func (*marketAdapter) HotEvent(size int) *[]models.HotEvent {
 	return data.NewMarketNewsApi().HotEvent(size)
 }
 
-func (*compatibilityServiceAdapter) HotTopic(size int) []any {
+func (*marketAdapter) HotTopic(size int) []any {
 	return data.NewMarketNewsApi().HotTopic(size)
 }
 
-func (*compatibilityServiceAdapter) InvestCalendar(yearMonth string) []any {
+func (*marketAdapter) InvestCalendar(yearMonth string) []any {
 	return data.NewMarketNewsApi().InvestCalendar(yearMonth)
 }
 
-func (*compatibilityServiceAdapter) ClsCalendar() []any {
+func (*marketAdapter) ClsCalendar() []any {
 	return data.NewMarketNewsApi().ClsCalendar()
 }
 
-func (*compatibilityServiceAdapter) GetTelegraphList(source string) *[]*models.Telegraph {
+func (*marketAdapter) GetTelegraphList(source string) *[]*models.Telegraph {
 	return data.NewMarketNewsApi().GetTelegraphList(source)
 }
 
-func (*compatibilityServiceAdapter) TelegraphList(timeout int64) *[]models.Telegraph {
+func (*marketAdapter) TelegraphList(timeout int64) *[]models.Telegraph {
 	return data.NewMarketNewsApi().TelegraphList(timeout)
 }
 
-func (*compatibilityServiceAdapter) GetSinaNews(timeout uint) *[]models.Telegraph {
+func (*marketAdapter) GetSinaNews(timeout uint) *[]models.Telegraph {
 	return data.NewMarketNewsApi().GetSinaNews(timeout)
 }
 
-func (*compatibilityServiceAdapter) TradingViewNews() *[]models.Telegraph {
+func (*marketAdapter) TradingViewNews() *[]models.Telegraph {
 	return data.NewMarketNewsApi().TradingViewNews()
 }
 
-func (*compatibilityServiceAdapter) GlobalStockIndexes() map[string]any {
+func (a *marketAdapter) RefreshTelegraphList(source string) *[]*models.Telegraph {
+	go a.TelegraphList(30)
+	go a.GetSinaNews(30)
+	go a.TradingViewNews()
+	return a.GetTelegraphList(source)
+}
+
+func (*marketAdapter) GlobalStockIndexes() map[string]any {
 	return data.NewMarketNewsApi().GlobalStockIndexes(30)
 }
 
-func (*compatibilityServiceAdapter) GetIndustryRank(sort string, count int) []any {
+func (*marketAdapter) GetIndustryRank(sort string, count int) []any {
 	result := data.NewMarketNewsApi().GetIndustryRank(sort, count)
 	if items, ok := result["data"].([]any); ok && items != nil {
 		return items
@@ -549,20 +538,14 @@ func (*compatibilityServiceAdapter) GetIndustryRank(sort string, count int) []an
 	return []any{}
 }
 
-func (*compatibilityServiceAdapter) GetIndustryMoneyRankSina(category, sort string) []map[string]any {
+func (*marketAdapter) GetIndustryMoneyRankSina(category, sort string) []map[string]any {
 	return data.NewMarketNewsApi().GetIndustryMoneyRankSina(category, sort)
 }
 
-func (*compatibilityServiceAdapter) GetMoneyRankSina(sort string) []map[string]any {
+func (*marketAdapter) GetMoneyRankSina(sort string) []map[string]any {
 	return data.NewMarketNewsApi().GetMoneyRankSina(sort)
 }
 
-func (*compatibilityServiceAdapter) GetStockMoneyTrendByDay(code string, days int) []map[string]any {
+func (*marketAdapter) GetStockMoneyTrendByDay(code string, days int) []map[string]any {
 	return data.NewMarketNewsApi().GetStockMoneyTrendByDay(code, days)
 }
-
-func (*compatibilityServiceAdapter) SendDingDingMessage(message string) string {
-	return data.NewDingDingAPI().SendDingDingMessage(message)
-}
-
-func (*compatibilityServiceAdapter) SendAlert(_, _, _, _ string) {}

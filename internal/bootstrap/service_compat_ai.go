@@ -16,17 +16,17 @@ import (
 	"gorm.io/gorm"
 )
 
-var _ service.AIOperations = (*compatibilityServiceAdapter)(nil)
-var _ service.ConfigOperations = (*compatibilityServiceAdapter)(nil)
+var _ service.AIService = (*aiConfigAdapter)(nil)
+var _ service.ConfigService = (*aiConfigAdapter)(nil)
 
 func NewProductionCommandAIResolver() (cliports.CommandAIResolver, error) {
 	if db.Dao == nil {
 		return nil, errors.New("main database is not initialized")
 	}
-	return &compatibilityServiceAdapter{main: db.Dao}, nil
+	return &aiConfigAdapter{main: db.Dao}, nil
 }
 
-func (a *compatibilityServiceAdapter) ResolveCommandAI(ctx context.Context, opts cliports.CommandAIOptions) (cliports.CommandAIClient, error) {
+func (a *aiConfigAdapter) ResolveCommandAI(ctx context.Context, opts cliports.CommandAIOptions) (cliports.CommandAIClient, error) {
 	cfg, err := resolveCommandAIConfig(ctx, a.main, opts)
 	if err != nil {
 		return nil, err
@@ -67,7 +67,7 @@ func resolveCommandAIConfig(ctx context.Context, main *gorm.DB, opts cliports.Co
 	return cfg, nil
 }
 
-func (*compatibilityServiceAdapter) TestAIConfig(ctx context.Context, aiConfigID int) *models.AIModelTestResult {
+func (*aiConfigAdapter) TestAIConfig(ctx context.Context, aiConfigID int) *models.AIModelTestResult {
 	startedAt := time.Now()
 	result := &models.AIModelTestResult{Message: "测试失败", Protocol: models.AIAPIProtocolChatCompletions}
 	setting := data.GetSettingConfig()
@@ -110,62 +110,32 @@ func (*compatibilityServiceAdapter) TestAIConfig(ctx context.Context, aiConfigID
 	return result
 }
 
-func (*compatibilityServiceAdapter) AnalyzeSentiment(text string) models.SentimentResult {
+func (*aiConfigAdapter) AnalyzeSentiment(text string) models.SentimentResult {
 	return data.AnalyzeSentiment(text)
 }
 
-func (*compatibilityServiceAdapter) AnalyzeSentimentWithFreqWeight(text string) map[string]any {
+func (*aiConfigAdapter) AnalyzeSentimentWithFreqWeight(text string) map[string]any {
 	result, frequencies := data.NewsAnalyze(text, false)
 	return map[string]any{"result": result, "frequencies": frequencies}
 }
 
-func (*compatibilityServiceAdapter) GetAIResponseResult(ctx context.Context, code string) *models.AIResponseResult {
-	return data.NewDeepSeekOpenAi(ctx, 0).GetAIResponseResult(code)
-}
-
-func (*compatibilityServiceAdapter) SaveAIResponseResult(ctx context.Context, code, name, result, chatID, question string, configID int) {
-	data.NewDeepSeekOpenAi(ctx, configID).SaveAIResponseResult(code, name, result, chatID, question)
-}
-
-func (*compatibilityServiceAdapter) GetPromptTemplates(name, promptType string) *[]models.PromptTemplate {
-	return data.NewPromptTemplateApi().GetPromptTemplates(name, promptType)
-}
-func (*compatibilityServiceAdapter) AddPrompt(prompt models.PromptTemplate) string {
-	return data.NewPromptTemplateApi().AddPrompt(prompt)
-}
-func (*compatibilityServiceAdapter) DelPrompt(id uint) string {
-	return data.NewPromptTemplateApi().DelPrompt(id)
-}
-func (*compatibilityServiceAdapter) GetAIConfigs() []*models.AIConfig {
+func (*aiConfigAdapter) GetAIConfigs() []*models.AIConfig {
 	cfg := data.GetSettingConfig()
 	if cfg == nil {
 		return []*models.AIConfig{}
 	}
 	return data.EnabledAIConfigs(cfg.AiConfigs)
 }
-func (*compatibilityServiceAdapter) ResolveDefaultAIConfigID() int {
-	return data.SelectPrimaryAIConfigID(data.GetSettingConfig())
-}
-func (*compatibilityServiceAdapter) ResolveAIFallbackOrder(id int) []int {
-	return data.ResolveAIFallbackOrder(data.GetSettingConfig(), id)
-}
-func (*compatibilityServiceAdapter) ResolveAIModelName(id int) string {
-	for _, item := range data.GetSettingConfig().AiConfigs {
-		if item != nil && int(item.ID) == id {
-			return strings.TrimSpace(item.ModelName)
-		}
+func (*aiConfigAdapter) GetConfig() *models.SettingConfig { return data.GetSettingConfig() }
+func (*aiConfigAdapter) ExportConfig() string             { return data.NewSettingsApi().Export() }
+func (*aiConfigAdapter) UpdateConfig(config *models.SettingConfig) (string, error) {
+	message := data.UpdateConfig(config)
+	if strings.HasPrefix(message, "保存失败") {
+		return message, fmt.Errorf("%w: %s", service.ErrInvalidInput, message)
 	}
-	return ""
+	return message, nil
 }
-func (*compatibilityServiceAdapter) NewChatStream(ctx context.Context, stock, code, question string, id int, promptID *int, tools []models.Tool, think bool) <-chan map[string]any {
-	return data.NewDeepSeekOpenAi(ctx, id).NewChatStream(stock, code, question, promptID, tools, think)
-}
-func (*compatibilityServiceAdapter) GetConfig() *models.SettingConfig { return data.GetSettingConfig() }
-func (*compatibilityServiceAdapter) ExportConfig() string             { return data.NewSettingsApi().Export() }
-func (*compatibilityServiceAdapter) UpdateConfig(config *models.SettingConfig) string {
-	return data.UpdateConfig(config)
-}
-func (*compatibilityServiceAdapter) ResolveFingerprint() (string, error) {
+func (*aiConfigAdapter) ResolveFingerprint() (string, error) {
 	settings := data.GetSettingConfig()
 	if settings != nil && settings.Settings != nil && strings.TrimSpace(settings.QgqpBId) != "" {
 		return strings.TrimSpace(settings.QgqpBId), nil

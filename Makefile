@@ -2,12 +2,18 @@ SHELL := /bin/bash
 
 GO_PACKAGES := $(shell go list ./... | grep -v '/frontend/node_modules/')
 
-.PHONY: ci test test-go test-go-race test-integration lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web
+.PHONY: ci test test-go test-tools test-frontend test-go-race test-integration lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web
 
-test: test-go
+test: test-go test-tools test-frontend
 
 test-go:
 	go test $(GO_PACKAGES)
+
+test-tools:
+	cd tools/network-audit && go test ./...
+
+test-frontend:
+	cd frontend && npm run test:runtime
 
 test-go-race:
 	go test -race $(GO_PACKAGES)
@@ -18,9 +24,11 @@ test-integration:
 lint: lint-go lint-frontend
 
 lint-go:
-	go vet ./...
+	go vet $(GO_PACKAGES)
 	go mod tidy -diff
-	test -z "$$(gofmt -l $$(git diff --name-only --diff-filter=ACMR -- '*.go'))"
+	cd tools/network-audit && go mod tidy -diff
+	test -z "$$(find . -path './frontend/node_modules' -prune -o -path './third_party' -prune -o -path './tools/network-audit' -prune -o -name '*.go' -print | xargs gofmt -l)"
+	test -z "$$(find tools/network-audit -name '*.go' -print | xargs gofmt -l)"
 
 lint-frontend:
 	cd frontend && npm run lint

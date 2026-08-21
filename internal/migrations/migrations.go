@@ -163,6 +163,18 @@ var mainMigrations = []migration{
 		},
 		apply: applyResearchMultiPositionFunding,
 	},
+	{
+		id: 11, name: "settings_provider_order_and_review_schedule",
+		description: "Adds an explicit minute-provider fallback order and configurable AI holding-review schedule without deleting legacy settings or AI history.",
+		definition: func() string {
+			return strings.Join([]string{
+				"settings.minute_provider_order TEXT NOT NULL DEFAULT 'tencent,sina,akshare,private'",
+				"settings.ai_review_start_time TEXT NOT NULL DEFAULT '09:50'",
+				"settings.ai_review_interval_minutes INTEGER NOT NULL DEFAULT 15",
+			}, "\n")
+		},
+		apply: applySettingsProviderOrderAndReviewSchedule,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -306,6 +318,46 @@ func applyResearchMultiPositionFunding(tx *gorm.DB) error {
 		return fmt.Errorf("backfill queued-buy reservations: %w", err)
 	}
 	return verifyMainSchema10Runtime(tx)
+}
+
+func applySettingsProviderOrderAndReviewSchedule(tx *gorm.DB) error {
+	if tx == nil {
+		return errors.New("main database is unavailable")
+	}
+	if !tx.Migrator().HasTable(&models.Settings{}) {
+		return errors.New("settings table is unavailable")
+	}
+	if !tx.Migrator().HasColumn(&models.Settings{}, "MinuteProviderOrder") {
+		if err := tx.Exec("ALTER TABLE settings ADD COLUMN minute_provider_order TEXT NOT NULL DEFAULT 'tencent,sina,akshare,private'").Error; err != nil {
+			return fmt.Errorf("add settings.minute_provider_order: %w", err)
+		}
+	}
+	if !tx.Migrator().HasColumn(&models.Settings{}, "AIReviewStartTime") {
+		if err := tx.Exec("ALTER TABLE settings ADD COLUMN ai_review_start_time TEXT NOT NULL DEFAULT '09:50'").Error; err != nil {
+			return fmt.Errorf("add settings.ai_review_start_time: %w", err)
+		}
+	}
+	if !tx.Migrator().HasColumn(&models.Settings{}, "AIReviewIntervalMinutes") {
+		if err := tx.Exec("ALTER TABLE settings ADD COLUMN ai_review_interval_minutes INTEGER NOT NULL DEFAULT 15").Error; err != nil {
+			return fmt.Errorf("add settings.ai_review_interval_minutes: %w", err)
+		}
+	}
+	if err := tx.Exec(`UPDATE settings
+		SET minute_provider_order = CASE
+			WHEN LOWER(TRIM(COALESCE(minute_provider_mode, ''))) = 'private' THEN 'private,tencent,sina,akshare'
+			ELSE 'tencent,sina,akshare,private'
+		END
+		WHERE minute_provider_order IS NULL OR TRIM(minute_provider_order) = ''
+			OR minute_provider_order = 'tencent,sina,akshare,private' AND LOWER(TRIM(COALESCE(minute_provider_mode, ''))) = 'private'`).Error; err != nil {
+		return fmt.Errorf("backfill minute provider order: %w", err)
+	}
+	if err := tx.Exec("UPDATE settings SET ai_review_start_time = '09:50' WHERE ai_review_start_time IS NULL OR TRIM(ai_review_start_time) = ''").Error; err != nil {
+		return fmt.Errorf("backfill AI review start time: %w", err)
+	}
+	if err := tx.Exec("UPDATE settings SET ai_review_interval_minutes = 15 WHERE ai_review_interval_minutes IS NULL OR ai_review_interval_minutes < 5 OR ai_review_interval_minutes > 120").Error; err != nil {
+		return fmt.Errorf("backfill AI review interval: %w", err)
+	}
+	return verifyMainSchema11Runtime(tx)
 }
 
 func applyAIConfigModelSwitchFallbackOrder(tx *gorm.DB) error {
@@ -657,6 +709,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 11 {
+		if err := verifyMainSchema11Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -796,6 +853,27 @@ func verifyMainSchema10Runtime(database *gorm.DB) error {
 	}
 	if plan.TargetContribution != research.TargetContribution || plan.DepositAmount != research.ScheduledDepositAmount || plan.PlannedDeposits != research.ScheduledDepositCount {
 		return fmt.Errorf("main schema 10 funding plan is invalid: %+v", plan)
+	}
+	return nil
+}
+
+func verifyMainSchema11Runtime(database *gorm.DB) error {
+	if database == nil {
+		return errors.New("main database is unavailable")
+	}
+	for _, field := range []string{"MinuteProviderOrder", "AIReviewStartTime", "AIReviewIntervalMinutes"} {
+		if !database.Migrator().HasColumn(&models.Settings{}, field) {
+			return fmt.Errorf("main schema 11 settings.%s is missing", field)
+		}
+	}
+	var invalid int64
+	if err := database.Model(&models.Settings{}).Where(
+		"minute_provider_order IS NULL OR TRIM(minute_provider_order) = '' OR ai_review_start_time IS NULL OR TRIM(ai_review_start_time) = '' OR ai_review_interval_minutes < 5 OR ai_review_interval_minutes > 120",
+	).Count(&invalid).Error; err != nil {
+		return err
+	}
+	if invalid != 0 {
+		return fmt.Errorf("main schema 11 has %d invalid settings rows", invalid)
 	}
 	return nil
 }

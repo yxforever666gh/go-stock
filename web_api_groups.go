@@ -25,22 +25,14 @@ func registerGroupRoutes(mux *http.ServeMux, app *App) {
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		if app.services.Group.AddGroup(req) {
-			writeCommand(w, "添加成功")
-			return
-		}
-		writeCommand(w, "添加失败")
+		writeBooleanCommand(w, app.services.Group.AddGroup(req), "添加成功", "添加失败", http.StatusConflict)
 	})
 	mux.HandleFunc("DELETE /api/v1/groups/{id}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := groupID(w, r)
 		if !ok {
 			return
 		}
-		if app.services.Group.RemoveGroup(id) {
-			writeCommand(w, "移除成功")
-			return
-		}
-		writeCommand(w, "移除失败")
+		writeBooleanCommand(w, app.services.Group.RemoveGroup(id), "移除成功", "分组不存在或移除失败", http.StatusNotFound)
 	})
 	mux.HandleFunc("PUT /api/v1/groups/{id}/sort", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := groupID(w, r)
@@ -51,10 +43,10 @@ func registerGroupRoutes(mux *http.ServeMux, app *App) {
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		writeJSON(w, http.StatusOK, commandResponse{OK: app.services.Group.UpdateGroupSort(id, req.Sort)})
+		writeBooleanCommand(w, app.services.Group.UpdateGroupSort(id, req.Sort), "排序已更新", "分组不存在或排序失败", http.StatusNotFound)
 	})
 	mux.HandleFunc("POST /api/v1/groups/initialize-sort", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, commandResponse{OK: app.services.Group.InitializeGroupSort()})
+		writeBooleanCommand(w, app.services.Group.InitializeGroupSort(), "排序已初始化", "初始化排序失败", http.StatusInternalServerError)
 	})
 	mux.HandleFunc("POST /api/v1/groups/{id}/stocks", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := groupID(w, r)
@@ -65,22 +57,18 @@ func registerGroupRoutes(mux *http.ServeMux, app *App) {
 		if !decodeAPIRequest(w, r, &req) {
 			return
 		}
-		if app.services.Group.AddStockGroup(id, strings.TrimSpace(req.StockCode)) {
-			writeCommand(w, "添加成功")
+		if strings.TrimSpace(req.StockCode) == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stockCode is required"})
 			return
 		}
-		writeCommand(w, "添加失败")
+		writeBooleanCommand(w, app.services.Group.AddStockGroup(id, strings.TrimSpace(req.StockCode)), "添加成功", "股票或分组不存在，或已在分组中", http.StatusConflict)
 	})
 	mux.HandleFunc("DELETE /api/v1/groups/{id}/stocks/{code}", func(w http.ResponseWriter, r *http.Request) {
 		id, ok := groupID(w, r)
 		if !ok {
 			return
 		}
-		if app.services.Group.RemoveStockGroup(r.PathValue("code"), r.URL.Query().Get("name"), id) {
-			writeCommand(w, "移除成功")
-			return
-		}
-		writeCommand(w, "移除失败")
+		writeBooleanCommand(w, app.services.Group.RemoveStockGroup(r.PathValue("code"), r.URL.Query().Get("name"), id), "移除成功", "分组股票不存在或移除失败", http.StatusNotFound)
 	})
 }
 

@@ -9,7 +9,7 @@ import (
 func (a *App) checkStockBaseInfo(ctx context.Context) {
 	defer PanicHandler()
 	defer func() {
-		go emitEvent(ctx, "loadingMsg", "done")
+		emitEvent(ctx, "loadingMsg", "done")
 	}()
 
 	result, err := a.services.Stock.RefreshStockBaseInfo(ctx)

@@ -18,6 +18,8 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+
+	"gorm.io/gorm"
 )
 
 type researchProviderCompletion func(context.Context, *models.AIConfig, []map[string]any, string, func(AIStreamActivity)) (string, string, string, error)
@@ -316,7 +318,14 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 type ResearchQuoteProvider struct{ stocks *StockDataApi }
 
 func NewResearchQuoteProvider() *ResearchQuoteProvider {
-	return &ResearchQuoteProvider{stocks: NewStockDataApi()}
+	return NewResearchQuoteProviderWithStockData(NewStockDataApi())
+}
+
+func NewResearchQuoteProviderWithStockData(stocks *StockDataApi) *ResearchQuoteProvider {
+	if stocks == nil {
+		stocks = NewStockDataApi()
+	}
+	return &ResearchQuoteProvider{stocks: stocks}
 }
 
 func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code string) (research.Quote, error) {
@@ -405,7 +414,17 @@ type researchSourceJob struct {
 }
 
 func NewResearchSourceCollector() *ResearchSourceCollector {
-	return &ResearchSourceCollector{news: NewMarketNewsApi(), stocks: NewStockDataApi()}
+	return NewResearchSourceCollectorWithProviders(NewMarketNewsApi(), NewStockDataApi())
+}
+
+func NewResearchSourceCollectorWithProviders(news *MarketNewsApi, stocks *StockDataApi) *ResearchSourceCollector {
+	if news == nil {
+		news = NewMarketNewsApi()
+	}
+	if stocks == nil {
+		stocks = NewStockDataApi()
+	}
+	return &ResearchSourceCollector{news: news, stocks: stocks}
 }
 
 func (collector *ResearchSourceCollector) CollectMarket(ctx context.Context, now time.Time) ([]research.SourceDocument, error) {
@@ -618,18 +637,32 @@ type ResearchRuntime struct {
 }
 
 func NewResearchRuntime(configID int) (*ResearchRuntime, error) {
-	if db.Dao == nil {
+	return NewResearchRuntimeWithStorage(configID, db.Dao, db.MinuteDao)
+}
+
+func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*ResearchRuntime, error) {
+	if mainDB == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	repository := research.NewRepository(db.Dao)
+	repository := research.NewRepository(mainDB)
 	if err := repository.EnsureAccount(context.Background()); err != nil {
 		return nil, err
 	}
-	quoteProvider := NewResearchQuoteProvider()
-	lifecycleCollector := NewResearchLifecycleContextCollector(quoteProvider)
+	stocks := NewStockDataApi()
+	news := NewMarketNewsApi()
+	quoteProvider := NewResearchQuoteProviderWithStockData(stocks)
+	lifecycleCollector := NewResearchLifecycleContextCollectorWithProviders(quoteProvider, stocks, news)
 	service := research.NewService(repository, NewResearchAIClient(configID), quoteProvider, ResearchTradingCalendar{}, lifecycleCollector)
-	service.SetRecommendationChartProvider(NewResearchChartProvider(quoteProvider))
-	return &ResearchRuntime{Repository: repository, Service: service, Runner: research.NewAnalysisRunner(service, NewResearchSourceCollector())}, nil
+	if setting := GetSettingConfig(); setting != nil && setting.Settings != nil {
+		schedule, scheduleErr := research.NewSellReviewSchedule(setting.AIReviewStartTime, setting.AIReviewIntervalMinutes)
+		if scheduleErr != nil {
+			return nil, scheduleErr
+		}
+		service.SetSellReviewSchedule(schedule)
+	}
+	service.SetRecommendationChartProvider(NewResearchChartProviderWithStorage(quoteProvider, minuteDB))
+	collector := NewResearchSourceCollectorWithProviders(news, stocks)
+	return &ResearchRuntime{Repository: repository, Service: service, Runner: research.NewAnalysisRunner(service, collector)}, nil
 }
 
 func ResolveAIAnalysisConfig(setting *SettingConfig) (*models.AIConfig, error) {

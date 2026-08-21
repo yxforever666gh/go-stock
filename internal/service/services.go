@@ -8,7 +8,6 @@ type AppServices struct {
 	Config  ConfigService
 	Group   GroupService
 	Fund    FundService
-	Notify  NotifyService
 }
 
 func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, error) {
@@ -18,12 +17,11 @@ func NewAppServicesWithDependencies(dependencies Dependencies) (AppServices, err
 	}
 	return AppServices{
 		Runtime: runtimeService,
-		Stock:   NewStockService(dependencies.Operations.Stock),
-		Market:  NewMarketService(dependencies.Operations.Market),
-		AI:      NewAIService(dependencies.Operations.AI),
-		Config:  NewConfigService(dependencies.Operations.Config),
-		Group:   NewGroupService(dependencies.Operations.Group),
-		Fund:    NewFundService(dependencies.Operations.Fund),
-		Notify:  NewNotifyService(dependencies.Operations.Notify),
+		Stock:   dependencies.Stock,
+		Market:  dependencies.Market,
+		AI:      dependencies.AI,
+		Config:  dependencies.Config,
+		Group:   dependencies.Group,
+		Fund:    dependencies.Fund,
 	}, nil
 }

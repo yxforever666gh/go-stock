@@ -1,8 +1,8 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.7.1
-  description: Local-only Web API for market data, watchlists, diagnosis, funds, settings, and AI research.
+  version: 1.7.3
+  description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
 paths:
@@ -17,16 +17,6 @@ paths:
       responses:
         "200": {description: Ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
         "503": {description: Not ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
-  /api/v1/system/version:
-    get:
-      operationId: getSystemVersion
-      responses:
-        "200": {description: App and database identity, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
-  /api/v1/system/health:
-    get:
-      operationId: getSystemHealth
-      responses:
-        "200": {description: Health, content: {application/json: {schema: {$ref: "#/components/schemas/HealthStatus"}}}}
   /api/v1/system/info:
     get: {operationId: getSystemInfo, responses: {"200": {description: Display version information}}}
   /api/v1/system/update-check:
@@ -51,14 +41,6 @@ paths:
       operationId: testAIConfig
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AIConfigTestRequest"}}}}
       responses: {"200": {description: AI configuration test result}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/ai/prompts:
-    get: {operationId: listPrompts, responses: {"200": {description: Prompt templates}}}
-    post:
-      operationId: createPrompt
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
-      responses: {"200": {description: Prompt created, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/ai/prompts/{id}:
-    delete: {operationId: deletePrompt, responses: {"200": {description: Prompt deleted}}}
   /api/v1/groups:
     get: {operationId: listGroups, responses: {"200": {description: Groups}}}
     post:
@@ -117,11 +99,6 @@ paths:
       operationId: updateStockSort
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockSortRequest"}}}}
       responses: {"200": {description: Sort updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/watchlist/stocks/{code}/ai-cron:
-    put:
-      operationId: updateStockAICron
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockCronRequest"}}}}
-      responses: {"200": {description: AI cron updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/funds/search:
     get: {operationId: searchFunds, responses: {"200": {description: Fund search}}}
   /api/v1/watchlist/funds:
@@ -180,23 +157,6 @@ paths:
     get: {operationId: getInvestmentCalendar, responses: {"200": {description: Investment calendar}}}
   /api/v1/market/calendars/cls:
     get: {operationId: getCLSCalendar, responses: {"200": {description: CLS calendar}}}
-  /api/v1/ai/chat-runs:
-    post:
-      operationId: createChatRun
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ChatRunRequest"}}}}
-      responses: {"202": {description: Chat run accepted, content: {application/json: {schema: {$ref: "#/components/schemas/AcceptedResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/ai/responses:
-    post:
-      operationId: saveAIResponse
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AIResponseSaveRequest"}}}}
-      responses: {"200": {description: AI response saved, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/ai/responses/{stockCode}:
-    get: {operationId: getAIResponse, responses: {"200": {description: AI response}}}
-  /api/v1/ai/responses/{stockCode}/share:
-    post:
-      operationId: shareAIResponse
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ShareAnalysisRequest"}}}}
-      responses: {"200": {description: AI response shared, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/research/analysis-runs:
     get:
       operationId: listAnalysisRuns
@@ -250,25 +210,10 @@ paths:
       description: Returns unitized TWR, valuation points and strategy-quality metrics.
       responses:
         "200": {description: Account performance, content: {application/json: {schema: {$ref: "#/components/schemas/AccountPerformance"}}}}
-  /api/v1/exports/markdown:
-    post:
-      operationId: exportMarkdown
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/MarkdownExportRequest"}}}}
-      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/exports/config:
     post:
       operationId: exportConfig
       requestBody: {content: {application/json: {schema: {$ref: "#/components/schemas/ExportRequest"}}}}
-      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/exports/image:
-    post:
-      operationId: exportImage
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ImageExportRequest"}}}}
-      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/exports/word:
-    post:
-      operationId: exportWord
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/WordExportRequest"}}}}
       responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/events/ws:
     get:
@@ -330,10 +275,6 @@ components:
       type: object
       required: [sort]
       properties: {sort: {type: integer, format: int64}}
-    StockCronRequest:
-      type: object
-      required: [cron]
-      properties: {cron: {type: string}}
     FundCodeRequest:
       type: object
       required: [fundCode]
@@ -346,46 +287,9 @@ components:
       type: object
       required: [text]
       properties: {text: {type: string}}
-    ChatRunRequest:
-      type: object
-      required: [stock, stockCode, question, aiConfigId, enableTools, think]
-      properties:
-        stock: {type: string}
-        stockCode: {type: string}
-        question: {type: string}
-        aiConfigId: {type: integer}
-        sysPromptId: {type: integer}
-        enableTools: {type: boolean}
-        think: {type: boolean}
-    AIResponseSaveRequest:
-      type: object
-      required: [stockCode, stockName, result, chatId, question, aiConfigId]
-      properties:
-        stockCode: {type: string}
-        stockName: {type: string}
-        result: {type: string}
-        chatId: {type: string}
-        question: {type: string}
-        aiConfigId: {type: integer}
-    ShareAnalysisRequest:
-      type: object
-      required: [stockName]
-      properties: {stockName: {type: string}}
     ExportRequest:
       type: object
       properties: {mode: {type: string, enum: [download, server]}}
-    MarkdownExportRequest:
-      type: object
-      required: [stockCode, stockName]
-      properties: {mode: {type: string, enum: [download, server]}, stockCode: {type: string}, stockName: {type: string}}
-    ImageExportRequest:
-      type: object
-      required: [name, base64Data]
-      properties: {mode: {type: string, enum: [download, server]}, name: {type: string}, base64Data: {type: string}}
-    WordExportRequest:
-      type: object
-      required: [filename, base64Data]
-      properties: {mode: {type: string, enum: [download, server]}, filename: {type: string}, base64Data: {type: string}}
     ExportResponse:
       type: object
       required: [mode, filename]
@@ -399,10 +303,6 @@ components:
       type: object
       required: [ok]
       properties: {ok: {type: boolean}}
-    HealthStatus:
-      type: object
-      required: [ok, mode, version]
-      properties: {ok: {type: boolean}, mode: {type: string}, version: {type: string}}
     ReadinessStatus:
       type: object
       required: [migrations, database, services, scheduler, ready]

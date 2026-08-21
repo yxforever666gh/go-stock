@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"embed"
 	"flag"
 	"fmt"
@@ -53,8 +52,7 @@ func main() {
 		os.Exit(cli.Execute(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	cfg := appconfig.Load()
-	flag.Bool("web", false, "deprecated compatibility flag; web mode is always enabled")
-	webListenAddr := flag.String("web-addr", cfg.Web.ListenAddr, "web mode listen address")
+	webListenAddr := flag.String("web-addr", cfg.Web.ListenAddr, "web listen address")
 	flag.Parse()
 	cfg.Web.ListenAddr = normalizeWebListenAddr(*webListenAddr)
 
@@ -76,12 +74,11 @@ func main() {
 	logStartupConfig(cfg)
 	//log.SugaredLogger.Infof("build key: %s", BuildKey)
 
-	app := NewAppWithServices(appRuntime.Services)
+	app := NewAppWithRuntime(appRuntime)
 	log.SugaredLogger.Infof("starting web mode at http://%s", cfg.Web.ListenAddr)
-	app.ctx = context.Background()
 	hub := NewWebEventHub()
 	setWebEventHub(hub)
-	go app.domReady(app.ctx)
+	app.goTask(app.domReady)
 
 	if err := runWebMode(app, cfg.Web.ListenAddr, hub); err != nil {
 		log.SugaredLogger.Fatal(err)

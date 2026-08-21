@@ -604,15 +604,6 @@ func (receiver StockDataApi) SetStockSort(newSort int64, stockCode string) {
 	}
 
 }
-func (receiver StockDataApi) SetStockAICron(cron string, stockCode string) {
-	if strutil.HasPrefixAny(stockCode, []string{"gb_"}) {
-		stockCode = strings.ToUpper(stockCode)
-		stockCode = strings.Replace(stockCode, "gb_", "us", 1)
-		stockCode = strings.Replace(stockCode, "GB_", "us", 1)
-	}
-	db.Dao.Model(&FollowedStock{}).Where("stock_code = ?", strings.ToLower(stockCode)).Update("cron", cron)
-
-}
 func (receiver StockDataApi) GetFollowList(groupId int) *[]FollowedStock {
 	logger.SugaredLogger.Infof("GetFollowList %d", groupId)
 

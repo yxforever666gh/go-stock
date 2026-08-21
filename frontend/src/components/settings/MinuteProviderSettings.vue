@@ -1,120 +1,207 @@
 <script setup>
-import {h} from "vue";
-import {NTag} from "naive-ui";
+import {onBeforeUnmount, ref} from 'vue'
 
-defineProps({
-  formValue: {
-    type: Object,
-    required: true,
-  },
-  minuteProviderModeOptions: {
-    type: Array,
-    required: true,
-  },
-  akshareMinuteSourceOptions: {
-    type: Array,
-    required: true,
-  },
-  privateMinuteProxyModeOptions: {
-    type: Array,
-    required: true,
-  },
-  privateMinuteLevelOptions: {
-    type: Array,
-    required: true,
-  },
+const props = defineProps({
+  formValue: {type: Object, required: true},
+  akshareMinuteSourceOptions: {type: Array, required: true},
+  privateMinuteProxyModeOptions: {type: Array, required: true},
+  privateMinuteLevelOptions: {type: Array, required: true},
 })
 
-const emit = defineEmits(['immediate-change', 'text-blur'])
+const emit = defineEmits(['immediate-change', 'text-blur', 'move-provider'])
+const dragSourceIndex = ref(null)
+const dragTargetIndex = ref(null)
+
+const providerMeta = {
+  tencent: {name: '腾讯分钟线', description: '公共实时分钟线'},
+  sina: {name: '新浪分钟线', description: '公共实时分钟线'},
+  akshare: {name: 'AKShare', description: '新浪 / 东方财富适配'},
+  private: {name: '私人分钟线接口', description: '自定义 HTTP 数据接口'},
+}
+
+function providerEnabled(provider) {
+  if (provider === 'tencent') return props.formValue.tencentMinuteEnabled
+  if (provider === 'sina') return props.formValue.sinaMinuteEnabled
+  if (provider === 'akshare') return props.formValue.akshareEnabled
+  return props.formValue.privateMinute.enabled
+}
+
+function setProviderEnabled(provider, value) {
+  if (provider === 'tencent') props.formValue.tencentMinuteEnabled = value
+  else if (provider === 'sina') props.formValue.sinaMinuteEnabled = value
+  else if (provider === 'akshare') props.formValue.akshareEnabled = value
+  else props.formValue.privateMinute.enabled = value
+  emit('immediate-change')
+}
+
+function startDrag(event, index) {
+  dragSourceIndex.value = index
+  dragTargetIndex.value = index
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', String(index))
+}
+
+function dragOver(event, index) {
+  event.preventDefault()
+  dragTargetIndex.value = index
+  event.dataTransfer.dropEffect = 'move'
+}
+
+function move(sourceIndex, targetIndex) {
+  if (!Number.isInteger(sourceIndex) || !Number.isInteger(targetIndex) || sourceIndex === targetIndex) return
+  emit('move-provider', sourceIndex, targetIndex)
+}
+
+function drop(event, index) {
+  event.preventDefault()
+  const source = dragSourceIndex.value ?? Number(event.dataTransfer.getData('text/plain'))
+  move(Number(source), index)
+  finishDrag()
+}
+
+function finishDrag() {
+  dragSourceIndex.value = null
+  dragTargetIndex.value = null
+  cleanupPointerDrag()
+}
+
+function rowIndexAt(clientX, clientY) {
+  const row = document.elementFromPoint(clientX, clientY)?.closest?.('.provider-row')
+  const index = Number(row?.getAttribute?.('data-provider-index'))
+  return Number.isInteger(index) ? index : null
+}
+
+function pointerDown(event, index) {
+  if (event.button !== 0) return
+  dragSourceIndex.value = index
+  dragTargetIndex.value = index
+  cleanupPointerDrag()
+  window.addEventListener('pointermove', pointerMove)
+  window.addEventListener('pointerup', pointerUp, {once: true})
+  window.addEventListener('pointercancel', finishDrag, {once: true})
+  event.preventDefault()
+}
+
+function pointerMove(event) {
+  if (dragSourceIndex.value === null) return
+  const index = rowIndexAt(event.clientX, event.clientY)
+  if (index !== null) dragTargetIndex.value = index
+}
+
+function pointerUp(event) {
+  const target = rowIndexAt(event.clientX, event.clientY) ?? dragTargetIndex.value
+  move(Number(dragSourceIndex.value), Number(target))
+  finishDrag()
+}
+
+function cleanupPointerDrag() {
+  window.removeEventListener('pointermove', pointerMove)
+  window.removeEventListener('pointerup', pointerUp)
+  window.removeEventListener('pointercancel', finishDrag)
+}
+
+function rowClass(index) {
+  return {
+    'provider-row': true,
+    'provider-row-dragging': dragSourceIndex.value === index,
+    'provider-row-drag-over': dragTargetIndex.value === index && dragSourceIndex.value !== index,
+  }
+}
+
+onBeforeUnmount(cleanupPointerDrag)
 </script>
 
 <template>
-  <n-card :title="() => h(NTag, { type: 'primary', bordered: false }, () => '分钟线数据源')" size="small">
-    <n-grid :cols="24" :x-gap="24" style="text-align: left">
-      <n-form-item-gi :span="24">
-        <n-alert type="info" :show-icon="false">
-          这里设置的是回退优先级，不是互斥模式。当前来源报错、返回空数据或覆盖不完整时，会按顺序自动尝试下一个已启用来源；已取得的数据会保留。
-        </n-alert>
-      </n-form-item-gi>
-
-      <n-form-item-gi :span="8" label="来源优先级：" path="minuteProviderMode">
-        <n-radio-group v-model:value="formValue.minuteProviderMode" @update:value="emit('immediate-change')">
-          <n-space>
-            <n-radio-button
-                v-for="item in minuteProviderModeOptions"
-                :key="item.value"
-                :value="item.value"
-            >
-              {{ item.label }}
-            </n-radio-button>
-          </n-space>
-        </n-radio-group>
-      </n-form-item-gi>
-      <n-form-item-gi :span="8" label="AKShare 来源偏好：" path="akshareMinuteSourceMode">
-        <n-select
-            v-model:value="formValue.akshareMinuteSourceMode"
-            :options="akshareMinuteSourceOptions"
-            :disabled="!formValue.akshareEnabled"
-            @update:value="emit('immediate-change')"
-        />
-      </n-form-item-gi>
-      <n-form-item-gi :span="24">
-        <n-alert type="success" :show-icon="false">
-          {{ formValue.minuteProviderMode === 'private'
-            ? '回退顺序：私人来源 → 腾讯 → 新浪 → AKShare（新浪/东方财富）'
-            : '回退顺序：腾讯 → 新浪 → AKShare（新浪/东方财富）→ 私人来源' }}。关闭的数据源不会被调用。
-        </n-alert>
-      </n-form-item-gi>
-
-      <n-form-item-gi :span="4" label="AKShare：" path="akshareEnabled">
-        <n-switch v-model:value="formValue.akshareEnabled" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="4" label="新浪分钟线：" path="sinaMinuteEnabled">
-        <n-switch v-model:value="formValue.sinaMinuteEnabled" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="4" label="腾讯分钟线：" path="tencentMinuteEnabled">
-        <n-switch v-model:value="formValue.tencentMinuteEnabled" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="24">
-        <n-alert type="warning" :show-icon="false">
-          私人来源仅在启用、配置完整且分钟级别为 1 分钟时参与研究图表回退；公共源更适合实时与短周期，私人源可用于补充较长历史。
-        </n-alert>
-      </n-form-item-gi>
-
-      <n-form-item-gi :span="4" label="启用私人来源：" path="privateMinute.enabled">
-        <n-switch v-model:value="formValue.privateMinute.enabled" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="10" label="调用 URL：" path="privateMinute.baseUrl">
-        <n-input
-            type="text"
-            placeholder="例如 https://example.com/api"
-            v-model:value="formValue.privateMinute.baseUrl"
-            clearable
-            @blur="emit('text-blur')"
-        />
-      </n-form-item-gi>
-      <n-form-item-gi :span="10" label="API Key：" path="privateMinute.apiKey">
-        <n-input
-            type="password"
-            placeholder="私人分钟线来源 API Key"
-            v-model:value="formValue.privateMinute.apiKey"
-            show-password-on="click"
-            clearable
-            @blur="emit('text-blur')"
-        />
-      </n-form-item-gi>
-      <n-form-item-gi :span="6" label="超时(秒)：" path="privateMinute.timeoutSec">
-        <n-input-number :min="1" v-model:value="formValue.privateMinute.timeoutSec" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="6" label="最小间隔(ms)：" path="privateMinute.minIntervalMs">
-        <n-input-number :min="0" v-model:value="formValue.privateMinute.minIntervalMs" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="6" label="代理模式：" path="privateMinute.proxyMode">
-        <n-select v-model:value="formValue.privateMinute.proxyMode" :options="privateMinuteProxyModeOptions" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-      <n-form-item-gi :span="6" label="分钟级别：" path="privateMinute.level">
-        <n-select v-model:value="formValue.privateMinute.level" :options="privateMinuteLevelOptions" @update:value="emit('immediate-change')"/>
-      </n-form-item-gi>
-    </n-grid>
-  </n-card>
+  <n-space vertical>
+    <n-alert type="info" :show-icon="false">
+      从上到下依次调用；当前接口报错、无数据或覆盖不完整时，会继续尝试下一个已启用接口。
+    </n-alert>
+    <n-scrollbar x-scrollable>
+      <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1600px">
+        <thead>
+        <tr>
+          <th style="width: 90px">顺序</th>
+          <th style="width: 80px">启用</th>
+          <th style="width: 180px">数据接口</th>
+          <th style="width: 200px">来源选项</th>
+          <th style="width: 310px">调用 URL</th>
+          <th style="width: 250px">API Key</th>
+          <th style="width: 120px">超时(秒)</th>
+          <th style="width: 140px">最小间隔(ms)</th>
+          <th style="width: 180px">代理模式</th>
+          <th style="width: 140px">分钟级别</th>
+        </tr>
+        </thead>
+        <tbody>
+        <tr v-for="(provider, index) in formValue.minuteProviderOrder"
+            :key="provider"
+            :class="rowClass(index)"
+            :data-provider-index="index"
+            @dragover="dragOver($event, index)"
+            @drop="drop($event, index)"
+            @dragend="finishDrag">
+          <td>
+            <div class="provider-drag-handle" draggable="true" title="拖动调整调用顺序"
+                 @pointerdown="pointerDown($event, index)" @dragstart="startDrag($event, index)">
+              <span class="provider-drag-icon">≡</span><span>{{ index + 1 }}</span>
+            </div>
+          </td>
+          <td>
+            <n-switch :value="providerEnabled(provider)"
+                      :aria-label="`${providerMeta[provider].name}启用开关`"
+                      @update:value="value => setProviderEnabled(provider, value)"/>
+          </td>
+          <td>
+            <n-text strong>{{ providerMeta[provider].name }}</n-text><br>
+            <n-text depth="3">{{ providerMeta[provider].description }}</n-text>
+          </td>
+          <td>
+            <n-select v-if="provider === 'akshare'" v-model:value="formValue.akshareMinuteSourceMode"
+                      :options="akshareMinuteSourceOptions" @update:value="emit('immediate-change')"/>
+            <n-text v-else depth="3">—</n-text>
+          </td>
+          <td>
+            <n-input v-if="provider === 'private'" v-model:value="formValue.privateMinute.baseUrl"
+                     placeholder="https://example.com/api" clearable @blur="emit('text-blur')"/>
+            <n-text v-else depth="3">内置</n-text>
+          </td>
+          <td>
+            <n-input v-if="provider === 'private'" v-model:value="formValue.privateMinute.apiKey"
+                     type="password" placeholder="API Key" show-password-on="click" clearable
+                     @blur="emit('text-blur')"/>
+            <n-text v-else depth="3">—</n-text>
+          </td>
+          <td>
+            <n-input-number v-if="provider === 'private'" v-model:value="formValue.privateMinute.timeoutSec"
+                            :min="1" @update:value="emit('immediate-change')"/>
+            <n-text v-else depth="3">—</n-text>
+          </td>
+          <td>
+            <n-input-number v-if="provider === 'private'" v-model:value="formValue.privateMinute.minIntervalMs"
+                            :min="0" @update:value="emit('immediate-change')"/>
+            <n-text v-else depth="3">—</n-text>
+          </td>
+          <td>
+            <n-select v-if="provider === 'private'" v-model:value="formValue.privateMinute.proxyMode"
+                      :options="privateMinuteProxyModeOptions" @update:value="emit('immediate-change')"/>
+            <n-text v-else depth="3">—</n-text>
+          </td>
+          <td>
+            <n-select v-if="provider === 'private'" v-model:value="formValue.privateMinute.level"
+                      :options="privateMinuteLevelOptions" @update:value="emit('immediate-change')"/>
+            <n-text v-else depth="3">1 分钟</n-text>
+          </td>
+        </tr>
+        </tbody>
+      </n-table>
+    </n-scrollbar>
+  </n-space>
 </template>
+
+<style scoped>
+.provider-row { transition: background-color .12s ease, opacity .12s ease; }
+.provider-row-dragging { opacity: .58; }
+.provider-row-drag-over > td { background-color: rgba(24, 160, 88, .08); border-top: 2px dashed #18a058; }
+.provider-drag-handle { align-items: center; color: #18a058; cursor: move; display: inline-flex; font-weight: 600; gap: 8px; justify-content: center; min-width: 54px; user-select: none; }
+.provider-drag-icon { color: #8a8f99; font-size: 18px; line-height: 1; }
+</style>

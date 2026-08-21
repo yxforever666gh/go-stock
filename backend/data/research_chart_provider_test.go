@@ -48,7 +48,7 @@ func TestChartProviderNormalizesCodesAndSanitizesErrors(t *testing.T) {
 func TestEnabledChartMinuteProvidersPrivatePriorityFallsBackToPublicSources(t *testing.T) {
 	initMinuteCacheTestDB(t, "chart-provider-private-fallback.db")
 	setChartProviderSettings(t, map[string]any{
-		"minute_provider_mode":    "private",
+		"minute_provider_order":   "private,tencent,sina,akshare",
 		"private_minute_enabled":  true,
 		"private_minute_base_url": "https://minute.example.test",
 		"private_minute_api_key":  "test-key",
@@ -68,7 +68,7 @@ func TestEnabledChartMinuteProvidersPrivatePriorityFallsBackToPublicSources(t *t
 func TestEnabledChartMinuteProvidersPublicPriorityFallsBackToPrivateSource(t *testing.T) {
 	initMinuteCacheTestDB(t, "chart-provider-public-fallback.db")
 	setChartProviderSettings(t, map[string]any{
-		"minute_provider_mode":    "public",
+		"minute_provider_order":   "tencent,sina,akshare,private",
 		"private_minute_enabled":  true,
 		"private_minute_base_url": "https://minute.example.test",
 		"private_minute_api_key":  "test-key",
@@ -88,7 +88,7 @@ func TestEnabledChartMinuteProvidersPublicPriorityFallsBackToPrivateSource(t *te
 func TestEnabledChartMinuteProvidersHonorsIndividualSwitches(t *testing.T) {
 	initMinuteCacheTestDB(t, "chart-provider-disabled-sources.db")
 	setChartProviderSettings(t, map[string]any{
-		"minute_provider_mode":    "private",
+		"minute_provider_order":   "private,akshare,sina,tencent",
 		"private_minute_enabled":  true,
 		"private_minute_base_url": "https://minute.example.test",
 		"private_minute_api_key":  "test-key",
@@ -108,7 +108,7 @@ func TestEnabledChartMinuteProvidersHonorsIndividualSwitches(t *testing.T) {
 func TestEnabledChartMinuteProvidersSkipsPrivateSourceUnlessItProvidesOneMinuteBars(t *testing.T) {
 	initMinuteCacheTestDB(t, "chart-provider-private-level.db")
 	setChartProviderSettings(t, map[string]any{
-		"minute_provider_mode":    "private",
+		"minute_provider_order":   "private,tencent,sina,akshare",
 		"private_minute_enabled":  true,
 		"private_minute_base_url": "https://minute.example.test",
 		"private_minute_api_key":  "test-key",

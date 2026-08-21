@@ -143,8 +143,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <n-space v-if="formValue.openAI.enable" vertical>
-    <n-divider title-placement="left">AI模型服务配置</n-divider>
+  <n-space vertical>
+    <n-divider title-placement="left">模型调用顺序</n-divider>
     <n-text depth="3">从上到下依次调用；当前模型失败时回退到下一个已启用模型。关闭的模型不会被自动调用。</n-text>
     <n-scrollbar x-scrollable>
       <n-table size="small" :bordered="true" :single-line="false" style="min-width: 1750px;">

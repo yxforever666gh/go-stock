@@ -53,8 +53,6 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		runErr = runSearch(cmdArgs, opts, stdout, stderr)
 	case "ai":
 		runErr = runAI(cmdArgs, opts, stdout, stderr)
-	case "network-audit":
-		runErr = runNetworkAudit(cmdArgs, opts, stdout, stderr)
 	case "research":
 		runErr = runResearch(cmdArgs, opts, stdout, stderr)
 	case "help", "-h", "--help":
@@ -75,7 +73,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 
 func IsCommand(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "quote", "search", "ai", "network-audit", "research", "db", "release", "help", "-h", "--help":
+	case "quote", "search", "ai", "research", "db", "release", "help", "-h", "--help":
 		return true
 	default:
 		return false
@@ -126,7 +124,6 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  quote   查询实时行情")
 	fmt.Fprintln(w, "  search  自然语言选股")
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
-	fmt.Fprintln(w, "  network-audit  审计当前环境下所有主要网络数据接口")
 	fmt.Fprintln(w, "  research run-once --json  后台执行一轮正式 AI 分析")
 	fmt.Fprintln(w, "  db status|archive|backup|compact|migrate|verify  管理、归档并校验主库和分钟库")
 	fmt.Fprintln(w, "  release inspect  查看 App 与数据库版本身份")

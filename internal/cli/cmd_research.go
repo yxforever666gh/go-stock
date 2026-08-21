@@ -65,9 +65,6 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	if setting == nil || setting.Settings == nil {
 		return errors.New("AI 分析设置不存在")
 	}
-	if !setting.AIAnalysisEnabled {
-		return errors.New("AI 分析当前未启用")
-	}
 	selected, err := data.ResolveAIAnalysisConfig(setting)
 	if err != nil {
 		return err

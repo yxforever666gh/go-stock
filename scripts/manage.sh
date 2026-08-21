@@ -84,9 +84,9 @@ view_status() {
     echo "================================"
 
     # 检查进程
-    if pgrep -f "go-stock.*--web" > /dev/null; then
+    if pgrep -x "go-stock" > /dev/null; then
         echo "进程状态: ✅ 运行中"
-        echo "PID: $(pgrep -f 'go-stock.*--web')"
+        echo "PID: $(pgrep -x 'go-stock')"
     else
         echo "进程状态: ❌ 未运行"
     fi

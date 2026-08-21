@@ -32,24 +32,6 @@ type exportRequest struct {
 	Mode string `json:"mode"`
 }
 
-type markdownExportRequest struct {
-	Mode      string `json:"mode"`
-	StockCode string `json:"stockCode"`
-	StockName string `json:"stockName"`
-}
-
-type imageExportRequest struct {
-	Mode       string `json:"mode"`
-	Name       string `json:"name"`
-	Base64Data string `json:"base64Data"`
-}
-
-type wordExportRequest struct {
-	Mode       string `json:"mode"`
-	Filename   string `json:"filename"`
-	Base64Data string `json:"base64Data"`
-}
-
 type downloadPayload struct {
 	Mode          string `json:"mode"`
 	Filename      string `json:"filename"`
@@ -170,6 +152,9 @@ func runWebMode(app *App, addr string, hub *WebEventHub) error {
 			time.Sleep(300 * time.Millisecond)
 			if app.cron != nil {
 				app.cron.Stop()
+			}
+			if !app.runtime.Shutdown(5 * time.Second) {
+				log.SugaredLogger.Warn("background tasks did not finish before shutdown timeout")
 			}
 			if server != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

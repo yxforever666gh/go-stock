@@ -94,7 +94,7 @@ stop_service() {
 start_service() {
     cd "$PROJECT_ROOT" || exit 1
     log "启动服务..."
-    setsid nohup ./go-stock --web --web-addr="$ADDR" \
+    setsid nohup ./go-stock --web-addr="$ADDR" \
         > "$LOG_DIR/web-mode.out" 2> "$LOG_DIR/web-mode.err" < /dev/null &
 
     NEW_PID=$!

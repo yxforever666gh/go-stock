@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go-stock/internal/releaseinfo"
+	"go-stock/internal/service"
 )
 
 type stubWebStatusProvider struct{}
@@ -32,9 +33,9 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		{http.MethodGet, "/livez"},
 		{http.MethodGet, "/readyz"},
 		{http.MethodGet, "/api/v1/market/hot/stocks"},
-		{http.MethodPost, "/api/v1/ai/chat-runs"},
+		{http.MethodPost, "/api/v1/research/analysis-runs"},
 		{http.MethodGet, "/api/v1/research/recommendations/example"},
-		{http.MethodPost, "/api/v1/exports/image"},
+		{http.MethodPost, "/api/v1/exports/config"},
 	}
 	for _, item := range typed {
 		req := httptest.NewRequest(item.method, "http://127.0.0.1:34115"+item.path, nil)
@@ -53,6 +54,14 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		{http.MethodPost, "/api/export/markdown"},
 		{http.MethodPost, "/api/shutdown"},
 		{http.MethodGet, "/healthz"},
+		{http.MethodPost, "/api/v1/ai/chat-runs"},
+		{http.MethodGet, "/api/v1/ai/prompts"},
+		{http.MethodPut, "/api/v1/watchlist/stocks/example/ai-cron"},
+		{http.MethodPost, "/api/v1/exports/markdown"},
+		{http.MethodPost, "/api/v1/exports/image"},
+		{http.MethodPost, "/api/v1/exports/word"},
+		{http.MethodGet, "/api/v1/system/version"},
+		{http.MethodGet, "/api/v1/system/health"},
 	}
 	for _, item := range legacy {
 		req := httptest.NewRequest(item.method, "http://127.0.0.1:34115"+item.path, nil)
@@ -140,5 +149,34 @@ func TestValidateLoopbackListenAddr(t *testing.T) {
 		if err := validateLoopbackListenAddr(addr); err == nil {
 			t.Errorf("validateLoopbackListenAddr(%q) unexpectedly succeeded", addr)
 		}
+	}
+}
+
+func TestWriteCommandResultMapsDomainErrors(t *testing.T) {
+	tests := []struct {
+		name   string
+		err    error
+		status int
+	}{
+		{name: "success", status: http.StatusOK},
+		{name: "invalid", err: service.ErrInvalidInput, status: http.StatusBadRequest},
+		{name: "missing", err: service.ErrNotFound, status: http.StatusNotFound},
+		{name: "conflict", err: service.ErrConflict, status: http.StatusConflict},
+		{name: "failed", err: service.ErrOperationFailed, status: http.StatusInternalServerError},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			writeCommandResult(recorder, "result", test.err)
+			if recorder.Code != test.status {
+				t.Fatalf("status = %d, want %d; body=%q", recorder.Code, test.status, recorder.Body.String())
+			}
+			if test.err == nil && !strings.Contains(recorder.Body.String(), `"ok":true`) {
+				t.Fatalf("unexpected success body %q", recorder.Body.String())
+			}
+			if test.err != nil && !strings.Contains(recorder.Body.String(), `"error":"result"`) {
+				t.Fatalf("unexpected error body %q", recorder.Body.String())
+			}
+		})
 	}
 }

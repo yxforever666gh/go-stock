@@ -40,10 +40,11 @@ find_listen_pid() {
 
 find_web_pids_by_ps() {
   # Fallback: when ss doesn't expose pid info (permissions/namespace), try scanning processes.
-  # Only consider the actual go-stock executable (avoid matching "bash -c ... go-stock --web ...").
+  # Only consider the actual go-stock executable. The service is Web-only, so
+  # there is no mode flag to inspect.
   # comm is the executable name (argv[0] basename) on Linux.
   ps -eo pid=,comm=,args= 2>/dev/null | awk '
-    $2 == "go-stock" && $0 ~ /--web/ {print $1}
+    $2 == "go-stock" {print $1}
   ' | sort -n | uniq
 }
 
@@ -56,14 +57,10 @@ cmdline_of() {
   tr '\0' ' ' <"$path" 2>/dev/null || true
 }
 
-ensure_go_stock_web() {
+ensure_go_stock_service() {
   local pid="$1"
   local cmdline
   cmdline="$(cmdline_of "$pid")"
-  if [[ "$cmdline" != *"--web"* ]]; then
-    echo "[go-stock] pid=${pid} does not look like a --web process: ${cmdline}"
-    return 1
-  fi
   if [[ "$cmdline" != *"go-stock"* ]]; then
     echo "[go-stock] pid=${pid} does not look like go-stock: ${cmdline}"
     return 1
@@ -143,7 +140,7 @@ case "$cmd" in
       echo "[go-stock] not running on http://${WEB_ADDR}"
       exit 1
     fi
-    ensure_go_stock_web "$pid"
+    ensure_go_stock_service "$pid"
     kill -STOP "$pid"
     echo "[go-stock] paused pid=${pid} (SIGSTOP). Note: port may still appear LISTEN but the server won't accept requests."
     ;;
@@ -153,7 +150,7 @@ case "$cmd" in
       echo "[go-stock] not running on http://${WEB_ADDR}"
       exit 1
     fi
-    ensure_go_stock_web "$pid"
+    ensure_go_stock_service "$pid"
     kill -CONT "$pid"
     echo "[go-stock] resumed pid=${pid} (SIGCONT)."
     ;;
@@ -164,7 +161,7 @@ case "$cmd" in
       exit 0
     fi
 
-    # Stop all go-stock --web processes we can see, not just the listener pid.
+    # Stop all go-stock service processes we can see, not just the listener pid.
     # This avoids "restart.sh stop 没用" when the server is hung/crashed and not listening anymore.
     pids="$(find_web_pids_by_ps || true)"
     if [[ -z "$pids" ]]; then
@@ -174,7 +171,7 @@ case "$cmd" in
     failed=0
     while IFS= read -r one; do
       [[ -z "$one" ]] && continue
-      if ! ensure_go_stock_web "$one"; then
+      if ! ensure_go_stock_service "$one"; then
         continue
       fi
 

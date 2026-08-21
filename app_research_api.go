@@ -19,7 +19,11 @@ const (
 )
 
 func (a *App) replaceResearchRuntime(configID int) error {
-	runtime, err := data.NewResearchRuntime(configID)
+	factory := a.researchFactory
+	if factory == nil {
+		factory = data.NewResearchRuntime
+	}
+	runtime, err := factory(configID)
 	if err != nil {
 		return err
 	}
@@ -65,9 +69,8 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 		return
 	}
 	a.setCronEntry(aiLifecycleEntryKey, entryID)
-	go a.processDueAILifecycle()
-	if setting == nil || setting.Settings == nil || !setting.AIAnalysisEnabled {
-		logger.SugaredLogger.Info("AI 新推荐定时任务已关闭；持仓生命周期与账户任务继续运行")
+	a.goTask(func(context.Context) { a.processDueAILifecycle() })
+	if setting == nil || setting.Settings == nil {
 		return
 	}
 	selected, err := data.ResolveAIAnalysisConfig(setting)
@@ -81,6 +84,10 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 	}
 	if err := a.replaceResearchRuntime(int(selected.ID)); err != nil {
 		a.recordSchedulerRegistrationError("AIAnalysisRuntime", setting.AIAnalysisTimes, err)
+		return
+	}
+	if !setting.AIAnalysisEnabled {
+		logger.SugaredLogger.Info("AI 新推荐定时任务已关闭；手动分析、持仓生命周期与账户任务继续运行")
 		return
 	}
 	times, err := data.NormalizeAIAnalysisTimes(setting.AIAnalysisTimes)
@@ -107,7 +114,7 @@ func (a *App) ensureResearchAccountCrons() {
 			a.recordSchedulerRegistrationError(researchFundingEntryKey, "0 * * * * *", err)
 		} else {
 			a.setCronEntry(researchFundingEntryKey, entryID)
-			go a.processScheduledResearchFunding()
+			a.goTask(func(context.Context) { a.processScheduledResearchFunding() })
 		}
 	}
 	if _, exists := a.getCronEntry(researchSnapshotEntryKey); !exists {
@@ -116,7 +123,7 @@ func (a *App) ensureResearchAccountCrons() {
 			a.recordSchedulerRegistrationError(researchSnapshotEntryKey, "0 * 15 * * *", err)
 		} else {
 			a.setCronEntry(researchSnapshotEntryKey, entryID)
-			go a.processScheduledResearchSnapshot()
+			a.goTask(func(context.Context) { a.processScheduledResearchSnapshot() })
 		}
 	}
 }
@@ -132,10 +139,7 @@ func (a *App) processScheduledResearchFunding() {
 		logger.SugaredLogger.Errorf("模拟账户入金运行时不可用: %v", err)
 		return
 	}
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := a.taskContext()
 	result, err := runtime.Service.ProcessScheduledFunding(ctx, now)
 	if err != nil {
 		logger.SugaredLogger.Errorf("模拟账户定时入金失败: %v", err)
@@ -158,10 +162,7 @@ func (a *App) processScheduledResearchSnapshot() {
 		logger.SugaredLogger.Errorf("模拟账户收盘快照运行时不可用: %v", err)
 		return
 	}
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := a.taskContext()
 	applied, err := runtime.Service.ProcessScheduledSnapshot(ctx, now)
 	if err != nil {
 		logger.SugaredLogger.Errorf("模拟账户收盘快照失败: %v", err)
@@ -173,7 +174,7 @@ func (a *App) processScheduledResearchSnapshot() {
 }
 
 func (a *App) runScheduledAIAnalysis() {
-	if err := a.startAIAnalysis("scheduled"); err != nil {
+	if err := a.startAIAnalysis(research.AnalysisModeScheduled); err != nil {
 		logger.SugaredLogger.Errorf("AI 分析启动失败: %v", err)
 	}
 }
@@ -188,7 +189,7 @@ func (a *App) startAIAnalysis(origin string) error {
 	if err != nil {
 		return fmt.Errorf("AI 分析运行时不可用: %w", err)
 	}
-	running, err := runtime.Repository.HasRunningAnalysis(context.Background())
+	running, err := runtime.Repository.HasRunningAnalysis(a.taskContext())
 	if err != nil {
 		return fmt.Errorf("检查运行中分析失败: %w", err)
 	}
@@ -196,8 +197,11 @@ func (a *App) startAIAnalysis(origin string) error {
 		return errors.New("已有 running 状态的 AI 分析，本次运行被拒绝")
 	}
 	setting := a.services.Config.GetConfig()
-	if setting == nil || setting.Settings == nil || !setting.AIAnalysisEnabled {
-		return errors.New("AI 分析当前未启用")
+	if setting == nil || setting.Settings == nil {
+		return errors.New("AI 分析设置不存在")
+	}
+	if origin == research.AnalysisModeScheduled && !setting.AIAnalysisEnabled {
+		return errors.New("AI 自动分析当前未启用")
 	}
 	selected, err := data.ResolveAIAnalysisConfig(setting)
 	if err != nil {
@@ -205,16 +209,12 @@ func (a *App) startAIAnalysis(origin string) error {
 	}
 	now := time.Now()
 	a.aiAnalysisRunning = true
-	go func() {
+	a.goTask(func(ctx context.Context) {
 		defer func() {
 			a.aiAnalysisRunMu.Lock()
 			a.aiAnalysisRunning = false
 			a.aiAnalysisRunMu.Unlock()
 		}()
-		ctx := a.ctx
-		if ctx == nil {
-			ctx = context.Background()
-		}
 		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: now, AIConfigID: selected.ID,
 			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName, Mode: origin})
 		if runErr != nil {
@@ -226,7 +226,7 @@ func (a *App) startAIAnalysis(origin string) error {
 			return
 		}
 		logger.SugaredLogger.Infof("AI 分析完成 origin=%s run=%s status=%s recommendations=%d", origin, run.RunID, run.Status, run.RecommendationCount)
-	}()
+	})
 	return nil
 }
 
@@ -234,7 +234,7 @@ func (a *App) startAIAnalysis(origin string) error {
 // follows the persisted running report and only enables the button again after
 // that report reaches a terminal status.
 func (a *App) startManualAIAnalysis() (bool, error) {
-	if err := a.startAIAnalysis("manual"); err != nil {
+	if err := a.startAIAnalysis(research.AnalysisModeManual); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -253,10 +253,7 @@ func (a *App) processDueAILifecycle() {
 		logger.SugaredLogger.Errorf("AI 生命周期运行时不可用: %v", err)
 		return
 	}
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
+	ctx := a.taskContext()
 	if err := runtime.Service.ProcessDue(ctx); err != nil {
 		logger.SugaredLogger.Errorf("AI 生命周期处理失败: %v", err)
 	}
@@ -275,16 +272,16 @@ func normalizedPage(limit, offset int) (int, int) {
 	return limit, offset
 }
 
-func (a *App) listAIAnalysisReports(limit, offset int) ([]research.AnalysisRunSummary, error) {
+func (a *App) listAIAnalysisReports(ctx context.Context, limit, offset int) ([]research.AnalysisRunSummary, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return nil, err
 	}
 	limit, offset = normalizedPage(limit, offset)
-	return runtime.Repository.ListAnalysis(context.Background(), limit, offset)
+	return runtime.Repository.ListAnalysis(ctx, limit, offset)
 }
 
-func (a *App) getAIAnalysisReport(runID string) (research.AnalysisRun, error) {
+func (a *App) getAIAnalysisReport(ctx context.Context, runID string) (research.AnalysisRun, error) {
 	if strings.TrimSpace(runID) == "" {
 		return research.AnalysisRun{}, errors.New("runId is required")
 	}
@@ -292,19 +289,19 @@ func (a *App) getAIAnalysisReport(runID string) (research.AnalysisRun, error) {
 	if err != nil {
 		return research.AnalysisRun{}, err
 	}
-	return runtime.Repository.Analysis(context.Background(), runID)
+	return runtime.Repository.Analysis(ctx, runID)
 }
 
-func (a *App) listAIRecommendations(limit, offset int) ([]research.Recommendation, error) {
+func (a *App) listAIRecommendations(ctx context.Context, limit, offset int) ([]research.Recommendation, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return nil, err
 	}
 	limit, offset = normalizedPage(limit, offset)
-	return runtime.Repository.ListRecommendations(context.Background(), limit, offset)
+	return runtime.Repository.ListRecommendations(ctx, limit, offset)
 }
 
-func (a *App) getAIRecommendation(recommendationID string) (research.RecommendationDetail, error) {
+func (a *App) getAIRecommendation(ctx context.Context, recommendationID string) (research.RecommendationDetail, error) {
 	if strings.TrimSpace(recommendationID) == "" {
 		return research.RecommendationDetail{}, errors.New("recommendationId is required")
 	}
@@ -312,10 +309,10 @@ func (a *App) getAIRecommendation(recommendationID string) (research.Recommendat
 	if err != nil {
 		return research.RecommendationDetail{}, err
 	}
-	return runtime.Service.Detail(context.Background(), recommendationID)
+	return runtime.Service.Detail(ctx, recommendationID)
 }
 
-func (a *App) getAIRecommendationChart(recommendationID string, refresh bool) (research.RecommendationChart, error) {
+func (a *App) getAIRecommendationChart(ctx context.Context, recommendationID string, refresh bool) (research.RecommendationChart, error) {
 	if strings.TrimSpace(recommendationID) == "" {
 		return research.RecommendationChart{}, errors.New("recommendationId is required")
 	}
@@ -323,15 +320,7 @@ func (a *App) getAIRecommendationChart(recommendationID string, refresh bool) (r
 	if err != nil {
 		return research.RecommendationChart{}, err
 	}
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	return runtime.Service.RecommendationChart(ctx, recommendationID, refresh)
-}
-
-func (a *App) getAISimulatedAccount() (research.AccountOverview, error) {
-	return a.getAISimulatedAccountContext(context.Background())
 }
 
 func (a *App) getAISimulatedAccountContext(ctx context.Context) (research.AccountOverview, error) {
@@ -342,20 +331,12 @@ func (a *App) getAISimulatedAccountContext(ctx context.Context) (research.Accoun
 	return runtime.Service.AccountOverview(ctx)
 }
 
-func (a *App) getAIAccountCashFlows() ([]research.AccountCashFlow, error) {
-	return a.getAIAccountCashFlowsContext(context.Background())
-}
-
 func (a *App) getAIAccountCashFlowsContext(ctx context.Context) ([]research.AccountCashFlow, error) {
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
 		return nil, err
 	}
 	return runtime.Service.CashFlows(ctx)
-}
-
-func (a *App) getAIAccountPerformance() (research.AccountPerformance, error) {
-	return a.getAIAccountPerformanceContext(context.Background())
 }
 
 func (a *App) getAIAccountPerformanceContext(ctx context.Context) (research.AccountPerformance, error) {

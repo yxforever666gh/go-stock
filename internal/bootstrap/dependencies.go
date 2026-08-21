@@ -44,11 +44,10 @@ func AssembleRuntime(cfg appconfig.AppConfig, dependencies RuntimeDependencies) 
 		return AppRuntime{}, errors.Join(ErrInvalidRuntimeDependencies, err)
 	}
 	return AppRuntime{
-		Config:    cfg,
-		Storage:   dependencies.Storage,
-		Clock:     dependencies.Services.Clock,
-		Providers: dependencies.Services.Providers,
-		Services:  services,
+		Config:   cfg,
+		Storage:  dependencies.Storage,
+		Clock:    dependencies.Services.Clock,
+		Services: services,
 	}, nil
 }
 

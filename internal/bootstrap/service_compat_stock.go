@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 )
 
-func (a *compatibilityServiceAdapter) ReplaceStockBaseInfo(
+func (a *stockAdapter) ReplaceStockBaseInfo(
 	ctx context.Context,
 	domestic []models.StockBasic,
 	hongKong []models.StockInfoHK,
@@ -44,7 +44,7 @@ type stockMasterRefreshSource interface {
 	FetchValidatedPublicStockMaster(context.Context) ([]models.StockBasic, models.StockMasterRefreshResult, error)
 }
 
-func (a *compatibilityServiceAdapter) RefreshStockBaseInfo(ctx context.Context) (models.StockMasterRefreshResult, error) {
+func (a *stockAdapter) RefreshStockBaseInfo(ctx context.Context) (models.StockMasterRefreshResult, error) {
 	if a == nil || a.main == nil {
 		return models.StockMasterRefreshResult{}, fmt.Errorf("stock master database is unavailable")
 	}
@@ -96,86 +96,77 @@ func refreshStockBaseInfo(
 	return result, nil
 }
 
-func (*compatibilityServiceAdapter) RefreshIndexBaseInfo() {
+func (*stockAdapter) RefreshIndexBaseInfo() {
 	data.NewStockDataApi().GetIndexBasic()
 }
 
-func (a *compatibilityServiceAdapter) AddGroup(group models.Group) bool {
+func (a *groupAdapter) AddGroup(group models.Group) bool {
 	return data.NewStockGroupApi(a.main).AddGroup(group)
 }
 
-func (a *compatibilityServiceAdapter) GetGroupList() []models.Group {
+func (a *groupAdapter) GetGroupList() []models.Group {
 	return data.NewStockGroupApi(a.main).GetGroupList()
 }
 
-func (a *compatibilityServiceAdapter) UpdateGroupSort(id, newSort int) bool {
+func (a *groupAdapter) UpdateGroupSort(id, newSort int) bool {
 	return data.NewStockGroupApi(a.main).UpdateGroupSort(id, newSort)
 }
 
-func (a *compatibilityServiceAdapter) InitializeGroupSort() bool {
+func (a *groupAdapter) InitializeGroupSort() bool {
 	return data.NewStockGroupApi(a.main).InitializeGroupSort()
 }
 
-func (a *compatibilityServiceAdapter) GetGroupStockList(groupID int) []models.GroupStock {
+func (a *groupAdapter) GetGroupStockList(groupID int) []models.GroupStock {
 	return data.NewStockGroupApi(a.main).GetGroupStockByGroupId(groupID)
 }
 
-func (a *compatibilityServiceAdapter) AddStockGroup(groupID int, stockCode string) bool {
+func (a *groupAdapter) AddStockGroup(groupID int, stockCode string) bool {
 	return data.NewStockGroupApi(a.main).AddStockGroup(groupID, stockCode)
 }
 
-func (a *compatibilityServiceAdapter) RemoveStockGroup(code, name string, groupID int) bool {
+func (a *groupAdapter) RemoveStockGroup(code, name string, groupID int) bool {
 	return data.NewStockGroupApi(a.main).RemoveStockGroup(code, name, groupID)
 }
 
-func (a *compatibilityServiceAdapter) RemoveGroup(groupID int) bool {
+func (a *groupAdapter) RemoveGroup(groupID int) bool {
 	return data.NewStockGroupApi(a.main).RemoveGroup(groupID)
 }
 
-func (*compatibilityServiceAdapter) Follow(stockCode string) string {
-	return data.NewStockDataApi().Follow(stockCode)
+func (*stockAdapter) Follow(stockCode string) (string, error) {
+	return legacyCommandResult(data.NewStockDataApi().Follow(stockCode))
 }
 
-func (*compatibilityServiceAdapter) UnFollow(stockCode string) string {
-	return data.NewStockDataApi().UnFollow(stockCode)
+func (*stockAdapter) UnFollow(stockCode string) (string, error) {
+	return legacyCommandResult(data.NewStockDataApi().UnFollow(stockCode))
 }
 
-func (*compatibilityServiceAdapter) GetFollowList(groupID int) *[]models.FollowedStock {
+func (*stockAdapter) GetFollowList(groupID int) *[]models.FollowedStock {
 	return data.NewStockDataApi().GetFollowList(groupID)
 }
 
-func (*compatibilityServiceAdapter) GetStockList(key string) []models.StockBasic {
+func (*stockAdapter) GetStockList(key string) []models.StockBasic {
 	return data.NewStockDataApi().GetStockList(key)
 }
 
-func (*compatibilityServiceAdapter) SetCostPriceAndVolume(stockCode string, price float64, volume int64) string {
-	return data.NewStockDataApi().SetCostPriceAndVolume(price, volume, stockCode)
+func (*stockAdapter) SetCostPriceAndVolume(stockCode string, price float64, volume int64) (string, error) {
+	return legacyCommandResult(data.NewStockDataApi().SetCostPriceAndVolume(price, volume, stockCode))
 }
 
-func (*compatibilityServiceAdapter) SetAlarmChangePercent(value, alarmPrice float64, stockCode string) string {
-	return data.NewStockDataApi().SetAlarmChangePercent(value, alarmPrice, stockCode)
+func (*stockAdapter) SetAlarmChangePercent(value, alarmPrice float64, stockCode string) (string, error) {
+	return legacyCommandResult(data.NewStockDataApi().SetAlarmChangePercent(value, alarmPrice, stockCode))
 }
 
-func (*compatibilityServiceAdapter) SetStockSort(sort int64, stockCode string) {
+func (*stockAdapter) SetStockSort(sort int64, stockCode string) {
 	data.NewStockDataApi().SetStockSort(sort, stockCode)
 }
 
-func (*compatibilityServiceAdapter) SetStockAICron(cronText, stockCode string) {
-	data.NewStockDataApi().SetStockAICron(cronText, stockCode)
-}
-
-func (*compatibilityServiceAdapter) GetFollowedStockByStockCode(stockCode string) *models.FollowedStock {
-	followed := data.NewStockDataApi().GetFollowedStockByStockCode(stockCode)
-	return &followed
-}
-
-func (a *compatibilityServiceAdapter) GetAllFollowedStocks() []models.FollowedStock {
+func (a *stockAdapter) GetAllFollowedStocks() []models.FollowedStock {
 	dest := make([]models.FollowedStock, 0)
 	a.main.Model(&models.FollowedStock{}).Find(&dest)
 	return dest
 }
 
-func (a *compatibilityServiceAdapter) GetFollowedStockDetail(stockCode string) *models.FollowedStock {
+func (a *stockAdapter) GetFollowedStockDetail(stockCode string) *models.FollowedStock {
 	followed := &models.FollowedStock{StockCode: stockCode}
 	a.main.Model(followed).
 		Where("stock_code = ?", stockCode).
@@ -185,27 +176,27 @@ func (a *compatibilityServiceAdapter) GetFollowedStockDetail(stockCode string) *
 	return followed
 }
 
-func (a *compatibilityServiceAdapter) UpdateFollowPrice(stockCode string, price float64) {
+func (a *stockAdapter) UpdateFollowPrice(stockCode string, price float64) {
 	a.main.Model(&models.FollowedStock{}).
 		Where("stock_code = ?", stockCode).
 		Updates(map[string]any{"price": price})
 }
 
-func (a *compatibilityServiceAdapter) GetStoredStockInfo(stockCode string) *models.StockInfo {
+func (a *stockAdapter) GetStoredStockInfo(stockCode string) *models.StockInfo {
 	stockInfo := &models.StockInfo{}
 	a.main.Model(stockInfo).Where("code = ?", stockCode).First(stockInfo)
 	return stockInfo
 }
 
-func (*compatibilityServiceAdapter) GetStockKLine(stockCode string, days int64) *[]models.KLineData {
+func (*stockAdapter) GetStockKLine(stockCode string, days int64) *[]models.KLineData {
 	return data.NewStockDataApi().GetHK_KLineData(stockCode, "day", days)
 }
 
-func (*compatibilityServiceAdapter) GetStockCommonKLine(stockCode string, days int64) *[]models.KLineData {
+func (*stockAdapter) GetStockCommonKLine(stockCode string, days int64) *[]models.KLineData {
 	return data.NewStockDataApi().GetCommonKLineData(stockCode, "day", days)
 }
 
-func (*compatibilityServiceAdapter) GetStockMinutePriceLineData(stockCode, stockName string) map[string]any {
+func (*stockAdapter) GetStockMinutePriceLineData(stockCode, stockName string) map[string]any {
 	priceData, date := data.NewStockDataApi().GetStockMinutePriceData(stockCode)
 	return map[string]any{
 		"priceData": priceData,
@@ -215,14 +206,14 @@ func (*compatibilityServiceAdapter) GetStockMinutePriceLineData(stockCode, stock
 	}
 }
 
-func (*compatibilityServiceAdapter) SearchStock(words string) map[string]any {
+func (*stockAdapter) SearchStock(words string) map[string]any {
 	return data.NewSearchStockApi(words).SearchStock(5000)
 }
 
-func (*compatibilityServiceAdapter) SearchStockWithFingerprint(words, fingerprint string, pageSize int) map[string]any {
+func (*stockAdapter) SearchStockWithFingerprint(words, fingerprint string, pageSize int) map[string]any {
 	return data.NewSearchStockApiWithFingerprint(words, fingerprint).SearchStock(pageSize)
 }
 
-func (*compatibilityServiceAdapter) GetStockCodeRealTimeData(stockCodes ...string) (*[]models.StockInfo, error) {
+func (*stockAdapter) GetStockCodeRealTimeData(stockCodes ...string) (*[]models.StockInfo, error) {
 	return data.NewStockDataApi().GetStockCodeRealTimeData(stockCodes...)
 }

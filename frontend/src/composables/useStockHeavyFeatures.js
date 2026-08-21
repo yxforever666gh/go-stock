@@ -1,38 +1,15 @@
-import { Environment } from '../services/browser-runtime.mjs'
 import {
   GetStockKLine,
   GetStockMinutePriceLineData,
 } from '../services/stocks-api'
-import {
-  SaveImage,
-  SaveWordFile,
-} from '../services/exports-api'
 
 let echartsLoader
-let html2canvasLoader
-let asBlobLoader
 
 function loadEcharts() {
   if (!echartsLoader) {
     echartsLoader = import('echarts')
   }
   return echartsLoader
-}
-
-async function loadHtml2canvas() {
-  if (!html2canvasLoader) {
-    html2canvasLoader = import('html2canvas')
-  }
-  const mod = await html2canvasLoader
-  return mod.default
-}
-
-async function loadAsBlob() {
-  if (!asBlobLoader) {
-    asBlobLoader = import('html-docx-js-typescript')
-  }
-  const mod = await asBlobLoader
-  return mod.asBlob
 }
 
 function calculateMA(dayCount, values) {
@@ -51,22 +28,11 @@ function calculateMA(dayCount, values) {
   return result
 }
 
-function getHtml(ref) {
-  if (!ref.value) {
-    console.error('mdPreviewRef is not yet available')
-    return ''
-  }
-  return ref.value.$el?.innerHTML || ''
-}
-
 export function useStockHeavyFeatures({
   data,
   downColor,
   kLineChartRef,
   kLineChartRef2,
-  mdPreviewRef,
-  message,
-  tipsRef,
   upColor,
 }) {
   async function renderMinuteChart(code, name) {
@@ -537,87 +503,7 @@ export function useStockHeavyFeatures({
     chart.on('click', { seriesName: '日K' }, function () {})
   }
 
-  async function exportAnalysisAsCanvasImage(name) {
-    const element = document.querySelector('.md-editor-preview')
-    if (!element) {
-      message.error('无法找到分析结果元素')
-      return
-    }
-
-    const html2canvas = await loadHtml2canvas()
-    const canvas = await html2canvas(element)
-    const dataUrl = canvas.toDataURL('image/png')
-    const base64 = dataUrl.replace(/^data:image\/png;base64,/, '')
-    const result = await SaveImage(name, base64)
-    message.success(result)
-  }
-
-  async function exportAnalysisAsImage(name, code) {
-    const { platform } = await Environment()
-    const element = document.querySelector('.md-editor-preview')
-    if (!element) {
-      message.error('无法找到分析结果元素')
-      return
-    }
-
-    const html2canvas = await loadHtml2canvas()
-    if (platform === 'windows') {
-      const canvas = await html2canvas(element, {
-        useCORS: true,
-        scale: 2,
-        allowTaint: true,
-      })
-      const link = document.createElement('a')
-      link.href = canvas.toDataURL('image/png')
-      link.download = `${name}[${code}]-ai-analysis-result.png`
-      link.click()
-      return
-    }
-
-    await exportAnalysisAsCanvasImage(name)
-  }
-
-  async function exportAnalysisAsWord() {
-    const html = getHtml(mdPreviewRef)
-    const tipsHtml = getHtml(tipsRef)
-    const value = `
-         ${html}
-         <hr>
-         <div style="font-size: 12px;color: red">
-         ${tipsHtml}
-          </div>
-<br>
-本报告由go-stock项目生成：
-<p>
-<a href="https://github.com/yxforever666gh/go-stock">
-AI赋能股票分析：自选股行情获取，成本盈亏展示，涨跌报警推送，市场整体/个股情绪分析，K线技术指标分析等。数据全部保留在本地。支持DeepSeek，OpenAI， Ollama，LMStudio，AnythingLLM，硅基流动，火山方舟，阿里云百炼等平台或模型。
-</a></p>
-`
-    const asBlob = await loadAsBlob()
-    const blob = await asBlob(value, { orientation: 'portrait' })
-    const { platform } = await Environment()
-    if (platform === 'windows') {
-      const a = document.createElement('a')
-      a.href = URL.createObjectURL(blob)
-      a.download = `${data.name}[${data.code}]-ai-analysis-result.docx`
-      a.click()
-      URL.revokeObjectURL(a.href)
-      a.remove()
-      return
-    }
-
-    const arrayBuffer = await blob.arrayBuffer()
-    const uint8Array = new Uint8Array(arrayBuffer)
-    const binary = uint8Array.reduce((acc, byte) => acc + String.fromCharCode(byte), '')
-    const base64 = btoa(binary)
-    const result = await SaveWordFile(`${data.name}[${data.code}]-ai-analysis-result.docx`, base64)
-    message.success(result)
-  }
-
   return {
-    exportAnalysisAsCanvasImage,
-    exportAnalysisAsImage,
-    exportAnalysisAsWord,
     renderDailyKLine,
     renderMinuteChart,
   }

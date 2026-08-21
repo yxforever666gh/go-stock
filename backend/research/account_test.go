@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -31,10 +32,15 @@ func (calendar fundingCalendar) IsTradingDay(_ context.Context, value time.Time)
 
 func fundingTestService(t *testing.T, startAfter string) (*Service, *gorm.DB) {
 	t.Helper()
-	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	database, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "research.db")), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	sqlDB, err := database.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 	if err := database.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{},
 		&SimulatedAccount{}, &SimulatedTrade{}, &Position{}, &AccountCashFlow{}, &FundingPlan{}, &AccountValuationSnapshot{}); err != nil {
 		t.Fatal(err)

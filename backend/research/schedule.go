@@ -3,6 +3,9 @@ package research
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,9 +19,48 @@ var shanghaiLocation = func() *time.Location {
 
 func ShanghaiTime(value time.Time) time.Time { return value.In(shanghaiLocation) }
 
-var sellCheckClock = [][2]int{
-	{9, 50}, {10, 5}, {10, 20}, {10, 35}, {10, 50}, {11, 5}, {11, 20},
-	{13, 0}, {13, 15}, {13, 30}, {13, 45}, {14, 0}, {14, 15}, {14, 30}, {14, 45},
+type SellReviewSchedule struct {
+	StartHour      int
+	StartMinute    int
+	IntervalMinute int
+}
+
+func DefaultSellReviewSchedule() SellReviewSchedule {
+	return SellReviewSchedule{StartHour: 9, StartMinute: 50, IntervalMinute: 15}
+}
+
+func NewSellReviewSchedule(start string, interval int) (SellReviewSchedule, error) {
+	parts := strings.Split(strings.TrimSpace(start), ":")
+	if len(parts) != 2 {
+		return SellReviewSchedule{}, fmt.Errorf("invalid sell review start time %q", start)
+	}
+	hour, hourErr := strconv.Atoi(parts[0])
+	minute, minuteErr := strconv.Atoi(parts[1])
+	if hourErr != nil || minuteErr != nil || minute < 0 || minute > 59 || hour < 0 || hour > 23 {
+		return SellReviewSchedule{}, fmt.Errorf("invalid sell review start time %q", start)
+	}
+	startMinute := hour*60 + minute
+	if startMinute < 9*60+30 || startMinute > 11*60+30 {
+		return SellReviewSchedule{}, errors.New("sell review start time must be between 09:30 and 11:30")
+	}
+	if interval < 5 || interval > 120 {
+		return SellReviewSchedule{}, errors.New("sell review interval must be between 5 and 120 minutes")
+	}
+	return SellReviewSchedule{StartHour: hour, StartMinute: minute, IntervalMinute: interval}, nil
+}
+
+func (schedule SellReviewSchedule) clocks() [][2]int {
+	if schedule.IntervalMinute < 5 || schedule.IntervalMinute > 120 {
+		schedule = DefaultSellReviewSchedule()
+	}
+	result := make([][2]int, 0, 32)
+	for minute := schedule.StartHour*60 + schedule.StartMinute; minute <= 11*60+30; minute += schedule.IntervalMinute {
+		result = append(result, [2]int{minute / 60, minute % 60})
+	}
+	for minute := 13 * 60; minute < 15*60; minute += schedule.IntervalMinute {
+		result = append(result, [2]int{minute / 60, minute % 60})
+	}
+	return result
 }
 
 // NextTradingSessionOpen returns the next point at which a queued direct buy
@@ -61,6 +103,10 @@ func NextTradingSessionOpen(ctx context.Context, calendar TradingCalendar, after
 // FirstSellCheck anchors a new position to 09:50 on the strict next trading
 // day, regardless of the intraday entry time.
 func FirstSellCheck(ctx context.Context, calendar TradingCalendar, entryAt time.Time) (time.Time, error) {
+	return FirstSellCheckWithSchedule(ctx, calendar, entryAt, DefaultSellReviewSchedule())
+}
+
+func FirstSellCheckWithSchedule(ctx context.Context, calendar TradingCalendar, entryAt time.Time, schedule SellReviewSchedule) (time.Time, error) {
 	if calendar == nil {
 		return time.Time{}, errors.New("trading calendar is unavailable")
 	}
@@ -73,15 +119,19 @@ func FirstSellCheck(ctx context.Context, calendar TradingCalendar, entryAt time.
 		}
 		if trading {
 			y, m, d := day.Date()
-			return time.Date(y, m, d, 9, 50, 0, 0, shanghaiLocation), nil
+			return time.Date(y, m, d, schedule.StartHour, schedule.StartMinute, 0, 0, shanghaiLocation), nil
 		}
 	}
 	return time.Time{}, errors.New("no next trading day found within calendar scan limit")
 }
 
-// NextSellCheck returns the next fixed 1.6.5 sell-review slot. Slots never
+// NextSellCheck returns the next configured sell-review slot. Slots never
 // drift with model latency and missed slots are not replayed.
 func NextSellCheck(ctx context.Context, calendar TradingCalendar, after time.Time) (time.Time, error) {
+	return NextSellCheckWithSchedule(ctx, calendar, after, DefaultSellReviewSchedule())
+}
+
+func NextSellCheckWithSchedule(ctx context.Context, calendar TradingCalendar, after time.Time, schedule SellReviewSchedule) (time.Time, error) {
 	if calendar == nil {
 		return time.Time{}, errors.New("trading calendar is unavailable")
 	}
@@ -96,7 +146,7 @@ func NextSellCheck(ctx context.Context, calendar TradingCalendar, after time.Tim
 			continue
 		}
 		y, m, d := day.Date()
-		for _, clock := range sellCheckClock {
+		for _, clock := range schedule.clocks() {
 			candidate := time.Date(y, m, d, clock[0], clock[1], 0, 0, shanghaiLocation)
 			if candidate.After(local) {
 				return candidate, nil

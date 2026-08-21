@@ -157,7 +157,7 @@ func TestReplaceStockBaseInfoReplacesAllMarkets(t *testing.T) {
 	}
 	seedStockBaseInfo(t, database)
 
-	adapter := compatibilityServiceAdapter{main: database}
+	adapter := stockAdapter{main: database}
 	err := adapter.ReplaceStockBaseInfo(
 		context.Background(),
 		[]models.StockBasic{{Name: "new-cn"}},
@@ -185,7 +185,7 @@ func TestReplaceStockBaseInfoRollsBackEveryMarket(t *testing.T) {
 		t.Fatalf("seed Hong Kong stock base info: %v", err)
 	}
 
-	adapter := compatibilityServiceAdapter{main: database}
+	adapter := stockAdapter{main: database}
 	err := adapter.ReplaceStockBaseInfo(
 		context.Background(),
 		[]models.StockBasic{{Name: "new-cn"}},

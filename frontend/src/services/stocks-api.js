@@ -12,4 +12,3 @@ export const UnFollow = (code) => command(withPath(API_PATHS.unfollowStock, { co
 export const SetCostPriceAndVolume = (code, price, volume) => command(withPath(API_PATHS.updateStockPosition, { code }), { method: 'PUT', body: { price, volume } })
 export const SetAlarmChangePercent = (value, alarmPrice, code) => command(withPath(API_PATHS.updateStockAlarm, { code }), { method: 'PUT', body: { value, alarmPrice } })
 export const SetStockSort = (sort, code) => command(withPath(API_PATHS.updateStockSort, { code }), { method: 'PUT', body: { sort } })
-export const SetStockAICron = (cron, code) => command(withPath(API_PATHS.updateStockAICron, { code }), { method: 'PUT', body: { cron } })

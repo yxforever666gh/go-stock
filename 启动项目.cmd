@@ -3,7 +3,7 @@ setlocal
 
 cd /d "%~dp0"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\restart.ps1" open -ResearchCenter
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\restart.ps1" open -ResearchCenter %*
 
 if errorlevel 1 (
   echo.

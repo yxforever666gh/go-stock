@@ -99,11 +99,15 @@ func listMinuteBarsFromCache(stockCode string, start, end time.Time) ([]minuteBa
 }
 
 func listMinuteBarsFromMinuteDB(code string, start, end time.Time) ([]minuteBar, error) {
-	if db.MinuteDao == nil {
+	return listMinuteBarsFromMinuteDatabase(db.MinuteDao, code, start, end)
+}
+
+func listMinuteBarsFromMinuteDatabase(database *gorm.DB, code string, start, end time.Time) ([]minuteBar, error) {
+	if database == nil {
 		return []minuteBar{}, nil
 	}
 	rows := make([]minuteCacheDBBar, 0)
-	err := db.MinuteDao.Model(&minuteCacheDBBar{}).
+	err := database.Model(&minuteCacheDBBar{}).
 		Where("stock_code = ? AND trade_time >= ? AND trade_time <= ?", code, minuteTimeMillis(start), minuteTimeMillis(end)).
 		Order("trade_time ASC").
 		Find(&rows).Error

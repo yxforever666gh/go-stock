@@ -131,8 +131,8 @@ echo ""
 echo "7. 进程和端口检查"
 echo "--------------------------------"
 
-if pgrep -f "go-stock.*--web" > /dev/null; then
-    PID=$(pgrep -f "go-stock.*--web")
+if pgrep -x "go-stock" > /dev/null; then
+    PID=$(pgrep -x "go-stock")
     echo "✅ 服务进程运行中 (PID: $PID)"
     PASSED=$((PASSED + 1))
 else

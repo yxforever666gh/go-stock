@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import {onBeforeMount, onUnmounted, ref} from 'vue'
+import {onBeforeMount, ref} from 'vue'
 import {HotStock} from "../services/market-api";
 import KLineChart from "./KLineChart.vue";
 import {ArrowBack, ArrowDown, ArrowUp} from "@vicons/ionicons5";
+import {usePolling} from "../composables/usePolling";
 
 const {marketType}=defineProps(
     {
@@ -12,19 +13,11 @@ const {marketType}=defineProps(
       }
     }
 )
-const task =ref()
-
 const list  = ref([])
-
-onBeforeMount(async () => {
+const polling = usePolling(async () => {
   list.value = await HotStock(marketType)
-  task.value = setInterval(async () => {
-    list.value = await HotStock(marketType)
-  }, 5000)
-})
-onUnmounted(()=>{
-  clearInterval(task.value)
-})
+}, 5000)
+onBeforeMount(() => polling.start())
 
 function getMarketCode(item) {
   if (item.exchange	 === 'SZ') {

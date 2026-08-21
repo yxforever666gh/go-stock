@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
-	"fmt"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -38,7 +37,6 @@ func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status 
 	registerStockRoutes(mux, app)
 	registerFundRoutes(mux, app)
 	registerMarketRoutes(mux, app)
-	registerAIRoutes(mux, app)
 	registerResearchRoutes(mux, app)
 	registerExportRoutes(mux, app)
 }
@@ -75,6 +73,34 @@ func writeCommand(w http.ResponseWriter, message string) {
 	writeJSON(w, http.StatusOK, commandResponse{OK: true, Message: message})
 }
 
+func writeCommandResult(w http.ResponseWriter, message string, err error) {
+	if err == nil {
+		writeCommand(w, message)
+		return
+	}
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, service.ErrInvalidInput):
+		status = http.StatusBadRequest
+	case errors.Is(err, service.ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, service.ErrConflict):
+		status = http.StatusConflict
+	}
+	if strings.TrimSpace(message) == "" {
+		message = err.Error()
+	}
+	writeJSON(w, status, map[string]any{"error": message})
+}
+
+func writeBooleanCommand(w http.ResponseWriter, ok bool, successMessage, failureMessage string, failureStatus int) {
+	if ok {
+		writeCommand(w, successMessage)
+		return
+	}
+	writeJSON(w, failureStatus, map[string]any{"error": failureMessage})
+}
+
 func writeResearchResult(w http.ResponseWriter, value any, err error) {
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
@@ -84,37 +110,7 @@ func writeResearchResult(w http.ResponseWriter, value any, err error) {
 }
 
 func registerExportRoutes(mux *http.ServeMux, app *App) {
-	mux.HandleFunc("POST /api/v1/exports/markdown", func(w http.ResponseWriter, r *http.Request) { handleMarkdownExport(app, w, r) })
 	mux.HandleFunc("POST /api/v1/exports/config", func(w http.ResponseWriter, r *http.Request) { handleConfigExport(app, w, r) })
-	mux.HandleFunc("POST /api/v1/exports/image", handleImageExport)
-	mux.HandleFunc("POST /api/v1/exports/word", handleWordExport)
-}
-
-func handleMarkdownExport(app *App, w http.ResponseWriter, r *http.Request) {
-	var req markdownExportRequest
-	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, false); err != nil {
-		writeRequestError(w, err)
-		return
-	}
-	req.StockCode = strings.TrimSpace(req.StockCode)
-	req.StockName = strings.TrimSpace(req.StockName)
-	if req.StockCode == "" || req.StockName == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stockCode and stockName are required"})
-		return
-	}
-	mode, err := normalizeExportMode(req.Mode)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	res := app.services.AI.GetAIResponseResult(app.ctx, req.StockCode)
-	if res == nil || len(res.Content) <= 100 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "analysis result is unavailable"})
-		return
-	}
-	analysisTime := res.CreatedAt.Format("2006-01-02_15_04_05")
-	filename := sanitizeFilename(fmt.Sprintf("%s[%s]AI-analysis_%s.md", req.StockName, req.StockCode, analysisTime), ".md")
-	writeExport(w, mode, filename, "text/markdown; charset=utf-8", []byte(res.Content))
 }
 
 func handleConfigExport(app *App, w http.ResponseWriter, r *http.Request) {
@@ -129,54 +125,4 @@ func handleConfigExport(app *App, w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeExport(w, mode, "config.json", "application/json", []byte(app.services.Config.ExportConfig()))
-}
-
-func handleImageExport(w http.ResponseWriter, r *http.Request) {
-	var req imageExportRequest
-	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, false); err != nil {
-		writeRequestError(w, err)
-		return
-	}
-	req.Name = strings.TrimSpace(req.Name)
-	req.Base64Data = strings.TrimSpace(req.Base64Data)
-	if req.Name == "" || req.Base64Data == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name and base64Data are required"})
-		return
-	}
-	mode, err := normalizeExportMode(req.Mode)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	payload, err := base64.StdEncoding.DecodeString(req.Base64Data)
-	if err != nil || len(payload) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid file content"})
-		return
-	}
-	writeExport(w, mode, sanitizeFilename(req.Name+"AI-analysis.png", ".png"), "image/png", payload)
-}
-
-func handleWordExport(w http.ResponseWriter, r *http.Request) {
-	var req wordExportRequest
-	if err := decodeJSONRequest(w, r, &req, maxExportRequestBodyBytes, false); err != nil {
-		writeRequestError(w, err)
-		return
-	}
-	req.Filename = strings.TrimSpace(req.Filename)
-	req.Base64Data = strings.TrimSpace(req.Base64Data)
-	if req.Filename == "" || req.Base64Data == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "filename and base64Data are required"})
-		return
-	}
-	mode, err := normalizeExportMode(req.Mode)
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
-	payload, err := base64.StdEncoding.DecodeString(req.Base64Data)
-	if err != nil || len(payload) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid file content"})
-		return
-	}
-	writeExport(w, mode, sanitizeFilename(req.Filename, ".docx"), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", payload)
 }

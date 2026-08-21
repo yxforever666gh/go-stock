@@ -100,6 +100,30 @@ func TestFixedSellCheckScheduleAndTPlusOneAnchor(t *testing.T) {
 	}
 }
 
+func TestCustomSellReviewScheduleControlsStartAndInterval(t *testing.T) {
+	calendar := weekdayTradingCalendar{}
+	schedule, err := NewSellReviewSchedule("10:00", 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := FirstSellCheckWithSchedule(context.Background(), calendar, time.Date(2026, 8, 14, 14, 30, 0, 0, shanghaiLocation), schedule)
+	if err != nil || first.Format("2006-01-02 15:04") != "2026-08-17 10:00" {
+		t.Fatalf("first=%s err=%v", first, err)
+	}
+	cases := map[string]string{
+		"2026-08-17 10:00": "2026-08-17 10:20",
+		"2026-08-17 11:20": "2026-08-17 13:00",
+		"2026-08-17 14:40": "2026-08-18 10:00",
+	}
+	for input, want := range cases {
+		value, _ := time.ParseInLocation("2006-01-02 15:04", input, shanghaiLocation)
+		next, nextErr := NextSellCheckWithSchedule(context.Background(), calendar, value, schedule)
+		if nextErr != nil || next.Format("2006-01-02 15:04") != want {
+			t.Fatalf("after %s next=%s err=%v", input, next, nextErr)
+		}
+	}
+}
+
 func TestTPlusOne(t *testing.T) {
 	loc := shanghaiLocation
 	entry := time.Date(2026, 8, 14, 10, 0, 0, 0, loc)

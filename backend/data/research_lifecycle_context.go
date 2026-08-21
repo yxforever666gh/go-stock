@@ -38,10 +38,20 @@ type ResearchLifecycleContextCollector struct {
 }
 
 func NewResearchLifecycleContextCollector(quotes *ResearchQuoteProvider) *ResearchLifecycleContextCollector {
+	return NewResearchLifecycleContextCollectorWithProviders(quotes, NewStockDataApi(), NewMarketNewsApi())
+}
+
+func NewResearchLifecycleContextCollectorWithProviders(quotes *ResearchQuoteProvider, stocks *StockDataApi, news *MarketNewsApi) *ResearchLifecycleContextCollector {
 	if quotes == nil {
 		quotes = NewResearchQuoteProvider()
 	}
-	return &ResearchLifecycleContextCollector{quotes: quotes, stocks: NewStockDataApi(), news: NewMarketNewsApi()}
+	if stocks == nil {
+		stocks = NewStockDataApi()
+	}
+	if news == nil {
+		news = NewMarketNewsApi()
+	}
+	return &ResearchLifecycleContextCollector{quotes: quotes, stocks: stocks, news: news}
 }
 
 func (collector *ResearchLifecycleContextCollector) CollectLifecycleContext(ctx context.Context, request research.LifecycleContextRequest) (research.LifecycleObservationDraft, error) {

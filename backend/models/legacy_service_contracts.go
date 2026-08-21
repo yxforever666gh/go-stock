@@ -19,10 +19,10 @@ type Settings struct {
 	DingRobot                string `json:"dingRobot"`
 	UpdateBasicInfoOnStart   bool   `json:"updateBasicInfoOnStart"`
 	RefreshInterval          int64  `json:"refreshInterval"`
-	OpenAiEnable             bool   `json:"openAiEnable"`
-	Prompt                   string `json:"prompt"`
+	OpenAiEnable             bool   `json:"-"`
+	Prompt                   string `json:"-"`
 	CheckUpdate              bool   `json:"checkUpdate"`
-	QuestionTemplate         string `json:"questionTemplate"`
+	QuestionTemplate         string `json:"-"`
 	CrawlTimeOut             int64  `json:"crawlTimeOut"`
 	KDays                    int64  `json:"kDays"`
 	EnableDanmu              bool   `json:"enableDanmu"`
@@ -37,10 +37,13 @@ type Settings struct {
 	HttpProxyEnabled         bool   `json:"httpProxyEnabled"`
 	ForceNoProxyForFetch     bool   `json:"forceNoProxyForFetch" gorm:"default:true"`
 	QgqpBId                  string `json:"qgqpBId" gorm:"column:qgqp_b_id"`
-	AIAnalysisEnabled        bool   `json:"aiAnalysisEnabled" gorm:"default:true"`
+	AIAnalysisEnabled        bool   `json:"-" gorm:"default:true"`
 	AIAnalysisConfigID       uint   `json:"aiAnalysisConfigId"`
 	AIAnalysisTimes          string `json:"aiAnalysisTimes" gorm:"default:'09:30,11:30,14:30'"`
+	AIReviewStartTime        string `json:"aiReviewStartTime" gorm:"default:'09:50'"`
+	AIReviewIntervalMinutes  int    `json:"aiReviewIntervalMinutes" gorm:"default:15"`
 	MinuteProviderMode       string `json:"minuteProviderMode" gorm:"default:'public'"`
+	MinuteProviderOrder      string `json:"-" gorm:"default:'tencent,sina,akshare,private'"`
 	MinuteLongHistoryHint    bool   `json:"minuteLongHistoryHintEnabled" gorm:"column:minute_long_history_hint_enabled;default:true"`
 	PrivateMinuteEnabled     bool   `json:"privateMinuteEnabled"`
 	PrivateMinuteBaseURL     string `json:"privateMinuteBaseUrl"`
@@ -110,7 +113,10 @@ type AIModelTestResult struct {
 
 type SettingConfig struct {
 	*Settings
-	AiConfigs []*AIConfig `json:"aiConfigs"`
+	AiConfigs              []*AIConfig `json:"aiConfigs"`
+	MinuteProviderOrder    []string    `json:"minuteProviderOrder" gorm:"-"`
+	AIAnalysisAutoEnabled  *bool       `json:"aiAnalysisAutoEnabled" gorm:"-"`
+	LegacyAIAnalysisEnable *bool       `json:"aiAnalysisEnabled,omitempty" gorm:"-"`
 }
 
 type Tool struct {

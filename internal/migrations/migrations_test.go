@@ -432,7 +432,7 @@ func TestSchema10RegistersInitialContributionWithoutChangingAccountOrPositions(t
 	}
 }
 
-func TestEmptyDatabasesUpgradeDirectlyToSchema10(t *testing.T) {
+func TestEmptyDatabasesUpgradeDirectlyToSchema11(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	if err := MigrateAll(mainDB, minuteDB); err != nil {
@@ -449,12 +449,12 @@ func TestEmptyDatabasesUpgradeDirectlyToSchema10(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 10 || minuteStatus.CurrentVersion != 2 {
+	if mainStatus.CurrentVersion != 11 || minuteStatus.CurrentVersion != 2 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 }
 
-func TestPublished15BaselineUpgradesDirectlyToSchema10(t *testing.T) {
+func TestPublished15BaselineUpgradesDirectlyToSchema11(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := database.AutoMigrate(&MigrationRecord{}); err != nil {
 		t.Fatal(err)
@@ -481,7 +481,7 @@ func TestPublished15BaselineUpgradesDirectlyToSchema10(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentVersion != 10 || len(status.Pending) != 0 {
+	if status.CurrentVersion != 11 || len(status.Pending) != 0 {
 		t.Fatalf("upgraded status=%+v", status)
 	}
 	if database.Migrator().HasTable("ai_recommend_stocks") {

@@ -15,12 +15,12 @@ func (a *App) updateBasicInfo() {
 		return
 	}
 	if config.UpdateBasicInfoOnStart {
-		go func() {
-			if _, err := a.services.Stock.RefreshStockBaseInfo(context.Background()); err != nil {
+		a.goTask(func(ctx context.Context) {
+			if _, err := a.services.Stock.RefreshStockBaseInfo(ctx); err != nil {
 				log.SugaredLogger.Warnf("refresh stock master on startup: %v", err)
 			}
-		}()
-		go a.services.Stock.RefreshIndexBaseInfo()
+		})
+		a.goTask(func(context.Context) { a.services.Stock.RefreshIndexBaseInfo() })
 	}
 }
 

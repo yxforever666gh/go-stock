@@ -8,7 +8,6 @@ import {
   GetfundList,
   UnFollowFund
 } from "../services/funds-api";
-import {GetConfig} from "../services/settings-api";
 import {GetVersionInfo} from "../services/system-api";
 import {BrowserOpenURL as OpenURL, Environment} from "../services/browser-runtime.mjs";
 
@@ -16,16 +15,11 @@ const icon = ref(null)
 const message = useMessage()
 const modalShow = ref(false)
 const data = reactive({
-  modelName:"",
-  chatId: "",
-  question:"",
   name: "",
   code: "",
   fenshiURL:"",
   kURL:"",
   fullscreen: false,
-  airesult: "",
-  openAiEnable: false,
   loading: true,
 })
 
@@ -34,11 +28,6 @@ const options=ref([])
 const ticker=ref({})
 
 onBeforeMount(()=>{
-  GetConfig().then(result => {
-    if (result.openAiEnable) {
-      data.openAiEnable = true
-    }
-  })
   GetFollowedFund().then(result => {
     followList.value = result
     //console.log("followList",followList.value)

@@ -10,20 +10,27 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/research"
+
+	"gorm.io/gorm"
 )
 
 // ResearchChartProvider is deliberately split from the lifecycle context
 // collector. LoadCached only touches minute.db; Refresh is the sole path that
 // may call configured upstream providers and the real-time quote service.
 type ResearchChartProvider struct {
-	quotes *ResearchQuoteProvider
+	quotes   *ResearchQuoteProvider
+	minuteDB *gorm.DB
 }
 
 func NewResearchChartProvider(quotes *ResearchQuoteProvider) *ResearchChartProvider {
+	return NewResearchChartProviderWithStorage(quotes, db.MinuteDao)
+}
+
+func NewResearchChartProviderWithStorage(quotes *ResearchQuoteProvider, minuteDB *gorm.DB) *ResearchChartProvider {
 	if quotes == nil {
 		quotes = NewResearchQuoteProvider()
 	}
-	return &ResearchChartProvider{quotes: quotes}
+	return &ResearchChartProvider{quotes: quotes, minuteDB: minuteDB}
 }
 
 func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string, start, end time.Time) (research.ChartProviderSnapshot, error) {
@@ -33,7 +40,7 @@ func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string
 	}
 	rows := make([]minuteBar, 0)
 	for _, key := range keys {
-		cached, cacheErr := listMinuteBarsFromCache(key, start, end)
+		cached, cacheErr := listMinuteBarsFromMinuteDatabase(provider.minuteDB, key, start, end)
 		if cacheErr != nil {
 			return research.ChartProviderSnapshot{}, cacheErr
 		}
@@ -58,7 +65,7 @@ func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string
 		result.ProviderErrors = append(result.ProviderErrors, research.ChartProviderError{Provider: "cache",
 			Message: fmt.Sprintf("已忽略 %d 条无法证明为未复权或价格无效的分钟数据", rejected)})
 	}
-	result.RefreshedAt = chartCacheUpdatedAt(keys, start, end)
+	result.RefreshedAt = provider.chartCacheUpdatedAt(keys, start, end)
 	if result.RefreshedAt.IsZero() {
 		result.RefreshedAt = time.Now().In(cnLocation())
 	}
@@ -83,7 +90,7 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 		if date == end.In(cnLocation()).Format("2006-01-02") && end.Before(winEnd) {
 			winEnd = end.In(cnLocation())
 		}
-		if !winEnd.After(winStart) || chartAnyCacheWindowCovered(keys, winStart, winEnd) {
+		if !winEnd.After(winStart) || provider.chartAnyCacheWindowCovered(keys, winStart, winEnd) {
 			continue
 		}
 		providers := enabledChartMinuteProviders(day)
@@ -128,7 +135,7 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
 					Message: date + " 返回空数据" + fallbackSuffix})
 			}
-			if chartAnyCacheWindowCovered(keys, winStart, winEnd) {
+			if provider.chartAnyCacheWindowCovered(keys, winStart, winEnd) {
 				break
 			}
 			if accepted > 0 && fetchErr == nil {
@@ -161,37 +168,31 @@ type chartMinuteProvider struct {
 
 func enabledChartMinuteProviders(day time.Time) []chartMinuteProvider {
 	settings := minuteProviderSettings()
-	mode := "public"
-	if settings != nil {
-		mode = normalizeMinuteProviderMode(settings.MinuteProviderMode)
-	}
-
-	// The mode controls priority, not exclusivity. A private provider is useful
-	// for longer history, while the public providers are independent fallbacks
-	// for recent/intraday gaps. Keeping them in one ordered chain means an empty
-	// response or upstream failure automatically advances to the next enabled
-	// source without discarding bars already cached by earlier attempts.
-	privateProviders := make([]chartMinuteProvider, 0, 1)
+	available := make(map[string]chartMinuteProvider, 4)
 	if settings != nil && settings.PrivateMinuteEnabled &&
 		normalizePrivateMinuteLevel(settings.PrivateMinuteLevel) == "1min" &&
 		strings.TrimSpace(settings.PrivateMinuteBaseURL) != "" &&
 		strings.TrimSpace(settings.PrivateMinuteAPIKey) != "" {
-		privateProviders = append(privateProviders, chartMinuteProvider{name: "diemeng", fetch: fetchMinuteBarsWithDiemeng})
+		available["private"] = chartMinuteProvider{name: "diemeng", fetch: fetchMinuteBarsWithDiemeng}
 	}
-
-	publicProviders := enabledPublicChartMinuteProviders(settings, day)
-	result := make([]chartMinuteProvider, 0, len(privateProviders)+len(publicProviders))
-	if mode == "private" {
-		result = append(result, privateProviders...)
-		result = append(result, publicProviders...)
-		return result
+	for id, provider := range availablePublicChartMinuteProviders(settings, day) {
+		available[id] = provider
 	}
-	result = append(result, publicProviders...)
-	result = append(result, privateProviders...)
+	legacyMode, persistedOrder := "public", ""
+	if settings != nil {
+		legacyMode, persistedOrder = settings.MinuteProviderMode, settings.MinuteProviderOrder
+	}
+	order, _ := NormalizeMinuteProviderOrder(splitProviderOrder(persistedOrder), legacyMode)
+	result := make([]chartMinuteProvider, 0, len(available))
+	for _, id := range order {
+		if provider, ok := available[id]; ok {
+			result = append(result, provider)
+		}
+	}
 	return result
 }
 
-func enabledPublicChartMinuteProviders(settings *Settings, day time.Time) []chartMinuteProvider {
+func availablePublicChartMinuteProviders(settings *Settings, day time.Time) map[string]chartMinuteProvider {
 	akshare, sina, tencent := true, true, true
 	if settings != nil {
 		akshare, sina, tencent = settings.AkshareEnabled, settings.SinaMinuteEnabled, settings.TencentMinuteEnabled
@@ -199,18 +200,18 @@ func enabledPublicChartMinuteProviders(settings *Settings, day time.Time) []char
 	today := time.Now().In(cnLocation())
 	isToday := day.Format("2006-01-02") == today.Format("2006-01-02")
 	recent := today.Sub(day) <= 7*24*time.Hour && !day.After(today)
-	result := make([]chartMinuteProvider, 0, 3)
+	result := make(map[string]chartMinuteProvider, 3)
 	if isToday && tencent {
-		result = append(result, chartMinuteProvider{name: "tencent", fetch: fetchMinuteBarsWithTencent})
+		result["tencent"] = chartMinuteProvider{name: "tencent", fetch: fetchMinuteBarsWithTencent}
 	}
 	if isToday && sina {
-		result = append(result, chartMinuteProvider{name: "sina", fetch: fetchMinuteBarsWithSina})
+		result["sina"] = chartMinuteProvider{name: "sina", fetch: fetchMinuteBarsWithSina}
 	}
 	if !isToday && recent && tencent {
-		result = append(result, chartMinuteProvider{name: "tencent", fetch: fetchMinuteBarsWithTencent})
+		result["tencent"] = chartMinuteProvider{name: "tencent", fetch: fetchMinuteBarsWithTencent}
 	}
 	if akshare {
-		result = append(result, chartMinuteProvider{name: "akshare", fetch: fetchMinuteBarsWithAkShare})
+		result["akshare"] = chartMinuteProvider{name: "akshare", fetch: fetchMinuteBarsWithAkShare}
 	}
 	return result
 }
@@ -248,8 +249,8 @@ func dedupeChartMinuteBars(rows []minuteBar) []minuteBar {
 	return result
 }
 
-func chartCacheWindowCovered(code string, start, end time.Time) bool {
-	rows, err := listMinuteBarsFromCache(code, start, end)
+func (provider *ResearchChartProvider) chartCacheWindowCovered(code string, start, end time.Time) bool {
+	rows, err := listMinuteBarsFromMinuteDatabase(provider.minuteDB, code, start, end)
 	if err != nil || len(rows) == 0 {
 		return false
 	}
@@ -266,24 +267,24 @@ func chartCacheWindowCovered(code string, start, end time.Time) bool {
 	return minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(code, valid, start, end, false)
 }
 
-func chartAnyCacheWindowCovered(keys []string, start, end time.Time) bool {
+func (provider *ResearchChartProvider) chartAnyCacheWindowCovered(keys []string, start, end time.Time) bool {
 	for _, key := range keys {
-		if chartCacheWindowCovered(key, start, end) {
+		if provider.chartCacheWindowCovered(key, start, end) {
 			return true
 		}
 	}
 	return false
 }
 
-func chartCacheUpdatedAt(keys []string, start, end time.Time) time.Time {
-	if db.MinuteDao == nil || len(keys) == 0 {
+func (provider *ResearchChartProvider) chartCacheUpdatedAt(keys []string, start, end time.Time) time.Time {
+	if provider.minuteDB == nil || len(keys) == 0 {
 		return time.Time{}
 	}
 	type row struct {
 		UpdatedAt *int64 `gorm:"column:updated_at"`
 	}
 	value := row{}
-	if err := db.MinuteDao.Model(&minuteCacheDBBar{}).Select("MAX(updated_at) AS updated_at").
+	if err := provider.minuteDB.Model(&minuteCacheDBBar{}).Select("MAX(updated_at) AS updated_at").
 		Where("stock_code IN ? AND trade_time >= ? AND trade_time <= ?", keys, minuteTimeMillis(start), minuteTimeMillis(end)).Scan(&value).Error; err != nil || value.UpdatedAt == nil {
 		return time.Time{}
 	}

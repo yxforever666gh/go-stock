@@ -57,6 +57,7 @@ type Service struct {
 	contextProvider LifecycleContextProvider
 	chartProvider   RecommendationChartProvider
 	calendar        TradingCalendar
+	reviewSchedule  SellReviewSchedule
 	now             func() time.Time
 	serial          sync.Mutex // serializes capacity admission and direct buys
 	analysisMu      sync.Mutex
@@ -78,8 +79,21 @@ func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calen
 	if provider == nil {
 		provider = quoteLifecycleContextProvider{quotes: quotes}
 	}
-	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar, now: time.Now,
+	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar,
+		reviewSchedule: DefaultSellReviewSchedule(), now: time.Now,
 		lifecycleActive: make(map[string]struct{}), chartRefreshing: make(map[string]struct{})}
+}
+
+func (s *Service) SetSellReviewSchedule(schedule SellReviewSchedule) {
+	s.reviewSchedule = schedule
+}
+
+func (s *Service) firstSellCheck(ctx context.Context, entryAt time.Time) (time.Time, error) {
+	return FirstSellCheckWithSchedule(ctx, s.calendar, entryAt, s.reviewSchedule)
+}
+
+func (s *Service) nextSellCheck(ctx context.Context, after time.Time) (time.Time, error) {
+	return NextSellCheckWithSchedule(ctx, s.calendar, after, s.reviewSchedule)
 }
 
 // SetRecommendationChartProvider installs the minute-cache adapter used by
@@ -265,7 +279,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if positionErr != nil {
 		return positionErr
 	}
-	firstCheck, err := FirstSellCheck(ctx, s.calendar, current.EntryAt)
+	firstCheck, err := s.firstSellCheck(ctx, current.EntryAt)
 	if err != nil {
 		return err
 	}
@@ -276,8 +290,9 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	local := ShanghaiTime(now)
 	y, m, d := local.Date()
 	staleDue := now.Sub(*effectiveDue) > 2*time.Minute
-	if now.Before(firstCheck) || local.Before(time.Date(y, m, d, 9, 50, 0, 0, shanghaiLocation)) || staleDue {
-		next, err := NextSellCheck(ctx, s.calendar, now)
+	firstToday := time.Date(y, m, d, s.reviewSchedule.StartHour, s.reviewSchedule.StartMinute, 0, 0, shanghaiLocation)
+	if now.Before(firstCheck) || local.Before(firstToday) || staleDue {
+		next, err := s.nextSellCheck(ctx, now)
 		if err != nil {
 			return err
 		}
@@ -365,7 +380,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return tradingErr
 	}
 	if !trading || !IsTradingSession(decisionAt) {
-		next, nextErr := NextSellCheck(ctx, s.calendar, decisionAt)
+		next, nextErr := s.nextSellCheck(ctx, decisionAt)
 		if nextErr != nil {
 			return nextErr
 		}
@@ -392,7 +407,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	}
 	switch decision.Action {
 	case "持有":
-		next, nextErr := NextSellCheck(ctx, s.calendar, decisionAt)
+		next, nextErr := s.nextSellCheck(ctx, decisionAt)
 		if nextErr != nil {
 			return nextErr
 		}
@@ -405,7 +420,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 }
 
 func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Recommendation, observation LifecycleObservation, now time.Time) error {
-	next, err := NextSellCheck(ctx, s.calendar, now)
+	next, err := s.nextSellCheck(ctx, now)
 	if err != nil {
 		return err
 	}
@@ -418,7 +433,7 @@ func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Reco
 }
 
 func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation, now time.Time) error {
-	nextSell, err := FirstSellCheck(ctx, s.calendar, now)
+	nextSell, err := s.firstSellCheck(ctx, now)
 	if err != nil {
 		return err
 	}
@@ -471,7 +486,7 @@ func (s *Service) retrySell(ctx context.Context, recommendation *Recommendation,
 }
 
 func (s *Service) deferSell(ctx context.Context, recommendationID string, now time.Time, reason string) error {
-	next, err := NextSellCheck(ctx, s.calendar, now)
+	next, err := s.nextSellCheck(ctx, now)
 	if err != nil {
 		return err
 	}
@@ -485,7 +500,7 @@ func (s *Service) recordError(ctx context.Context, recommendation Recommendation
 	if recommendation.Status == "buy_pending" {
 		return s.deferBuyProcessingError(ctx, recommendation.RecommendationID, now, processErr)
 	}
-	next, err := NextSellCheck(ctx, s.calendar, now)
+	next, err := s.nextSellCheck(ctx, now)
 	if err != nil {
 		return err
 	}

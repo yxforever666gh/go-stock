@@ -97,7 +97,7 @@ func TestResolveCommandAIConfigRejectsInvalidSources(t *testing.T) {
 }
 
 func TestCompatibilityCommandAIResolverConstructsClient(t *testing.T) {
-	resolver := &compatibilityServiceAdapter{main: openCommandAITestDB(t)}
+	resolver := &aiConfigAdapter{main: openCommandAITestDB(t)}
 	client, err := resolver.ResolveCommandAI(context.Background(), cliports.CommandAIOptions{
 		BaseURL: "https://example.com", APIKey: "key", Model: "model",
 	})

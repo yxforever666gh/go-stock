@@ -36,7 +36,7 @@ echo "[go-stock] starting backend web API on 127.0.0.1:34115 ..."
 GO_STOCK_WEB_ADDR="${GO_STOCK_WEB_ADDR:-127.0.0.1:34115}" \
 GO_STOCK_DB_LOG_LEVEL="${GO_STOCK_DB_LOG_LEVEL:-silent}" \
 GO_STOCK_LOG_LEVEL="${GO_STOCK_LOG_LEVEL:-warn}" \
-go run . --web &
+go run . &
 BACK_PID=$!
 
 sleep 1

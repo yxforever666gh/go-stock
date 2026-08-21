@@ -1,5 +1,5 @@
 <script setup>
-import {computed, defineAsyncComponent, h, nextTick, onBeforeMount, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
+import {computed, h, nextTick, onBeforeMount, onBeforeUnmount, onMounted, reactive, ref, watch} from 'vue'
 import {
   AddGroup,
   AddStockGroup,
@@ -16,14 +16,11 @@ import {
   Greet,
   SetAlarmChangePercent,
   SetCostPriceAndVolume,
-  SetStockAICron,
   SetStockSort,
   UnFollow
 } from '../services/stocks-api'
-import {GetAiConfigs, GetConfig, GetPromptTemplates} from '../services/settings-api'
+import {GetConfig} from '../services/settings-api'
 import {GetVersionInfo} from '../services/system-api'
-import {GetAIResponseResult, NewChatStream, SaveAIResponseResult, ShareAnalysis} from '../services/ai-api'
-import {SaveAsMarkdown} from '../services/exports-api'
 import {
   NAvatar,
   NButton,
@@ -47,21 +44,16 @@ import {
   WindowUnfullscreen
 } from '../services/browser-runtime.mjs'
 import {Add} from '@vicons/ionicons5'
-import '@vavt/v3-extension/lib/asset/ExportPDF.css';
 import {useRoute, useRouter} from 'vue-router'
 import MoneyTrend from "./moneyTrend.vue";
 import StockSparkLine from "./stockSparkLine.vue";
-import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import { useStockHeavyFeatures } from '../composables/useStockHeavyFeatures'
-
-const MdEditor = defineAsyncComponent(() => import('md-editor-v3').then((mod) => mod.MdEditor))
-const ExportPDF = defineAsyncComponent(() => import('@vavt/v3-extension').then((mod) => mod.ExportPDF))
+import { useDraggableGroupTabs } from '../composables/useDraggableGroupTabs'
 
 const route = useRoute()
 const router = useRouter()
 
 const dialog = useDialog()
-const toolbars = [0];
 
 const upColor = '#ec0000';
 const upBorderColor = '';
@@ -71,13 +63,6 @@ const kLineChartRef = ref(null);
 const kLineChartRef2 = ref(null);
 
 
-const handleProgress = (progress) => {
-  //console.log(`Export progress: ${progress.ratio * 100}%`);
-};
-const enableEditor = ref(false)
-const mdPreviewRef = ref(null)
-const mdEditorRef = ref(null)
-const tipsRef = ref(null)
 const message = useMessage()
 const notify = useNotification()
 const stocks = ref([])
@@ -89,11 +74,8 @@ const options = ref([])
 const modalShow = ref(false)
 const modalShow2 = ref(false)
 const modalShow3 = ref(false)
-const modalShow4 = ref(false)
 const modalShow5 = ref(false)
 const addBTN = ref(true)
-const enableTools = ref(true)
-const thinkingMode = ref(true)
 const formModel = ref({
   name: "",
   code: "",
@@ -102,36 +84,20 @@ const formModel = ref({
   alarm: 0,
   alarmPrice: 0,
   sort: 999,
-  cron: "",
 })
-
-const promptTemplates = ref([])
-const aiConfigs = ref([])
-const sysPromptOptions = ref([])
-const userPromptOptions = ref([])
 const data = reactive({
-  modelName: "",
-  chatId: "",
-  question: "",
-  sysPromptId: null,
-  aiConfigId: null,
   name: "",
   code: "",
   fenshiURL: "",
   kURL: "",
   resultText: "Please enter your name below 👇",
   fullscreen: false,
-  airesult: "",
-  openAiEnable: false,
   loading: true,
   darkTheme: false,
   changePercent: 0
 })
 const feishiInterval = ref(null)
 const {
-  exportAnalysisAsCanvasImage,
-  exportAnalysisAsImage,
-  exportAnalysisAsWord,
   renderDailyKLine,
   renderMinuteChart,
 } = useStockHeavyFeatures({
@@ -139,19 +105,13 @@ const {
   downColor,
   kLineChartRef,
   kLineChartRef2,
-  mdPreviewRef,
   message,
-  tipsRef,
   upColor,
 })
 
 
 const currentGroupId = ref(0)
 
-
-const theme = computed(() => {
-  return data.darkTheme ? 'dark' : 'light'
-})
 
 const danmakuColor = computed(() => {
   return data.darkTheme ? 'color:#fff' : 'color:#000'
@@ -182,107 +142,19 @@ const groupResults = computed(() => {
   }
 })
 const showPopover = ref(false)
-// 拖拽相关变量
-const dragSourceIndex = ref(null)
-const dragTargetIndex = ref(null)
-
-// 拖拽处理函数
-function handleTabDragStart(event, name) {
-  // "全部"标签（name=0）不应该触发拖拽
-  if (name === 0) {
-    event.preventDefault();
-    return;
-  }
-  dragSourceIndex.value = name;
-  event.dataTransfer.effectAllowed = 'move';
-  event.target.classList.add('tab-dragging');
-}
-
-
-function handleTabDragOver(event) {
-  event.preventDefault()
-  event.dataTransfer.dropEffect = 'move'
-}
-
-function handleTabDragEnter(event, name) {
-  event.preventDefault();
-  // "全部"标签（name=0）不应该作为拖拽目标
-  if (name > 0) {
-    dragTargetIndex.value = name;
-    if (event.target.classList) {
-      // 查找最近的标签元素并添加高亮样式
-      let tabElement = event.target.closest('.n-tabs-tab');
-      if (tabElement) {
-        tabElement.classList.add('tab-drag-over');
+const {initialize: initDraggableTabs, cleanup: cleanupDraggableTabs} = useDraggableGroupTabs(
+    groupList,
+    async (sourceGroup, newSortPosition) => {
+      try {
+        const result = await UpdateGroupSort(sourceGroup.ID, newSortPosition)
+        if (!result) throw new Error('后端未更新排序')
+        message.success('分组排序更新成功')
+        groupList.value = await GetGroupList()
+      } catch (error) {
+        message.error('分组排序更新失败: ' + error.message)
       }
-    }
-  }
-}
-
-function handleTabDragLeave(event) {
-  // 查找最近的标签元素并移除高亮样式
-  let tabElement = event.target.closest('.n-tabs-tab')
-  if (tabElement && tabElement.classList) {
-    tabElement.classList.remove('tab-drag-over')
-  }
-  // 不要重置 dragTargetIndex，因为可能会在元素间快速移动
-}
-
-function handleTabDrop(event) {
-  event.preventDefault();
-
-  // 移除所有高亮样式
-  const tabs = document.querySelectorAll('.n-tabs-tab');
-  tabs.forEach(tab => {
-    tab.classList.remove('tab-drag-over');
-  });
-
-  if (dragSourceIndex.value !== null && dragTargetIndex.value !== null &&
-      dragSourceIndex.value !== dragTargetIndex.value) {
-
-    // 确保索引有效（排除"全部"选项卡）
-    if (dragSourceIndex.value > 0 && dragTargetIndex.value > 0) {
-      // 查找源分组和目标分组
-      const sourceGroup = groupList.value.find(g => g.ID === dragSourceIndex.value);
-      const targetGroup = groupList.value.find(g => g.ID === dragTargetIndex.value);
-
-      if (sourceGroup && targetGroup) {
-        // 计算新的位置序号（使用目标分组的sort值）
-        const newSortPosition = targetGroup.sort;
-
-        // 调用后端API更新组排序
-        UpdateGroupSort(sourceGroup.ID, newSortPosition).then(result => {
-          if (result) {
-            message.success('分组排序更新成功');
-            // 重新获取分组列表以更新界面
-            GetGroupList().then(result => {
-              groupList.value = result;
-            });
-          } else {
-            message.error('分组排序更新失败');
-          }
-        }).catch(error => {
-          message.error('分组排序更新失败: ' + error.message);
-        });
-      }
-    }
-  }
-
-  // 重置状态
-  dragSourceIndex.value = null;
-  dragTargetIndex.value = null;
-}
-
-function handleTabDragEnd(event) {
-  // 移除所有高亮样式
-  const tabs = document.querySelectorAll('.n-tabs-tab')
-  tabs.forEach(tab => {
-    tab.classList.remove('tab-drag-over', 'tab-dragging')
-  })
-
-  dragSourceIndex.value = null
-  dragTargetIndex.value = null
-}
+    },
+)
 
 onBeforeMount(() => {
   GetGroupList().then(result => {
@@ -313,24 +185,9 @@ onBeforeMount(() => {
     })
   })
   GetConfig().then(result => {
-    if (result.openAiEnable) {
-      data.openAiEnable = true
-    }
     if (result.darkTheme) {
       data.darkTheme = true
     }
-  })
-  GetPromptTemplates("", "").then(res => {
-    promptTemplates.value = res
-
-    sysPromptOptions.value = promptTemplates.value.filter(item => item.type === '模型系统Prompt')
-    userPromptOptions.value = promptTemplates.value.filter(item => item.type === '模型用户Prompt')
-
-  })
-
-  GetAiConfigs().then(res => {
-    aiConfigs.value = res
-    data.aiConfigId = res[0].ID
   })
 
   // Clean up any stale event listeners (defensive)
@@ -339,7 +196,6 @@ onBeforeMount(() => {
   EventsOff("showSearch")
   EventsOff("stock_price")
   EventsOff("refreshFollowList")
-  EventsOff("newChatStream")
   EventsOff("changeTab")
   EventsOff("updateVersion")
   EventsOff("warnMsg")
@@ -375,31 +231,6 @@ onBeforeMount(() => {
     WindowReload()
   })
 
-  EventsOn("newChatStream", async (msg) => {
-    data.loading = false
-    if (msg === "DONE") {
-      SaveAIResponseResult(data.code, data.name, data.airesult, data.chatId, data.question, data.aiConfigId)
-      message.info("AI分析完成！")
-      message.destroyAll()
-    } else {
-      if (msg.aiConfigId) {
-        data.aiConfigId = msg.aiConfigId
-      }
-      if (msg.chatId) {
-        data.chatId = msg.chatId
-      }
-      if (msg.question) {
-        data.question = msg.question
-      }
-      if (msg.content) {
-        data.airesult = data.airesult + msg.content
-      }
-      if (msg.extraContent) {
-        data.airesult = data.airesult + msg.extraContent
-      }
-
-    }
-  })
 
   EventsOn("changeTab", async (msg) => {
     currentGroupId.value = Number(msg.ID)
@@ -525,49 +356,6 @@ onMounted(() => {
     icon.value = res.icon;
   });
 })
-// 清理拖拽事件监听器
-// 清理拖拽事件监听器
-function cleanupDraggableTabs() {
-  const tabs = document.querySelectorAll('.n-tabs-tab');
-  tabs.forEach((tab) => {
-    // 移除所有可能的拖拽事件监听器
-    tab.removeEventListener('dragstart', handleTabDragStart);
-    tab.removeEventListener('dragover', handleTabDragOver);
-    tab.removeEventListener('dragenter', handleTabDragEnter);
-    tab.removeEventListener('dragleave', handleTabDragLeave);
-    tab.removeEventListener('drop', handleTabDrop);
-    tab.removeEventListener('dragend', handleTabDragEnd);
-    // 移除draggable属性
-    tab.removeAttribute('draggable');
-  });
-}
-
-// 初始化可拖拽选项卡
-function initDraggableTabs() {
-  // 移除之前可能添加的事件监听器
-  cleanupDraggableTabs();
-
-  // 添加拖拽事件监听器到选项卡元素
-  setTimeout(() => {
-    const tabs = document.querySelectorAll('.n-tabs-tab');
-    tabs.forEach((tab, index) => {
-      const dataIndex = tab.getAttribute('data-name');
-      const name = parseInt(dataIndex);
-
-      // 只为分组标签（name > 0）添加拖拽功能
-      if (name > 0) {
-        tab.setAttribute('draggable', 'true');
-        tab.addEventListener('dragstart', (e) => handleTabDragStart(e, name));
-        tab.addEventListener('dragover', handleTabDragOver);
-        tab.addEventListener('dragenter', (e) => handleTabDragEnter(e, name));
-        tab.addEventListener('dragleave', handleTabDragLeave);
-        tab.addEventListener('drop', handleTabDrop);
-        tab.addEventListener('dragend', handleTabDragEnd);
-      }
-    });
-  }, 100);
-}
-
 onBeforeUnmount(() => {
   // //console.log(`the component is now unmounted.`)
   //clearInterval(ticker.value)
@@ -579,7 +367,6 @@ onBeforeUnmount(() => {
   EventsOff("showSearch")
   EventsOff("stock_price")
   EventsOff("refreshFollowList")
-  EventsOff("newChatStream")
   EventsOff("changeTab")
   EventsOff("updateVersion")
   EventsOff("warnMsg")
@@ -848,7 +635,6 @@ function setStock(code, name) {
   formModel.value.alarm = res[0].AlarmChangePercent
   formModel.value.alarmPrice = res[0].AlarmPrice
   formModel.value.sort = res[0].Sort
-  formModel.value.cron = res[0].Cron
   modalShow.value = true
 }
 
@@ -916,12 +702,6 @@ function updateCostPriceAndVolumeNew(code, price, volume, alarm, formModel) {
       //message.success(result)
     })
   }
-  if (formModel.cron) {
-    SetStockAICron(formModel.cron, code).then(result => {
-      //message.success(result)
-    })
-  }
-
   if (alarm || formModel.alarmPrice) {
     SetAlarmChangePercent(alarm, formModel.alarmPrice, code).then(result => {
       //message.success(result)
@@ -957,59 +737,6 @@ function fullscreen() {
 //type 报警类型: 1 涨跌报警;2 股价报警 3 成本价报警
 function SendMessage(result, type) {
   return `${getTypeName(type)}:${result["股票代码"]}`
-}
-
-function aiReCheckStock(stock, stockCode) {
-  data.modelName = ""
-  data.airesult = ""
-  data.time = ""
-  data.name = stock
-  data.code = stockCode
-  data.loading = true
-  modalShow4.value = true
-  message.loading("ai检测中...", {
-    duration: 0,
-  })
-  //
-
-  //message.info("sysPromptId:"+data.sysPromptId)
-  NewChatStream(stock, stockCode, data.question, data.aiConfigId, data.sysPromptId, enableTools.value,thinkingMode.value)
-}
-
-function aiCheckStock(stock, stockCode) {
-  GetAIResponseResult(stockCode).then(result => {
-    if (result.content) {
-      data.modelName = result.modelName
-      data.chatId = result.chatId
-      data.question = result.question
-      data.name = stock
-      data.code = stockCode
-      data.loading = false
-      modalShow4.value = true
-      data.airesult = result.content
-      const date = new Date(result.CreatedAt);
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, '0');
-      const day = String(date.getDate()).padStart(2, '0');
-      const hours = String(date.getHours()).padStart(2, '0');
-      const minutes = String(date.getMinutes()).padStart(2, '0');
-      const seconds = String(date.getSeconds()).padStart(2, '0');
-      data.time = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`
-    } else {
-      data.modelName = ""
-      data.question = ""
-      data.airesult = ""
-      data.time = ""
-      data.name = stock
-      data.code = stockCode
-      data.loading = false
-      modalShow4.value = true
-      // message.loading("ai检测中...", {
-      //   duration: 0,
-      // })
-      // NewChatStream(stock, stockCode, "", data.sysPromptId)
-    }
-  })
 }
 
 function getTypeName(type) {
@@ -1049,68 +776,6 @@ window.onerror = function (msg, source, lineno, colno, error) {
   message.error("发生错误:" + msg)
   return true;
 };
-
-function saveAsImage(name, code) {
-  return exportAnalysisAsImage(name, code)
-}
-
-async function saveCanvasImage(name) {
-  return exportAnalysisAsCanvasImage(name)
-}
-
-async function copyToClipboard() {
-  try {
-    await navigator.clipboard.writeText(data.airesult);
-    message.success('分析结果已复制到剪切板');
-  } catch (err) {
-    message.error('复制失败: ' + err);
-  }
-}
-
-function saveAsMarkdown() {
-  SaveAsMarkdown(data.code, data.name).then(result => {
-    message.success(result)
-  })
-}
-
-function saveAsMarkdown_old() {
-  const blob = new Blob([data.airesult], {type: 'text/markdown;charset=utf-8'});
-  const link = document.createElement('a');
-  link.href = URL.createObjectURL(blob);
-  link.download = `${data.name}[${data.code}]-${data.time}ai-analysis-result.md`;
-  link.click();
-  URL.revokeObjectURL(link.href);
-  link.remove()
-}
-
-// 导出文档
-async function saveAsWord() {
-  return exportAnalysisAsWord()
-}
-
-function share(code, name) {
-  ShareAnalysis(code, name).then(msg => {
-    //message.info(msg)
-    notify.info({
-      avatar: () =>
-          h(NAvatar, {
-            size: 'small',
-            round: false,
-            src: icon.value
-          }),
-      title: '分享到社区',
-      duration: 1000 * 30,
-      content: () => {
-        return h('div', {
-          style: {
-            'text-align': 'left',
-            'font-size': '14px',
-          }
-        }, {default: () => msg})
-      },
-    })
-  })
-}
 
 const addTabModel = ref({
   name: '',
@@ -1309,10 +974,6 @@ function searchStockReport(stockCode) {
                 取消关注
               </n-button>&nbsp;
 
-              <n-button size="tiny" v-if="data.openAiEnable" secondary type="warning"
-                        @click="aiCheckStock(result['股票名称'],result['股票代码'])">
-                AI分析
-              </n-button>
             </template>
             <template #footer>
               <n-flex justify="center">
@@ -1452,10 +1113,6 @@ function searchStockReport(stockCode) {
                 取消关注
               </n-button>&nbsp;
 
-              <n-button size="tiny" v-if="data.openAiEnable" secondary type="warning"
-                        @click="aiCheckStock(result['股票名称'],result['股票代码'])">
-                AI分析
-              </n-button>
               <n-button secondary type="error" size="tiny"
                         @click="delStockGroup(result['股票代码'],result['股票名称'],group.ID)">移出分组
               </n-button>
@@ -1569,9 +1226,6 @@ function searchStockReport(stockCode) {
         <n-input-number v-model:value="formModel.sort" min="0" placeholder="请输入股价排序值">
         </n-input-number>
       </n-form-item>
-      <n-form-item label="AI cron" path="cron">
-        <n-input v-model:value="formModel.cron" placeholder="请输入cron表达式"/>
-      </n-form-item>
     </n-form>
     <template #footer>
       <n-button type="primary"
@@ -1619,81 +1273,6 @@ function searchStockReport(stockCode) {
     <div ref="kLineChartRef" style="width: 1000px; height: 500px;"></div>
   </n-modal>
 
-  <n-modal transform-origin="center" v-model:show="modalShow4" preset="card" style="width: min(1080px, 94vw);"
-           :title="'['+data.name+']AI分析'">
-    <n-spin size="small" :show="data.loading">
-      <MdEditor v-if="enableEditor" :toolbars="toolbars" ref="mdEditorRef"
-                class="app-markdown-surface app-markdown-editor" style="height: 440px;text-align: left"
-                :modelValue="data.airesult" :theme="theme">
-        <template #defToolbars>
-          <ExportPDF :file-name="data.name+'['+data.code+']AI分析报告'" style="text-align: left"
-                     :modelValue="data.airesult" @onProgress="handleProgress"/>
-        </template>
-      </MdEditor>
-      <AppMarkdownPreview v-if="!enableEditor" ref="mdPreviewRef" style="height: 440px;text-align: left"
-                          :modelValue="data.airesult" :theme="theme"/>
-    </n-spin>
-    <template #footer>
-      <n-flex justify="space-between" ref="tipsRef">
-        <n-text type="info" v-if="data.time">
-          <n-tag v-if="data.modelName" type="warning" round :title="data.chatId" :bordered="false">
-            {{ data.modelName }}
-          </n-tag>
-          {{ data.time }}
-        </n-text>
-        <n-text type="error">*AI分析结果仅供参考，请以实际行情为准。投资需谨慎，风险自担。</n-text>
-      </n-flex>
-    </template>
-    <template #action>
-      <n-flex justify="left" style="margin-bottom: 10px">
-        <n-switch v-model:value="enableTools" :round="false">
-          <template #checked>
-            启用AI函数工具调用
-          </template>
-          <template #unchecked>
-            不启用AI函数工具调用
-          </template>
-        </n-switch>
-        <n-switch v-model:value="thinkingMode" :round="false">
-          <template #checked>
-            启用思考模式
-          </template>
-          <template #unchecked>
-            不启用思考模式
-          </template>
-        </n-switch>
-        <n-gradient-text type="error" style="margin-left: 10px">
-          *AI函数工具调用可以增强AI获取数据的能力,但会消耗更多tokens。
-        </n-gradient-text>
-      </n-flex>
-      <n-flex justify="space-between" style="margin-bottom: 10px">
-        <n-select style="width: 31%" v-model:value="data.aiConfigId" label-field="name" value-field="ID"
-                  :options="aiConfigs" placeholder="请选择AI模型服务配置"/>
-        <n-select style="width: 31%" v-model:value="data.sysPromptId" label-field="name" value-field="ID"
-                  :options="sysPromptOptions" placeholder="请选择系统提示词"/>
-        <n-select style="width: 31%" v-model:value="data.question" label-field="name" value-field="content"
-                  :options="userPromptOptions" placeholder="请选择用户提示词"/>
-      </n-flex>
-      <n-flex justify="right">
-        <n-input v-model:value="data.question" style="text-align: left" clearable
-                 type="textarea"
-                 :show-count="true"
-                 placeholder="请输入您的问题:例如{{stockName}}[{{stockCode}}]分析和总结"
-                 :autosize="{
-              minRows: 2,
-              maxRows: 5
-            }"
-        />
-        <!--        <n-button size="tiny" type="error" @click="enableEditor=!enableEditor">编辑/预览</n-button>-->
-        <n-button size="tiny" type="warning" @click="aiReCheckStock(data.name,data.code)">开始AI分析</n-button>
-        <n-button size="tiny" type="info" @click="saveAsImage(data.name,data.code)">保存为图片</n-button>
-        <n-button size="tiny" type="success" @click="copyToClipboard">复制到剪切板</n-button>
-        <n-button size="tiny" type="primary" @click="saveAsMarkdown">保存为Markdown文件</n-button>
-        <n-button size="tiny" type="primary" @click="saveAsWord">保存为Word文件</n-button>
-        <n-button size="tiny" type="error" @click="share(data.code,data.name)">分享到项目社区</n-button>
-      </n-flex>
-    </template>
-  </n-modal>
   <n-modal v-model:show="modalShow5" :title="data.name+'资金趋势'" style="width: 1000px" :preset="'card'">
     <money-trend :code="data.code" :name="data.name" :days="360" :dark-theme="data.darkTheme"
                  :chart-height="500"></money-trend>

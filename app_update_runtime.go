@@ -42,7 +42,7 @@ func (a *App) checkUpdate(flag int) {
 	}
 
 	a.enrichReleaseVersion(releaseVersion)
-	go emitEvent(a.ctx, "updateVersion", releaseVersion)
+	a.goTask(func(ctx context.Context) { emitEvent(ctx, "updateVersion", releaseVersion) })
 }
 
 func (a *App) fetchLatestReleaseVersion() (*models.GitHubReleaseVersion, error) {
@@ -92,11 +92,13 @@ func (a *App) enrichReleaseVersion(releaseVersion *models.GitHubReleaseVersion) 
 }
 
 func (a *App) emitReleaseNews(timeLabel, content string) {
-	go emitEvent(a.ctx, "newsPush", map[string]any{
-		"time":    timeLabel,
-		"isRed":   true,
-		"source":  "go-stock",
-		"content": content,
+	a.goTask(func(ctx context.Context) {
+		emitEvent(ctx, "newsPush", map[string]any{
+			"time":    timeLabel,
+			"isRed":   true,
+			"source":  "go-stock",
+			"content": content,
+		})
 	})
 }
 
@@ -168,7 +170,7 @@ func syncedTelegraphSource(tags []string) string {
 }
 
 func (a *App) persistSyncedTelegraph(telegraph *models.Telegraph, tags []string) bool {
-	created, err := a.services.Market.PersistSyncedTelegraph(context.Background(), telegraph, tags)
+	created, err := a.services.Market.PersistSyncedTelegraph(a.taskContext(), telegraph, tags)
 	if err != nil {
 		logger.SugaredLogger.Errorf("persist synced telegraph failed: %v", err)
 		return false
