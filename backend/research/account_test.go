@@ -123,6 +123,9 @@ func TestScheduledFundingStopsAtFourAndDoesNotCatchUpSameDay(t *testing.T) {
 
 func TestScheduledFundingPreservesUnitValueAndTWR(t *testing.T) {
 	service, database := fundingTestService(t, "2026-08-18")
+	service.now = func() time.Time {
+		return time.Date(2026, 8, 19, 9, 21, 0, 0, shanghaiLocation)
+	}
 	if err := database.Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 110000.0).Error; err != nil {
 		t.Fatal(err)
 	}
