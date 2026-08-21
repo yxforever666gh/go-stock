@@ -124,7 +124,7 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  quote   查询实时行情")
 	fmt.Fprintln(w, "  search  自然语言选股")
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
-	fmt.Fprintln(w, "  research run-once --json  后台执行一轮正式 AI 分析")
+	fmt.Fprintln(w, "  research run-once|repair-missed-cash|repair-xd-sell  研究任务与受控历史纠正")
 	fmt.Fprintln(w, "  db status|archive|backup|compact|migrate|verify  管理、归档并校验主库和分钟库")
 	fmt.Fprintln(w, "  release inspect  查看 App 与数据库版本身份")
 }

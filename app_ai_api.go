@@ -11,7 +11,7 @@ import (
 func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.7.4：推荐详情按交易日分隔分钟走势，并提供可记忆的最新、买入和卖出价格横线开关。"
+		content = "1.7.5：修复 XD/XR/DR 除权除息行情名称误判，并支持按 13:30 已落库决策证据进行受控历史卖出纠正。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion             = "1.7.4"
+	AppVersion             = "1.7.5"
 	InitialCash            = 100000.0
 	MaxCashPerTrade        = 50000.0
 	TargetContribution     = 500000.0

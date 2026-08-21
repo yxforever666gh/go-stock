@@ -413,47 +413,55 @@ func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendation
 
 func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Quote) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := lockAccountForWrite(tx); err != nil {
-			return err
-		}
-		var recommendation Recommendation
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ?", recommendationID).First(&recommendation).Error; err != nil {
-			return err
-		}
-		var position Position
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ? AND status = ?", recommendationID, "open").First(&position).Error; err != nil {
-			return err
-		}
-		cost := CalculateSellCost(quote.Price, position.Quantity)
-		if err := tx.Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", gorm.Expr("cash + ?", cost.NetCashFlow)).Error; err != nil {
-			return err
-		}
-		netPnL := cost.NetCashFlow - (position.EntryPrice*float64(position.Quantity) + position.BuyFees)
-		trade := SimulatedTrade{
-			TradeID: newID(), RecommendationID: recommendationID, StockCode: recommendation.StockCode, Side: "sell", TradedAt: quote.At,
-			MarketPrice: quote.Price, ExecutionPrice: cost.ExecutionPrice, Quantity: position.Quantity, Notional: cost.Notional,
-			Commission: cost.Commission, StampDuty: cost.StampDuty, TransferFee: cost.TransferFee,
-			SlippageAmount: cost.SlippageAmount, TotalFees: cost.TotalFees, NetCashFlow: cost.NetCashFlow,
-		}
-		if err := tx.Create(&trade).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&Position{}).Where("id = ?", position.ID).Updates(map[string]any{
-			"status": "closed", "exit_at": quote.At, "exit_price": cost.ExecutionPrice,
-			"sell_fees": cost.TotalFees, "current_price": quote.Price, "current_price_at": quote.At, "net_pn_l": netPnL,
-		}).Error; err != nil {
-			return err
-		}
-		netYield := 0.0
-		invested := position.EntryPrice*float64(position.Quantity) + position.BuyFees
-		if invested > 0 {
-			netYield = netPnL / invested
-		}
-		return tx.Model(&Recommendation{}).Where("recommendation_id = ?", recommendationID).Updates(map[string]any{
-			"status": "closed", "closed_at": quote.At, "close_price": cost.ExecutionPrice, "next_check_at": nil,
-			"total_fees": position.BuyFees + cost.TotalFees, "net_pn_l": netPnL, "net_yield_rate": netYield,
-		}).Error
+		_, err := sellInTransaction(tx, recommendationID, quote)
+		return err
 	})
+}
+
+func sellInTransaction(tx *gorm.DB, recommendationID string, quote Quote) (SimulatedTrade, error) {
+	if err := lockAccountForWrite(tx); err != nil {
+		return SimulatedTrade{}, err
+	}
+	var recommendation Recommendation
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ?", recommendationID).First(&recommendation).Error; err != nil {
+		return SimulatedTrade{}, err
+	}
+	var position Position
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ? AND status = ?", recommendationID, "open").First(&position).Error; err != nil {
+		return SimulatedTrade{}, err
+	}
+	cost := CalculateSellCost(quote.Price, position.Quantity)
+	if err := tx.Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", gorm.Expr("cash + ?", cost.NetCashFlow)).Error; err != nil {
+		return SimulatedTrade{}, err
+	}
+	netPnL := cost.NetCashFlow - (position.EntryPrice*float64(position.Quantity) + position.BuyFees)
+	trade := SimulatedTrade{
+		TradeID: newID(), RecommendationID: recommendationID, StockCode: recommendation.StockCode, Side: "sell", TradedAt: quote.At,
+		MarketPrice: quote.Price, ExecutionPrice: cost.ExecutionPrice, Quantity: position.Quantity, Notional: cost.Notional,
+		Commission: cost.Commission, StampDuty: cost.StampDuty, TransferFee: cost.TransferFee,
+		SlippageAmount: cost.SlippageAmount, TotalFees: cost.TotalFees, NetCashFlow: cost.NetCashFlow,
+	}
+	if err := tx.Create(&trade).Error; err != nil {
+		return SimulatedTrade{}, err
+	}
+	if err := tx.Model(&Position{}).Where("id = ?", position.ID).Updates(map[string]any{
+		"status": "closed", "exit_at": quote.At, "exit_price": cost.ExecutionPrice,
+		"sell_fees": cost.TotalFees, "current_price": quote.Price, "current_price_at": quote.At, "net_pn_l": netPnL,
+	}).Error; err != nil {
+		return SimulatedTrade{}, err
+	}
+	netYield := 0.0
+	invested := position.EntryPrice*float64(position.Quantity) + position.BuyFees
+	if invested > 0 {
+		netYield = netPnL / invested
+	}
+	if err := tx.Model(&Recommendation{}).Where("recommendation_id = ?", recommendationID).Updates(map[string]any{
+		"status": "closed", "closed_at": quote.At, "close_price": cost.ExecutionPrice, "next_check_at": nil,
+		"total_fees": position.BuyFees + cost.TotalFees, "net_pn_l": netPnL, "net_yield_rate": netYield,
+	}).Error; err != nil {
+		return SimulatedTrade{}, err
+	}
+	return trade, nil
 }
 
 func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {

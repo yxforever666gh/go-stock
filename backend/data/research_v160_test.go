@@ -204,3 +204,33 @@ func TestResearchAIClientParentCancellationIsNotRetried(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, calls)
 	}
 }
+
+func TestValidateResearchQuoteResponseCodeRequiresActualMatchingCode(t *testing.T) {
+	tests := []struct {
+		name      string
+		requested string
+		response  string
+		want      string
+		wantErr   bool
+	}{
+		{name: "matching prefixed", requested: "sh601899", response: "SH601899", want: "sh601899"},
+		{name: "matching digits", requested: "sh601899", response: "601899", want: "sh601899"},
+		{name: "different valid code", requested: "sh601899", response: "sh600000", wantErr: true},
+		{name: "missing response code", requested: "sh601899", response: "", wantErr: true},
+		{name: "invalid response code", requested: "sh601899", response: "not-a-code", wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := validateResearchQuoteResponseCode(test.requested, test.response)
+			if test.wantErr {
+				if err == nil {
+					t.Fatalf("got=%q, expected error", got)
+				}
+				return
+			}
+			if err != nil || got != test.want {
+				t.Fatalf("got=%q err=%v want=%q", got, err, test.want)
+			}
+		})
+	}
+}

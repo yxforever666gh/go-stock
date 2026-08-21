@@ -39,10 +39,14 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 		fmt.Fprintln(stdout, "用法:")
 		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research run-once [--json] [--timeout 0]")
 		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research repair-missed-cash --recommendation-id ID --recommendation-id ID [--json]")
+		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research repair-xd-sell [--json]")
 		return nil
 	}
 	if strings.EqualFold(args[0], "repair-missed-cash") {
 		return runResearchMissedCashRepair(args[1:], g, stdout, stderr)
+	}
+	if strings.EqualFold(args[0], "repair-xd-sell") {
+		return runResearchXDSellRepair(args[1:], g, stdout, stderr)
 	}
 	if !strings.EqualFold(args[0], "run-once") {
 		return fmt.Errorf("未知 research 子命令: %s", args[0])
@@ -109,6 +113,54 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 		_, _ = fmt.Fprintf(stdout, "run=%s status=%s recommendations=%d\n", run.RunID, run.Status, run.RecommendationCount)
 	}
 	return runErr
+}
+
+const (
+	approvedXDSellRecommendationID = "053e7c47-a538-4d6d-9dbd-61e9897d8285"
+	approvedXDSellObservationID    = "046ced9c-cc28-4471-b04b-ff8faf2d0055"
+	approvedXDSellDecisionEventID  = "3eab7cb7-f454-4b9b-8120-bacf1bf8ef24"
+)
+
+func runResearchXDSellRepair(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("research repair-xd-sell", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := g.JSON
+	fs.BoolVar(&jsonOut, "json", jsonOut, "JSON 输出")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("repair-xd-sell 不接受位置参数: %s", strings.Join(fs.Args(), " "))
+	}
+	if db.Dao == nil {
+		return errors.New("主数据库未初始化")
+	}
+	repository := research.NewRepository(db.Dao)
+	if err := repository.EnsureAccount(context.Background()); err != nil {
+		return err
+	}
+	service := research.NewService(repository, nil, nil, data.ResearchTradingCalendar{})
+	receipt, err := service.ApplyHistoricalSellCorrection(context.Background(), research.HistoricalSellCorrectionRequest{
+		RecommendationID: approvedXDSellRecommendationID,
+		ObservationID:    approvedXDSellObservationID,
+		DecisionEventID:  approvedXDSellDecisionEventID,
+		AppliedAt:        time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		body, marshalErr := marshalPrettyJSON(receipt)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		_, _ = fmt.Fprintln(stdout, string(body))
+		return nil
+	}
+	_, _ = fmt.Fprintf(stdout, "status=%s recommendation=%s quote_at=%s market_price=%.3f execution_price=%.3f quantity=%d net_pnl=%.2f cash_after=%.2f\n",
+		receipt.Status, receipt.RecommendationID, receipt.QuoteAt.Format(time.RFC3339), receipt.MarketPrice,
+		receipt.ExecutionPrice, receipt.Quantity, receipt.NetPnL, receipt.CashAfter)
+	return nil
 }
 
 type repeatedStringFlag []string

@@ -329,6 +329,12 @@ func TestStockShortlistIsRestrictedToItsBatchAndValidatedName(t *testing.T) {
 	if !sameStockName(" 浦发 银行 ", "浦发银行") || sameStockName("平安银行", "浦发银行") {
 		t.Fatal("stock name validation is not strict")
 	}
+	if !sameStockName("紫金矿业", "XD紫金矿") || !sameStockName("紫金矿业", "XR紫金矿业") || !sameStockName("DR紫金矿业", "紫金矿业") {
+		t.Fatal("stock name validation did not normalize corporate-action prefixes and provider truncation")
+	}
+	if sameStockName("紫金矿业", "紫金银行") || sameStockName("平安银行", "平安证券") {
+		t.Fatal("stock name validation accepted an unrelated name")
+	}
 }
 
 func TestAnalysisRunRepairsReportAndCreatesAtMostTwoIsolatedSessions(t *testing.T) {

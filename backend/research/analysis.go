@@ -266,6 +266,10 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		if quoteErr != nil || validateBuyQuote(quote) != nil {
 			continue
 		}
+		quoteCode, quoteCodeOK := NormalizeMainlandCode(quote.Code)
+		if !quoteCodeOK || quoteCode != code {
+			continue
+		}
 		if !sameStockName(row.StockName, quote.Name) {
 			continue
 		}
@@ -406,9 +410,26 @@ func shortlistForBatch(source []recommendationRow, batch []StockCandidate) []rec
 
 func sameStockName(modelName, quoteName string) bool {
 	normalize := func(value string) string {
-		return strings.ToUpper(strings.Join(strings.Fields(strings.TrimSpace(value)), ""))
+		value = strings.ToUpper(strings.Join(strings.Fields(strings.TrimSpace(value)), ""))
+		for _, prefix := range []string{"XD", "XR", "DR"} {
+			if strings.HasPrefix(value, prefix) {
+				return strings.TrimPrefix(value, prefix)
+			}
+		}
+		return value
 	}
-	return normalize(modelName) != "" && normalize(modelName) == normalize(quoteName)
+	model, quote := normalize(modelName), normalize(quoteName)
+	if model == "" || quote == "" {
+		return false
+	}
+	if model == quote {
+		return true
+	}
+	shorter := model
+	if len([]rune(quote)) < len([]rune(model)) {
+		shorter = quote
+	}
+	return len([]rune(shorter)) >= 3 && (strings.HasPrefix(model, quote) || strings.HasPrefix(quote, model))
 }
 
 func parseStrictJSON(content string, target any) error {

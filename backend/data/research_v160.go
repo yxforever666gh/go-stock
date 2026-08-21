@@ -341,6 +341,10 @@ func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code st
 		return research.Quote{}, errors.New("realtime quote is unavailable")
 	}
 	row := (*rows)[0]
+	rowCode, err := validateResearchQuoteResponseCode(normalized, row.Code)
+	if err != nil {
+		return research.Quote{}, err
+	}
 	price, err := strconv.ParseFloat(strings.TrimSpace(row.Price), 64)
 	if err != nil || price <= 0 {
 		return research.Quote{}, errors.New("realtime quote price is invalid")
@@ -378,8 +382,20 @@ func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code st
 		down := math.Floor(previousClose*(1-limitRate)*100+0.5) / 100
 		limitUp, limitDown = price >= up-0.001, price <= down+0.001
 	}
-	return research.Quote{Code: normalized, Name: strings.TrimSpace(row.Name), Market: market, Price: price, PreviousClose: previousClose,
+	return research.Quote{Code: rowCode, Name: strings.TrimSpace(row.Name), Market: market, Price: price, PreviousClose: previousClose,
 		Volume: volume, Amount: amount, At: quoteAt, Suspended: volume == 0, LimitUp: limitUp, LimitDown: limitDown}, nil
+}
+
+func validateResearchQuoteResponseCode(requested, response string) (string, error) {
+	requestedCode, requestedOK := research.NormalizeMainlandCode(requested)
+	responseCode, responseOK := research.NormalizeMainlandCode(response)
+	if !requestedOK || !responseOK {
+		return "", errors.New("realtime quote response code is invalid")
+	}
+	if requestedCode != responseCode {
+		return "", fmt.Errorf("realtime quote response code %s does not match request %s", responseCode, requestedCode)
+	}
+	return responseCode, nil
 }
 
 type ResearchTradingCalendar struct{}
