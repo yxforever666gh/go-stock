@@ -348,6 +348,29 @@ func TestEnqueueRecommendationBuysImmediatelyAndAnchorsNextTradingDay0950(t *tes
 	}
 }
 
+func TestEnqueueRecommendationReservesAndBuysOneHighPriceLot(t *testing.T) {
+	repo := researchTestRepo(t)
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 154814.32202159002).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 21, 14, 35, 48, 0, shanghaiLocation)
+	quote := Quote{Code: "sz300308", Name: "中际旭创", Market: "SZ", Price: 941.41, At: now.Add(-6 * time.Second)}
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, weekdayTradingCalendar{})
+	service.now = func() time.Time { return now }
+	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: quote.Code, StockName: quote.Name, SignalAt: now}
+	if err := service.EnqueueRecommendation(context.Background(), &rec, nil, quote); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	var trade SimulatedTrade
+	if err := repo.DB().Where("recommendation_id = ? AND side = ?", rec.RecommendationID, "buy").First(&trade).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "active" || stored.Quantity != 100 || stored.ReservedCash != 0 || math.Abs(-trade.NetCashFlow-94264.35389371) > 1e-6 {
+		t.Fatalf("stored=%+v", stored)
+	}
+}
+
 func TestAfterCloseBuyQueuesForNextOpenAndFailsOnlyOnce(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 14, 15, 30, 0, 0, shanghaiLocation)
@@ -399,7 +422,7 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 		stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
 		statuses = append(statuses, stored.Status)
 	}
-	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "capacity_rejected" {
+	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "missed_cash" {
 		t.Fatalf("statuses=%v", statuses)
 	}
 }

@@ -291,12 +291,15 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 			{RecommendationID: recommendation.RecommendationID, Sequence: 1, Role: "system", Phase: "initial", Content: isolatedInitialContext(run, recommendation), Model: finalResult.Model, CreatedAt: signalAt},
 			{RecommendationID: recommendation.RecommendationID, Sequence: 2, Role: "assistant", Phase: "initial", Content: row.markdownRow(), Model: finalResult.Model, CreatedAt: signalAt},
 		}
-		if err := r.service.EnqueueRecommendation(ctx, &recommendation, initial); err != nil {
+		if err := r.service.EnqueueRecommendation(ctx, &recommendation, initial, quote); err != nil {
 			if errors.Is(err, ErrDuplicateExposure) {
 				continue
 			}
 			if errors.Is(err, ErrCapacityReached) {
 				break
+			}
+			if errors.Is(err, ErrInsufficientCash) || errors.Is(err, ErrMinimumOrder) {
+				continue
 			}
 			return finishFailure(err)
 		}

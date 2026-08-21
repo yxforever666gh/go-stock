@@ -3,9 +3,11 @@ package research
 import "time"
 
 const (
-	AppVersion             = "1.7.5"
-	InitialCash            = 100000.0
-	MaxCashPerTrade        = 50000.0
+	AppVersion         = "1.7.6"
+	InitialCash        = 100000.0
+	TargetCashPerTrade = 50000.0
+	// MaxCashPerTrade is retained for frozen migrations and older callers.
+	MaxCashPerTrade        = TargetCashPerTrade
 	TargetContribution     = 500000.0
 	ScheduledDepositAmount = 100000.0
 	ScheduledDepositCount  = 4

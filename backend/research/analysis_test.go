@@ -346,8 +346,6 @@ func TestAnalysisRunRepairsReportAndCreatesAtMostTwoIsolatedSessions(t *testing.
 	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: "bad"}, {Content: repaired, ResponseID: "final-response", Model: "gpt-5.6-sol"}}}
 	quotes := &scriptedQuotes{quotes: []Quote{
 		{Code: "sh600000", Name: "甲", Market: "SH", Price: 10, At: now},
-		{Code: "sh600000", Name: "甲", Market: "SH", Price: 10, At: now},
-		{Code: "sz000001", Name: "乙", Market: "SZ", Price: 12, At: now},
 		{Code: "sz000001", Name: "乙", Market: "SZ", Price: 12, At: now},
 	}}
 	service := NewService(repo, ai, quotes, openCalendar{})

@@ -40,6 +40,7 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research run-once [--json] [--timeout 0]")
 		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research repair-missed-cash --recommendation-id ID --recommendation-id ID [--json]")
 		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research repair-xd-sell [--json]")
+		fmt.Fprintln(stdout, "  go-stock-cli [--db-path PATH] research repair-post-sell-buy [--json]")
 		return nil
 	}
 	if strings.EqualFold(args[0], "repair-missed-cash") {
@@ -47,6 +48,9 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	}
 	if strings.EqualFold(args[0], "repair-xd-sell") {
 		return runResearchXDSellRepair(args[1:], g, stdout, stderr)
+	}
+	if strings.EqualFold(args[0], "repair-post-sell-buy") {
+		return runResearchPostSellBuyRepair(args[1:], g, stdout, stderr)
 	}
 	if !strings.EqualFold(args[0], "run-once") {
 		return fmt.Errorf("未知 research 子命令: %s", args[0])
@@ -161,6 +165,94 @@ func runResearchXDSellRepair(args []string, g GlobalOptions, stdout, stderr io.W
 		receipt.Status, receipt.RecommendationID, receipt.QuoteAt.Format(time.RFC3339), receipt.MarketPrice,
 		receipt.ExecutionPrice, receipt.Quantity, receipt.NetPnL, receipt.CashAfter)
 	return nil
+}
+
+const approvedPostSellBuyRecommendationID = "d78113c2-fbd9-42c5-ad0e-f203b90ffc61"
+
+// runResearchPostSellBuyRepair intentionally fetches the closing-session mark
+// before entering research's account transaction. The service itself accepts a
+// value object, so no network request can occur while the ledger is locked.
+func runResearchPostSellBuyRepair(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+	fs := flag.NewFlagSet("research repair-post-sell-buy", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	jsonOut := g.JSON
+	timeout := 5 * time.Minute
+	fs.BoolVar(&jsonOut, "json", jsonOut, "JSON 输出")
+	fs.DurationVar(&timeout, "timeout", timeout, "收盘行情采集超时")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if len(fs.Args()) != 0 {
+		return fmt.Errorf("repair-post-sell-buy 不接受位置参数: %s", strings.Join(fs.Args(), " "))
+	}
+	if timeout <= 0 {
+		return errors.New("timeout 必须大于 0")
+	}
+	if db.Dao == nil {
+		return errors.New("主数据库未初始化")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	repository := research.NewRepository(db.Dao)
+	if err := repository.EnsureAccount(ctx); err != nil {
+		return err
+	}
+	recommendation, err := repository.Recommendation(ctx, approvedPostSellBuyRecommendationID)
+	if err != nil {
+		return fmt.Errorf("读取受控历史推荐: %w", err)
+	}
+	mark, err := historicalPostSellBuyCloseMark(ctx, recommendation)
+	if err != nil {
+		return err
+	}
+	service := research.NewService(repository, nil, nil, data.ResearchTradingCalendar{})
+	receipt, err := service.ApplyHistoricalPostSellBuyCorrection(ctx, research.HistoricalPostSellBuyCorrectionRequest{MarkQuote: mark, AppliedAt: time.Now()})
+	if err != nil {
+		return err
+	}
+	if jsonOut {
+		body, marshalErr := marshalPrettyJSON(struct {
+			Receipt research.HistoricalPostSellBuyCorrectionReceipt `json:"receipt"`
+			Mark    research.Quote                                  `json:"mark"`
+		}{receipt, mark})
+		if marshalErr != nil {
+			return marshalErr
+		}
+		_, _ = fmt.Fprintln(stdout, string(body))
+		return nil
+	}
+	_, _ = fmt.Fprintf(stdout, "status=%s recommendation=%s quote_at=%s mark_at=%s market_price=%.3f execution_price=%.5f quantity=%d cash_after=%.2f\n", receipt.Status, receipt.RecommendationID, receipt.QuoteAt.Format(time.RFC3339), receipt.MarkAt.Format(time.RFC3339), receipt.MarketPrice, receipt.ExecutionPrice, receipt.Quantity, receipt.CashAfter)
+	return nil
+}
+
+func historicalPostSellBuyCloseMark(ctx context.Context, recommendation research.Recommendation) (research.Quote, error) {
+	date := "2026-08-21"
+	start := time.Date(2026, 8, 21, 9, 30, 0, 0, time.FixedZone("CST", 8*60*60))
+	end := time.Date(2026, 8, 21, 15, 0, 0, 0, start.Location())
+	provider := data.NewResearchChartProvider(data.NewResearchQuoteProvider())
+	snapshot, err := provider.Refresh(ctx, recommendation.StockCode, start, end, []string{date})
+	if err != nil {
+		return research.Quote{}, fmt.Errorf("获取 %s 收盘分钟行情: %w", recommendation.StockName, err)
+	}
+	var selected *research.ChartMinuteBar
+	for index := range snapshot.Bars {
+		bar := &snapshot.Bars[index]
+		local := bar.At.In(start.Location())
+		if local.Format("2006-01-02") != date || local.Hour() < 14 || (local.Hour() == 14 && local.Minute() < 30) || bar.Close <= 0 {
+			continue
+		}
+		if selected == nil || bar.At.After(selected.At) {
+			selected = bar
+		}
+	}
+	if selected == nil {
+		return research.Quote{}, errors.New("未取得 2026-08-21 收盘时段的中际旭创分钟行情，拒绝执行历史补买")
+	}
+	market := "SZ"
+	if strings.HasPrefix(strings.ToLower(recommendation.StockCode), "sh") {
+		market = "SH"
+	}
+	return research.Quote{Code: recommendation.StockCode, Name: recommendation.StockName, Market: market, Price: selected.Close, At: selected.At}, nil
 }
 
 type repeatedStringFlag []string

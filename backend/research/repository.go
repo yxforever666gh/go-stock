@@ -121,7 +121,9 @@ func recommendationCapacity(tx *gorm.DB) (RecommendationCapacity, error) {
 		return result, err
 	}
 	result.UnreservedCash = math.Max(0, result.Cash-result.ReservedCash)
-	result.AffordableSlots = int(math.Floor((result.UnreservedCash + 1e-7) / MaxCashPerTrade))
+	if result.UnreservedCash > 1e-7 {
+		result.AffordableSlots = result.RemainingPositions
+	}
 	result.AllowedNew = result.RemainingPositions
 	if result.AffordableSlots < result.AllowedNew {
 		result.AllowedNew = result.AffordableSlots
@@ -211,6 +213,9 @@ func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, rec
 		}
 		if capacity.AllowedNew < 1 {
 			return ErrCapacityReached
+		}
+		if recommendation.ReservedCash <= 0 || recommendation.ReservedCash > capacity.UnreservedCash+1e-8 {
+			return ErrInsufficientCash
 		}
 		if err := tx.Create(recommendation).Error; err != nil {
 			return err
@@ -326,7 +331,13 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, 1).Error; err != nil {
 			return err
 		}
-		quantity, cost, err := SizeBuy(recommendation.StockCode, quote.Price, account.Cash)
+		var reservedOthers float64
+		if err := tx.Model(&Recommendation{}).Where("status IN ? AND recommendation_id <> ?", []string{"buy_pending", "pending"}, recommendationID).
+			Select("COALESCE(SUM(reserved_cash), 0)").Scan(&reservedOthers).Error; err != nil {
+			return err
+		}
+		availableCash := math.Max(0, account.Cash-reservedOthers)
+		quantity, cost, err := SizeBuy(recommendation.StockCode, quote.Price, availableCash)
 		if err != nil {
 			return err
 		}

@@ -2,11 +2,11 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.7.5
+## 当前版本：App 1.7.6
 
 Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本保留市场行情、股票自选和基金，并建立研究中心从 AI 分析到模拟交易净收益的完整流程。
 
-[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.7.5 发布说明](./RELEASE_NOTES_1.7.5.md)
+[Releases](https://github.com/yxforever666gh/go-stock/releases) | [更新日志](./CHANGELOG.md) | [1.7.6 发布说明](./RELEASE_NOTES_1.7.6.md)
 
 > 本仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 演化，不是原作者官方仓库。
 
@@ -24,8 +24,8 @@ Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 
 ## 模拟账户与净收益
 
 - 初始资金：`100,000 元`；升级后的四个实际运行交易日各追加 `100,000 元`，累计投入上限 `500,000 元`
-- 最大并行敞口：`10 只`；待买任务按每只 `50,000 元`预留资金
-- 单只股票现金支出上限：`50,000 元`
+- 最大并行敞口：`10 只`；待买任务按候选行情、最小整手和费用计算实际预留资金
+- 单只股票现金支出目标：`50,000 元`；选择实际支出首次严格超过目标的最小整手。若目标仓位现金不足，则回退为可承担的最大整手；连一手也无法承担才跳过
 - 普通沪深 A 股：100 股整数倍；科创板首次申报至少 200 股
 - 成本：佣金、最低佣金、卖出印花税、过户费和双边滑点
 - 净收益额：`现金 + 持仓按可卖出净值估值 - 累计净入金`

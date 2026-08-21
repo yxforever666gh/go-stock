@@ -2,6 +2,7 @@ package research
 
 import (
 	"context"
+	"errors"
 	"math"
 	"testing"
 	"time"
@@ -14,30 +15,53 @@ func (weekdayTradingCalendar) IsTradingDay(_ context.Context, value time.Time) (
 	return weekday != time.Saturday && weekday != time.Sunday, nil
 }
 
-func TestSizeBuyHonorsCashCapCostsAndMarketLot(t *testing.T) {
+func TestSizeBuyTargetsFirstCashOutflowAboveFiftyThousand(t *testing.T) {
 	quantity, cost, err := SizeBuy("sh600000", 10, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if quantity%100 != 0 || quantity <= 0 {
+	if quantity != 5000 || quantity%100 != 0 {
 		t.Fatalf("quantity=%d", quantity)
 	}
-	if -cost.NetCashFlow > MaxCashPerTrade+1e-8 {
-		t.Fatalf("cash outflow %.2f exceeds cap", -cost.NetCashFlow)
+	if -cost.NetCashFlow <= TargetCashPerTrade {
+		t.Fatalf("cash outflow %.2f did not strictly exceed target", -cost.NetCashFlow)
+	}
+	previous := CalculateBuyCost(10, quantity-100)
+	if -previous.NetCashFlow > TargetCashPerTrade {
+		t.Fatalf("previous lot cash outflow %.2f already exceeded target", -previous.NetCashFlow)
 	}
 	if cost.Commission < MinimumCommission || cost.TransferFee <= 0 || cost.SlippageAmount <= 0 {
 		t.Fatalf("cost=%+v", cost)
 	}
 
-	starQuantity, _, err := SizeBuy("sh688001", 50, 100000)
+	starQuantity, starCost, err := SizeBuy("sh688001", 50, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if starQuantity%200 != 0 {
-		t.Fatalf("STAR quantity=%d, want 200-share unit", starQuantity)
+	if starQuantity != 1000 || starQuantity%200 != 0 || -starCost.NetCashFlow <= TargetCashPerTrade {
+		t.Fatalf("STAR quantity=%d cost=%+v", starQuantity, starCost)
 	}
 	if _, _, err := SizeBuy("bj430001", 10, 100000); err == nil {
 		t.Fatal("Beijing exchange must be rejected")
+	}
+}
+
+func TestSizeBuyUsesOneHighPriceLotOrLargestAffordableFallback(t *testing.T) {
+	quantity, cost, err := SizeBuy("sz300308", 941.41, 154814.32202159002)
+	if err != nil || quantity != 100 || math.Abs(-cost.NetCashFlow-94264.35389371) > 1e-6 {
+		t.Fatalf("high-price lot quantity=%d cost=%+v err=%v", quantity, cost, err)
+	}
+
+	quantity, cost, err = SizeBuy("sh600000", 10, 40000)
+	if err != nil || quantity != 3900 || -cost.NetCashFlow > 40000+1e-8 {
+		t.Fatalf("fallback quantity=%d cost=%+v err=%v", quantity, cost, err)
+	}
+	if next := CalculateBuyCost(10, quantity+100); -next.NetCashFlow <= 40000 {
+		t.Fatalf("fallback did not use largest affordable lot: next=%+v", next)
+	}
+
+	if _, _, err = SizeBuy("sh600000", 500, 40000); !errors.Is(err, ErrMinimumOrder) {
+		t.Fatalf("err=%v, want ErrMinimumOrder", err)
 	}
 }
 

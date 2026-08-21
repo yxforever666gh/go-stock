@@ -113,7 +113,37 @@ func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakd
 	if err != nil {
 		return 0, CostBreakdown{}, err
 	}
-	capAmount := math.Min(MaxCashPerTrade, availableCash)
+	if availableCash <= 0 || marketPrice <= 0 {
+		return 0, CostBreakdown{}, ErrInsufficientCash
+	}
+
+	quantity := lot
+	cost := CalculateBuyCost(marketPrice, quantity)
+	for -cost.NetCashFlow <= TargetCashPerTrade {
+		quantity += lot
+		cost = CalculateBuyCost(marketPrice, quantity)
+	}
+	if -cost.NetCashFlow <= availableCash+1e-8 {
+		return quantity, cost, nil
+	}
+
+	maxQuantity := int64(math.Floor(availableCash/(marketPrice*(1+SlippageRate))/float64(lot))) * lot
+	for maxQuantity >= lot {
+		cost = CalculateBuyCost(marketPrice, maxQuantity)
+		if -cost.NetCashFlow <= availableCash+1e-8 {
+			return maxQuantity, cost, nil
+		}
+		maxQuantity -= lot
+	}
+	return 0, CostBreakdown{}, ErrMinimumOrder
+}
+
+func sizeBuyWithinCashCap(code string, marketPrice, availableCash, cap float64) (int64, CostBreakdown, error) {
+	lot, err := LotSize(code)
+	if err != nil {
+		return 0, CostBreakdown{}, err
+	}
+	capAmount := math.Min(cap, availableCash)
 	if capAmount <= 0 || marketPrice <= 0 {
 		return 0, CostBreakdown{}, ErrInsufficientCash
 	}

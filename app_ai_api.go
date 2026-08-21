@@ -11,7 +11,7 @@ import (
 func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.7.5：修复 XD/XR/DR 除权除息行情名称误判，并支持按 13:30 已落库决策证据进行受控历史卖出纠正。"
+		content = "1.7.6：买入以 5 万元实际现金支出为目标，按最小整手向上取整；现金不足时回退至最大可承担整手，并补记中际旭创历史买入。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

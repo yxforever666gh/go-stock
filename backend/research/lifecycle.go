@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -140,7 +141,7 @@ func (s *Service) recommendationCapacity(ctx context.Context) (RecommendationCap
 // single direct buy immediately or schedules that attempt for the next valid
 // trading session. The same serial lock is shared with the lifecycle scanner so
 // account competition is deterministic.
-func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage) error {
+func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, signalQuotes ...Quote) error {
 	s.serial.Lock()
 	defer s.serial.Unlock()
 	now := s.now()
@@ -149,7 +150,32 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 		return err
 	}
 	recommendation.Status, recommendation.NextCheckAt = "buy_pending", &next
-	recommendation.ReservedCash = MaxCashPerTrade
+	capacity, err := s.repository.RecommendationCapacity(ctx)
+	if err != nil {
+		return err
+	}
+	if capacity.UnreservedCash <= 0 {
+		return ErrCapacityReached
+	}
+	var signalQuote *Quote
+	if len(signalQuotes) > 0 && !next.After(now) {
+		candidate := signalQuotes[0]
+		if err := validateBuyQuoteAt(now, candidate); err != nil {
+			return err
+		}
+		quoteCode, ok := NormalizeMainlandCode(candidate.Code)
+		if !ok || quoteCode != recommendation.StockCode || !sameStockName(candidate.Name, recommendation.StockName) {
+			return errors.New("buy quote does not match recommendation")
+		}
+		_, cost, sizeErr := SizeBuy(recommendation.StockCode, candidate.Price, capacity.UnreservedCash)
+		if sizeErr != nil {
+			return sizeErr
+		}
+		recommendation.ReservedCash = -cost.NetCashFlow
+		signalQuote = &candidate
+	} else {
+		recommendation.ReservedCash = math.Min(TargetCashPerTrade, capacity.UnreservedCash)
+	}
 	initialDecision := &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
 		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入"}
 	if err := s.repository.CreateRecommendationWithinCapacity(ctx, recommendation, initial, initialDecision); err != nil {
@@ -158,7 +184,7 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 	if next.After(now) {
 		return nil
 	}
-	if err := s.attemptBuy(ctx, recommendation, now); err != nil {
+	if err := s.attemptBuyWithQuote(ctx, recommendation, now, signalQuote); err != nil {
 		// Admission already committed successfully. An internal calendar/database
 		// fault must not turn the parent analysis into a failed report while the
 		// queued recommendation remains visible and reserved. Leave it retryable.
@@ -433,14 +459,23 @@ func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Reco
 }
 
 func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation, now time.Time) error {
+	return s.attemptBuyWithQuote(ctx, recommendation, now, nil)
+}
+
+func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recommendation, now time.Time, providedQuote *Quote) error {
 	nextSell, err := s.firstSellCheck(ctx, now)
 	if err != nil {
 		return err
 	}
-	quote, quoteErr := s.quotes.CurrentQuote(ctx, recommendation.StockCode)
-	if quoteErr != nil {
-		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
-			"一次性买入行情读取失败: "+quoteErr.Error(), now, nil)
+	var quote Quote
+	if providedQuote != nil {
+		quote = *providedQuote
+	} else {
+		quote, err = s.quotes.CurrentQuote(ctx, recommendation.StockCode)
+		if err != nil {
+			return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
+				"一次性买入行情读取失败: "+err.Error(), now, nil)
+		}
 	}
 	if err := validateBuyQuoteAt(now, quote); err != nil {
 		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",

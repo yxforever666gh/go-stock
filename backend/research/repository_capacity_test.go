@@ -102,3 +102,27 @@ func TestCapacityAdmissionAcrossTwoRepositoriesNeverExceedsTen(t *testing.T) {
 		t.Fatalf("accepted=%d rejected=%d unexpected=%v capacity=%+v", accepted, rejected, unexpected, capacity)
 	}
 }
+
+func TestCapacityAllowsSubTargetCashAndRejectsReservationsBeyondUnreservedCash(t *testing.T) {
+	repo := researchTestRepo(t)
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 49000.0).Error; err != nil {
+		t.Fatal(err)
+	}
+	capacity, err := repo.RecommendationCapacity(context.Background())
+	if err != nil || capacity.AllowedNew != 2 || capacity.UnreservedCash != 49000 {
+		t.Fatalf("capacity=%+v err=%v", capacity, err)
+	}
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 100000.0).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 21, 14, 0, 0, 0, shanghaiLocation)
+	first := Recommendation{RecommendationID: "reserved-low", AnalysisRunID: "run", StockCode: "sh600000", StockName: "浦发银行", SignalAt: now, Status: "buy_pending", ReservedCash: 60000}
+	if err := repo.CreateRecommendationWithinCapacity(context.Background(), &first, nil, &DecisionEvent{EventID: "reserved-low-event", RecommendationID: first.RecommendationID, DecisionType: "待买入", DecidedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	second := Recommendation{RecommendationID: "reserved-over", AnalysisRunID: "run", StockCode: "sh600001", StockName: "浦发银行", SignalAt: now, Status: "buy_pending", ReservedCash: 50000}
+	err = repo.CreateRecommendationWithinCapacity(context.Background(), &second, nil, &DecisionEvent{EventID: "reserved-over-event", RecommendationID: second.RecommendationID, DecisionType: "待买入", DecidedAt: now})
+	if !errors.Is(err, ErrInsufficientCash) {
+		t.Fatalf("err=%v, want ErrInsufficientCash", err)
+	}
+}

@@ -334,7 +334,7 @@ func applyHistoricalBuy(tx *gorm.DB, recommendation Recommendation, evidence His
 // lot if the account (including the approved contribution) can cover it. The
 // normal strategy continues to use SizeBuy and its unchanged 5万元 cap.
 func sizeHistoricalCorrectionBuy(code string, marketPrice, availableCash float64) (int64, CostBreakdown, bool, error) {
-	quantity, cost, err := SizeBuy(code, marketPrice, availableCash)
+	quantity, cost, err := sizeBuyWithinCashCap(code, marketPrice, availableCash, MaxCashPerTrade)
 	if err == nil {
 		return quantity, cost, false, nil
 	}
