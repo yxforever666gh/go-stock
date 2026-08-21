@@ -4,6 +4,7 @@ import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useMessage} from 'naive-ui'
 import {GetAIRecommendationChart, RefreshAIRecommendationChart} from '../services/research-api'
 import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
+import {tradingDaySeparatorIndexes} from '../utils/research-trade-chart'
 
 const props = defineProps({
   recommendationId: {type: String, required: true},
@@ -147,6 +148,15 @@ function weightedBuyPrice() {
   return quantity > 0 ? buys.reduce((sum, item) => sum + finite(item.executionPrice) * finite(item.quantity), 0) / quantity : 0
 }
 
+function tradingDayMarkLines(categories, separatorIndexes) {
+  return [...separatorIndexes].map(index => ({
+    name: '交易日分隔',
+    xAxis: categories[index],
+    label: {show: false},
+    lineStyle: {color: '#6b7280', type: 'dashed', width: 1.2, opacity: 0.85},
+  }))
+}
+
 function renderChart() {
   if (!chart || chart.isDisposed()) return
   if (!bars.value.length) {
@@ -154,6 +164,8 @@ function renderChart() {
     return
   }
   const categories = bars.value.map(item => item.at)
+  const separatorIndexes = tradingDaySeparatorIndexes(categories)
+  const dayMarkLines = tradingDayMarkLines(categories, separatorIndexes)
   const visibleStart = Math.max(0, 100 - (Math.min(300, bars.value.length) / bars.value.length) * 100)
   const buyPrice = weightedBuyPrice()
   const latestPrice = finite(chartData.value?.currentPrice, finite(bars.value.at(-1)?.close))
@@ -173,7 +185,7 @@ function renderChart() {
     areaStyle: mode.value === 'line' ? {color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(32,128,240,.22)'}, {offset: 1, color: 'rgba(32,128,240,.02)'}])} : undefined,
     itemStyle: mode.value === 'candle' ? {color: '#d03050', color0: '#18a058', borderColor: '#d03050', borderColor0: '#18a058'} : undefined,
     markPoint: {symbolKeepAspect: true, data: buildMarkPoints(categories)},
-    markLine: {symbol: ['none', 'none'], silent: true, data: markLines},
+    markLine: {symbol: ['none', 'none'], silent: true, data: [...markLines, ...dayMarkLines]},
   }
   chart.setOption({
     animation: false,
@@ -206,6 +218,7 @@ function renderChart() {
       {
         name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1,
         data: bars.value.map(item => ({value: finite(item.volume), itemStyle: {color: finite(item.close) >= finite(item.open) ? 'rgba(208,48,80,.7)' : 'rgba(24,160,88,.7)'}})),
+        markLine: {symbol: ['none', 'none'], silent: true, label: {show: false}, data: dayMarkLines},
       },
     ],
   }, true)
