@@ -11,7 +11,7 @@ import (
 func (a *App) versionInfo() *models.VersionInfo {
 	content := VersionCommit
 	if strings.TrimSpace(content) == "" {
-		content = "1.7.3：收敛领域服务与后台任务生命周期，统一 Web-only 启动入口，市场、研究和模拟账户能力保持不变。"
+		content = "1.7.4：推荐详情按交易日分隔分钟走势，并提供可记忆的最新、买入和卖出价格横线开关。"
 	}
 	return &models.VersionInfo{
 		Version:           Version,

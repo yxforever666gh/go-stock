@@ -4,7 +4,8 @@ import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useMessage} from 'naive-ui'
 import {GetAIRecommendationChart, RefreshAIRecommendationChart} from '../services/research-api'
 import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
-import {tradingDaySeparatorIndexes} from '../utils/research-trade-chart'
+import {tradingDaySeparatorIndexes, weightedExecutionPrice} from '../utils/research-trade-chart'
+import {useResearchChartPreferences} from '../composables/useResearchChartPreferences'
 
 const props = defineProps({
   recommendationId: {type: String, required: true},
@@ -12,6 +13,7 @@ const props = defineProps({
 })
 
 const message = useMessage()
+const {showPriceLines} = useResearchChartPreferences()
 const chartElement = ref(null)
 const chartData = ref(null)
 const initialLoading = ref(false)
@@ -133,19 +135,11 @@ function buildMarkPoints(categories) {
   if (!bars.value.length) return []
   const highest = bars.value.reduce((result, item) => finite(item.high) > finite(result.high) ? item : result)
   const lowest = bars.value.reduce((result, item) => finite(item.low) < finite(result.low) ? item : result)
-  const latest = bars.value.at(-1)
   return [
     ...tradeMarkPoints(categories),
     {name: '区间最高', coord: [highest.at, finite(highest.high)], value: formatPrice(highest.high), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'top', color: '#d03050', formatter: '高 {c}'}},
     {name: '区间最低', coord: [lowest.at, finite(lowest.low)], value: formatPrice(lowest.low), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'bottom', color: '#18a058', formatter: '低 {c}'}},
-    {name: '最新', coord: [latest.at, finite(latest.close)], value: formatPrice(latest.close), symbol: 'circle', symbolSize: 10, label: {show: true, position: 'right', color: '#2080f0', formatter: '最新 {c}'}},
   ]
-}
-
-function weightedBuyPrice() {
-  const buys = trades.value.filter(item => String(item.side).toLowerCase() === 'buy' && finite(item.quantity) > 0)
-  const quantity = buys.reduce((sum, item) => sum + finite(item.quantity), 0)
-  return quantity > 0 ? buys.reduce((sum, item) => sum + finite(item.executionPrice) * finite(item.quantity), 0) / quantity : 0
 }
 
 function tradingDayMarkLines(categories, separatorIndexes) {
@@ -167,14 +161,18 @@ function renderChart() {
   const separatorIndexes = tradingDaySeparatorIndexes(categories)
   const dayMarkLines = tradingDayMarkLines(categories, separatorIndexes)
   const visibleStart = Math.max(0, 100 - (Math.min(300, bars.value.length) / bars.value.length) * 100)
-  const buyPrice = weightedBuyPrice()
+  const buyPrice = weightedExecutionPrice(trades.value, 'buy')
+  const sellPrice = weightedExecutionPrice(trades.value, 'sell')
   const latestPrice = finite(chartData.value?.currentPrice, finite(bars.value.at(-1)?.close))
   const mainData = mode.value === 'line'
     ? bars.value.map(item => finite(item.close))
     : bars.value.map(item => [finite(item.open), finite(item.close), finite(item.low), finite(item.high)])
   const markLines = []
-  if (buyPrice > 0) markLines.push({name: '买入均价', yAxis: buyPrice, label: {formatter: `买入 ${formatPrice(buyPrice)}`}, lineStyle: {color: '#d03050', type: 'dashed'}})
-  if (latestPrice > 0) markLines.push({name: '最新价', yAxis: latestPrice, label: {formatter: `最新 ${formatPrice(latestPrice)}`}, lineStyle: {color: '#2080f0', type: 'dotted'}})
+  if (showPriceLines.value) {
+    if (latestPrice > 0) markLines.push({name: '最新价', yAxis: latestPrice, label: {formatter: `最新 ${formatPrice(latestPrice)}`}, lineStyle: {color: '#2080f0', type: 'dotted'}})
+    if (buyPrice > 0) markLines.push({name: '买入均价', yAxis: buyPrice, label: {formatter: `买入 ${formatPrice(buyPrice)}`}, lineStyle: {color: '#d03050', type: 'dashed'}})
+    if (sellPrice > 0) markLines.push({name: '卖出均价', yAxis: sellPrice, label: {formatter: `卖出 ${formatPrice(sellPrice)}`}, lineStyle: {color: '#18a058', type: 'dashed'}})
+  }
   const mainSeries = {
     name: mode.value === 'line' ? '分时' : '1分钟K',
     type: mode.value === 'line' ? 'line' : 'candlestick',
@@ -278,7 +276,7 @@ async function loadInitial() {
 }
 
 watch(() => props.recommendationId, () => { void loadInitial() }, {immediate: true})
-watch([bars, mode], async () => { await nextTick(); renderChart() }, {deep: true})
+watch([bars, mode, showPriceLines], async () => { await nextTick(); renderChart() }, {deep: true})
 
 onMounted(() => {
   if (chartElement.value) {
@@ -307,6 +305,13 @@ onBeforeUnmount(() => {
         </n-button-group>
         <n-select v-model:value="selectedSession" clearable placeholder="定位交易日" :options="sessionOptions" style="width:170px" @update:value="locateSession"/>
         <n-button @click="resetRange">范围复位</n-button>
+        <n-flex align="center" :size="6" class="price-lines-toggle">
+          <n-text depth="3">价格横线</n-text>
+          <n-switch v-model:value="showPriceLines" aria-label="价格横线">
+            <template #checked>显示</template>
+            <template #unchecked>隐藏</template>
+          </n-switch>
+        </n-flex>
       </n-flex>
       <n-flex align="center" :wrap="true">
         <n-statistic label="最新价" :value="chartData?.currentPrice ? formatPrice(chartData.currentPrice) : '--'"/>
