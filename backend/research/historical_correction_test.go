@@ -21,14 +21,14 @@ func historicalCorrectionTestService(t *testing.T) (*Service, *gorm.DB, Historic
 		t.Fatal(err)
 	}
 	created := time.Date(2026, 8, 1, 9, 0, 0, 0, shanghaiLocation)
-	if err := database.Create(&SimulatedAccount{ID: 1, InitialCash: InitialCash, Cash: 1924.6591, CreatedAt: created}).Error; err != nil {
+	if err := database.Create(&SimulatedAccount{ID: 1, InitialCash: LegacyInitialCash, Cash: 1924.6591, CreatedAt: created}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Create(&AccountCashFlow{FlowID: "initial", Sequence: 0, Type: "initial_deposit", Amount: InitialCash,
-		EffectiveAt: created, TradingDate: "2026-08-01", NetAssetValueAfter: InitialCash, UnitValueBefore: 1, UnitsIssued: InitialCash}).Error; err != nil {
+	if err := database.Create(&AccountCashFlow{FlowID: "initial", Sequence: 0, Type: "initial_deposit", Amount: LegacyInitialCash,
+		EffectiveAt: created, TradingDate: "2026-08-01", NetAssetValueAfter: LegacyInitialCash, UnitValueBefore: 1, UnitsIssued: LegacyInitialCash}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Create(&FundingPlan{ID: 1, InitialContribution: InitialCash, TargetContribution: TargetContribution,
+	if err := database.Create(&FundingPlan{ID: 1, InitialContribution: LegacyInitialCash, TargetContribution: TargetContribution,
 		DepositAmount: ScheduledDepositAmount, PlannedDeposits: ScheduledDepositCount, StartAfterTradingDate: "2026-08-19"}).Error; err != nil {
 		t.Fatal(err)
 	}

@@ -45,17 +45,17 @@ func fundingTestService(t *testing.T, startAfter string) (*Service, *gorm.DB) {
 		&SimulatedAccount{}, &SimulatedTrade{}, &Position{}, &AccountCashFlow{}, &FundingPlan{}, &AccountValuationSnapshot{}); err != nil {
 		t.Fatal(err)
 	}
-	account := SimulatedAccount{ID: 1, InitialCash: InitialCash, Cash: InitialCash}
+	account := SimulatedAccount{ID: 1, InitialCash: LegacyInitialCash, Cash: LegacyInitialCash}
 	if err := database.Create(&account).Error; err != nil {
 		t.Fatal(err)
 	}
-	flow := AccountCashFlow{FlowID: "initial", Sequence: 0, Type: "initial_deposit", Amount: InitialCash,
+	flow := AccountCashFlow{FlowID: "initial", Sequence: 0, Type: "initial_deposit", Amount: LegacyInitialCash,
 		EffectiveAt: time.Date(2026, 8, 18, 9, 20, 0, 0, shanghaiLocation), TradingDate: "2026-08-18",
-		NetAssetValueAfter: InitialCash, UnitValueBefore: 1, UnitsIssued: InitialCash}
+		NetAssetValueAfter: LegacyInitialCash, UnitValueBefore: 1, UnitsIssued: LegacyInitialCash}
 	if err := database.Create(&flow).Error; err != nil {
 		t.Fatal(err)
 	}
-	plan := FundingPlan{ID: 1, InitialContribution: InitialCash, TargetContribution: TargetContribution,
+	plan := FundingPlan{ID: 1, InitialContribution: LegacyInitialCash, TargetContribution: TargetContribution,
 		DepositAmount: ScheduledDepositAmount, PlannedDeposits: ScheduledDepositCount, StartAfterTradingDate: startAfter}
 	if err := database.Create(&plan).Error; err != nil {
 		t.Fatal(err)
@@ -143,9 +143,6 @@ func TestScheduledFundingPreservesUnitValueAndTWR(t *testing.T) {
 	}
 	if overview.CumulativeNetContribution != 200000 || overview.NetProfit != 10000 || math.Abs(overview.CumulativeCapitalReturn-0.05) > 1e-9 {
 		t.Fatalf("overview=%+v", overview)
-	}
-	if overview.NextContributionAt == nil || overview.NextContributionAt.Format("2006-01-02 15:04") != "2026-08-20 09:20" {
-		t.Fatalf("next contribution=%v", overview.NextContributionAt)
 	}
 }
 

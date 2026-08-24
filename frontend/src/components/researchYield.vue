@@ -29,8 +29,6 @@ const detailVisible = ref(false)
 const detail = ref(null)
 
 const positionsByRecommendation = computed(() => new Map((account.value?.positions || []).map(item => [item.recommendationId, item])))
-const fundingProgress = computed(() => Number(account.value?.contributionProgress || 0))
-const exposureCount = computed(() => Number(account.value?.currentPositions || 0) + Number(account.value?.pendingBuys || 0))
 const performanceMetrics = computed(() => performance.value?.metrics || normalizePerformance().metrics)
 
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
@@ -129,40 +127,14 @@ onMounted(refresh)
     <section v-if="account" class="account-overview-grid">
       <n-card size="small" class="primary-metric-card">
         <n-statistic label="策略净收益率（TWR）" :value="formatPercent(performance?.timeWeightedReturn ?? account.timeWeightedReturn)"/>
-        <n-text depth="3" class="metric-note">已剔除追加入金对收益率的影响</n-text>
+        <n-text depth="3" class="metric-note">基于固定 50 万元初始资金</n-text>
       </n-card>
       <n-card size="small"><n-statistic label="账户净值" :value="formatMoney(account.netAssetValue)"/><n-text depth="3" class="metric-note">估值 {{ dateTime(performance?.valuedAt || account.valuedAt) }}</n-text></n-card>
-      <n-card size="small"><n-statistic label="净收益额" :value="formatMoney(performance?.netProfit ?? account.netProfit)"/><n-text depth="3" class="metric-note">净值减累计净入金</n-text></n-card>
-      <n-card size="small"><n-statistic label="累计投入回报率" :value="formatPercent(performance?.cumulativeCapitalReturn ?? account.cumulativeCapitalReturn)"/><n-text depth="3" class="metric-note">净收益额 ÷ 累计净入金</n-text></n-card>
+      <n-card size="small"><n-statistic label="净收益额" :value="formatMoney(performance?.netProfit ?? account.netProfit)"/><n-text depth="3" class="metric-note">净值减固定初始资金</n-text></n-card>
+      <n-card size="small"><n-statistic label="累计投入回报率" :value="formatPercent(performance?.cumulativeCapitalReturn ?? account.cumulativeCapitalReturn)"/><n-text depth="3" class="metric-note">净收益额 ÷ 500,000 元</n-text></n-card>
       <n-card size="small"><n-statistic label="账户现金" :value="formatMoney(account.cash)"/><n-text depth="3" class="metric-note">持仓可卖出净值 {{ formatMoney(account.positionValue) }}</n-text></n-card>
       <n-card size="small"><n-statistic label="单位净值" :value="formatNumber(performance?.unitValue ?? 1, 6)"/><n-text depth="3" class="metric-note">用于时间加权收益计算</n-text></n-card>
     </section>
-
-    <n-card v-if="account" size="small" title="资金与持仓容量">
-      <div class="funding-capacity-grid">
-        <div class="funding-progress-block">
-          <n-flex justify="space-between" align="center">
-            <n-text strong>累计投入 {{ formatMoney(account.cumulativeNetContribution) }} / {{ formatMoney(account.targetContribution) }}</n-text>
-            <n-text depth="3">{{ formatNumber(fundingProgress, 0) }}%</n-text>
-          </n-flex>
-          <n-progress type="line" :percentage="fundingProgress" :show-indicator="false" status="success"/>
-          <n-flex justify="space-between" class="progress-footnote">
-            <n-text depth="3">追加入金 {{ account.completedDeposits }} / {{ account.plannedDeposits }} 次，每次 {{ formatMoney(account.depositAmount) }}</n-text>
-            <n-text depth="3">剩余 {{ account.remainingDeposits }} 次</n-text>
-          </n-flex>
-        </div>
-        <div class="capacity-summary">
-          <div><n-text depth="3">持仓容量</n-text><strong>{{ exposureCount }} / {{ account.maxPositions }}</strong></div>
-          <div><n-text depth="3">当前持仓</n-text><strong>{{ account.currentPositions }}</strong></div>
-          <div><n-text depth="3">待买入</n-text><strong>{{ account.pendingBuys }}</strong></div>
-          <div><n-text depth="3">剩余位置</n-text><strong>{{ account.remainingPositions }}</strong></div>
-        </div>
-      </div>
-      <n-alert v-if="account.nextContributionAt" type="info" :show-icon="false" class="next-funding-alert">
-        下一次计划入金：{{ dateTime(account.nextContributionAt) }}；仅在应用于交易日开盘前运行时执行，错过将顺延。
-      </n-alert>
-      <n-alert v-else-if="account.remainingDeposits === 0" type="success" :show-icon="false" class="next-funding-alert">四次计划入金已全部完成。</n-alert>
-    </n-card>
 
     <n-card size="small" title="策略评估">
       <template #header-extra>
@@ -195,7 +167,7 @@ onMounted(refresh)
     </n-collapse>
 
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">净收益额 = 账户净值 − 累计净入金；TWR 用于比较策略表现，不会把追加资金误算为盈利。</n-text>
+      <n-text depth="3">净收益额 = 账户净值 − 固定 500,000 元初始资金；账户不再追加注资。</n-text>
       <n-button :loading="loading" @click="refresh">刷新估值</n-button>
     </n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1500" :row-key="row => row.recommendationId"/>
@@ -256,29 +228,6 @@ onMounted(refresh)
   font-size: 12px;
 }
 
-.funding-capacity-grid {
-  display: grid;
-  grid-template-columns: minmax(300px, 1.4fr) minmax(340px, 1fr);
-  gap: 28px;
-  align-items: center;
-}
-
-.funding-progress-block {
-  display: grid;
-  gap: 9px;
-}
-
-.progress-footnote {
-  gap: 12px;
-}
-
-.capacity-summary {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(70px, 1fr));
-  gap: 8px;
-}
-
-.capacity-summary > div,
 .strategy-metric {
   border: 1px solid var(--n-border-color);
   border-radius: 6px;
@@ -286,7 +235,6 @@ onMounted(refresh)
   min-width: 0;
 }
 
-.capacity-summary span,
 .strategy-metric span {
   display: block;
   color: var(--n-text-color-3);
@@ -294,15 +242,10 @@ onMounted(refresh)
   margin-bottom: 4px;
 }
 
-.capacity-summary strong,
 .strategy-metric strong {
   font-size: 16px;
   font-weight: 600;
   overflow-wrap: anywhere;
-}
-
-.next-funding-alert {
-  margin-top: 14px;
 }
 
 .strategy-metrics-grid {
@@ -316,18 +259,7 @@ onMounted(refresh)
   max-height: 96vh;
 }
 
-@media (max-width: 900px) {
-  .funding-capacity-grid {
-    grid-template-columns: 1fr;
-    gap: 18px;
-  }
-}
-
 @media (max-width: 560px) {
-  .capacity-summary {
-    grid-template-columns: repeat(2, 1fr);
-  }
-
   .strategy-metrics-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }

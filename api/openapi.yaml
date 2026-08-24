@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.7.6
+  version: 1.7.7
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -492,23 +492,15 @@ components:
         trades: {type: array, items: {$ref: "#/components/schemas/RecommendationChartTrade"}}
     AccountOverview:
       type: object
-      required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, targetContribution, depositAmount, plannedDeposits, completedDeposits, remainingDeposits, currentPositions, pendingBuys, maxPositions, remainingPositions, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, positions]
+      required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, currentPositions, pendingBuys, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, positions]
       properties:
         initialCash: {type: number}
         cash: {type: number}
         positionValue: {type: number}
         netAssetValue: {type: number}
         cumulativeNetContribution: {type: number}
-        targetContribution: {type: number}
-        depositAmount: {type: number}
-        plannedDeposits: {type: integer}
-        completedDeposits: {type: integer}
-        remainingDeposits: {type: integer}
-        nextContributionAt: {type: string, format: date-time}
         currentPositions: {type: integer}
         pendingBuys: {type: integer}
-        maxPositions: {type: integer}
-        remainingPositions: {type: integer}
         netProfit: {type: number}
         netYieldRate: {type: number, description: Compatibility alias of timeWeightedReturn.}
         timeWeightedReturn: {type: number, description: Unitized time-weighted return excluding external contributions.}

@@ -56,7 +56,7 @@ func TestSchema3CreatesIndependentResearchTablesAndAccount(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if account.Cash != research.InitialCash || account.InitialCash != research.InitialCash {
+	if account.Cash != research.LegacyInitialCash || account.InitialCash != research.LegacyInitialCash {
 		t.Fatalf("account = %+v", account)
 	}
 	run := research.AnalysisRun{RunID: "run-1", ScheduledFor: time.Now(), StartedAt: time.Now(), Status: "running"}
@@ -396,7 +396,7 @@ func TestSchema10RegistersInitialContributionWithoutChangingAccountOrPositions(t
 	if err := database.First(&account, 1).Error; err != nil {
 		t.Fatal(err)
 	}
-	if account.Cash != 23456.78 || account.InitialCash != research.InitialCash {
+	if account.Cash != 23456.78 || account.InitialCash != research.LegacyInitialCash {
 		t.Fatalf("migration changed account: %+v", account)
 	}
 	var storedPosition research.Position
@@ -417,7 +417,7 @@ func TestSchema10RegistersInitialContributionWithoutChangingAccountOrPositions(t
 	if err := database.Order("sequence asc").Find(&flows).Error; err != nil {
 		t.Fatal(err)
 	}
-	if len(flows) != 1 || flows[0].Sequence != 0 || flows[0].Amount != research.InitialCash {
+	if len(flows) != 1 || flows[0].Sequence != 0 || flows[0].Amount != research.LegacyInitialCash {
 		t.Fatalf("cash flows=%+v", flows)
 	}
 	var plan research.FundingPlan
@@ -432,7 +432,7 @@ func TestSchema10RegistersInitialContributionWithoutChangingAccountOrPositions(t
 	}
 }
 
-func TestEmptyDatabasesUpgradeDirectlyToSchema11(t *testing.T) {
+func TestEmptyDatabasesUpgradeDirectlyToSchema12(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	if err := MigrateAll(mainDB, minuteDB); err != nil {
@@ -449,12 +449,12 @@ func TestEmptyDatabasesUpgradeDirectlyToSchema11(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 11 || minuteStatus.CurrentVersion != 2 {
+	if mainStatus.CurrentVersion != 12 || minuteStatus.CurrentVersion != 2 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 }
 
-func TestPublished15BaselineUpgradesDirectlyToSchema11(t *testing.T) {
+func TestPublished15BaselineUpgradesDirectlyToSchema12(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := database.AutoMigrate(&MigrationRecord{}); err != nil {
 		t.Fatal(err)
@@ -481,7 +481,7 @@ func TestPublished15BaselineUpgradesDirectlyToSchema11(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentVersion != 11 || len(status.Pending) != 0 {
+	if status.CurrentVersion != 12 || len(status.Pending) != 0 {
 		t.Fatalf("upgraded status=%+v", status)
 	}
 	if database.Migrator().HasTable("ai_recommend_stocks") {

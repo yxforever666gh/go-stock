@@ -107,9 +107,6 @@ func (s *Service) ApplyHistoricalPostSellBuyCorrection(ctx context.Context, requ
 		if err != nil {
 			return err
 		}
-		if capacity.ExposureCount >= MaxPortfolioExposures {
-			return ErrCapacityReached
-		}
 		entry := Quote{Code: "sz300308", Name: "中际旭创", Market: "SZ", Price: 941.41, At: historicalPostSellBuyQuoteAt}
 		quantity, cost, err := SizeBuy(entry.Code, entry.Price, capacity.UnreservedCash)
 		if err != nil {

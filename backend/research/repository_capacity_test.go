@@ -38,7 +38,7 @@ func TestCapacityAdmissionRollsBackRecommendationMemoryAndInitialEventTogether(t
 	}
 }
 
-func TestCapacityAdmissionAcrossTwoRepositoriesNeverExceedsTen(t *testing.T) {
+func TestCashAdmissionAcrossTwoRepositoriesNeverOverspends(t *testing.T) {
 	path := filepath.ToSlash(filepath.Join(t.TempDir(), "capacity.db"))
 	dsn := "file:" + path + "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"
 	open := func() *gorm.DB {
@@ -86,7 +86,7 @@ func TestCapacityAdmissionAcrossTwoRepositoriesNeverExceedsTen(t *testing.T) {
 			switch {
 			case err == nil:
 				accepted++
-			case errors.Is(err, ErrCapacityReached):
+			case errors.Is(err, ErrInsufficientCash):
 				rejected++
 			default:
 				unexpected = append(unexpected, err)
@@ -109,7 +109,7 @@ func TestCapacityAllowsSubTargetCashAndRejectsReservationsBeyondUnreservedCash(t
 		t.Fatal(err)
 	}
 	capacity, err := repo.RecommendationCapacity(context.Background())
-	if err != nil || capacity.AllowedNew != 2 || capacity.UnreservedCash != 49000 {
+	if err != nil || capacity.UnreservedCash != 49000 {
 		t.Fatalf("capacity=%+v err=%v", capacity, err)
 	}
 	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 100000.0).Error; err != nil {
@@ -124,5 +124,23 @@ func TestCapacityAllowsSubTargetCashAndRejectsReservationsBeyondUnreservedCash(t
 	err = repo.CreateRecommendationWithinCapacity(context.Background(), &second, nil, &DecisionEvent{EventID: "reserved-over-event", RecommendationID: second.RecommendationID, DecisionType: "待买入", DecidedAt: now})
 	if !errors.Is(err, ErrInsufficientCash) {
 		t.Fatalf("err=%v, want ErrInsufficientCash", err)
+	}
+}
+
+func TestAdmissionAllowsDuplicateStockAndMoreThanTwoRecommendations(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 24, 14, 0, 0, 0, shanghaiLocation)
+	if err := repo.DB().Create(&Position{RecommendationID: "existing-same-stock", StockCode: "sh601318", StockName: "中国平安", Market: "SH", Quantity: 900, EntryAt: now.AddDate(0, 0, -1), EntryPrice: 53.5, Status: "open"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 3; index++ {
+		recommendation := Recommendation{RecommendationID: fmt.Sprintf("same-stock-%d", index), AnalysisRunID: "run", StockCode: "sh601318", StockName: "中国平安", SignalAt: now.Add(time.Duration(index) * time.Millisecond), Status: "buy_pending", ReservedCash: 50000}
+		if err := repo.CreateRecommendationWithinCapacity(context.Background(), &recommendation, nil, &DecisionEvent{EventID: fmt.Sprintf("same-stock-event-%d", index), RecommendationID: recommendation.RecommendationID, DecisionType: "待买入", DecidedAt: now}); err != nil {
+			t.Fatalf("recommendation %d rejected: %v", index, err)
+		}
+	}
+	capacity, err := repo.RecommendationCapacity(context.Background())
+	if err != nil || capacity.OpenPositions != 1 || capacity.PendingBuys != 3 || capacity.ReservedCash != 150000 {
+		t.Fatalf("capacity=%+v err=%v", capacity, err)
 	}
 }

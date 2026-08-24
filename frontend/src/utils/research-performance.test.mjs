@@ -15,23 +15,19 @@ test('sample assessment follows the 30 and 100 closed trade thresholds', () => {
   assert.equal(sampleAssessment(100).label, '可进行阶段性评价')
 })
 
-test('account overview derives capacity, funding progress and capital return', () => {
+test('account overview derives fixed-capital return without funding or capacity fields', () => {
   const result = normalizeAccountOverview({
-    initialCash: 100000,
-    cumulativeNetContribution: 300000,
-    targetContribution: 500000,
-    completedDeposits: 2,
+    initialCash: 500000,
+    cumulativeNetContribution: 500000,
     currentPositions: 6,
     pendingBuys: 1,
-    maxPositions: 10,
-    netProfit: 15000,
+    netProfit: 25000,
     netYieldRate: 0.08,
   })
-  assert.equal(result.remainingDeposits, 2)
-  assert.equal(result.remainingPositions, 3)
-  assert.equal(result.contributionProgress, 60)
   assert.equal(result.cumulativeCapitalReturn, 0.05)
   assert.equal(result.timeWeightedReturn, 0.08)
+  assert.equal(result.currentPositions, 6)
+  assert.equal(result.pendingBuys, 1)
 })
 
 test('performance and cash flow payloads degrade safely when optional metrics are absent', () => {

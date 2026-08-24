@@ -111,10 +111,10 @@ func (s *Service) ApplyHistoricalMissedCashCorrection(ctx context.Context, reque
 		if err != nil {
 			return err
 		}
-		if math.Abs(contribution-InitialCash) > 0.001 || math.Abs(units-InitialCash) > 0.001 {
+		if math.Abs(contribution-LegacyInitialCash) > 0.001 || math.Abs(units-LegacyInitialCash) > 0.001 {
 			return fmt.Errorf("initial funding ledger is unexpected: contribution=%.2f units=%.6f", contribution, units)
 		}
-		beforeNAV := InitialCash
+		beforeNAV := LegacyInitialCash
 		unitValue := beforeNAV / units
 		for sequence := 1; sequence <= historicalCorrectionDepositCount; sequence++ {
 			flowBefore := beforeNAV + float64(sequence-1)*ScheduledDepositAmount
@@ -137,9 +137,9 @@ func (s *Service) ApplyHistoricalMissedCashCorrection(ctx context.Context, reque
 		}).Error; err != nil {
 			return err
 		}
-		postContribution := InitialCash + correctionFunding
+		postContribution := LegacyInitialCash + correctionFunding
 		for _, snapshot := range []AccountValuationSnapshot{
-			newAccountSnapshot("pre_deposit", request.BuyTradingDate, request.FundingEffectiveAt, InitialCash, 0, InitialCash, InitialCash, 1, "complete", "pre-deposit-"+request.BuyTradingDate),
+			newAccountSnapshot("pre_deposit", request.BuyTradingDate, request.FundingEffectiveAt, LegacyInitialCash, 0, LegacyInitialCash, LegacyInitialCash, 1, "complete", "pre-deposit-"+request.BuyTradingDate),
 			newAccountSnapshot("post_deposit", request.BuyTradingDate, request.FundingEffectiveAt, postContribution, 0, postContribution, postContribution, 1, "complete", "post-deposit-"+request.BuyTradingDate),
 		} {
 			if err := tx.Create(&snapshot).Error; err != nil {

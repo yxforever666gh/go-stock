@@ -143,16 +143,14 @@ func researchTestRepo(t *testing.T) *Repository {
 	return repo
 }
 
-func TestRecommendationCapacityAtEightNineAndTenExposures(t *testing.T) {
-	for _, testCase := range []struct {
-		open, want int
-	}{{8, 2}, {9, 1}, {10, 0}} {
-		t.Run(fmt.Sprintf("open_%d", testCase.open), func(t *testing.T) {
+func TestRecommendationCapacityDoesNotDependOnExposureCount(t *testing.T) {
+	for _, open := range []int{8, 9, 10, 12} {
+		t.Run(fmt.Sprintf("open_%d", open), func(t *testing.T) {
 			repo := researchTestRepo(t)
 			if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 500000.0).Error; err != nil {
 				t.Fatal(err)
 			}
-			for index := 0; index < testCase.open; index++ {
+			for index := 0; index < open; index++ {
 				position := Position{RecommendationID: fmt.Sprintf("position-%02d", index), StockCode: fmt.Sprintf("sh%06d", 600000+index),
 					StockName: fmt.Sprintf("股票%d", index), Market: "SH", Quantity: 100, EntryAt: time.Now(), EntryPrice: 10, Status: "open"}
 				if err := repo.DB().Create(&position).Error; err != nil {
@@ -160,14 +158,14 @@ func TestRecommendationCapacityAtEightNineAndTenExposures(t *testing.T) {
 				}
 			}
 			capacity, err := repo.RecommendationCapacity(context.Background())
-			if err != nil || capacity.AllowedNew != testCase.want || capacity.ExposureCount != int64(testCase.open) {
+			if err != nil || capacity.UnreservedCash != 500000 || capacity.ExposureCount != int64(open) {
 				t.Fatalf("capacity=%+v err=%v", capacity, err)
 			}
 		})
 	}
 }
 
-func TestConcurrentRecommendationAdmissionNeverExceedsTenOrCash(t *testing.T) {
+func TestConcurrentRecommendationAdmissionNeverExceedsCash(t *testing.T) {
 	repo := researchTestRepo(t)
 	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 500000.0).Error; err != nil {
 		t.Fatal(err)
@@ -191,7 +189,7 @@ func TestConcurrentRecommendationAdmissionNeverExceedsTenOrCash(t *testing.T) {
 			defer resultMu.Unlock()
 			if err == nil {
 				accepted++
-			} else if errors.Is(err, ErrCapacityReached) {
+			} else if errors.Is(err, ErrInsufficientCash) {
 				rejected++
 			} else {
 				t.Errorf("unexpected admission error: %v", err)
@@ -402,27 +400,26 @@ func TestAfterCloseBuyQueuesForNextOpenAndFailsOnlyOnce(t *testing.T) {
 
 func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	repo := researchTestRepo(t)
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 110000.0).Error; err != nil {
+		t.Fatal(err)
+	}
 	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
 	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{
 		{Code: "sh600000", Name: "甲", Market: "SH", Price: 40, At: now}, {Code: "sz000001", Name: "乙", Market: "SZ", Price: 40, At: now},
-		{Code: "sh600001", Name: "丙", Market: "SH", Price: 40, At: now},
+		{Code: "sh600001", Name: "丙", Market: "SH", Price: 40, At: now}, {Code: "sh600002", Name: "丁", Market: "SH", Price: 40, At: now},
 	}}, weekdayTradingCalendar{})
 	service.now = func() time.Time { return now }
 	runID := seedRun(t, repo, now)
 	var statuses []string
-	for index, code := range []string{"sh600000", "sz000001", "sh600001"} {
-		rec := Recommendation{RecommendationID: newID(), AnalysisRunID: runID, StockCode: code, StockName: []string{"甲", "乙", "丙"}[index], SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
+	for index, code := range []string{"sh600000", "sz000001", "sh600001", "sh600002"} {
+		rec := Recommendation{RecommendationID: newID(), AnalysisRunID: runID, StockCode: code, StockName: []string{"甲", "乙", "丙", "丁"}[index], SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
 		if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
-			if index == 2 && errors.Is(err, ErrCapacityReached) {
-				statuses = append(statuses, "capacity_rejected")
-				continue
-			}
 			t.Fatal(err)
 		}
 		stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
 		statuses = append(statuses, stored.Status)
 	}
-	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "missed_cash" {
+	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "active" || statuses[3] != "missed_cash" {
 		t.Fatalf("statuses=%v", statuses)
 	}
 }

@@ -304,14 +304,8 @@ func (s *Service) accountOverview(ctx context.Context, refreshQuotes bool) (Acco
 	}
 	nav := account.Cash + value
 	contribution, units := account.InitialCash, account.InitialCash
-	plan := FundingPlan{InitialContribution: account.InitialCash, TargetContribution: TargetContribution, DepositAmount: ScheduledDepositAmount, PlannedDeposits: ScheduledDepositCount}
 	if s.repository.db.Migrator().HasTable(&AccountCashFlow{}) {
 		if contribution, units, err = fundingLedger(s.repository.db.WithContext(ctx)); err != nil {
-			return AccountOverview{}, err
-		}
-	}
-	if s.repository.db.Migrator().HasTable(&FundingPlan{}) {
-		if err := s.repository.db.WithContext(ctx).First(&plan, 1).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 			return AccountOverview{}, err
 		}
 	}
@@ -323,17 +317,9 @@ func (s *Service) accountOverview(ctx context.Context, refreshQuotes bool) (Acco
 	if err := s.repository.db.WithContext(ctx).Model(&Recommendation{}).Where("status IN ?", []string{"buy_pending", "pending"}).Count(&pending).Error; err != nil {
 		return AccountOverview{}, err
 	}
-	remainingPositions := MaxPortfolioExposures - len(positions) - int(pending)
-	if remainingPositions < 0 {
-		remainingPositions = 0
-	}
-	remainingDeposits := maxInt(0, plan.PlannedDeposits-plan.CompletedDeposits)
 	return AccountOverview{
 		InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: value, NetAssetValue: nav,
-		CumulativeNetContribution: contribution, TargetContribution: plan.TargetContribution, DepositAmount: plan.DepositAmount,
-		PlannedDeposits: plan.PlannedDeposits, CompletedDeposits: plan.CompletedDeposits, RemainingDeposits: remainingDeposits,
-		NextContributionAt: s.nextContributionAt(ctx, now), CurrentPositions: len(positions), PendingBuys: int(pending),
-		MaxPositions: MaxPortfolioExposures, RemainingPositions: remainingPositions,
+		CumulativeNetContribution: contribution, CurrentPositions: len(positions), PendingBuys: int(pending),
 		NetProfit: netProfit, NetYieldRate: twr, TimeWeightedReturn: twr, CumulativeCapitalReturn: capitalReturn,
 		ValuedAt: now, Positions: positions,
 	}, nil

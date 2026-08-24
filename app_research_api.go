@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	researchFundingEntryKey  = "ResearchAccountFunding"
 	researchSnapshotEntryKey = "ResearchAccountDailyCloseSnapshot"
 )
 
@@ -50,9 +49,8 @@ func (a *App) getResearchRuntime() (*data.ResearchRuntime, error) {
 }
 
 func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
-	// Account contributions and daily valuation snapshots belong to the
-	// simulated portfolio, not to the model switch. Register them even when AI
-	// analysis is disabled or every model configuration is turned off.
+	// Daily valuation snapshots belong to the simulated portfolio, not to the
+	// model switch. Register them even when AI analysis is disabled.
 	a.ensureResearchAccountCrons()
 	for key, entryID := range a.snapshotCronEntries() {
 		if strings.HasPrefix(key, aiAnalysisEntryPrefix) || key == aiLifecycleEntryKey {
@@ -108,15 +106,6 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 }
 
 func (a *App) ensureResearchAccountCrons() {
-	if _, exists := a.getCronEntry(researchFundingEntryKey); !exists {
-		entryID, err := a.cron.AddFunc("0 * * * * *", func() { a.processScheduledResearchFunding() })
-		if err != nil {
-			a.recordSchedulerRegistrationError(researchFundingEntryKey, "0 * * * * *", err)
-		} else {
-			a.setCronEntry(researchFundingEntryKey, entryID)
-			a.goTask(func(context.Context) { a.processScheduledResearchFunding() })
-		}
-	}
 	if _, exists := a.getCronEntry(researchSnapshotEntryKey); !exists {
 		entryID, err := a.cron.AddFunc("0 * 15 * * *", func() { a.processScheduledResearchSnapshot() })
 		if err != nil {
@@ -125,29 +114,6 @@ func (a *App) ensureResearchAccountCrons() {
 			a.setCronEntry(researchSnapshotEntryKey, entryID)
 			a.goTask(func(context.Context) { a.processScheduledResearchSnapshot() })
 		}
-	}
-}
-
-func (a *App) processScheduledResearchFunding() {
-	now := time.Now()
-	local := research.ShanghaiTime(now)
-	if local.Hour() != 9 || local.Minute() < 20 || local.Minute() >= 30 {
-		return
-	}
-	runtime, err := a.getResearchRuntime()
-	if err != nil {
-		logger.SugaredLogger.Errorf("模拟账户入金运行时不可用: %v", err)
-		return
-	}
-	ctx := a.taskContext()
-	result, err := runtime.Service.ProcessScheduledFunding(ctx, now)
-	if err != nil {
-		logger.SugaredLogger.Errorf("模拟账户定时入金失败: %v", err)
-		return
-	}
-	if result.Applied && result.CashFlow != nil {
-		logger.SugaredLogger.Infof("模拟账户定时入金完成: sequence=%d amount=%.2f tradingDate=%s remaining=%d",
-			result.CashFlow.Sequence, result.CashFlow.Amount, result.CashFlow.TradingDate, result.RemainingDeposits)
 	}
 }
 

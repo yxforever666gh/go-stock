@@ -14,13 +14,6 @@ import (
 
 type Repository struct{ db *gorm.DB }
 
-const MaxPortfolioExposures = 10
-
-var (
-	ErrCapacityReached   = errors.New("portfolio recommendation capacity reached")
-	ErrDuplicateExposure = errors.New("stock already has a pending recommendation or open position")
-)
-
 // lockAccountForWrite turns SQLite's deferred transaction into a write
 // transaction before any capacity or cash reads. SQLite ignores SELECT FOR
 // UPDATE, while this no-op UPDATE acquires the database writer lock without
@@ -62,20 +55,17 @@ func transactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation
 	return err
 }
 
-// RecommendationCapacity is the admission-control snapshot used before an AI
-// run and rechecked transactionally when a recommendation is persisted. A
-// queued buy reserves the full per-trade budget so multiple recommendations
-// cannot collectively promise more cash than the account owns.
+// RecommendationCapacity is the cash-admission snapshot used before an AI run
+// and rechecked transactionally when a recommendation is persisted. There is
+// deliberately no position-count or same-stock limit; queued buys only reserve
+// cash so concurrent recommendations cannot collectively overspend.
 type RecommendationCapacity struct {
-	OpenPositions      int64
-	PendingBuys        int64
-	ExposureCount      int64
-	RemainingPositions int
-	Cash               float64
-	ReservedCash       float64
-	UnreservedCash     float64
-	AffordableSlots    int
-	AllowedNew         int
+	OpenPositions  int64
+	PendingBuys    int64
+	ExposureCount  int64
+	Cash           float64
+	ReservedCash   float64
+	UnreservedCash float64
 }
 
 func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
@@ -95,7 +85,7 @@ func (r *Repository) HasOpenPosition(ctx context.Context) (bool, error) {
 
 func (r *Repository) HasBlockingExposure(ctx context.Context) (bool, error) {
 	capacity, err := r.RecommendationCapacity(ctx)
-	return capacity.AllowedNew == 0, err
+	return capacity.UnreservedCash <= 1e-7, err
 }
 
 func recommendationCapacity(tx *gorm.DB) (RecommendationCapacity, error) {
@@ -111,26 +101,12 @@ func recommendationCapacity(tx *gorm.DB) (RecommendationCapacity, error) {
 		return result, err
 	}
 	result.ExposureCount = result.OpenPositions + result.PendingBuys
-	result.RemainingPositions = MaxPortfolioExposures - int(result.ExposureCount)
-	if result.RemainingPositions < 0 {
-		result.RemainingPositions = 0
-	}
 	result.Cash = account.Cash
 	if err := tx.Model(&Recommendation{}).Where("status IN ?", []string{"buy_pending", "pending"}).
 		Select("COALESCE(SUM(reserved_cash), 0)").Scan(&result.ReservedCash).Error; err != nil {
 		return result, err
 	}
 	result.UnreservedCash = math.Max(0, result.Cash-result.ReservedCash)
-	if result.UnreservedCash > 1e-7 {
-		result.AffordableSlots = result.RemainingPositions
-	}
-	result.AllowedNew = result.RemainingPositions
-	if result.AffordableSlots < result.AllowedNew {
-		result.AllowedNew = result.AffordableSlots
-	}
-	if result.AllowedNew > 2 {
-		result.AllowedNew = 2
-	}
 	return result, nil
 }
 
@@ -142,21 +118,6 @@ func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
 	var count int64
 	err := r.db.WithContext(ctx).Model(&AnalysisRun{}).Where("status = ?", "running").Count(&count).Error
 	return count > 0, err
-}
-
-func (r *Repository) HasPendingOrPosition(ctx context.Context, code string) (bool, error) {
-	var recommendations int64
-	if err := r.db.WithContext(ctx).Model(&Recommendation{}).
-		Where("stock_code = ? AND status IN ?", code, []string{"buy_pending", "pending", "active", "sell_pending"}).
-		Count(&recommendations).Error; err != nil {
-		return false, err
-	}
-	if recommendations > 0 {
-		return true, nil
-	}
-	var positions int64
-	err := r.db.WithContext(ctx).Model(&Position{}).Where("stock_code = ? AND status = ?", code, "open").Count(&positions).Error
-	return positions > 0, err
 }
 
 func (r *Repository) CreateAnalysis(ctx context.Context, run *AnalysisRun) error {
@@ -185,7 +146,7 @@ func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *R
 	})
 }
 
-// CreateRecommendationWithinCapacity is the final admission check. The
+// CreateRecommendationWithinCapacity is the final cash admission check. The
 // recommendation, initial memory and initial lifecycle event are committed as
 // one unit so a failed run can never leave an invisible queued buy behind.
 func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage, initialDecision *DecisionEvent) error {
@@ -193,26 +154,9 @@ func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, rec
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
-		var duplicateRecommendations int64
-		if err := tx.Model(&Recommendation{}).
-			Where("stock_code = ? AND status IN ?", recommendation.StockCode, []string{"buy_pending", "pending", "active", "sell_pending"}).
-			Count(&duplicateRecommendations).Error; err != nil {
-			return err
-		}
-		var duplicatePositions int64
-		if err := tx.Model(&Position{}).Where("stock_code = ? AND status = ?", recommendation.StockCode, "open").
-			Count(&duplicatePositions).Error; err != nil {
-			return err
-		}
-		if duplicateRecommendations > 0 || duplicatePositions > 0 {
-			return ErrDuplicateExposure
-		}
 		capacity, err := recommendationCapacity(tx)
 		if err != nil {
 			return err
-		}
-		if capacity.AllowedNew < 1 {
-			return ErrCapacityReached
 		}
 		if recommendation.ReservedCash <= 0 || recommendation.ReservedCash > capacity.UnreservedCash+1e-8 {
 			return ErrInsufficientCash

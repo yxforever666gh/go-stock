@@ -2,6 +2,7 @@ package research
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"strings"
@@ -142,6 +143,160 @@ func TestCandidateAndSourceBounds(t *testing.T) {
 	}
 }
 
+func latin1DecodedUTF8(value string) string {
+	var result strings.Builder
+	for _, item := range []byte(value) {
+		result.WriteRune(rune(item))
+	}
+	return result.String()
+}
+
+func TestStructuredJSONRecoversUTF8Latin1MojibakeAndStaysStrict(t *testing.T) {
+	sectorJSON := `{"analysis":"银行资金转强","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
+	sector, err := parseSectorEnvelope(latin1DecodedUTF8(sectorJSON))
+	if err != nil || sector.Analysis != "银行资金转强" || len(sector.Candidates) != 1 || sector.Candidates[0].Name != "浦发银行" {
+		t.Fatalf("sector=%+v err=%v", sector, err)
+	}
+
+	stockJSON := `{"analysis":"量价改善","shortlist":[]}`
+	stock, err := parseStockEnvelope(latin1DecodedUTF8(stockJSON))
+	if err != nil || stock.Analysis != "量价改善" {
+		t.Fatalf("stock=%+v err=%v", stock, err)
+	}
+	if _, err = parseSectorEnvelope("```json\n" + sectorJSON + "\n```"); err != nil {
+		t.Fatalf("fenced JSON failed: %v", err)
+	}
+	if _, err = parseSectorEnvelope(`{"analysis":"板块","directions":[],"candidates":[],"unexpected":true}`); err == nil {
+		t.Fatal("unknown field must remain invalid")
+	}
+}
+
+func TestAnalysisRunRepairsMalformedSectorOnce(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
+	bad := latin1DecodedUTF8("根据现有数据整理板块方向")
+	repaired := `{"analysis":"原输出无法可靠恢复","directions":[],"candidates":[]}`
+	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
+	delegate := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: bad}, {Content: repaired}, {Content: emptyFinal}}}
+	ai := &attemptReportingAI{delegate: delegate}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time { return now }
+
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
+	if err != nil || run.Status != "no_recommendation" {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	wantPhases := []string{"market_analysis", "sector_analysis", "sector_analysis_repair", "final_decision"}
+	if len(delegate.requests) != len(wantPhases) {
+		t.Fatalf("requests=%d want=%d", len(delegate.requests), len(wantPhases))
+	}
+	for index, phase := range wantPhases {
+		if delegate.requests[index].Phase != phase {
+			t.Fatalf("phase[%d]=%s want=%s", index, delegate.requests[index].Phase, phase)
+		}
+	}
+	stored, err := repo.Analysis(context.Background(), run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := decodeModelAttemptLog(stored.ModelAttemptLogJSON)
+	if len(records) != 4 || records[2].Phase != "sector_analysis_repair" {
+		t.Fatalf("records=%+v", records)
+	}
+}
+
+func TestAnalysisRunFailsAfterOneInvalidSectorRepair(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
+	bad := latin1DecodedUTF8("根据现有数据整理板块方向")
+	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: bad}, {Content: "仍然不是 JSON"}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time { return now }
+
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
+	if err == nil || run.Status != "failed" || !strings.Contains(run.FailureReason, "板块层输出修复后仍不合规") {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	if len(ai.requests) != 3 || ai.requests[2].Phase != "sector_analysis_repair" {
+		t.Fatalf("requests=%+v", ai.requests)
+	}
+}
+
+func TestAnalysisRunFailsWhenSectorRepairCallFails(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
+	bad := latin1DecodedUTF8("根据现有数据整理板块方向")
+	ai := &scriptedAI{
+		results: []CompletionResult{{Content: "大盘"}, {Content: bad}, {}},
+		errors:  []error{nil, nil, errors.New("repair unavailable")},
+	}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time { return now }
+
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
+	if err == nil || run.Status != "failed" || !strings.Contains(run.FailureReason, "板块层输出修复失败") {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	if strings.Contains(run.FailureReason, "根据现有数据") {
+		t.Fatalf("failure reason leaked response body: %s", run.FailureReason)
+	}
+	if len(ai.requests) != 3 || ai.requests[2].Phase != "sector_analysis_repair" {
+		t.Fatalf("requests=%+v", ai.requests)
+	}
+}
+
+func TestAnalysisRunRepairsMalformedStockBatch(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
+	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
+	bad := latin1DecodedUTF8("根据候选数据整理个股")
+	repaired := `{"analysis":"原输出无法可靠恢复","shortlist":[]}`
+	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
+	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: bad}, {Content: repaired}, {Content: emptyFinal}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time { return now }
+
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
+	if err != nil || run.Status != "no_recommendation" {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	if len(ai.requests) != 5 || ai.requests[3].Phase != "stock_analysis_repair" {
+		t.Fatalf("requests=%+v", ai.requests)
+	}
+}
+
+func TestAnalysisRunContinuesAfterOneInvalidStockRepair(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
+	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
+	bad := latin1DecodedUTF8("根据候选数据整理个股")
+	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
+	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: bad}, {Content: "仍然不是 JSON"}, {Content: emptyFinal}}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time { return now }
+
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
+	if err != nil || run.Status != "no_recommendation" {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	if len(ai.requests) != 5 || ai.requests[3].Phase != "stock_analysis_repair" {
+		t.Fatalf("requests=%+v", ai.requests)
+	}
+	var sources []SourceDocument
+	if err = json.Unmarshal([]byte(run.SourceStatusJSON), &sources); err != nil {
+		t.Fatal(err)
+	}
+	failed := 0
+	for _, source := range sources {
+		if source.SourceName == "个股分析批次1" && strings.Contains(source.Error, "输出修复后仍不合规") {
+			failed++
+		}
+	}
+	if failed != 1 {
+		t.Fatalf("failed=%d sources=%+v", failed, sources)
+	}
+}
+
 func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Now()
@@ -215,7 +370,7 @@ func TestScheduledCalendarFailureCreatesNoAnalysisRecord(t *testing.T) {
 	}
 }
 
-func TestAnalysisSkipsCapacityBeforeCollectingOrCallingAI(t *testing.T) {
+func TestAnalysisSkipsExhaustedCashBeforeCollectingOrCallingAI(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
 	due := now.Add(time.Hour)
@@ -225,11 +380,14 @@ func TestAnalysisSkipsCapacityBeforeCollectingOrCallingAI(t *testing.T) {
 		Update("stock_code", "sz000001").Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 100000.0).Error; err != nil {
+		t.Fatal(err)
+	}
 	ai := &scriptedAI{}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeManual})
-	if err != nil || run.Status != "skipped_capacity" || !strings.Contains(run.FailureReason, "未调用 AI") || len(ai.requests) != 0 || run.SourceStatusJSON != "" {
+	if err != nil || run.Status != "skipped_cash" || !strings.Contains(run.FailureReason, "未调用 AI") || len(ai.requests) != 0 || run.SourceStatusJSON != "" {
 		t.Fatalf("run=%+v calls=%d err=%v", run, len(ai.requests), err)
 	}
 }

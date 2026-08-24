@@ -17,35 +17,20 @@ export function sampleAssessment(closedTrades) {
 }
 
 export function normalizeAccountOverview(account = {}) {
-  const cumulativeNetContribution = numberOr(account.cumulativeNetContribution, numberOr(account.initialCash, 100000))
-  const targetContribution = numberOr(account.targetContribution, 500000)
-  const completedDeposits = Math.max(0, Math.trunc(numberOr(account.completedDeposits)))
-  const plannedDeposits = Math.max(completedDeposits, Math.trunc(numberOr(account.plannedDeposits, 4)))
-  const currentPositions = Math.max(0, Math.trunc(numberOr(account.currentPositions, account.positions?.length || 0)))
-  const pendingBuys = Math.max(0, Math.trunc(numberOr(account.pendingBuys)))
-  const maxPositions = Math.max(1, Math.trunc(numberOr(account.maxPositions, 10)))
-  const remainingPositions = Math.max(0, Math.trunc(numberOr(account.remainingPositions, maxPositions - currentPositions - pendingBuys)))
-  const timeWeightedReturn = numberOr(account.timeWeightedReturn, account.netYieldRate)
+	const cumulativeNetContribution = numberOr(account.cumulativeNetContribution, numberOr(account.initialCash, 500000))
+	const currentPositions = Math.max(0, Math.trunc(numberOr(account.currentPositions, account.positions?.length || 0)))
+	const pendingBuys = Math.max(0, Math.trunc(numberOr(account.pendingBuys)))
+	const timeWeightedReturn = numberOr(account.timeWeightedReturn, account.netYieldRate)
 
   return {
-    ...account,
-    cumulativeNetContribution,
-    targetContribution,
-    depositAmount: numberOr(account.depositAmount, 100000),
-    plannedDeposits,
-    completedDeposits,
-    remainingDeposits: Math.max(0, Math.trunc(numberOr(account.remainingDeposits, plannedDeposits - completedDeposits))),
-    currentPositions,
-    pendingBuys,
-    maxPositions,
-    remainingPositions,
-    timeWeightedReturn,
-    cumulativeCapitalReturn: numberOr(account.cumulativeCapitalReturn,
-      cumulativeNetContribution > 0 ? numberOr(account.netProfit) / cumulativeNetContribution : 0),
-    contributionProgress: targetContribution > 0
-      ? Math.max(0, Math.min(100, cumulativeNetContribution / targetContribution * 100))
-      : 0,
-  }
+		...account,
+		cumulativeNetContribution,
+		currentPositions,
+		pendingBuys,
+		timeWeightedReturn,
+		cumulativeCapitalReturn: numberOr(account.cumulativeCapitalReturn,
+			cumulativeNetContribution > 0 ? numberOr(account.netProfit) / cumulativeNetContribution : 0),
+	}
 }
 
 export function normalizePerformance(payload = {}, account = {}) {

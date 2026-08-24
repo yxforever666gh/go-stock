@@ -3,8 +3,11 @@ package research
 import "time"
 
 const (
-	AppVersion         = "1.7.6"
-	InitialCash        = 100000.0
+	AppVersion  = "1.7.7"
+	InitialCash = 500000.0
+	// LegacyInitialCash freezes the published pre-1.7.7 account basis for
+	// historical migrations and correction commands.
+	LegacyInitialCash  = 100000.0
 	TargetCashPerTrade = 50000.0
 	// MaxCashPerTrade is retained for frozen migrations and older callers.
 	MaxCashPerTrade        = TargetCashPerTrade
@@ -313,16 +316,8 @@ type AccountOverview struct {
 	PositionValue             float64    `json:"positionValue"`
 	NetAssetValue             float64    `json:"netAssetValue"`
 	CumulativeNetContribution float64    `json:"cumulativeNetContribution"`
-	TargetContribution        float64    `json:"targetContribution"`
-	DepositAmount             float64    `json:"depositAmount"`
-	PlannedDeposits           int        `json:"plannedDeposits"`
-	CompletedDeposits         int        `json:"completedDeposits"`
-	RemainingDeposits         int        `json:"remainingDeposits"`
-	NextContributionAt        *time.Time `json:"nextContributionAt,omitempty"`
 	CurrentPositions          int        `json:"currentPositions"`
 	PendingBuys               int        `json:"pendingBuys"`
-	MaxPositions              int        `json:"maxPositions"`
-	RemainingPositions        int        `json:"remainingPositions"`
 	NetProfit                 float64    `json:"netProfit"`
 	NetYieldRate              float64    `json:"netYieldRate"`
 	TimeWeightedReturn        float64    `json:"timeWeightedReturn"`

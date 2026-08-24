@@ -91,24 +91,16 @@ export type AccountCashFlow = {
 
 export type AccountOverview = {
   cash: number
-  completedDeposits: number
   cumulativeCapitalReturn: number
   cumulativeNetContribution: number
   currentPositions: number
-  depositAmount: number
   initialCash: number
-  maxPositions: number
   netAssetValue: number
   netProfit: number
   netYieldRate: number
-  nextContributionAt?: string
   pendingBuys: number
-  plannedDeposits: number
   positionValue: number
   positions: Array<Position>
-  remainingDeposits: number
-  remainingPositions: number
-  targetContribution: number
   timeWeightedReturn: number
   valuedAt: string
 }

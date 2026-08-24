@@ -175,6 +175,19 @@ var mainMigrations = []migration{
 		},
 		apply: applySettingsProviderOrderAndReviewSchedule,
 	},
+	{
+		id: 12, name: "research_fixed_capital_unlimited_positions",
+		description: "App 1.7.7 rebases the simulated account to one fixed 500000 contribution, retires scheduled funding and restores the approved 2026-08-24 China Ping An recommendation when its exact historical run is present.",
+		definition: func() string {
+			return strings.Join([]string{
+				"fixed initial contribution 500000; no scheduled deposits",
+				"remove pre_deposit and post_deposit snapshots; rebase remaining snapshots to fixed capital",
+				"restore analysis run 4bf3e4d9-959a-48c6-95b7-56104167c6cd at 2026-08-24 13:00 from Tencent first-minute open 55.17",
+				"deterministic recommendation, trade, lifecycle messages and correction decision",
+			}, "\n")
+		},
+		apply: applyResearchFixedCapitalAndHistoricalBuy,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -258,7 +271,7 @@ func applyResearchV160Schema(tx *gorm.DB) error {
 	); err != nil {
 		return fmt.Errorf("create 1.6.0 research schema: %w", err)
 	}
-	account := research.SimulatedAccount{ID: 1, InitialCash: research.InitialCash, Cash: research.InitialCash}
+	account := research.SimulatedAccount{ID: 1, InitialCash: research.LegacyInitialCash, Cash: research.LegacyInitialCash}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
 		return fmt.Errorf("initialize 1.6.0 simulated account: %w", err)
 	}
@@ -284,15 +297,15 @@ func applyResearchMultiPositionFunding(tx *gorm.DB) error {
 	localEffective := research.ShanghaiTime(effectiveAt)
 	initialFlow := research.AccountCashFlow{
 		FlowID:   uuid.NewSHA1(uuid.NameSpaceOID, []byte("go-stock-1.7.0-initial-contribution")).String(),
-		Sequence: 0, Type: "initial_deposit", Amount: research.InitialCash, EffectiveAt: effectiveAt,
+		Sequence: 0, Type: "initial_deposit", Amount: research.LegacyInitialCash, EffectiveAt: effectiveAt,
 		TradingDate: localEffective.Format("2006-01-02"), NetAssetValueBefore: 0,
-		NetAssetValueAfter: research.InitialCash, UnitValueBefore: 1, UnitsIssued: research.InitialCash,
+		NetAssetValueAfter: research.LegacyInitialCash, UnitValueBefore: 1, UnitsIssued: research.LegacyInitialCash,
 	}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&initialFlow).Error; err != nil {
 		return fmt.Errorf("register initial contribution: %w", err)
 	}
 	plan := research.FundingPlan{
-		ID: 1, InitialContribution: research.InitialCash, TargetContribution: research.TargetContribution,
+		ID: 1, InitialContribution: research.LegacyInitialCash, TargetContribution: research.TargetContribution,
 		DepositAmount: research.ScheduledDepositAmount, PlannedDeposits: research.ScheduledDepositCount,
 		StartAfterTradingDate: research.ShanghaiTime(now).Format("2006-01-02"),
 	}
@@ -302,8 +315,8 @@ func applyResearchMultiPositionFunding(tx *gorm.DB) error {
 	baseline := research.AccountValuationSnapshot{
 		SnapshotID: "initial-deposit-baseline", SnapshotType: "initial_deposit",
 		TradingDate: localEffective.Format("2006-01-02"), ValuedAt: effectiveAt,
-		Cash: research.InitialCash, PositionValue: 0, NetAssetValue: research.InitialCash,
-		CumulativeNetContribution: research.InitialCash, UnitValue: 1, TimeWeightedReturn: 0,
+		Cash: research.LegacyInitialCash, PositionValue: 0, NetAssetValue: research.LegacyInitialCash,
+		CumulativeNetContribution: research.LegacyInitialCash, UnitValue: 1, TimeWeightedReturn: 0,
 		ValuationStatus: "baseline",
 	}
 	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&baseline).Error; err != nil {
@@ -714,6 +727,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 			return result, err
 		}
 	}
+	if name == "main" && expected >= 12 {
+		if err := verifyMainSchema12Runtime(database); err != nil {
+			return result, err
+		}
+	}
 	return result, nil
 }
 
@@ -728,8 +746,8 @@ func verifyMainSchema3Runtime(database *gorm.DB) error {
 	if err := database.First(&account, 1).Error; err != nil {
 		return fmt.Errorf("main schema 3 simulated account is unavailable: %w", err)
 	}
-	if account.InitialCash != research.InitialCash {
-		return fmt.Errorf("main schema 3 initial cash is %.2f, expected %.2f", account.InitialCash, research.InitialCash)
+	if account.InitialCash <= 0 {
+		return fmt.Errorf("main schema 3 initial cash is invalid: %.2f", account.InitialCash)
 	}
 	var triggerCount int64
 	if err := database.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND (name LIKE 'guard_strategy_%' OR name LIKE 'guard_legacy_%' OR name LIKE 'immutable_strategy_%' OR name LIKE 'immutable_corporate_action_%')`).Scan(&triggerCount).Error; err != nil {
@@ -840,7 +858,7 @@ func verifyMainSchema10Runtime(database *gorm.DB) error {
 	}
 	var initialCount int64
 	if err := database.Model(&research.AccountCashFlow{}).
-		Where("sequence = ? AND type = ? AND amount = ?", 0, "initial_deposit", research.InitialCash).
+		Where("sequence = ? AND type = ?", 0, "initial_deposit").
 		Count(&initialCount).Error; err != nil {
 		return err
 	}
@@ -851,8 +869,8 @@ func verifyMainSchema10Runtime(database *gorm.DB) error {
 	if err := database.First(&plan, 1).Error; err != nil {
 		return fmt.Errorf("main schema 10 funding plan is unavailable: %w", err)
 	}
-	if plan.TargetContribution != research.TargetContribution || plan.DepositAmount != research.ScheduledDepositAmount || plan.PlannedDeposits != research.ScheduledDepositCount {
-		return fmt.Errorf("main schema 10 funding plan is invalid: %+v", plan)
+	if plan.TargetContribution <= 0 || plan.InitialContribution <= 0 {
+		return fmt.Errorf("main schema 10 funding plan is structurally invalid: %+v", plan)
 	}
 	return nil
 }

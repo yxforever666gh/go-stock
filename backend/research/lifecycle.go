@@ -155,7 +155,7 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 		return err
 	}
 	if capacity.UnreservedCash <= 0 {
-		return ErrCapacityReached
+		return ErrInsufficientCash
 	}
 	var signalQuote *Quote
 	if len(signalQuotes) > 0 && !next.After(now) {

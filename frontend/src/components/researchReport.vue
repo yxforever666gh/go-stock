@@ -21,7 +21,7 @@ const analysisBusy = computed(() => starting.value || hasRunningReport.value)
 
 const statusLabels = {
   running: '分析中', success: '已推荐', no_recommendation: '空仓', failed: '失败',
-  skipped_non_trading_day: '非交易日跳过', skipped_open_position: '持仓中跳过', skipped_capacity: '容量不足跳过',
+  skipped_non_trading_day: '非交易日跳过', skipped_open_position: '持仓中跳过', skipped_capacity: '容量不足跳过', skipped_cash: '现金不足跳过',
 }
 
 function dateTime(value) {
