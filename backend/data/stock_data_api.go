@@ -14,6 +14,7 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"io"
+	"math"
 	url2 "net/url"
 	"os"
 	"strconv"
@@ -722,10 +723,11 @@ func parseTencentStockInfo(variable, payload string) (*StockInfo, error) {
 	if err != nil {
 		return nil, fmt.Errorf("Tencent turnover: %w", err)
 	}
+	// Tencent uses fields 31/32 for absolute change/change percent and
+	// fields 33/34 for the session high/low for both A shares and HK shares.
+	// Treating 32 as the A-share high silently turns the percentage change
+	// into a price and poisons every downstream research prompt.
 	highIndex, lowIndex := 33, 34
-	if !strings.HasPrefix(code, "hk") {
-		highIndex, lowIndex = 32, 33
-	}
 
 	info := &StockInfo{
 		Code:     code,
@@ -755,7 +757,50 @@ func parseTencentStockInfo(variable, payload string) (*StockInfo, error) {
 		info.A4P, info.A4V = strings.TrimSpace(parts[25]), strings.TrimSpace(parts[26])
 		info.A5P, info.A5V = strings.TrimSpace(parts[27]), strings.TrimSpace(parts[28])
 	}
+	if err := validateTencentOHLC(info); err != nil {
+		return nil, err
+	}
 	return info, nil
+}
+
+func validateTencentOHLC(info *StockInfo) error {
+	if info == nil {
+		return fmt.Errorf("%w: Tencent quote is nil", ErrInvalidDataFormat)
+	}
+	parse := func(label, value string) (float64, error) {
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		if err != nil || math.IsNaN(parsed) || math.IsInf(parsed, 0) || parsed < 0 {
+			return 0, fmt.Errorf("%w: Tencent %s %q is invalid", ErrInvalidDataFormat, label, value)
+		}
+		return parsed, nil
+	}
+	price, err := parse("price", info.Price)
+	if err != nil {
+		return err
+	}
+	open, err := parse("open", info.Open)
+	if err != nil {
+		return err
+	}
+	high, err := parse("high", info.High)
+	if err != nil {
+		return err
+	}
+	low, err := parse("low", info.Low)
+	if err != nil {
+		return err
+	}
+	// Tencent returns zero for both bounds before a first trade or for a
+	// suspended symbol.  Once either bound is present, require a coherent
+	// traded range so future provider-layout changes fail loudly.
+	if high == 0 && low == 0 {
+		return nil
+	}
+	if high == 0 || low == 0 || high < low || (price > 0 && (price > high || price < low)) || (open > 0 && (open > high || open < low)) {
+		return fmt.Errorf("%w: Tencent OHLC is inconsistent (open=%s price=%s high=%s low=%s)",
+			ErrInvalidDataFormat, info.Open, info.Price, info.High, info.Low)
+	}
+	return nil
 }
 
 func parseTencentQuoteTime(parts []string) (string, string, error) {
@@ -885,7 +930,10 @@ func ParseTxHKStockData(datas []string) (map[string]string, error) {
 	})
 	result["股票代码"] = stockCode
 
-	parts := strutil.SplitAndTrim(datas[1], "~")
+	parts := strings.Split(datas[1], "~")
+	for index := range parts {
+		parts[index] = strings.TrimSpace(parts[index])
+	}
 	//logger.SugaredLogger.Infof("股票数据解析完成 len: %v", len(parts))
 	if len(parts) < 35 {
 		return nil, ErrInvalidDataFormat
@@ -923,20 +971,13 @@ func ParseTxHKStockData(datas []string) (map[string]string, error) {
 
 	}
 
-	timestr := ""
-
-	if strutil.ContainsAny(parts[30], []string{"/"}) {
-		timestr = strutil.ReplaceWithMap(parts[30], map[string]string{
-			"/":  "-",
-			"\n": " ",
-		})
-		result["日期"] = strutil.SplitAndTrim(timestr, " ", "")[0]
-		result["时间"] = strutil.SplitAndTrim(timestr, " ", "")[1]
-	} else {
-		result["日期"] = strutil.Trim(parts[29])[0:4] + "-" + strutil.Trim(parts[29])[4:6] + "-" + strutil.Trim(parts[29])[6:8]
-		result["时间"] = strutil.Trim(parts[29])[8:10] + ":" + strutil.Trim(parts[29])[10:12] + ":" + strutil.Trim(parts[29])[12:14]
-		result["今日最高价"] = parts[32]
-		result["今日最低价"] = parts[33]
+	date, clock, err := parseTencentQuoteTime(parts)
+	if err != nil {
+		return nil, err
+	}
+	result["日期"], result["时间"] = date, clock
+	if err := validateTencentOHLC(&StockInfo{Price: result["当前价格"], Open: result["今日开盘价"], High: result["今日最高价"], Low: result["今日最低价"]}); err != nil {
+		return nil, err
 	}
 	//logger.SugaredLogger.Infof("股票数据解析完成 %s %s 时间: %s,%s", parts[1], parts[3], parts[29], parts[30])
 

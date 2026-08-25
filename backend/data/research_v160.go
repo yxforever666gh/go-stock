@@ -418,6 +418,7 @@ func (ResearchTradingCalendar) IsTradingDayCached(value time.Time) (bool, bool) 
 type ResearchSourceCollector struct {
 	news          *MarketNewsApi
 	stocks        *StockDataApi
+	clock         func() time.Time
 	newsWindowMu  sync.Mutex
 	newsWindowKey string
 	newsWindow    NewsWindowResult
@@ -440,7 +441,14 @@ func NewResearchSourceCollectorWithProviders(news *MarketNewsApi, stocks *StockD
 	if stocks == nil {
 		stocks = NewStockDataApi()
 	}
-	return &ResearchSourceCollector{news: news, stocks: stocks}
+	return &ResearchSourceCollector{news: news, stocks: stocks, clock: time.Now}
+}
+
+func (collector *ResearchSourceCollector) collectedAt() time.Time {
+	if collector != nil && collector.clock != nil {
+		return collector.clock()
+	}
+	return time.Now()
 }
 
 func (collector *ResearchSourceCollector) CollectMarket(ctx context.Context, now time.Time) ([]research.SourceDocument, error) {
@@ -461,7 +469,7 @@ func (collector *ResearchSourceCollector) CollectMarket(ctx context.Context, now
 		{"九阳公社投资日历", func() any { return collector.news.InvestCalendar(now.Format("2006-01")) }},
 		{"财联社投资日历", func() any { return collector.news.ClsCalendar() }},
 	}
-	return runResearchSourceJobs(ctx, now, "market", jobs)
+	return runResearchSourceJobs(ctx, "market", collector.collectedAt, jobs)
 }
 
 func (collector *ResearchSourceCollector) CollectSectors(ctx context.Context, now time.Time) ([]research.SourceDocument, error) {
@@ -474,7 +482,7 @@ func (collector *ResearchSourceCollector) CollectSectors(ctx context.Context, no
 		{"东方财富热门话题", func() any { return collector.news.HotTopic(30) }},
 		{"东方财富龙虎榜", func() any { return collector.news.LongTiger(now.Format("20060102")) }},
 	}
-	return runResearchSourceJobs(ctx, now, "sector", jobs)
+	return runResearchSourceJobs(ctx, "sector", collector.collectedAt, jobs)
 }
 
 func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now time.Time, candidates []research.StockCandidate) ([]research.SourceDocument, error) {
@@ -514,7 +522,7 @@ func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now
 			}
 			local := make([]research.SourceDocument, 0, len(items))
 			for _, item := range items {
-				local = append(local, executeResearchSourceJob(item.name, "stock", now, item.run))
+				local = append(local, executeResearchSourceJob(item.name, "stock", collector.collectedAt, item.run))
 			}
 			mutex.Lock()
 			documents = append(documents, local...)
@@ -566,7 +574,7 @@ func (collector *ResearchSourceCollector) cachedNewsWindow(now time.Time) (NewsW
 	return collector.newsWindow, collector.newsWindowErr
 }
 
-func runResearchSourceJobs(ctx context.Context, now time.Time, category string, jobs []researchSourceJob) ([]research.SourceDocument, error) {
+func runResearchSourceJobs(ctx context.Context, category string, clock func() time.Time, jobs []researchSourceJob) ([]research.SourceDocument, error) {
 	documents := make([]research.SourceDocument, len(jobs))
 	var wait sync.WaitGroup
 	for index := range jobs {
@@ -575,19 +583,20 @@ func runResearchSourceJobs(ctx context.Context, now time.Time, category string, 
 		go func() {
 			defer wait.Done()
 			if ctx.Err() != nil {
-				documents[index] = research.SourceDocument{SourceName: jobs[index].name, Category: category, CollectedAt: now, Error: ctx.Err().Error()}
+				documents[index] = research.SourceDocument{SourceName: jobs[index].name, Category: category, CollectedAt: researchSourceNow(clock), Error: ctx.Err().Error()}
 				return
 			}
-			documents[index] = executeResearchSourceJob(jobs[index].name, category, now, jobs[index].run)
+			documents[index] = executeResearchSourceJob(jobs[index].name, category, clock, jobs[index].run)
 		}()
 	}
 	wait.Wait()
 	return documents, ctx.Err()
 }
 
-func executeResearchSourceJob(name, category string, now time.Time, run func() any) (document research.SourceDocument) {
-	document = research.SourceDocument{SourceName: name, Category: category, CollectedAt: now}
+func executeResearchSourceJob(name, category string, clock func() time.Time, run func() any) (document research.SourceDocument) {
+	document = research.SourceDocument{SourceName: name, Category: category}
 	defer func() {
+		document.CollectedAt = researchSourceNow(clock)
 		if recovered := recover(); recovered != nil {
 			document.Content = ""
 			document.Error = fmt.Sprintf("来源调用异常: %v", recovered)
@@ -597,7 +606,14 @@ func executeResearchSourceJob(name, category string, now time.Time, run func() a
 		document.Error = "来源任务为空"
 		return document
 	}
-	return researchDocument(name, category, now, run())
+	return researchDocument(name, category, researchSourceNow(clock), run())
+}
+
+func researchSourceNow(clock func() time.Time) time.Time {
+	if clock != nil {
+		return clock()
+	}
+	return time.Now()
 }
 
 func researchDocument(name, category string, now time.Time, value any) research.SourceDocument {
@@ -606,18 +622,80 @@ func researchDocument(name, category string, now time.Time, value any) research.
 		document.Error = "来源返回空值"
 		return document
 	}
-	if result, ok := value.(map[string]any); ok {
-		if sourceError, exists := result["error"]; exists && strings.TrimSpace(fmt.Sprint(sourceError)) != "" {
-			document.Error = strings.TrimSpace(fmt.Sprint(sourceError))
-		}
-	}
 	data, err := json.Marshal(value)
 	if err != nil {
 		document.Error = err.Error()
 		return document
 	}
 	document.Content = truncateResearchSourceJSON(string(data), 16000)
+	document.Error = semanticResearchSourceError(data)
 	return document
+}
+
+func semanticResearchSourceError(data []byte) string {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(data, &fields) != nil || fields == nil {
+		return ""
+	}
+	readText := func(key string) string {
+		raw, ok := fields[key]
+		if !ok || string(raw) == "null" {
+			return ""
+		}
+		var value string
+		if json.Unmarshal(raw, &value) == nil {
+			return strings.TrimSpace(value)
+		}
+		return strings.TrimSpace(string(raw))
+	}
+	format := func(prefix string) string {
+		parts := []string{prefix}
+		if message := readText("message"); message != "" {
+			parts = append(parts, message)
+		} else if warning := readText("warning"); warning != "" {
+			parts = append(parts, warning)
+		}
+		if code := readText("code"); code != "" && code != "0" {
+			parts = append(parts, "code="+code)
+		}
+		return truncateResearchError(strings.Join(parts, ": "))
+	}
+	if raw, exists := fields["error"]; exists && string(raw) != "null" {
+		var sourceError string
+		if json.Unmarshal(raw, &sourceError) == nil {
+			if sourceError = strings.TrimSpace(sourceError); sourceError != "" {
+				return truncateResearchError(sourceError)
+			}
+		} else {
+			var errorFlag bool
+			if json.Unmarshal(raw, &errorFlag) != nil || errorFlag {
+				return truncateResearchError(strings.TrimSpace(string(raw)))
+			}
+		}
+	}
+	if raw, exists := fields["success"]; exists {
+		var success bool
+		if json.Unmarshal(raw, &success) == nil && !success {
+			return format("来源返回失败")
+		}
+	}
+	switch strings.ToLower(readText("status")) {
+	case "failed":
+		return format("来源状态失败")
+	case "stale":
+		return format("来源数据已过期")
+	}
+	return ""
+}
+
+func truncateResearchError(value string) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	const maxRunes = 512
+	runes := []rune(value)
+	if len(runes) > maxRunes {
+		return string(runes[:maxRunes]) + "…"
+	}
+	return value
 }
 
 func truncateResearchSourceJSON(value string, maxBytes int) string {

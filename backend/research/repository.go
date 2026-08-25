@@ -487,6 +487,21 @@ func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int)
 	return result, nil
 }
 
+func (r *Repository) RecentRecommendationHistory(ctx context.Context, since, before time.Time, limit int) ([]RecommendationHistoryItem, error) {
+	if limit <= 0 {
+		return []RecommendationHistoryItem{}, nil
+	}
+	if limit > 20 {
+		limit = 20
+	}
+	result := make([]RecommendationHistoryItem, 0, limit)
+	err := r.db.WithContext(ctx).Model(&Recommendation{}).
+		Select("stock_code", "stock_name", "signal_at", "status", "ai_summary", "main_risk").
+		Where("signal_at >= ? AND signal_at < ?", since, before).
+		Order("signal_at DESC, id DESC").Limit(limit).Scan(&result).Error
+	return result, err
+}
+
 func enrichRecommendationAmounts(recommendation *Recommendation, trades []SimulatedTrade, position *Position) {
 	if recommendation == nil {
 		return

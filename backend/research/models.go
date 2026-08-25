@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion  = "1.7.7"
+	AppVersion  = "1.7.8"
 	InitialCash = 500000.0
 	// LegacyInitialCash freezes the published pre-1.7.7 account basis for
 	// historical migrations and correction commands.
@@ -114,6 +114,17 @@ type Recommendation struct {
 }
 
 func (Recommendation) TableName() string { return "research_v160_recommendations" }
+
+// RecommendationHistoryItem is bounded internal context for soft diversity.
+// It is not exposed by the public API and never blocks a repeated position.
+type RecommendationHistoryItem struct {
+	StockCode string    `json:"stockCode"`
+	StockName string    `json:"stockName"`
+	SignalAt  time.Time `json:"signalAt"`
+	Status    string    `json:"status"`
+	AISummary string    `json:"aiSummary"`
+	MainRisk  string    `json:"mainRisk"`
+}
 
 type LifecycleMessage struct {
 	ID                 uint      `json:"id" gorm:"primaryKey"`

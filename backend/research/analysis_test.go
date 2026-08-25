@@ -141,6 +141,95 @@ func TestCandidateAndSourceBounds(t *testing.T) {
 	if corpus := sourceCorpus(sources, 64); len(corpus) > 64 || !strings.Contains(corpus, sources[0].SourceID) {
 		t.Fatalf("corpus should respect cap and retain id: %q", corpus)
 	}
+	failedCorpus := sourceCorpus([]SourceDocument{{SourceID: "S999", SourceName: "failed", Category: "stock", CollectedAt: now, Content: "provider-body-must-not-leak", Error: "semantic failure"}}, 256)
+	if strings.Contains(failedCorpus, "provider-body-must-not-leak") || !strings.Contains(failedCorpus, "semantic failure") {
+		t.Fatalf("failed source corpus=%q", failedCorpus)
+	}
+}
+
+func TestAnalysisStagePromptsUsePostCollectionTimes(t *testing.T) {
+	repo := researchTestRepo(t)
+	zone := shanghaiLocation
+	times := []time.Time{
+		time.Date(2026, 8, 25, 9, 55, 0, 0, zone),
+		time.Date(2026, 8, 25, 9, 55, 1, 0, zone),
+		time.Date(2026, 8, 25, 9, 55, 2, 0, zone),
+		time.Date(2026, 8, 25, 9, 56, 0, 0, zone),
+		time.Date(2026, 8, 25, 9, 57, 0, 0, zone),
+		time.Date(2026, 8, 25, 9, 58, 0, 0, zone),
+		time.Date(2026, 8, 25, 9, 59, 0, 0, zone),
+		time.Date(2026, 8, 25, 10, 0, 0, 0, zone),
+	}
+	index := 0
+	ai := &scriptedAI{results: []CompletionResult{
+		{Content: "大盘"},
+		{Content: `{"analysis":"无候选","directions":[],"candidates":[]}`},
+		{Content: "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"},
+	}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
+	service.now = func() time.Time {
+		if index >= len(times) {
+			return times[len(times)-1]
+		}
+		value := times[index]
+		index++
+		return value
+	}
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeManual})
+	if err != nil || run.Status != "no_recommendation" || len(ai.requests) != 3 {
+		t.Fatalf("run=%+v err=%v requests=%d", run, err, len(ai.requests))
+	}
+	checks := []struct {
+		request int
+		values  []string
+	}{
+		{request: 0, values: []string{"2026-08-25T09:56:00+08:00", "2026-08-25T09:55:02+08:00"}},
+		{request: 1, values: []string{"2026-08-25T09:58:00+08:00", "2026-08-25T09:57:00+08:00"}},
+		{request: 2, values: []string{"2026-08-25T09:59:00+08:00"}},
+	}
+	for _, check := range checks {
+		for _, value := range check.values {
+			if !strings.Contains(ai.requests[check.request].Prompt, value) {
+				t.Fatalf("request %d missing %s: %s", check.request, value, ai.requests[check.request].Prompt)
+			}
+		}
+	}
+}
+
+func TestRecentRecommendationIsSoftContextAndDoesNotBlockRepeat(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 25, 10, 5, 0, 0, shanghaiLocation)
+	previous := seedRecommendation(t, repo, "closed", now.AddDate(0, 0, -1), now, "")
+	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
+	stock := `{"analysis":"新增资金证据支持再次入选","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"相对上次新增证据：当日资金与量价共振","mainRisk":"冲高回落","sourceRefs":"S001"}]}`
+	final := "允许同股独立持仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|相对上次新增证据：当日资金与量价共振|冲高回落|S001|"
+	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quote := Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.9, At: now}
+	service := NewService(repo, ai, &scriptedQuotes{quotes: []Quote{quote}}, openCalendar{})
+	service.now = func() time.Time { return now }
+	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeManual})
+	if err != nil || run.Status != "success" || run.RecommendationCount != 1 {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	for _, requestIndex := range []int{1, 2, 3} {
+		prompt := ai.requests[requestIndex].Prompt
+		if !strings.Contains(prompt, previous.StockCode) || !strings.Contains(prompt, previous.SignalAt.Format(time.RFC3339)) || (!strings.Contains(prompt, "不得硬性排除重复股票") && requestIndex != 1) {
+			t.Fatalf("request %d missing soft history context: %s", requestIndex, prompt)
+		}
+	}
+	items, err := repo.ListRecommendations(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, item := range items {
+		if item.StockCode == "sh600000" {
+			count++
+		}
+	}
+	if count != 2 {
+		t.Fatalf("same-stock recommendation count=%d want=2 items=%+v", count, items)
+	}
 }
 
 func latin1DecodedUTF8(value string) string {

@@ -147,6 +147,17 @@ func TestParseTxStockData(t *testing.T) {
 	if info.Volume != "10987200" || info.Amount != "241183171" {
 		t.Fatalf("A-share turnover = %s/%s, want 10987200/241183171", info.Volume, info.Amount)
 	}
+	if info.High != "22.16" || info.Low != "21.84" {
+		t.Fatalf("A-share high/low = %s/%s, want 22.16/21.84", info.High, info.Low)
+	}
+	legacy, legacyErr := ParseTxHKStockData(strutil.SplitAndTrim(input, "=", "\""))
+	if legacyErr != nil || legacy["今日最高价"] != "22.16" || legacy["今日最低价"] != "21.84" || legacy["时间"] != "09:42:09" {
+		t.Fatalf("legacy A-share parse=%v err=%v", legacy, legacyErr)
+	}
+	invalid := strings.Replace(input, "~-1.57~22.16~21.84~", "~-1.57~20.00~21.84~", 1)
+	if _, err = ParseTxStockData(invalid); err == nil || !strings.Contains(err.Error(), "OHLC is inconsistent") {
+		t.Fatalf("inconsistent A-share OHLC err=%v", err)
+	}
 }
 
 func TestParseTxStockDataHongKongTurnover(t *testing.T) {
@@ -157,6 +168,9 @@ func TestParseTxStockDataHongKongTurnover(t *testing.T) {
 	}
 	if info.Volume != "195083034" || info.Amount != "1195673623.140" {
 		t.Fatalf("HK turnover = %s/%s, want 195083034/1195673623.140", info.Volume, info.Amount)
+	}
+	if info.High != "6.450" || info.Low != "5.710" {
+		t.Fatalf("HK high/low = %s/%s, want 6.450/5.710", info.High, info.Low)
 	}
 }
 
