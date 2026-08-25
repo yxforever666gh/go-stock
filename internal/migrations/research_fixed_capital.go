@@ -331,7 +331,11 @@ func verifyFixedCapitalHistoricalBuy(tx *gorm.DB) error {
 	if err := tx.Where("recommendation_id = ?", recommendationID).First(&recommendation).Error; err != nil {
 		return err
 	}
-	if recommendation.AnalysisRunID != fixedCapitalAnalysisRunID || recommendation.StockCode != fixedCapitalStockCode || recommendation.Status != "active" ||
+	lifecycleValid := recommendation.Status == "active" && recommendation.ClosedAt == nil
+	if recommendation.Status == "closed" && recommendation.ActivatedAt != nil && recommendation.ClosedAt != nil {
+		lifecycleValid = !recommendation.ClosedAt.Before(*recommendation.ActivatedAt)
+	}
+	if recommendation.AnalysisRunID != fixedCapitalAnalysisRunID || recommendation.StockCode != fixedCapitalStockCode || !lifecycleValid ||
 		recommendation.Quantity != 1000 || recommendation.ActivatedAt == nil || !recommendation.SignalAt.Equal(fixedCapitalSignalAt) || !recommendation.ActivatedAt.Equal(fixedCapitalTradeAt) {
 		return errors.New("1.7.7 historical recommendation verification failed")
 	}

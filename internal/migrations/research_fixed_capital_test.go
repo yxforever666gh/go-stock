@@ -65,6 +65,15 @@ func TestSchema12RebasesFixedCapitalAndRestoresApprovedHistoricalBuy(t *testing.
 	if err := applyResearchFixedCapitalAndHistoricalBuy(database); err != nil {
 		t.Fatalf("schema 12 must be idempotent: %v", err)
 	}
+	closedAt := time.Date(2026, 8, 25, 10, 10, 30, 0, fixedCapitalTradeAt.Location())
+	if err := database.Model(&research.Recommendation{}).
+		Where("recommendation_id = ?", fixedCapitalID("china-ping-an-recommendation")).
+		Updates(map[string]any{"status": "closed", "closed_at": closedAt}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := applyResearchFixedCapitalAndHistoricalBuy(database); err != nil {
+		t.Fatalf("schema 12 runtime verification must accept a normally closed historical position: %v", err)
+	}
 	var account research.SimulatedAccount
 	if err := database.First(&account, 1).Error; err != nil {
 		t.Fatal(err)
