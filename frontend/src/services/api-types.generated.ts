@@ -272,9 +272,11 @@ export type Recommendation = {
   aiSummary?: string
   analysisRunId: string
   buyAmount?: number
+  buyPrice?: number
   closePrice?: number
   closedAt?: string
   currentAmount?: number
+  currentPrice?: number
   dataPauseSeconds?: number
   mainRisk?: string
   netPnl?: number
@@ -284,6 +286,7 @@ export type Recommendation = {
   recommendationId: string
   reservedCash?: number
   sellAmount?: number
+  sellPrice?: number
   signalAt: string
   sourceRefs?: string
   status: "buy_pending" | "pending" | "active" | "sell_pending" | "invalidated" | "missed_cash" | "missed_untradable" | "closed"

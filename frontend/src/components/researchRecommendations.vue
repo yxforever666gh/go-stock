@@ -16,7 +16,7 @@ const detail = ref(null)
 
 const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
-function hasBuy(row) { return Boolean(row.activatedAt) && Number(row.buyAmount || 0) > 0 }
+function hasBuy(row) { return Boolean(row.activatedAt) && Number(row.buyPrice || 0) > 0 }
 function colorType(value) { return Number(value || 0) >= 0 ? 'error' : 'success' }
 function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'buy_pending' || status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
 
@@ -27,13 +27,13 @@ const defaultColumns = [
   {title: 'AI 摘要', key: 'aiSummary', minWidth: 260, ellipsis: {tooltip: true}},
   {title: '主要风险', key: 'mainRisk', minWidth: 220, ellipsis: {tooltip: true}},
   {title: '当前状态', key: 'status', width: 135, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
-  {title: '买入金额', key: 'buyAmount', width: 140, render: row => hasBuy(row) ? formatMoney(row.buyAmount) : '--'},
-  {title: '卖出金额', key: 'sellAmount', width: 140, render: row => Number(row.sellAmount || 0) > 0 ? formatMoney(row.sellAmount) : '--'},
-  {title: '当前金额', key: 'currentAmount', width: 140, render: row => Number(row.currentAmount || 0) > 0 ? formatMoney(row.currentAmount) : '--'},
+  {title: '买入价', key: 'buyPrice', width: 120, render: row => hasBuy(row) ? formatPrice(row.buyPrice) : '--'},
+  {title: '卖出价', key: 'sellPrice', width: 120, render: row => Number(row.sellPrice || 0) > 0 ? formatPrice(row.sellPrice) : '--'},
+  {title: '当前价', key: 'currentPrice', width: 120, render: row => Number(row.currentPrice || 0) > 0 ? formatPrice(row.currentPrice) : '--'},
   {title: '净收益率', key: 'netYieldRate', width: 120, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate)}, {default: () => formatPercent(row.netYieldRate)}) : '--'},
   {title: '来源', key: 'sourceRefs', minWidth: 150, ellipsis: {tooltip: true}},
 ]
-const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research-recommendations:column-order:v1')
+const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research-recommendations:column-order:v2')
 
 async function refresh() {
   loading.value = true
@@ -58,7 +58,7 @@ onMounted(refresh)
 <template>
   <n-space vertical>
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">金额均为净现金口径；拖动表头可左右调整列顺序并自动保存。点击股票名称查看独立会话和成交详情。</n-text>
+      <n-text depth="3">买入价和卖出价为每股成交价，当前价为未平仓仓位的最新每股价格；拖动表头可左右调整列顺序并自动保存。点击股票名称查看独立会话和成交详情。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">

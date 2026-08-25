@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion  = "1.7.9"
+	AppVersion  = "1.7.10"
 	InitialCash = 500000.0
 	// LegacyInitialCash freezes the published pre-1.7.7 account basis for
 	// historical migrations and correction commands.
@@ -105,6 +105,9 @@ type Recommendation struct {
 	BuyAmount           float64    `json:"buyAmount" gorm:"-"`
 	SellAmount          float64    `json:"sellAmount" gorm:"-"`
 	CurrentAmount       float64    `json:"currentAmount" gorm:"-"`
+	BuyPrice            float64    `json:"buyPrice" gorm:"-"`
+	SellPrice           float64    `json:"sellPrice" gorm:"-"`
+	CurrentPrice        float64    `json:"currentPrice" gorm:"-"`
 	LastDecision        string     `json:"lastDecision" gorm:"size:32"`
 	LastDecisionAt      *time.Time `json:"lastDecisionAt"`
 	DataPauseSeconds    int64      `json:"dataPauseSeconds" gorm:"not null;default:0"`

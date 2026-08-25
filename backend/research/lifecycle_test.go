@@ -424,7 +424,7 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	}
 }
 
-func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
+func TestListRecommendationsUsesNetCashAmountsAndPerSharePrices(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 19, 10, 0, 0, 0, shanghaiLocation)
 	openRecommendation := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
@@ -433,7 +433,7 @@ func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := repo.DB().Create(&SimulatedTrade{TradeID: newID(), RecommendationID: openRecommendation.RecommendationID,
-		StockCode: openRecommendation.StockCode, Side: "buy", TradedAt: now.AddDate(0, 0, -1), Quantity: 100, NetCashFlow: -1005}).Error; err != nil {
+		StockCode: openRecommendation.StockCode, Side: "buy", TradedAt: now.AddDate(0, 0, -1), ExecutionPrice: 10.05, Quantity: 100, NetCashFlow: -1005}).Error; err != nil {
 		t.Fatal(err)
 	}
 	seedOpenPosition(t, repo, openRecommendation, now.AddDate(0, 0, -1))
@@ -450,9 +450,9 @@ func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
 	}
 	closedTrades := []SimulatedTrade{
 		{TradeID: newID(), RecommendationID: closedRecommendation.RecommendationID, StockCode: closedRecommendation.StockCode,
-			Side: "buy", TradedAt: now.AddDate(0, 0, -2), Quantity: 100, NetCashFlow: -1005},
+			Side: "buy", TradedAt: now.AddDate(0, 0, -2), ExecutionPrice: 10.05, Quantity: 100, NetCashFlow: -1005},
 		{TradeID: newID(), RecommendationID: closedRecommendation.RecommendationID, StockCode: closedRecommendation.StockCode,
-			Side: "sell", TradedAt: closedAt, Quantity: 100, NetCashFlow: 1088},
+			Side: "sell", TradedAt: closedAt, ExecutionPrice: 10.88, Quantity: 100, NetCashFlow: 1088},
 	}
 	if err := repo.DB().Create(&closedTrades).Error; err != nil {
 		t.Fatal(err)
@@ -471,12 +471,18 @@ func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
 	if openRow.BuyAmount != 1005 || math.Abs(openRow.CurrentAmount-wantCurrent) > 0.001 || openRow.SellAmount != 0 {
 		t.Fatalf("open amounts=%+v wantCurrent=%.4f", openRow, wantCurrent)
 	}
+	if openRow.BuyPrice != 10.05 || openRow.SellPrice != 0 || openRow.CurrentPrice != 11 {
+		t.Fatalf("open prices=%+v", openRow)
+	}
 	if math.Abs(openRow.NetYieldRate-(wantCurrent-1005)/1005) > 0.000001 {
 		t.Fatalf("open net yield=%f", openRow.NetYieldRate)
 	}
 	closedRow := byID[closedRecommendation.RecommendationID]
 	if closedRow.BuyAmount != 1005 || closedRow.SellAmount != 1088 || closedRow.CurrentAmount != 0 || closedRow.NetPnL != 83 {
 		t.Fatalf("closed amounts=%+v", closedRow)
+	}
+	if closedRow.BuyPrice != 10.05 || closedRow.SellPrice != 10.88 || closedRow.CurrentPrice != 0 {
+		t.Fatalf("closed prices=%+v", closedRow)
 	}
 	if math.Abs(closedRow.NetYieldRate-83.0/1005.0) > 0.000001 {
 		t.Fatalf("closed net yield=%f", closedRow.NetYieldRate)
@@ -491,6 +497,8 @@ func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
 	}
 	if openDetail.Recommendation.BuyAmount != openRow.BuyAmount ||
 		math.Abs(openDetail.Recommendation.CurrentAmount-openRow.CurrentAmount) > 0.001 ||
+		openDetail.Recommendation.BuyPrice != openRow.BuyPrice ||
+		openDetail.Recommendation.CurrentPrice != openRow.CurrentPrice ||
 		math.Abs(openDetail.Recommendation.NetYieldRate-openRow.NetYieldRate) > 0.000001 {
 		t.Fatalf("open detail/list mismatch: detail=%+v list=%+v", openDetail.Recommendation, openRow)
 	}
@@ -500,6 +508,8 @@ func TestListRecommendationsUsesNetCashAmounts(t *testing.T) {
 	}
 	if closedDetail.Recommendation.BuyAmount != closedRow.BuyAmount ||
 		closedDetail.Recommendation.SellAmount != closedRow.SellAmount ||
+		closedDetail.Recommendation.BuyPrice != closedRow.BuyPrice ||
+		closedDetail.Recommendation.SellPrice != closedRow.SellPrice ||
 		math.Abs(closedDetail.Recommendation.NetYieldRate-closedRow.NetYieldRate) > 0.000001 {
 		t.Fatalf("closed detail/list mismatch: detail=%+v list=%+v", closedDetail.Recommendation, closedRow)
 	}

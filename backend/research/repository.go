@@ -482,7 +482,7 @@ func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int)
 		positionsByRecommendation[positions[index].RecommendationID] = &positions[index]
 	}
 	for index := range result {
-		enrichRecommendationAmounts(&result[index], tradesByRecommendation[result[index].RecommendationID], positionsByRecommendation[result[index].RecommendationID])
+		enrichRecommendationMetrics(&result[index], tradesByRecommendation[result[index].RecommendationID], positionsByRecommendation[result[index].RecommendationID])
 	}
 	return result, nil
 }
@@ -502,22 +502,48 @@ func (r *Repository) RecentRecommendationHistory(ctx context.Context, since, bef
 	return result, err
 }
 
-func enrichRecommendationAmounts(recommendation *Recommendation, trades []SimulatedTrade, position *Position) {
+func enrichRecommendationMetrics(recommendation *Recommendation, trades []SimulatedTrade, position *Position) {
 	if recommendation == nil {
 		return
 	}
 	recommendation.BuyAmount, recommendation.SellAmount, recommendation.CurrentAmount = 0, 0, 0
+	recommendation.BuyPrice, recommendation.SellPrice, recommendation.CurrentPrice = 0, 0, 0
+	var buyQuantity, sellQuantity int64
+	var buyExecutionValue, sellExecutionValue float64
 	for _, trade := range trades {
 		switch trade.Side {
 		case "buy":
 			recommendation.BuyAmount += -trade.NetCashFlow
+			if trade.Quantity > 0 && trade.ExecutionPrice > 0 {
+				buyQuantity += trade.Quantity
+				buyExecutionValue += trade.ExecutionPrice * float64(trade.Quantity)
+			}
 		case "sell":
 			recommendation.SellAmount += trade.NetCashFlow
+			if trade.Quantity > 0 && trade.ExecutionPrice > 0 {
+				sellQuantity += trade.Quantity
+				sellExecutionValue += trade.ExecutionPrice * float64(trade.Quantity)
+			}
 		}
+	}
+	if buyQuantity > 0 {
+		recommendation.BuyPrice = buyExecutionValue / float64(buyQuantity)
+	} else if recommendation.ActivationPrice > 0 {
+		recommendation.BuyPrice = recommendation.ActivationPrice
+	} else if position != nil {
+		recommendation.BuyPrice = position.EntryPrice
+	}
+	if sellQuantity > 0 {
+		recommendation.SellPrice = sellExecutionValue / float64(sellQuantity)
+	} else if recommendation.ClosePrice > 0 {
+		recommendation.SellPrice = recommendation.ClosePrice
+	} else if position != nil && position.Status == "closed" {
+		recommendation.SellPrice = position.ExitPrice
 	}
 	if position != nil && position.Status == "open" {
 		enrichPositionValue(position)
 		recommendation.CurrentAmount = position.NetSellValue
+		recommendation.CurrentPrice = position.CurrentPrice
 	}
 	comparisonAmount := recommendation.SellAmount + recommendation.CurrentAmount
 	if recommendation.BuyAmount > 0 && comparisonAmount > 0 {

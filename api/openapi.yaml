@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.7.9
+  version: 1.7.10
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -386,6 +386,9 @@ components:
         buyAmount: {type: number, description: Actual net cash paid for the simulated buy, including buy-side costs.}
         sellAmount: {type: number, description: Actual net cash received from the simulated sell, after sell-side costs.}
         currentAmount: {type: number, description: Open position value at the latest price after estimated sell-side costs.}
+        buyPrice: {type: number, description: Quantity-weighted simulated buy execution price per share.}
+        sellPrice: {type: number, description: Quantity-weighted simulated sell execution price per share.}
+        currentPrice: {type: number, description: Latest price per share for an open position; zero after the position is closed.}
         dataPauseSeconds: {type: integer, format: int64}
         reservedCash: {type: number, description: Cash reserved while the recommendation is waiting for its one-shot buy attempt.}
     LifecycleMessage:
