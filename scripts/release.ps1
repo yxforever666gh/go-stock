@@ -87,6 +87,21 @@ function Get-Context {
     }
 }
 
+function Assert-VersionTagMatchesCommit {
+    param($Context)
+    $version = [string]$Context.Manifest.appVersion
+    $tagRef = "refs/tags/$version"
+    $tagCommit = [string](& git -C $ProjectRoot rev-list -n 1 $tagRef)
+    $tagExitCode = $LASTEXITCODE
+    $tagCommit = $tagCommit.Trim()
+    if ($tagExitCode -ne 0 -or -not $tagCommit) {
+        throw "Release tag $version is required before build or deploy"
+    }
+    if (-not $tagCommit.Equals([string]$Context.Commit, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Release tag $version points to $tagCommit, expected $($Context.Commit)"
+    }
+}
+
 function Get-ZoneInfoSource {
     $goRoot = (& go env GOROOT).Trim()
     if ($LASTEXITCODE -ne 0) { throw "Cannot resolve GOROOT" }
@@ -135,6 +150,7 @@ function New-Pointer {
 
 function Invoke-Build {
     $context = Get-Context
+    Assert-VersionTagMatchesCommit $context
     $dirty = (& git -C $ProjectRoot status --porcelain)
     if ($LASTEXITCODE -ne 0) { throw "Cannot inspect git worktree" }
     if ($dirty) { throw "Release builds require a clean git worktree" }
@@ -368,6 +384,7 @@ function Remove-RestorationSafetyCopy {
 function Invoke-Deploy {
     Assert-DatabasePaths
     $context = Get-Context
+    Assert-VersionTagMatchesCommit $context
     if (-not (Test-Path -LiteralPath $context.Binary) -or -not (Test-Path -LiteralPath $context.ZoneInfo)) { $pointer = Invoke-Build }
     else { $pointer = New-Pointer $context }
     $previous = if (Test-Path -LiteralPath $CurrentPointer) { Read-ReleasePointer $CurrentPointer } else { $null }

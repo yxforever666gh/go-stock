@@ -31,6 +31,7 @@ const containerRef = ref({})
 const realtimeProfit = ref(0)
 const groupList = ref([])
 const officialStatement = ref('')
+const appVersion = ref('')
 const menuOptions = ref([])
 const shuttingDown = ref(false)
 const shutdownMessage = ref('')
@@ -106,6 +107,7 @@ onBeforeMount(() => {
     enableFund,
     realtimeProfit,
     isFullscreen,
+    appVersion,
     toggleFullscreen,
   })
   cleanupRuntimeEvents = registerAppRuntimeEvents({
@@ -115,6 +117,7 @@ onBeforeMount(() => {
   })
 
   GetVersionInfo().then(result => {
+    appVersion.value = result.version || ''
     if (result.officialStatement) {
       content.value = result.officialStatement + '\n\n' + content.value
       officialStatement.value = result.officialStatement

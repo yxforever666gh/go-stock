@@ -22,6 +22,7 @@ import { ReportAnalytics, ReportMoney, ReportSearch } from '@vicons/tabler'
 import { BoxSearch20Regular } from '@vicons/fluent'
 import { NotificationFilled, StockOutlined } from '@vicons/antd'
 import { BrowserOpenURL, EventsEmit } from '../services/browser-runtime.mjs'
+import { formatGitHubVersionLabel } from './version-label.js'
 
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) })
@@ -140,6 +141,7 @@ export function createMenuOptions({
   enableFund,
   realtimeProfit,
   isFullscreen,
+  appVersion,
   toggleFullscreen,
 }) {
   return [
@@ -237,7 +239,7 @@ export function createMenuOptions({
       icon: renderIcon(SettingsOutline),
     },
     {
-      label: createAnchorLabel('GitHub', () => {
+      label: createAnchorLabel(() => formatGitHubVersionLabel(appVersion.value), () => {
         BrowserOpenURL('https://github.com/yxforever666gh/go-stock')
       }),
       key: 'about',
