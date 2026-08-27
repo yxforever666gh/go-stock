@@ -7,10 +7,12 @@ const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order-v163'
 const ResearchYield = defineAsyncComponent(() => import('./researchYield.vue'))
 const ResearchReport = defineAsyncComponent(() => import('./researchReport.vue'))
 const ResearchRecommendations = defineAsyncComponent(() => import('./researchRecommendations.vue'))
+const Settings = defineAsyncComponent(() => import('./settings.vue'))
 const defaultTabs = [
   { name: "股票推荐记录", component: ResearchRecommendations },
   { name: "AI分析报告", component: ResearchReport },
   { name: "股票收益率", component: ResearchYield },
+	{ name: "设置", component: Settings },
 ]
 
 const tabs = ref([...defaultTabs])

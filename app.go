@@ -15,29 +15,38 @@ import (
 
 // App struct
 type App struct {
-	ctx               context.Context
-	runtime           *runtimeCoordinator
-	cache             *freecache.Cache
-	cron              *cron.Cron
-	cronEntrys        map[string]cron.EntryID
-	cronEntrysMu      sync.RWMutex
-	services          service.AppServices
-	domReadyMu        sync.Mutex
-	domReadyDone      bool
-	schedulerErrorsMu sync.Mutex
-	schedulerErrors   []error
-	researchRuntimeMu sync.RWMutex
-	researchRuntime   *data.ResearchRuntime
-	researchFactory   func(int) (*data.ResearchRuntime, error)
-	aiAnalysisRunMu   sync.Mutex
-	aiAnalysisRunning bool
-	aiRecoveryRunMu   sync.Mutex
-	aiLifecycleRunMu  sync.Mutex
+	ctx                context.Context
+	runtime            *runtimeCoordinator
+	cache              *freecache.Cache
+	cron               *cron.Cron
+	cronEntrys         map[string]cron.EntryID
+	cronEntrysMu       sync.RWMutex
+	services           service.AppServices
+	domReadyMu         sync.Mutex
+	domReadyDone       bool
+	schedulerErrorsMu  sync.Mutex
+	schedulerErrors    []error
+	researchRuntimeMu  sync.RWMutex
+	researchRuntime    *data.ResearchRuntime
+	researchFactory    func(int) (*data.ResearchRuntime, error)
+	research2RuntimeMu sync.RWMutex
+	research2Runtime   *data.Research2Runtime
+	research2Factory   func(int) (*data.Research2Runtime, error)
+	aiAnalysisRunMu    sync.Mutex
+	aiAnalysisRunning  bool
+	aiRecoveryRunMu    sync.Mutex
+	aiLifecycleRunMu   sync.Mutex
+	research2RunMu     sync.Mutex
+	research2TradeMu   sync.Mutex
+	research2MetricMu  sync.Mutex
 }
 
 const aiAnalysisEntryPrefix = "AIAnalysisCustom_"
 const aiLifecycleEntryKey = "AIAnalysisLifecycleDue"
 const aiRecoveryEntryKey = "AIAnalysisRecoveryDue"
+const research2AnalysisEntryKey = "Research2Analysis0950"
+const research2TradingEntryKey = "Research2TradingMinute"
+const research2MetricsEntryKey = "Research2Metrics1505"
 
 // NewApp creates a new App application struct
 func NewApp() *App {
@@ -54,13 +63,14 @@ func NewAppWithServices(services service.AppServices) *App {
 	c := cron.New(cron.WithSeconds())
 	runtime := newRuntimeCoordinator(context.Background())
 	return &App{
-		ctx:             runtime.Context(),
-		runtime:         runtime,
-		cache:           cache,
-		cron:            c,
-		cronEntrys:      make(map[string]cron.EntryID),
-		services:        services,
-		researchFactory: data.NewResearchRuntime,
+		ctx:              runtime.Context(),
+		runtime:          runtime,
+		cache:            cache,
+		cron:             c,
+		cronEntrys:       make(map[string]cron.EntryID),
+		services:         services,
+		researchFactory:  data.NewResearchRuntime,
+		research2Factory: data.NewResearch2Runtime,
 	}
 }
 
@@ -68,6 +78,9 @@ func NewAppWithRuntime(appRuntime bootstrap.AppRuntime) *App {
 	app := NewAppWithServices(appRuntime.Services)
 	app.researchFactory = func(configID int) (*data.ResearchRuntime, error) {
 		return data.NewResearchRuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
+	}
+	app.research2Factory = func(configID int) (*data.Research2Runtime, error) {
+		return data.NewResearch2RuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	}
 	return app
 }

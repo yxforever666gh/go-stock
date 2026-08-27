@@ -38,6 +38,7 @@ type Settings struct {
 	ForceNoProxyForFetch     bool   `json:"forceNoProxyForFetch" gorm:"default:true"`
 	QgqpBId                  string `json:"qgqpBId" gorm:"column:qgqp_b_id"`
 	AIAnalysisEnabled        bool   `json:"-" gorm:"default:true"`
+	Research2AutoEnabled     bool   `json:"research2AutoEnabled" gorm:"default:true"`
 	AIAnalysisConfigID       uint   `json:"aiAnalysisConfigId"`
 	AIAnalysisTimes          string `json:"aiAnalysisTimes" gorm:"default:'09:30,11:30,14:30'"`
 	AIReviewStartTime        string `json:"aiReviewStartTime" gorm:"default:'09:50'"`

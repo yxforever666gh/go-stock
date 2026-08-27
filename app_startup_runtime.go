@@ -154,6 +154,7 @@ func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 
 func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
 	a.reloadAIAnalysisCron(config)
+	a.reloadResearch2Cron(config)
 }
 
 func (a *App) registerCronTask(key, spec string, task func()) {

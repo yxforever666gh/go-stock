@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.8.3
+  version: 1.8.4
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -210,6 +210,37 @@ paths:
       description: Returns unitized TWR, valuation points and strategy-quality metrics.
       responses:
         "200": {description: Account performance, content: {application/json: {schema: {$ref: "#/components/schemas/AccountPerformance"}}}}
+  /api/v1/research2/analysis-runs:
+    get:
+      operationId: listResearch2AnalysisRuns
+      description: Lists automatic overnight-strength runs. This strategy has no manual trigger endpoint.
+      responses:
+        "200": {description: Research Center 2 analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2AnalysisRunSummary"}}}}}
+  /api/v1/research2/analysis-runs/{id}:
+    get:
+      operationId: getResearch2AnalysisRun
+      responses:
+        "200": {description: Research Center 2 analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AnalysisRun"}}}}
+  /api/v1/research2/recommendations:
+    get:
+      operationId: listResearch2Recommendations
+      responses:
+        "200": {description: Research Center 2 recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2Recommendation"}}}}}
+  /api/v1/research2/recommendations/{id}:
+    get:
+      operationId: getResearch2Recommendation
+      responses:
+        "200": {description: Research Center 2 recommendation detail, content: {application/json: {schema: {$ref: "#/components/schemas/Research2RecommendationDetail"}}}}
+  /api/v1/research2/account:
+    get:
+      operationId: getResearch2Account
+      responses:
+        "200": {description: Isolated 12000-yuan Research Center 2 account, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AccountOverview"}}}}
+  /api/v1/research2/account/performance:
+    get:
+      operationId: getResearch2Performance
+      responses:
+        "200": {description: Research Center 2 overnight performance, content: {application/json: {schema: {$ref: "#/components/schemas/Research2Performance"}}}}
   /api/v1/exports/config:
     post:
       operationId: exportConfig
@@ -570,3 +601,150 @@ components:
         cumulativeNetContribution: {type: number}
         curve: {type: array, items: {$ref: "#/components/schemas/AccountPerformancePoint"}}
         metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}
+    Research2AnalysisRun:
+      type: object
+      required: [runId, tradingDate, scheduledFor, startedAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
+      properties:
+        runId: {type: string}
+        tradingDate: {type: string, format: date}
+        scheduledFor: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        evidenceCutoffAt: {type: string, format: date-time}
+        generatedAt: {type: string, format: date-time}
+        status: {type: string, enum: [running, success, no_recommendation, failed, skipped_non_trading_day, missed_window]}
+        providerName: {type: string}
+        modelName: {type: string}
+        reportMarkdown: {type: string}
+        sourceStatusJson: {type: string}
+        modelAttemptLogJson: {type: string}
+        failureReason: {type: string}
+        recommendationCount: {type: integer}
+        onTime: {type: boolean}
+    Research2AnalysisRunSummary:
+      type: object
+      required: [runId, tradingDate, scheduledFor, evidenceCutoffAt, status, recommendationCount, onTime]
+      properties:
+        runId: {type: string}
+        tradingDate: {type: string, format: date}
+        scheduledFor: {type: string, format: date-time}
+        evidenceCutoffAt: {type: string, format: date-time}
+        generatedAt: {type: string, format: date-time}
+        status: {type: string}
+        providerName: {type: string}
+        modelName: {type: string}
+        recommendationCount: {type: integer}
+        onTime: {type: boolean}
+        failureReason: {type: string}
+    Research2Recommendation:
+      type: object
+      required: [recommendationId, analysisRunId, rank, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]
+      properties:
+        recommendationId: {type: string}
+        analysisRunId: {type: string}
+        rank: {type: integer}
+        stockCode: {type: string}
+        stockName: {type: string}
+        signalAt: {type: string, format: date-time}
+        marketScore: {type: number}
+        sectorScore: {type: number}
+        stockScore: {type: number}
+        catalystScore: {type: number}
+        riskDeduction: {type: number}
+        finalScore: {type: number}
+        referencePrice: {type: number}
+        buyLower: {type: number}
+        buyUpper: {type: number}
+        estimatedLotCost: {type: number}
+        summary: {type: string}
+        quantData: {type: string}
+        freshCatalyst: {type: string}
+        oldBackground: {type: string}
+        mainRisk: {type: string}
+        cancelConditions: {type: string}
+        sourceRefs: {type: string}
+        status: {type: string, enum: [buy_pending, active, sell_pending, closed, missed_cash, missed_untradable, missed_window, cancelled_price]}
+        late: {type: boolean}
+        targetBuyAt: {type: string, format: date-time}
+        buyAt: {type: string, format: date-time}
+        buyMarketPrice: {type: number}
+        buyPrice: {type: number}
+        quantity: {type: integer, format: int64}
+        buyFees: {type: number}
+        targetSellAt: {type: string, format: date-time}
+        sellAt: {type: string, format: date-time}
+        sellMarketPrice: {type: number}
+        sellPrice: {type: number}
+        sellFees: {type: number}
+        netPnl: {type: number}
+        netYieldRate: {type: number}
+        hitFiveBeforeSell: {type: boolean, nullable: true}
+        hitLimitUpFullDay: {type: boolean, nullable: true}
+        hitMinusThree: {type: boolean, nullable: true}
+        metricsFinalized: {type: boolean}
+        failureReason: {type: string}
+    Research2Trade:
+      type: object
+      required: [tradeId, recommendationId, side, tradedAt, marketPrice, executionPrice, quantity, commission, stampDuty, transferFee, slippageAmount, netCashFlow]
+      properties:
+        tradeId: {type: string}
+        recommendationId: {type: string}
+        side: {type: string, enum: [buy, sell]}
+        tradedAt: {type: string, format: date-time}
+        marketPrice: {type: number}
+        executionPrice: {type: number}
+        quantity: {type: integer, format: int64}
+        commission: {type: number}
+        stampDuty: {type: number}
+        transferFee: {type: number}
+        slippageAmount: {type: number}
+        netCashFlow: {type: number}
+    Research2RecommendationDetail:
+      type: object
+      required: [recommendation, analysis, trades]
+      properties:
+        recommendation: {$ref: "#/components/schemas/Research2Recommendation"}
+        analysis: {$ref: "#/components/schemas/Research2AnalysisRun"}
+        trades: {type: array, items: {$ref: "#/components/schemas/Research2Trade"}}
+    Research2AccountOverview:
+      type: object
+      required: [initialCash, cash, positionValue, netAssetValue, netProfit, returnRate, openPositions, pendingBuys, lastValuedAt]
+      properties:
+        initialCash: {type: number, const: 12000}
+        cash: {type: number}
+        positionValue: {type: number}
+        netAssetValue: {type: number}
+        netProfit: {type: number}
+        returnRate: {type: number}
+        openPositions: {type: integer, format: int64}
+        pendingBuys: {type: integer, format: int64}
+        lastValuedAt: {type: string, format: date-time}
+    Research2AccountSnapshot:
+      type: object
+      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, netProfit, returnRate]
+      properties:
+        snapshotId: {type: string}
+        valuedAt: {type: string, format: date-time}
+        tradingDate: {type: string, format: date}
+        snapshotType: {type: string}
+        cash: {type: number}
+        positionValue: {type: number}
+        netAssetValue: {type: number}
+        netProfit: {type: number}
+        returnRate: {type: number}
+    Research2Performance:
+      allOf:
+        - {$ref: "#/components/schemas/Research2AccountOverview"}
+        - type: object
+          required: [closedTrades, winningTrades, totalFees, hitFiveCount, hitLimitUpCount, hitMinusThreeCount, onTimeReports, lateReports, curve]
+          properties:
+            closedTrades: {type: integer, format: int64}
+            winningTrades: {type: integer, format: int64}
+            winRate: {type: number, nullable: true}
+            totalFees: {type: number}
+            maxDrawdown: {type: number, nullable: true}
+            hitFiveCount: {type: integer, format: int64}
+            hitLimitUpCount: {type: integer, format: int64}
+            hitMinusThreeCount: {type: integer, format: int64}
+            onTimeReports: {type: integer, format: int64}
+            lateReports: {type: integer, format: int64}
+            curve: {type: array, items: {$ref: "#/components/schemas/Research2AccountSnapshot"}}

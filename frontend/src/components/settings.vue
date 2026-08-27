@@ -39,6 +39,7 @@ const formValue = ref({
     reviewStartTime: '09:50',
     reviewIntervalMinutes: 15,
   },
+  research2AutoEnabled: true,
 })
 
 const aiConfigTestStates = ref({})
@@ -137,6 +138,7 @@ function applyConfigToForm(config) {
     reviewStartTime: config?.aiReviewStartTime || '09:50',
     reviewIntervalMinutes: config?.aiReviewIntervalMinutes || 15,
   }
+  formValue.value.research2AutoEnabled = config?.research2AutoEnabled !== false
 }
 
 function aiConfigRowKey(aiConfig) {
@@ -254,6 +256,7 @@ function buildConfigPayload() {
     aiAnalysisTimes: formValue.value.aiAnalysis.times,
     aiReviewStartTime: formValue.value.aiAnalysis.reviewStartTime,
     aiReviewIntervalMinutes: formValue.value.aiAnalysis.reviewIntervalMinutes,
+    research2AutoEnabled: formValue.value.research2AutoEnabled,
   }
 }
 
@@ -416,6 +419,10 @@ onBeforeUnmount(() => message.destroyAll())
 
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => 'AI 分析设置')" size="small">
           <n-grid :cols="24" :x-gap="24">
+            <n-form-item-gi :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
+              <n-switch v-model:value="formValue.research2AutoEnabled" @update:value="handleImmediateFieldChange"/>
+              <n-text depth="3" style="margin-left: 12px">固定 09:50 开始采集、09:55 冻结数据，10:00 模拟买入，下一交易日 10:00 模拟卖出。</n-text>
+            </n-form-item-gi>
             <n-form-item-gi :span="6" label="自动分析：" path="aiAnalysis.autoEnabled">
               <n-switch v-model:value="formValue.aiAnalysis.autoEnabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>

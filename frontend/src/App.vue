@@ -5,8 +5,8 @@ import {
   WindowUnfullscreen,
   WindowSetTitle,
 } from './services/browser-runtime.mjs'
-import { onBeforeMount, onBeforeUnmount, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { darkTheme, dateZhCN, zhCN } from 'naive-ui'
 import { GetConfig } from './services/settings-api'
 import { GetGroupList } from './services/groups-api'
@@ -19,6 +19,7 @@ import {
 import { registerAppRuntimeEvents } from './app-shell/runtime-events'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(true)
 const loadingMsg = ref('加载数据中...')
 const contentStyle = ref('')
@@ -36,6 +37,10 @@ const menuOptions = ref([])
 const shuttingDown = ref(false)
 const shutdownMessage = ref('')
 let cleanupRuntimeEvents = () => {}
+
+watch(() => route.name, name => {
+  if (['stock', 'market', 'fund', 'research', 'research2'].includes(String(name || ''))) activeKey.value = String(name)
+}, {immediate: true})
 
 function toggleFullscreen(e) {
   activeKey.value = 'full'

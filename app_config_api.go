@@ -31,6 +31,7 @@ func (a *App) updateConfig(settingConfig *models.SettingConfig) (string, error) 
 	}
 	if strings.Contains(res, "\u4fdd\u5b58\u6210\u529f") {
 		a.reloadAIAnalysisCron(settingConfig)
+		a.reloadResearch2Cron(settingConfig)
 	}
 	return res, nil
 }

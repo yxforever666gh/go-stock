@@ -1,5 +1,5 @@
 param(
-    [string]$ShortcutName = "Go-Stock 1.8.3",
+    [string]$ShortcutName = "Go-Stock 1.8.4",
     [string]$DesktopPath = [Environment]::GetFolderPath("Desktop")
 )
 
@@ -21,7 +21,7 @@ $Shortcut.TargetPath = $Launcher
 $Shortcut.Arguments = ""
 $Shortcut.WorkingDirectory = $ProjectRoot
 $Shortcut.IconLocation = $IconPath + ",0"
-$Shortcut.Description = "Start Go-Stock 1.8.3 and open Research Center"
+$Shortcut.Description = "Start Go-Stock 1.8.4 and open Research Center"
 $Shortcut.Save()
 
 Write-Output $ShortcutPath

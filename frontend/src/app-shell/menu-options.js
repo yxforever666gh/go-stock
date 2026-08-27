@@ -23,6 +23,7 @@ import { BoxSearch20Regular } from '@vicons/fluent'
 import { NotificationFilled, StockOutlined } from '@vicons/antd'
 import { BrowserOpenURL, EventsEmit } from '../services/browser-runtime.mjs'
 import { formatGitHubVersionLabel } from './version-label.js'
+import {RESEARCH_CENTER1_LABEL, RESEARCH_CENTER2_LABEL, RESEARCH_TABS} from './research-menu-model.js'
 
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) })
@@ -93,11 +94,8 @@ function createMarketChildren(activeKey) {
 }
 
 function createResearchChildren(activeKey) {
-  const researchTabs = [
-    ['research1', '股票推荐记录', DiamondOutline, 0],
-    ['research2', 'AI分析报告', ReportAnalytics, 1],
-    ['research3', '股票收益率', ReportMoney, 2],
-  ]
+  const icons = [DiamondOutline, ReportAnalytics, ReportMoney, SettingsOutline]
+  const researchTabs = RESEARCH_TABS.map((name, id) => [`research${id + 1}`, name, icons[id], id])
 
   return researchTabs.map(([key, name, icon, id]) => ({
     label: createRouterLabel(
@@ -111,6 +109,20 @@ function createResearchChildren(activeKey) {
         emitLater('changeResearchTab', { ID: id, name })
       },
     ),
+    key,
+    icon: renderIcon(icon),
+  }))
+}
+
+function createResearch2Children(activeKey) {
+  const keys = ['recommendations', 'reports', 'yield', 'settings']
+  const icons = [DiamondOutline, ReportAnalytics, ReportMoney, SettingsOutline]
+  const tabs = RESEARCH_TABS.map((name, id) => [`research2-${keys[id]}`, name, icons[id], id])
+  return tabs.map(([key, name, icon, id]) => ({
+    label: createRouterLabel(name, {name: 'research2', query: {name}}, () => {
+      activeKey.value = 'research2'
+      emitLater('changeResearch2Tab', {ID: id, name})
+    }),
     key,
     icon: renderIcon(icon),
   }))
@@ -210,7 +222,7 @@ export function createMenuOptions({
     },
     {
       label: createRouterLabel(
-        '研究中心',
+        RESEARCH_CENTER1_LABEL,
         {
           name: 'research',
           query: { name: '股票推荐记录' },
@@ -226,17 +238,19 @@ export function createMenuOptions({
     },
     {
       label: createRouterLabel(
-        '设置',
+        RESEARCH_CENTER2_LABEL,
         {
-          name: 'settings',
-          query: { name: '设置' },
+          name: 'research2',
+          query: { name: '股票推荐记录' },
         },
         () => {
-          activeKey.value = 'settings'
+          activeKey.value = 'research2'
+          emitLater('changeResearch2Tab', { ID: 0, name: '股票推荐记录' })
         },
       ),
-      key: 'settings',
-      icon: renderIcon(SettingsOutline),
+      key: 'research2',
+      icon: renderIcon(FlaskOutline),
+      children: createResearch2Children(activeKey),
     },
     {
       label: createAnchorLabel(() => formatGitHubVersionLabel(appVersion.value), () => {

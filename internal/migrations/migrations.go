@@ -188,6 +188,21 @@ var mainMigrations = []migration{
 		},
 		apply: applyResearchFixedCapitalAndHistoricalBuy,
 	},
+	{
+		id: 13, name: "research2_overnight_strength_strategy",
+		description: "App 1.8.4 adds the isolated 12000-yuan overnight-strength research account, reports, recommendations, trades, metrics and automatic-run switch.",
+		definition: func() string {
+			return strings.Join([]string{
+				"settings.research2_auto_enabled BOOLEAN NOT NULL DEFAULT 1",
+				"research2_analysis_runs",
+				"research2_recommendations",
+				"research2_trades",
+				"research2_accounts initial_cash=12000 cash=12000",
+				"research2_account_snapshots",
+			}, "\n")
+		},
+		apply: applyResearch2OvernightStrengthStrategy,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -729,6 +744,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 12 {
 		if err := verifyMainSchema12Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 13 {
+		if err := verifyMainSchema13Runtime(database); err != nil {
 			return result, err
 		}
 	}

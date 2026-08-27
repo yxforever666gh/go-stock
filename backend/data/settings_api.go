@@ -137,6 +137,7 @@ func UpdateConfig(s *SettingConfig) string {
 		"force_no_proxy_for_fetch":         s.ForceNoProxyForFetch,
 		"qgqp_b_id":                        s.QgqpBId,
 		"ai_analysis_enabled":              s.AIAnalysisEnabled,
+		"research2_auto_enabled":           s.Research2AutoEnabled,
 		"ai_analysis_config_id":            s.AIAnalysisConfigID,
 		"ai_analysis_times":                s.AIAnalysisTimes,
 		"ai_review_start_time":             s.AIReviewStartTime,
@@ -339,6 +340,7 @@ func applySettingDefaults(settings *Settings) {
 	}
 	if settings.ID == 0 {
 		settings.ForceNoProxyForFetch = true
+		settings.Research2AutoEnabled = true
 	}
 	if strings.TrimSpace(settings.AIAnalysisTimes) == "" {
 		settings.AIAnalysisTimes = defaultAIAnalysisTimes

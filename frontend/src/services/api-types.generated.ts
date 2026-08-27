@@ -24,6 +24,10 @@ export const API_PATHS = {
   getReadiness: "/readyz",
   getRecommendation: "/api/v1/research/recommendations/{id}",
   getRecommendationChart: "/api/v1/research/recommendations/{id}/chart",
+  getResearch2Account: "/api/v1/research2/account",
+  getResearch2AnalysisRun: "/api/v1/research2/analysis-runs/{id}",
+  getResearch2Performance: "/api/v1/research2/account/performance",
+  getResearch2Recommendation: "/api/v1/research2/recommendations/{id}",
   getSettings: "/api/v1/settings",
   getSimulatedAccount: "/api/v1/research/account",
   getStockKLine: "/api/v1/stocks/{code}/kline",
@@ -46,6 +50,8 @@ export const API_PATHS = {
   listHotTopics: "/api/v1/market/hot/topics",
   listIndustryResearchReports: "/api/v1/market/industries/research-reports",
   listRecommendations: "/api/v1/research/recommendations",
+  listResearch2AnalysisRuns: "/api/v1/research2/analysis-runs",
+  listResearch2Recommendations: "/api/v1/research2/recommendations",
   listStockNotices: "/api/v1/market/stocks/notices",
   listStockResearchReports: "/api/v1/market/stocks/research-reports",
   listTelegraphs: "/api/v1/market/telegraphs",
@@ -355,6 +361,143 @@ export type RecommendationDetail = {
   position?: Position
   recommendation: Recommendation
   trades: Array<SimulatedTrade>
+}
+
+export type Research2AccountOverview = {
+  cash: number
+  initialCash: 12000
+  lastValuedAt: string
+  netAssetValue: number
+  netProfit: number
+  openPositions: number
+  pendingBuys: number
+  positionValue: number
+  returnRate: number
+}
+
+export type Research2AccountSnapshot = {
+  cash: number
+  netAssetValue: number
+  netProfit: number
+  positionValue: number
+  returnRate: number
+  snapshotId: string
+  snapshotType: string
+  tradingDate: string
+  valuedAt: string
+}
+
+export type Research2AnalysisRun = {
+  evidenceCutoffAt: string
+  failureReason?: string
+  generatedAt?: string
+  modelAttemptLogJson: string
+  modelName?: string
+  onTime: boolean
+  providerName?: string
+  recommendationCount: number
+  reportMarkdown: string
+  runId: string
+  scheduledFor: string
+  sourceStatusJson: string
+  startedAt: string
+  status: "running" | "success" | "no_recommendation" | "failed" | "skipped_non_trading_day" | "missed_window"
+  tradingDate: string
+}
+
+export type Research2AnalysisRunSummary = {
+  evidenceCutoffAt: string
+  failureReason?: string
+  generatedAt?: string
+  modelName?: string
+  onTime: boolean
+  providerName?: string
+  recommendationCount: number
+  runId: string
+  scheduledFor: string
+  status: string
+  tradingDate: string
+}
+
+export type Research2Performance = Research2AccountOverview & {
+  closedTrades: number
+  curve: Array<Research2AccountSnapshot>
+  hitFiveCount: number
+  hitLimitUpCount: number
+  hitMinusThreeCount: number
+  lateReports: number
+  maxDrawdown?: number | null
+  onTimeReports: number
+  totalFees: number
+  winRate?: number | null
+  winningTrades: number
+}
+
+export type Research2Recommendation = {
+  analysisRunId: string
+  buyAt?: string
+  buyFees?: number
+  buyLower: number
+  buyMarketPrice?: number
+  buyPrice?: number
+  buyUpper: number
+  cancelConditions?: string
+  catalystScore?: number
+  estimatedLotCost?: number
+  failureReason?: string
+  finalScore: number
+  freshCatalyst?: string
+  hitFiveBeforeSell?: boolean | null
+  hitLimitUpFullDay?: boolean | null
+  hitMinusThree?: boolean | null
+  late: boolean
+  mainRisk?: string
+  marketScore?: number
+  metricsFinalized: boolean
+  netPnl: number
+  netYieldRate: number
+  oldBackground?: string
+  quantData?: string
+  quantity: number
+  rank: number
+  recommendationId: string
+  referencePrice: number
+  riskDeduction?: number
+  sectorScore?: number
+  sellAt?: string
+  sellFees?: number
+  sellMarketPrice?: number
+  sellPrice?: number
+  signalAt: string
+  sourceRefs?: string
+  status: "buy_pending" | "active" | "sell_pending" | "closed" | "missed_cash" | "missed_untradable" | "missed_window" | "cancelled_price"
+  stockCode: string
+  stockName: string
+  stockScore?: number
+  summary?: string
+  targetBuyAt: string
+  targetSellAt?: string
+}
+
+export type Research2RecommendationDetail = {
+  analysis: Research2AnalysisRun
+  recommendation: Research2Recommendation
+  trades: Array<Research2Trade>
+}
+
+export type Research2Trade = {
+  commission: number
+  executionPrice: number
+  marketPrice: number
+  netCashFlow: number
+  quantity: number
+  recommendationId: string
+  side: "buy" | "sell"
+  slippageAmount: number
+  stampDuty: number
+  tradeId: string
+  tradedAt: string
+  transferFee: number
 }
 
 export type SentimentRequest = {

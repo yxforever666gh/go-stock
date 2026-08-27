@@ -71,7 +71,7 @@ func main() {
 	var write bool
 	flag.StringVar(&specPath, "spec", "api/openapi.yaml", "OpenAPI source file")
 	flag.StringVar(&outputPath, "output", "frontend/src/services/api-types.generated.ts", "generated TypeScript output")
-	flag.StringVar(&goFiles, "go-files", "web_api.go,web_api_system.go,web_api_settings.go,web_api_groups.go,web_api_stocks.go,web_api_funds.go,web_api_market.go,web_api_research.go", "comma-separated Go HTTP route files")
+	flag.StringVar(&goFiles, "go-files", "web_api.go,web_api_system.go,web_api_settings.go,web_api_groups.go,web_api_stocks.go,web_api_funds.go,web_api_market.go,web_api_research.go,web_api_research2.go", "comma-separated Go HTTP route files")
 	flag.BoolVar(&write, "write", false, "write generated output instead of checking it")
 	flag.Parse()
 
