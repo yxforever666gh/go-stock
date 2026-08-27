@@ -2,9 +2,9 @@ package releaseinfo
 
 import "testing"
 
-func TestReleaseIdentity176Schema11(t *testing.T) {
+func TestReleaseIdentity183Schema12(t *testing.T) {
 	manifest := Manifest()
-	if manifest.AppVersion != "1.8.2" || manifest.MainSchemaVersion != 12 || manifest.MinuteSchemaVersion != 2 {
+	if manifest.AppVersion != "1.8.3" || manifest.MainSchemaVersion != 12 || manifest.MinuteSchemaVersion != 2 {
 		t.Fatalf("unexpected manifest: %+v", manifest)
 	}
 	status := SystemVersion()
