@@ -26,7 +26,7 @@
 
 - `README.md`
 - `LICENSE`
-- `CHANGELOG.md`
+- `RELEASE_NOTES.md`
 - `CONTRIBUTING.md`
 - `CODE_OF_CONDUCT.md`
 - `SECURITY.md`

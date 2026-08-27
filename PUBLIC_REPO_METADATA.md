@@ -58,7 +58,7 @@ Local-first web stock analysis tool built with Go, Vue 3 and SQLite, with watchl
 
 ## 仓库可见性切换前建议
 
-- 确认 `README.md`、`CHANGELOG.md`、`LICENSE`、`SECURITY.md` 已是当前公开版内容
+- 确认 `README.md`、`RELEASE_NOTES.md`、`LICENSE`、`SECURITY.md` 已是当前公开版内容
 - 确认 `main` 只保留当前单提交公开快照
 - 确认远端发布标签与 App `1.6.0` 一致
 - 确认 Releases 页面没有旧的私有发布说明

@@ -51,9 +51,9 @@ func TestAppVersionIsConsistentAcrossReleaseArtifacts(t *testing.T) {
 	if !strings.Contains(readme, "App "+version) {
 		t.Fatalf("README.md does not identify current App version %q", version)
 	}
-	changelog := readTextFile(t, filepath.Join(root, "CHANGELOG.md"))
-	if got := firstChangelogVersion(changelog); got != version {
-		t.Fatalf("CHANGELOG.md first release = %q, want %q", got, version)
+	releaseNotes := readTextFile(t, filepath.Join(root, "RELEASE_NOTES.md"))
+	if got := firstReleaseNotesVersion(releaseNotes); got != version {
+		t.Fatalf("RELEASE_NOTES.md first release = %q, want %q", got, version)
 	}
 
 }
@@ -105,7 +105,7 @@ func assertReleaseVersion(t *testing.T, artifact, got, want string) {
 	}
 }
 
-func firstChangelogVersion(content string) string {
+func firstReleaseNotesVersion(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "## ") {
