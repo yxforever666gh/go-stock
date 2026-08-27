@@ -3,6 +3,9 @@ package main
 import "net/http"
 
 func registerResearch2Routes(mux *http.ServeMux, app *App) {
+	mux.HandleFunc("POST /api/v1/research2/email/test", func(w http.ResponseWriter, r *http.Request) {
+		writeCommandResult(w, "研究中心2测试邮件发送成功", app.testResearch2Email(r.Context()))
+	})
 	mux.HandleFunc("GET /api/v1/research2/analysis-runs", func(w http.ResponseWriter, r *http.Request) {
 		limit, offset := webPage(r)
 		items, err := app.listResearch2Runs(r.Context(), limit, offset)

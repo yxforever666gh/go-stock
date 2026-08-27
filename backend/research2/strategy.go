@@ -99,6 +99,21 @@ func NewRunner(repository *Repository, ai research.AIClient, collector EvidenceC
 	return &Runner{repository: repository, ai: ai, collector: collector, calendar: calendar, now: time.Now, waitUntil: waitUntil}
 }
 
+// ConfigureReplayClock lets an isolated historical replay use the production
+// runner without waiting for wall-clock time. Production construction leaves
+// both sources untouched.
+func (r *Runner) ConfigureReplayClock(now func() time.Time, wait func(context.Context, time.Time) error) {
+	if r == nil {
+		return
+	}
+	if now != nil {
+		r.now = now
+	}
+	if wait != nil {
+		r.waitUntil = wait
+	}
+}
+
 func waitUntil(ctx context.Context, target time.Time) error {
 	delay := time.Until(target)
 	if delay <= 0 {
@@ -169,29 +184,46 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			modelDeadline = latest
 		}
 	}
-	modelCtx, cancelModel := context.WithDeadline(ctx, modelDeadline)
-	defer cancelModel()
-	result, err := r.ai.Complete(modelCtx, research.CompletionRequest{RecommendationID: run.RunID, Phase: "research2_overnight_strength", Prompt: buildPrompt(evidence, cutoff), OnAttempt: func(record research.ModelAttemptRecord) {
-		attempts[record.ID] = record
-		run.ProviderName = record.ProviderName
-		values := make([]research.ModelAttemptRecord, 0, len(attempts))
-		for _, item := range attempts {
-			values = append(values, item)
-		}
-		sort.Slice(values, func(i, j int) bool { return values[i].StartedAt.Before(values[j].StartedAt) })
-		encoded, _ := json.Marshal(values)
-		run.ModelAttemptLogJSON = string(encoded)
-		persistCtx, cancelPersist := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancelPersist()
-		_ = r.repository.SaveRun(persistCtx, &run)
-	}})
-	if err != nil {
-		return finishFailure("failed", "大模型分析失败: "+err.Error(), err)
+	modelBudget := modelDeadline.Sub(r.now().In(shanghai()))
+	if modelBudget <= 0 {
+		modelBudget = 5 * time.Minute
 	}
-	run.ModelName = result.Model
-	output, err := ParseModelOutput(result.Content)
-	if err != nil {
-		return finishFailure("failed", "大模型结构化输出无效: "+err.Error(), err)
+	modelCtx, cancelModel := context.WithTimeout(ctx, modelBudget)
+	defer cancelModel()
+	prompt := buildPrompt(evidence, cutoff)
+	var result research.CompletionResult
+	var output modelOutput
+	for structureAttempt := 1; structureAttempt <= 2; structureAttempt++ {
+		result, err = r.ai.Complete(modelCtx, research.CompletionRequest{RecommendationID: run.RunID, Phase: "research2_overnight_strength", Prompt: prompt, OnAttempt: func(record research.ModelAttemptRecord) {
+			attempts[record.ID] = record
+			run.ProviderName = record.ProviderName
+			values := make([]research.ModelAttemptRecord, 0, len(attempts))
+			for _, item := range attempts {
+				values = append(values, item)
+			}
+			sort.Slice(values, func(i, j int) bool { return values[i].StartedAt.Before(values[j].StartedAt) })
+			encoded, _ := json.Marshal(values)
+			run.ModelAttemptLogJSON = string(encoded)
+			persistCtx, cancelPersist := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelPersist()
+			_ = r.repository.SaveRun(persistCtx, &run)
+		}})
+		if err != nil {
+			return finishFailure("failed", "大模型分析失败: "+err.Error(), err)
+		}
+		run.ModelName = result.Model
+		output, err = ParseModelOutput(result.Content)
+		if err == nil {
+			break
+		}
+		if structureAttempt == 2 {
+			return finishFailure("failed", "大模型结构化输出无效: "+err.Error(), err)
+		}
+		prompt = strings.Join([]string{
+			buildPrompt(evidence, cutoff),
+			"\n# 上次输出纠正要求",
+			"上次响应无法解析为严格 JSON（" + err.Error() + "）。请重新生成完整结果，只输出一个合法 JSON 对象；所有中文、换行和引号必须位于 JSON 字符串内并正确转义，不得输出解释、注释或代码围栏。",
+		}, "\n")
 	}
 	generated := r.now().In(shanghai())
 	run.GeneratedAt = &generated

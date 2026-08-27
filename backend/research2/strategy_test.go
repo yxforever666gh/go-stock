@@ -2,6 +2,7 @@ package research2
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,6 +12,24 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+type sequenceAI struct {
+	responses []string
+	calls     int
+}
+
+func (a *sequenceAI) Complete(_ context.Context, _ research.CompletionRequest) (research.CompletionResult, error) {
+	a.calls++
+	index := a.calls - 1
+	if index >= len(a.responses) {
+		index = len(a.responses) - 1
+	}
+	return research.CompletionResult{Content: a.responses[index], Model: "test-model"}, nil
+}
+
+type fixedEvidence struct{ value Evidence }
+
+func (e fixedEvidence) Collect(context.Context, time.Time) (Evidence, error) { return e.value, nil }
 
 type testCalendar struct{}
 
@@ -63,6 +82,25 @@ func TestParseModelOutputAcceptsJSONFence(t *testing.T) {
 	}
 	if !value.TradingDay || value.ReportMarkdown != "ok" {
 		t.Fatalf("unexpected output: %+v", value)
+	}
+}
+
+func TestRunnerRetriesOnceWhenModelJSONIsInvalid(t *testing.T) {
+	repository := research2TestRepository(t)
+	ai := &sequenceAI{responses: []string{
+		`{"tradingDay":true,"reportMarkdown":"损坏"æ}`,
+		`{"tradingDay":true,"conclusion":"证据不足，空仓","reportMarkdown":"# 隔离报告\n\n证据不足，空仓。","recommendations":[]}`,
+	}}
+	loc := shanghai()
+	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "测试证据", SourceStatusJSON: "[]"}}, testCalendar{})
+	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
+	run, err := runner.Run(context.Background(), scheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ai.calls != 2 || run.Status != "no_recommendation" || !strings.Contains(run.ReportMarkdown, "隔离报告") {
+		t.Fatalf("calls=%d run=%+v", ai.calls, run)
 	}
 }
 

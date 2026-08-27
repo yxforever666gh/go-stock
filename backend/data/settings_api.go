@@ -7,6 +7,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/research2"
 	appconfig "go-stock/internal/config"
 	"os"
 	"regexp"
@@ -72,6 +73,19 @@ func UpdateConfig(s *SettingConfig) string {
 	s.PrivateMinuteProxyMode = normalizePrivateMinuteProxyMode(s.PrivateMinuteProxyMode)
 	s.PrivateMinuteLevel = normalizePrivateMinuteLevel(s.PrivateMinuteLevel)
 	s.AkshareMinuteSourceMode = normalizeAkshareMinuteSourceMode(s.AkshareMinuteSourceMode)
+	s.Research2EmailTo = strings.TrimSpace(s.Research2EmailTo)
+	s.Research2EmailFrom = strings.TrimSpace(s.Research2EmailFrom)
+	s.Research2EmailSMTPHost = strings.TrimSpace(s.Research2EmailSMTPHost)
+	s.Research2EmailSMTPUser = strings.TrimSpace(s.Research2EmailSMTPUser)
+	if s.Research2EmailEnabled {
+		if _, _, emailErr := research2.ValidateEmailConfig(research2.EmailConfig{
+			Enabled: true, To: s.Research2EmailTo, From: s.Research2EmailFrom,
+			SMTPHost: s.Research2EmailSMTPHost, SMTPPort: s.Research2EmailSMTPPort,
+			Username: s.Research2EmailSMTPUser, Password: s.Research2EmailSMTPPass,
+		}); emailErr != nil {
+			return "保存失败: 研究中心2邮件配置无效: " + emailErr.Error()
+		}
+	}
 
 	normalizedAnalysisTimes, err := NormalizeAIAnalysisTimes(s.AIAnalysisTimes)
 	if err != nil {
@@ -138,6 +152,13 @@ func UpdateConfig(s *SettingConfig) string {
 		"qgqp_b_id":                        s.QgqpBId,
 		"ai_analysis_enabled":              s.AIAnalysisEnabled,
 		"research2_auto_enabled":           s.Research2AutoEnabled,
+		"research2_email_enabled":          s.Research2EmailEnabled,
+		"research2_email_to":               s.Research2EmailTo,
+		"research2_email_from":             s.Research2EmailFrom,
+		"research2_email_smtp_host":        s.Research2EmailSMTPHost,
+		"research2_email_smtp_port":        s.Research2EmailSMTPPort,
+		"research2_email_smtp_user":        s.Research2EmailSMTPUser,
+		"research2_email_smtp_pass":        s.Research2EmailSMTPPass,
 		"ai_analysis_config_id":            s.AIAnalysisConfigID,
 		"ai_analysis_times":                s.AIAnalysisTimes,
 		"ai_review_start_time":             s.AIReviewStartTime,

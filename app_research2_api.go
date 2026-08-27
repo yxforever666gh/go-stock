@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"go-stock/backend/data"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research2"
+	"go-stock/internal/service"
 )
 
 func (a *App) ensureResearch2Runtime(configID int) (*data.Research2Runtime, error) {
@@ -44,17 +46,31 @@ func (a *App) resetResearch2Runtime() {
 }
 
 func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
-	for _, key := range []string{research2AnalysisEntryKey, research2TradingEntryKey, research2MetricsEntryKey} {
+	for _, key := range []string{research2AnalysisEntryKey, research2TradingEntryKey, research2MetricsEntryKey, research2EmailEntryKey} {
 		if entry, exists := a.getCronEntry(key); exists {
 			a.cron.Remove(entry)
 		}
 		a.deleteCronEntry(key)
 	}
 	a.resetResearch2Runtime()
-	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
+	if setting == nil || setting.Settings == nil {
 		return
 	}
 	configID := int(setting.AIAnalysisConfigID)
+	if setting.Research2EmailEnabled {
+		entryID, err := a.cron.AddFunc("@every 30s", func() { a.processResearch2Emails() })
+		if err != nil {
+			a.recordSchedulerRegistrationError(research2EmailEntryKey, "@every 30s", err)
+		} else {
+			a.setCronEntry(research2EmailEntryKey, entryID)
+			go a.processResearch2Emails()
+		}
+	} else {
+		go a.cancelResearch2Emails()
+	}
+	if !setting.Research2AutoEnabled {
+		return
+	}
 	registrations := []struct {
 		key, spec string
 		run       func()
@@ -109,11 +125,80 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
 		return
 	}
-	if _, err = runtime.Runner.Run(a.ctx, scheduledFor); err != nil {
+	run, err := runtime.Runner.Run(a.ctx, scheduledFor)
+	if err != nil {
 		logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
 		return
 	}
+	// Complete the time-sensitive simulated trade path before making the report
+	// visible to the asynchronous SMTP worker.
 	a.processResearch2Trades(time.Now())
+	if runtime.Email != nil && setting.Research2EmailEnabled {
+		if _, queueErr := runtime.Email.Queue(a.ctx, run, research2EmailConfig(setting)); queueErr != nil {
+			logger.SugaredLogger.Errorf("研究中心2报告邮件入队失败: %v", queueErr)
+		}
+	}
+	go a.processResearch2Emails()
+}
+
+func research2EmailConfig(setting *models.SettingConfig) research2.EmailConfig {
+	if setting == nil || setting.Settings == nil {
+		return research2.EmailConfig{}
+	}
+	return research2.EmailConfig{
+		Enabled: setting.Research2EmailEnabled, To: setting.Research2EmailTo, From: setting.Research2EmailFrom,
+		SMTPHost: setting.Research2EmailSMTPHost, SMTPPort: setting.Research2EmailSMTPPort,
+		Username: setting.Research2EmailSMTPUser, Password: setting.Research2EmailSMTPPass, Timeout: 15 * time.Second,
+	}
+}
+
+func (a *App) processResearch2Emails() {
+	if a == nil || !a.research2EmailMu.TryLock() {
+		return
+	}
+	defer a.research2EmailMu.Unlock()
+	setting := data.GetSettingConfig()
+	if setting == nil || setting.Settings == nil {
+		return
+	}
+	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	if err != nil {
+		logger.SugaredLogger.Errorf("初始化研究中心2邮件服务失败: %v", err)
+		return
+	}
+	if runtime.Email == nil {
+		logger.SugaredLogger.Error("初始化研究中心2邮件服务失败: 邮件服务不可用")
+		return
+	}
+	if err = runtime.Email.ProcessDue(a.ctx, research2EmailConfig(setting)); err != nil {
+		logger.SugaredLogger.Errorf("研究中心2报告邮件处理失败: %v", err)
+	}
+}
+
+func (a *App) cancelResearch2Emails() {
+	if a == nil || !a.research2EmailMu.TryLock() {
+		return
+	}
+	defer a.research2EmailMu.Unlock()
+	repository, err := a.research2Repository()
+	if err == nil {
+		_ = repository.CancelPendingEmailDeliveries(a.ctx)
+	}
+}
+
+func (a *App) testResearch2Email(ctx context.Context) error {
+	setting := data.GetSettingConfig()
+	if setting == nil || setting.Settings == nil {
+		return errors.New("研究中心2邮件配置不可用")
+	}
+	if _, _, configErr := research2.ValidateEmailConfig(research2EmailConfig(setting)); configErr != nil {
+		return fmt.Errorf("%w: %s", service.ErrInvalidInput, configErr.Error())
+	}
+	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	if err != nil {
+		return err
+	}
+	return runtime.Email.SendTest(ctx, research2EmailConfig(setting))
 }
 
 func (a *App) processResearch2Trades(now time.Time) {

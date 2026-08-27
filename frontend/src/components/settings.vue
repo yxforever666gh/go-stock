@@ -1,13 +1,13 @@
 <script setup>
 import {h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NTag, useMessage} from 'naive-ui'
-import {GetConfig, TestAIConfig, UpdateConfig} from '../services/settings-api'
+import {GetConfig, TestAIConfig, TestResearch2Email, UpdateConfig} from '../services/settings-api'
 import {ExportConfig} from '../services/exports-api'
 import {EventsEmit} from '../services/browser-runtime.mjs'
 import MinuteProviderSettings from './settings/MinuteProviderSettings.vue'
 import AiConfigSettings from './settings/AiConfigSettings.vue'
 
-defineProps({
+const props = defineProps({
   settingsScope: {
     type: String,
     default: 'research1',
@@ -48,6 +48,15 @@ const formValue = ref({
     reviewIntervalMinutes: 15,
   },
   research2AutoEnabled: true,
+  research2Email: {
+    enabled: false,
+    to: '',
+    from: '',
+    smtpHost: '',
+    smtpPort: 465,
+    smtpUsername: '',
+    smtpPassword: '',
+  },
 })
 
 const aiConfigTestStates = ref({})
@@ -56,6 +65,7 @@ const persistedConfig = ref({})
 const autoSaveState = ref('idle')
 const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
+const research2EmailTesting = ref(false)
 let activeSavePromise = null
 let queuedAutoSave = false
 let nextAiConfigLocalKey = 1
@@ -147,6 +157,15 @@ function applyConfigToForm(config) {
     reviewIntervalMinutes: config?.aiReviewIntervalMinutes || 15,
   }
   formValue.value.research2AutoEnabled = config?.research2AutoEnabled !== false
+  formValue.value.research2Email = {
+    enabled: config?.research2EmailEnabled === true,
+    to: config?.research2EmailTo || '',
+    from: config?.research2EmailFrom || '',
+    smtpHost: config?.research2EmailSmtpHost || '',
+    smtpPort: Number.isFinite(config?.research2EmailSmtpPort) && config.research2EmailSmtpPort > 0 ? config.research2EmailSmtpPort : 465,
+    smtpUsername: config?.research2EmailSmtpUsername || '',
+    smtpPassword: config?.research2EmailSmtpPassword || '',
+  }
 }
 
 function aiConfigRowKey(aiConfig) {
@@ -265,7 +284,25 @@ function buildConfigPayload() {
     aiReviewStartTime: formValue.value.aiAnalysis.reviewStartTime,
     aiReviewIntervalMinutes: formValue.value.aiAnalysis.reviewIntervalMinutes,
     research2AutoEnabled: formValue.value.research2AutoEnabled,
+    research2EmailEnabled: formValue.value.research2Email.enabled,
+    research2EmailTo: formValue.value.research2Email.to,
+    research2EmailFrom: formValue.value.research2Email.from,
+    research2EmailSmtpHost: formValue.value.research2Email.smtpHost,
+    research2EmailSmtpPort: formValue.value.research2Email.smtpPort,
+    research2EmailSmtpUsername: formValue.value.research2Email.smtpUsername,
+    research2EmailSmtpPassword: formValue.value.research2Email.smtpPassword,
   }
+}
+
+function getResearch2EmailConfigError(requireConfig = formValue.value.research2Email.enabled) {
+  if (props.settingsScope !== 'research2' || !requireConfig) return ''
+  const email = formValue.value.research2Email
+  if (!String(email.to || '').trim()) return '请填写研究中心2报告收件人'
+  if (!String(email.smtpHost || '').trim()) return '请填写研究中心2 SMTP 主机'
+  if (!Number.isInteger(email.smtpPort) || email.smtpPort < 1 || email.smtpPort > 65535) return '研究中心2 SMTP 端口必须在 1 到 65535 之间'
+  if (!String(email.smtpUsername || '').trim()) return '请填写研究中心2 SMTP 用户名'
+  if (!String(email.smtpPassword || '').trim()) return '请填写研究中心2 SMTP 授权码'
+  return ''
 }
 
 function getMinuteSourceConfigError() {
@@ -284,6 +321,7 @@ function formatSaveTime(date = new Date()) {
 async function runPersist({showSuccess = false, notifyError = false, recordAutoSaveError = false} = {}) {
   if (recordAutoSaveError) autoSaveError.value = ''
   const validationError = getMinuteSourceConfigError()
+    || getResearch2EmailConfigError()
   if (validationError) {
     if (notifyError) message.error(validationError)
     if (recordAutoSaveError) {
@@ -334,6 +372,24 @@ async function saveCurrentConfig(options = {}) {
   if (activeSavePromise) await activeSavePromise
   autoSaveState.value = 'saving'
   return runPersist({showSuccess: options.showSuccess, notifyError: options.notifyError, recordAutoSaveError: true})
+}
+
+async function testResearch2Email() {
+  const validationError = getResearch2EmailConfigError(true)
+  if (validationError) {
+    message.error(validationError)
+    return
+  }
+  research2EmailTesting.value = true
+  try {
+    if (!await saveCurrentConfig({notifyError: true})) return
+    const result = await TestResearch2Email()
+    message.success(result || '研究中心2测试邮件发送成功')
+  } catch (error) {
+    message.error(`测试邮件发送失败：${error?.message || error}`)
+  } finally {
+    research2EmailTesting.value = false
+  }
 }
 
 function handleImmediateFieldChange() { queueAutoSave() }
@@ -464,6 +520,38 @@ onBeforeUnmount(() => message.destroyAll())
                   @test-ai-config="testAiConfig"
                   @move-ai-config="handleAiConfigMove"/>
             </n-gi>
+          </n-grid>
+        </n-card>
+
+        <n-card v-if="settingsScope === 'research2'" :title="() => h(NTag, {type: 'primary', bordered: false}, () => '研究中心2报告邮件')" size="small">
+          <n-grid :cols="24" :x-gap="24">
+            <n-form-item-gi :span="24" label="自动发送报告：" path="research2Email.enabled">
+              <n-switch v-model:value="formValue.research2Email.enabled" @update:value="handleImmediateFieldChange"/>
+              <n-text depth="3" style="margin-left:12px">报告落库并完成交易处理后异步发送；失败后最多重试3次。</n-text>
+            </n-form-item-gi>
+            <n-form-item-gi :span="12" label="收件人：" path="research2Email.to">
+              <n-input v-model:value="formValue.research2Email.to" type="textarea" :autosize="{minRows:2,maxRows:4}"
+                       placeholder="多个地址可用逗号、分号或换行分隔" @blur="handleTextFieldBlur"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="12" label="发件人：" path="research2Email.from">
+              <n-input v-model:value="formValue.research2Email.from" placeholder="留空时使用 SMTP 用户名" @blur="handleTextFieldBlur"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="10" label="SMTP 主机：" path="research2Email.smtpHost">
+              <n-input v-model:value="formValue.research2Email.smtpHost" placeholder="smtp.example.com" @blur="handleTextFieldBlur"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="4" label="端口：" path="research2Email.smtpPort">
+              <n-input-number v-model:value="formValue.research2Email.smtpPort" :min="1" :max="65535" @update:value="handleImmediateFieldChange"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="10" label="SMTP 用户名：" path="research2Email.smtpUsername">
+              <n-input v-model:value="formValue.research2Email.smtpUsername" @blur="handleTextFieldBlur"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="12" label="SMTP 授权码：" path="research2Email.smtpPassword">
+              <n-input v-model:value="formValue.research2Email.smtpPassword" type="password" show-password-on="click" @blur="handleTextFieldBlur"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="12">
+              <n-button type="primary" secondary :loading="research2EmailTesting" @click="testResearch2Email">发送测试邮件</n-button>
+            </n-form-item-gi>
+            <n-gi :span="24"><n-alert type="info" :show-icon="false">支持465隐式TLS及STARTTLS。测试邮件只验证配置，不创建研究记录或模拟交易。</n-alert></n-gi>
           </n-grid>
         </n-card>
 

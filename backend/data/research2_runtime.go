@@ -22,6 +22,7 @@ type Research2Runtime struct {
 	Repository *research2.Repository
 	Runner     *research2.Runner
 	Trading    *research2.TradingService
+	Email      *research2.EmailService
 }
 
 func NewResearch2Runtime(configID int) (*Research2Runtime, error) {
@@ -42,7 +43,7 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, _ *gorm.DB) (*Research
 	calendar := ResearchTradingCalendar{}
 	collector := &Research2EvidenceCollector{sources: NewResearchSourceCollectorWithProviders(news, stocks), stocks: stocks}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks}
-	return &Research2Runtime{Repository: repository, Runner: research2.NewRunner(repository, NewResearchAIClient(configID), collector, calendar), Trading: research2.NewTradingService(repository, market, calendar)}, nil
+	return &Research2Runtime{Repository: repository, Runner: research2.NewRunner(repository, NewResearchAIClient(configID), collector, calendar), Trading: research2.NewTradingService(repository, market, calendar), Email: research2.NewEmailService(repository, nil)}, nil
 }
 
 type research2MarketRow struct {

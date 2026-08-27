@@ -64,6 +64,7 @@ export const API_PATHS = {
   shutdownSystem: "/api/v1/system/shutdown",
   startAnalysisRun: "/api/v1/research/analysis-runs",
   testAIConfig: "/api/v1/ai/configs/test",
+  testResearch2Email: "/api/v1/research2/email/test",
   unfollowFund: "/api/v1/watchlist/funds/{code}",
   unfollowStock: "/api/v1/watchlist/stocks/{code}",
   updateGroupSort: "/api/v1/groups/{id}/sort",
@@ -388,6 +389,10 @@ export type Research2AccountSnapshot = {
 }
 
 export type Research2AnalysisRun = {
+  emailAttemptCount?: number
+  emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
+  emailLastError?: string
+  emailSentAt?: string | null
   evidenceCutoffAt: string
   failureReason?: string
   generatedAt?: string
@@ -406,6 +411,10 @@ export type Research2AnalysisRun = {
 }
 
 export type Research2AnalysisRunSummary = {
+  emailAttemptCount?: number
+  emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
+  emailLastError?: string
+  emailSentAt?: string | null
   evidenceCutoffAt: string
   failureReason?: string
   generatedAt?: string

@@ -6,6 +6,8 @@ import (
 	"math"
 	"time"
 
+	"go-stock/backend/models"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -43,16 +45,105 @@ func (r *Repository) CreateRecommendations(ctx context.Context, items []Recommen
 func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {
 	var rows []AnalysisRun
 	err := r.db.WithContext(ctx).Order("scheduled_for DESC, id DESC").Limit(limit).Offset(offset).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	deliveries, err := r.emailDeliveryMap(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]AnalysisRunSummary, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, ScheduledFor: row.ScheduledFor, EvidenceCutoffAt: row.EvidenceCutoffAt, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason})
+		delivery := deliveries[row.RunID]
+		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, ScheduledFor: row.ScheduledFor, EvidenceCutoffAt: row.EvidenceCutoffAt, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError})
 	}
-	return items, err
+	return items, nil
 }
 func (r *Repository) GetRun(ctx context.Context, id string) (AnalysisRun, error) {
 	var item AnalysisRun
 	err := r.db.WithContext(ctx).Where("run_id = ?", id).First(&item).Error
+	if err != nil {
+		return item, err
+	}
+	var delivery EmailDelivery
+	if deliveryErr := r.db.WithContext(ctx).Where("analysis_run_id = ?", item.RunID).First(&delivery).Error; deliveryErr == nil {
+		item.EmailDeliveryStatus = delivery.Status
+		item.EmailSentAt = delivery.SentAt
+		item.EmailAttemptCount = delivery.AttemptCount
+		item.EmailLastError = delivery.LastError
+	} else if !errors.Is(deliveryErr, gorm.ErrRecordNotFound) {
+		return item, deliveryErr
+	}
 	return item, err
+}
+
+func (r *Repository) emailDeliveryMap(ctx context.Context, runs []AnalysisRun) (map[string]EmailDelivery, error) {
+	result := make(map[string]EmailDelivery, len(runs))
+	ids := make([]string, 0, len(runs))
+	for _, run := range runs {
+		ids = append(ids, run.RunID)
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var deliveries []EmailDelivery
+	if err := r.db.WithContext(ctx).Where("analysis_run_id IN ?", ids).Find(&deliveries).Error; err != nil {
+		return nil, err
+	}
+	for _, delivery := range deliveries {
+		result[delivery.AnalysisRunID] = delivery
+	}
+	return result, nil
+}
+
+func (r *Repository) CreateEmailDelivery(ctx context.Context, delivery *EmailDelivery) (bool, error) {
+	result := r.db.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "analysis_run_id"}}, DoNothing: true}).Create(delivery)
+	return result.RowsAffected == 1, result.Error
+}
+
+func (r *Repository) DueEmailDeliveries(ctx context.Context, now time.Time, limit int) ([]EmailDelivery, error) {
+	var items []EmailDelivery
+	if limit <= 0 {
+		limit = 20
+	}
+	err := r.db.WithContext(ctx).
+		Where("status IN ? AND (next_attempt_at IS NULL OR next_attempt_at <= ?)", []string{EmailStatusPending, EmailStatusRetryWait}, now).
+		Order("created_at ASC").Limit(limit).Find(&items).Error
+	return items, err
+}
+
+func (r *Repository) ClaimEmailDelivery(ctx context.Context, id uint) (bool, error) {
+	result := r.db.WithContext(ctx).Model(&EmailDelivery{}).Where("id = ? AND status IN ?", id, []string{EmailStatusPending, EmailStatusRetryWait}).Updates(map[string]any{"status": EmailStatusSending, "last_error": ""})
+	return result.RowsAffected == 1, result.Error
+}
+
+func (r *Repository) CompleteEmailDelivery(ctx context.Context, id uint, attempts int, sentAt time.Time) error {
+	return r.db.WithContext(ctx).Model(&EmailDelivery{}).Where("id = ?", id).Updates(map[string]any{"status": EmailStatusSent, "attempt_count": attempts, "next_attempt_at": nil, "sent_at": sentAt, "last_error": ""}).Error
+}
+
+func (r *Repository) FailEmailDelivery(ctx context.Context, id uint, attempts int, next *time.Time, lastError string) error {
+	status := EmailStatusFailed
+	if next != nil {
+		status = EmailStatusRetryWait
+	}
+	return r.db.WithContext(ctx).Model(&EmailDelivery{}).Where("id = ?", id).Updates(map[string]any{"status": status, "attempt_count": attempts, "next_attempt_at": next, "last_error": lastError}).Error
+}
+
+func (r *Repository) RecoverStaleEmailDeliveries(ctx context.Context, staleBefore, now time.Time) error {
+	return r.db.WithContext(ctx).Model(&EmailDelivery{}).Where("status = ? AND updated_at <= ?", EmailStatusSending, staleBefore).Updates(map[string]any{"status": EmailStatusRetryWait, "next_attempt_at": now, "last_error": "上次发送进程中断，已恢复重试"}).Error
+}
+
+func (r *Repository) CancelPendingEmailDeliveries(ctx context.Context) error {
+	return r.db.WithContext(ctx).Model(&EmailDelivery{}).Where("status IN ?", []string{EmailStatusPending, EmailStatusRetryWait}).Updates(map[string]any{"status": EmailStatusCancelled, "next_attempt_at": nil, "last_error": "邮件开关已关闭"}).Error
+}
+
+func (r *Repository) RecordEmailAttempt(ctx context.Context, delivery EmailDelivery, status, errorMessage string, at time.Time) error {
+	generated := at
+	return r.db.WithContext(ctx).Create(&models.EmailSendLog{
+		SendType: "research2_report", TriggeredAt: at, Status: status,
+		Recipients: delivery.Recipients, Subject: delivery.Subject, ErrorMessage: errorMessage,
+		ReportCreatedAt: &generated, ExtraSummary: "analysisRunId=" + delivery.AnalysisRunID,
+	}).Error
 }
 func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int) ([]Recommendation, error) {
 	var items []Recommendation

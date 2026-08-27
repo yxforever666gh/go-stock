@@ -44,6 +44,7 @@ Thumbs.db
 /runtime/db/*.bak-*
 /runtime/db/
 /runtime/network-audit/
+/runtime/validation/
 /runtime/backups/
 /runtime/releases/
 /runtime/deployments/

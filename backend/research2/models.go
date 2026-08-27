@@ -26,6 +26,10 @@ type AnalysisRun struct {
 	OnTime              bool       `json:"onTime"`
 	CreatedAt           time.Time  `json:"createdAt"`
 	UpdatedAt           time.Time  `json:"updatedAt"`
+	EmailDeliveryStatus string     `json:"emailDeliveryStatus,omitempty" gorm:"-"`
+	EmailSentAt         *time.Time `json:"emailSentAt,omitempty" gorm:"-"`
+	EmailAttemptCount   int        `json:"emailAttemptCount,omitempty" gorm:"-"`
+	EmailLastError      string     `json:"emailLastError,omitempty" gorm:"-"`
 }
 
 func (AnalysisRun) TableName() string { return "research2_analysis_runs" }
@@ -42,7 +46,30 @@ type AnalysisRunSummary struct {
 	RecommendationCount int        `json:"recommendationCount"`
 	OnTime              bool       `json:"onTime"`
 	FailureReason       string     `json:"failureReason"`
+	EmailDeliveryStatus string     `json:"emailDeliveryStatus,omitempty"`
+	EmailSentAt         *time.Time `json:"emailSentAt,omitempty"`
+	EmailAttemptCount   int        `json:"emailAttemptCount,omitempty"`
+	EmailLastError      string     `json:"emailLastError,omitempty"`
 }
+
+type EmailDelivery struct {
+	ID            uint       `json:"id" gorm:"primaryKey"`
+	AnalysisRunID string     `json:"analysisRunId" gorm:"size:36;uniqueIndex;not null"`
+	Status        string     `json:"status" gorm:"size:32;index;not null"`
+	AttemptCount  int        `json:"attemptCount"`
+	NextAttemptAt *time.Time `json:"nextAttemptAt" gorm:"index"`
+	SentAt        *time.Time `json:"sentAt" gorm:"index"`
+	Recipients    string     `json:"recipients" gorm:"type:text;not null"`
+	Sender        string     `json:"sender" gorm:"type:text;not null"`
+	Subject       string     `json:"subject" gorm:"size:255;not null"`
+	Body          string     `json:"body" gorm:"type:text;not null"`
+	MessageID     string     `json:"messageId" gorm:"size:255;not null"`
+	LastError     string     `json:"lastError" gorm:"type:text"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
+}
+
+func (EmailDelivery) TableName() string { return "research2_email_deliveries" }
 
 type Recommendation struct {
 	ID                uint       `json:"id" gorm:"primaryKey"`

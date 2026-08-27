@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.8.5
+  version: 1.8.6
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -216,6 +216,11 @@ paths:
       description: Lists automatic overnight-strength runs. This strategy has no manual trigger endpoint.
       responses:
         "200": {description: Research Center 2 analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2AnalysisRunSummary"}}}}}
+  /api/v1/research2/email/test:
+    post:
+      operationId: testResearch2Email
+      description: Sends a Research Center 2 SMTP configuration test message without creating an analysis run or simulated trade.
+      responses: {"200": {description: Test email sent, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "500": {description: SMTP delivery failed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}}
   /api/v1/research2/analysis-runs/{id}:
     get:
       operationId: getResearch2AnalysisRun
@@ -620,6 +625,10 @@ components:
         failureReason: {type: string}
         recommendationCount: {type: integer}
         onTime: {type: boolean}
+        emailDeliveryStatus: {type: string, enum: [pending, sending, retry_wait, sent, failed, cancelled]}
+        emailSentAt: {type: string, format: date-time, nullable: true}
+        emailAttemptCount: {type: integer}
+        emailLastError: {type: string}
     Research2AnalysisRunSummary:
       type: object
       required: [runId, tradingDate, scheduledFor, evidenceCutoffAt, status, recommendationCount, onTime]
@@ -635,6 +644,10 @@ components:
         recommendationCount: {type: integer}
         onTime: {type: boolean}
         failureReason: {type: string}
+        emailDeliveryStatus: {type: string, enum: [pending, sending, retry_wait, sent, failed, cancelled]}
+        emailSentAt: {type: string, format: date-time, nullable: true}
+        emailAttemptCount: {type: integer}
+        emailLastError: {type: string}
     Research2Recommendation:
       type: object
       required: [recommendationId, analysisRunId, rank, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]

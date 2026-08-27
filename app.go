@@ -39,6 +39,7 @@ type App struct {
 	research2RunMu     sync.Mutex
 	research2TradeMu   sync.Mutex
 	research2MetricMu  sync.Mutex
+	research2EmailMu   sync.Mutex
 }
 
 const aiAnalysisEntryPrefix = "AIAnalysisCustom_"
@@ -47,6 +48,7 @@ const aiRecoveryEntryKey = "AIAnalysisRecoveryDue"
 const research2AnalysisEntryKey = "Research2Analysis0950"
 const research2TradingEntryKey = "Research2TradingMinute"
 const research2MetricsEntryKey = "Research2Metrics1505"
+const research2EmailEntryKey = "Research2EmailDelivery"
 
 // NewApp creates a new App application struct
 func NewApp() *App {

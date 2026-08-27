@@ -203,6 +203,18 @@ var mainMigrations = []migration{
 		},
 		apply: applyResearch2OvernightStrengthStrategy,
 	},
+	{
+		id: 14, name: "research2_report_email",
+		description: "App 1.8.6 adds isolated Research Center 2 SMTP settings and durable report-email delivery state.",
+		definition: func() string {
+			return strings.Join([]string{
+				"settings.research2_email_* copied once from complete legacy SMTP settings",
+				"research2_email_deliveries unique analysis_run_id",
+				"eligible statuses: success, no_recommendation, missed_window",
+			}, "\n")
+		},
+		apply: applyResearch2ReportEmail,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -749,6 +761,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 13 {
 		if err := verifyMainSchema13Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 14 {
+		if err := verifyMainSchema14Runtime(database); err != nil {
 			return result, err
 		}
 	}
