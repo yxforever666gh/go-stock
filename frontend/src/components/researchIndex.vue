@@ -12,7 +12,7 @@ const defaultTabs = [
   { name: "股票推荐记录", component: ResearchRecommendations },
   { name: "AI分析报告", component: ResearchReport },
   { name: "股票收益率", component: ResearchYield },
-	{ name: "设置", component: Settings },
+  { name: "设置", component: Settings, props: { settingsScope: 'research1' } },
 ]
 
 const tabs = ref([...defaultTabs])
@@ -233,7 +233,7 @@ onBeforeUnmount(() => {
           :name="tab.name"
           :tab="tab.name"
       >
-        <component v-if="shouldRenderTab(tab.name)" :is="tab.component"/>
+        <component v-if="shouldRenderTab(tab.name)" :is="tab.component" v-bind="tab.props || {}"/>
       </n-tab-pane>
     </n-tabs>
   </n-card>

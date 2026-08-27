@@ -7,7 +7,7 @@ const tabs = [
   {name: '股票推荐记录', component: defineAsyncComponent(() => import('./research2Recommendations.vue'))},
   {name: 'AI分析报告', component: defineAsyncComponent(() => import('./research2Report.vue'))},
   {name: '股票收益率', component: defineAsyncComponent(() => import('./research2Yield.vue'))},
-  {name: '设置', component: defineAsyncComponent(() => import('./settings.vue'))},
+  {name: '设置', component: defineAsyncComponent(() => import('./settings.vue')), props: {settingsScope: 'research2'}},
 ]
 const route = useRoute()
 const router = useRouter()
@@ -29,7 +29,7 @@ onBeforeUnmount(() => EventsOff('changeResearch2Tab'))
   <n-card>
     <n-tabs type="line" animated :value="nowTab" @update-value="updateTab">
       <n-tab-pane v-for="tab in tabs" :key="tab.name" :name="tab.name" :tab="tab.name">
-        <component v-if="visited.includes(tab.name)" :is="tab.component"/>
+        <component v-if="visited.includes(tab.name)" :is="tab.component" v-bind="tab.props || {}"/>
       </n-tab-pane>
     </n-tabs>
   </n-card>

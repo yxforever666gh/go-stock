@@ -7,6 +7,14 @@ import {EventsEmit} from '../services/browser-runtime.mjs'
 import MinuteProviderSettings from './settings/MinuteProviderSettings.vue'
 import AiConfigSettings from './settings/AiConfigSettings.vue'
 
+defineProps({
+  settingsScope: {
+    type: String,
+    default: 'research1',
+    validator: value => ['research1', 'research2'].includes(value),
+  },
+})
+
 const message = useMessage()
 const formRef = ref(null)
 const formValue = ref({
@@ -419,27 +427,29 @@ onBeforeUnmount(() => message.destroyAll())
 
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => 'AI 分析设置')" size="small">
           <n-grid :cols="24" :x-gap="24">
-            <n-form-item-gi :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
+            <n-form-item-gi v-if="settingsScope === 'research2'" :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
               <n-switch v-model:value="formValue.research2AutoEnabled" @update:value="handleImmediateFieldChange"/>
               <n-text depth="3" style="margin-left: 12px">固定 09:50 开始采集、09:55 冻结数据，10:00 模拟买入，下一交易日 10:00 模拟卖出。</n-text>
             </n-form-item-gi>
-            <n-form-item-gi :span="6" label="自动分析：" path="aiAnalysis.autoEnabled">
-              <n-switch v-model:value="formValue.aiAnalysis.autoEnabled" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="18" label="自动分析时间：" path="aiAnalysis.times">
-              <n-input v-model:value="formValue.aiAnalysis.times" placeholder="09:30,11:30,14:30" @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" label="持仓复查开始：" path="aiAnalysis.reviewStartTime">
-              <n-input v-model:value="formValue.aiAnalysis.reviewStartTime" placeholder="09:50" @blur="handleTextFieldBlur"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" label="持仓复查间隔：" path="aiAnalysis.reviewIntervalMinutes">
-              <n-input-number v-model:value="formValue.aiAnalysis.reviewIntervalMinutes" :min="5" :max="120"
-                              @update:value="handleImmediateFieldChange">
-                <template #suffix>分钟</template>
-              </n-input-number>
-            </n-form-item-gi>
+            <template v-if="settingsScope === 'research1'">
+              <n-form-item-gi :span="6" label="自动分析：" path="aiAnalysis.autoEnabled">
+                <n-switch v-model:value="formValue.aiAnalysis.autoEnabled" @update:value="handleImmediateFieldChange"/>
+              </n-form-item-gi>
+              <n-form-item-gi :span="18" label="自动分析时间：" path="aiAnalysis.times">
+                <n-input v-model:value="formValue.aiAnalysis.times" placeholder="09:30,11:30,14:30" @blur="handleTextFieldBlur"/>
+              </n-form-item-gi>
+              <n-form-item-gi :span="8" label="持仓复查开始：" path="aiAnalysis.reviewStartTime">
+                <n-input v-model:value="formValue.aiAnalysis.reviewStartTime" placeholder="09:50" @blur="handleTextFieldBlur"/>
+              </n-form-item-gi>
+              <n-form-item-gi :span="8" label="持仓复查间隔：" path="aiAnalysis.reviewIntervalMinutes">
+                <n-input-number v-model:value="formValue.aiAnalysis.reviewIntervalMinutes" :min="5" :max="120"
+                                @update:value="handleImmediateFieldChange">
+                  <template #suffix>分钟</template>
+                </n-input-number>
+              </n-form-item-gi>
+            </template>
             <n-gi :span="24">
-              <n-alert type="info" :show-icon="false">
+              <n-alert v-if="settingsScope === 'research1'" type="info" :show-icon="false">
                 “自动分析”只控制定时触发；关闭后，研究中心的手动分析仍使用下方同一组模型。错过的最近自动分析节点会在开盘时补跑；自动分析或持仓复查失败后每 5 分钟重试至当日收盘。持仓首轮从开始时间触发，之后每只股票按本轮完成时间独立计算复查间隔。
               </n-alert>
               <AiConfigSettings
