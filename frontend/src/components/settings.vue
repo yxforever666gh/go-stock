@@ -433,7 +433,7 @@ onBeforeUnmount(() => message.destroyAll())
             </n-form-item-gi>
             <n-gi :span="24">
               <n-alert type="info" :show-icon="false">
-                “自动分析”只控制定时触发；关闭后，研究中心的手动分析仍使用下方同一组模型。持仓复查从开始时间起按间隔运行。
+                “自动分析”只控制定时触发；关闭后，研究中心的手动分析仍使用下方同一组模型。错过的最近自动分析节点会在开盘时补跑；自动分析或持仓复查失败后每 5 分钟重试至当日收盘。持仓首轮从开始时间触发，之后每只股票按本轮完成时间独立计算复查间隔。
               </n-alert>
               <AiConfigSettings
                   :form-value="formValue"

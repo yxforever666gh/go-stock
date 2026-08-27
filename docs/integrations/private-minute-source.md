@@ -46,6 +46,8 @@ curl -H "apiKey: <your_api_key>" https://example.com/api/stock/list
 仅用于首轮导入或脚本部署兼容：
 
 - `GO_STOCK_DIEMENG_API_KEY`
+- `GO_STOCK_DIEMENG_API_KEY_FILE`（推荐，文件仅含一行密钥）
+- `GO_STOCK_SECRETS_DIR`（配合 `GO_STOCK_DIEMENG_API_KEY=secret://diemeng_api_key`）
 - `GO_STOCK_DIEMENG_BASE_URL`
 - `GO_STOCK_DIEMENG_TIMEOUT_SEC`
 - `GO_STOCK_DIEMENG_MIN_INTERVAL_MS`
@@ -55,5 +57,6 @@ curl -H "apiKey: <your_api_key>" https://example.com/api/stock/list
 ## 说明
 
 - 这里保留 `GO_STOCK_DIEMENG_*` 只是为了兼容旧部署与历史配置迁移
+- 部署环境优先使用 `*_FILE` 或 `secret://` 引用；不要把密钥写入源码、镜像或普通容器环境变量
 - 当前公开仓库不默认绑定任何具体私人分钟线服务
 - 如果你准备公开自己的衍生仓库，建议继续使用通用说明，不要把私有接入地址和凭据写入版本库

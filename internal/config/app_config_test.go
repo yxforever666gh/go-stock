@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,8 @@ import (
 func resetRuntimeOverrideForTest(t *testing.T) {
 	t.Helper()
 	ResetRuntimeOverride()
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY_FILE", "")
+	t.Setenv("GO_STOCK_SECRETS_DIR", "")
 	t.Cleanup(ResetRuntimeOverride)
 }
 
@@ -35,6 +38,8 @@ func TestLoadDefaults(t *testing.T) {
 		"GO_STOCK_AKSHARE_MIN_INTERVAL_MS",
 		"GO_STOCK_AKSHARE_RETRY_WAIT_MS",
 		"GO_STOCK_DIEMENG_API_KEY",
+		"GO_STOCK_DIEMENG_API_KEY_FILE",
+		"GO_STOCK_SECRETS_DIR",
 		"GO_STOCK_DIEMENG_BASE_URL",
 		"GO_STOCK_DIEMENG_TIMEOUT_SEC",
 		"GO_STOCK_DIEMENG_MIN_INTERVAL_MS",
@@ -72,6 +77,58 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Diemeng.BaseURL != DefaultDiemengBaseURL || cfg.Diemeng.Level != DefaultDiemengLevel {
 		t.Fatalf("unexpected diemeng config: %+v", cfg.Diemeng)
+	}
+	if cfg.Diemeng.APIKey != "" {
+		t.Fatal("Diemeng API key must have no compiled or implicit default")
+	}
+}
+
+func TestLoadDiemengAPIKeyFromFile(t *testing.T) {
+	resetRuntimeOverrideForTest(t)
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY", "")
+	secretPath := filepath.Join(t.TempDir(), "diemeng-key")
+	if err := os.WriteFile(secretPath, []byte("file-backed-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY_FILE", secretPath)
+
+	if got := Load().Diemeng.APIKey; got != "file-backed-key" {
+		t.Fatalf("unexpected file-backed API key: %q", got)
+	}
+}
+
+func TestLoadDiemengAPIKeyFromSecretReference(t *testing.T) {
+	resetRuntimeOverrideForTest(t)
+	secretRoot := t.TempDir()
+	secretPath := filepath.Join(secretRoot, "diemeng_api_key")
+	if err := os.WriteFile(secretPath, []byte("referenced-key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY", "secret://diemeng_api_key")
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY_FILE", "")
+	t.Setenv("GO_STOCK_SECRETS_DIR", secretRoot)
+
+	if got := Load().Diemeng.APIKey; got != "referenced-key" {
+		t.Fatalf("unexpected referenced API key: %q", got)
+	}
+}
+
+func TestLoadDiemengAPIKeyFileFailsClosed(t *testing.T) {
+	resetRuntimeOverrideForTest(t)
+	secretPath := filepath.Join(t.TempDir(), "diemeng-key")
+	if err := os.WriteFile(secretPath, []byte("line-one\nline-two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY", "legacy-value")
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY_FILE", secretPath)
+
+	if got := Load().Diemeng.APIKey; got != "" {
+		t.Fatalf("ambiguous credential inputs must fail closed, got %q", got)
+	}
+
+	t.Setenv("GO_STOCK_DIEMENG_API_KEY", "")
+	if got := Load().Diemeng.APIKey; got != "" {
+		t.Fatalf("multiline secret must fail closed, got %q", got)
 	}
 }
 

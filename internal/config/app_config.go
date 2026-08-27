@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -149,7 +151,7 @@ func Load() AppConfig {
 			RetryWaitMS:   intOrDefault("GO_STOCK_AKSHARE_RETRY_WAIT_MS", DefaultAkshareRetryWaitMS, 1, noMaxLimit),
 		},
 		Diemeng: DiemengConfig{
-			APIKey:        strings.TrimSpace(os.Getenv("GO_STOCK_DIEMENG_API_KEY")),
+			APIKey:        secretOrFile("GO_STOCK_DIEMENG_API_KEY"),
 			BaseURL:       normalizeDiemengBaseURL(stringOrDefault("GO_STOCK_DIEMENG_BASE_URL", DefaultDiemengBaseURL)),
 			TimeoutSec:    intOrDefault("GO_STOCK_DIEMENG_TIMEOUT_SEC", DefaultDiemengTimeoutSec, 1, noMaxLimit),
 			MinIntervalMS: intOrDefault("GO_STOCK_DIEMENG_MIN_INTERVAL_MS", DefaultDiemengMinIntervalMS, 0, noMaxLimit),
@@ -161,6 +163,79 @@ func Load() AppConfig {
 		},
 	}
 	return applyRuntimeOverrides(cfg)
+}
+
+// secretOrFile keeps the plain environment variable for legacy desktop
+// deployments while preferring a file-backed credential.  A secret reference
+// such as secret://diemeng_api_key is resolved only below GO_STOCK_SECRETS_DIR;
+// malformed, ambiguous or unreadable inputs fail closed to an empty value.
+func secretOrFile(key string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	filePath := strings.TrimSpace(os.Getenv(key + "_FILE"))
+	if filePath != "" && value != "" {
+		return ""
+	}
+	if filePath != "" {
+		return readOneLineSecret(filePath)
+	}
+	if !strings.HasPrefix(value, "secret://") {
+		return value
+	}
+
+	name := strings.TrimPrefix(value, "secret://")
+	if !safeSecretName(name) {
+		return ""
+	}
+	root := strings.TrimSpace(os.Getenv("GO_STOCK_SECRETS_DIR"))
+	if root == "" {
+		return ""
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return ""
+	}
+	candidate := filepath.Join(resolvedRoot, name)
+	resolvedCandidate, err := filepath.EvalSymlinks(candidate)
+	if err != nil {
+		return ""
+	}
+	relative, err := filepath.Rel(resolvedRoot, resolvedCandidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return ""
+	}
+	return readOneLineSecret(candidate)
+}
+
+func safeSecretName(name string) bool {
+	if name == "" || strings.HasPrefix(name, ".") || strings.Contains(name, "..") {
+		return false
+	}
+	for _, char := range name {
+		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') ||
+			(char >= '0' && char <= '9') || char == '_' || char == '-' || char == '.' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func readOneLineSecret(path string) string {
+	info, err := os.Lstat(path)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !utf8.Valid(raw) || strings.IndexByte(string(raw), 0) >= 0 {
+		return ""
+	}
+	value := string(raw)
+	value = strings.TrimSuffix(value, "\n")
+	value = strings.TrimSuffix(value, "\r")
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return ""
+	}
+	return value
 }
 
 func (c AppConfig) StartupSummary() string {

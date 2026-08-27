@@ -31,11 +31,13 @@ type App struct {
 	researchFactory   func(int) (*data.ResearchRuntime, error)
 	aiAnalysisRunMu   sync.Mutex
 	aiAnalysisRunning bool
+	aiRecoveryRunMu   sync.Mutex
 	aiLifecycleRunMu  sync.Mutex
 }
 
 const aiAnalysisEntryPrefix = "AIAnalysisCustom_"
 const aiLifecycleEntryKey = "AIAnalysisLifecycleDue"
+const aiRecoveryEntryKey = "AIAnalysisRecoveryDue"
 
 // NewApp creates a new App application struct
 func NewApp() *App {

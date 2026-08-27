@@ -148,6 +148,41 @@ func TestCustomSellReviewScheduleControlsStartAndInterval(t *testing.T) {
 	}
 }
 
+func TestIndependentSellReviewCadenceAndFailureRetryRespectSessions(t *testing.T) {
+	calendar := weekdayTradingCalendar{}
+	schedule, err := NewSellReviewSchedule("09:55", 15)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name  string
+		input string
+		retry bool
+		want  string
+	}{
+		{name: "independent cadence", input: "2026-08-17 10:07", want: "2026-08-17 10:22"},
+		{name: "normal lunch clamp", input: "2026-08-17 11:20", want: "2026-08-17 13:00"},
+		{name: "retry five minutes", input: "2026-08-17 10:07", retry: true, want: "2026-08-17 10:12"},
+		{name: "retry lunch clamp", input: "2026-08-17 11:28", retry: true, want: "2026-08-17 13:00"},
+		{name: "retry after close", input: "2026-08-17 14:58", retry: true, want: "2026-08-18 09:55"},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			value, _ := time.ParseInLocation("2006-01-02 15:04", item.input, shanghaiLocation)
+			var next time.Time
+			var nextErr error
+			if item.retry {
+				next, nextErr = NextSellReviewRetry(context.Background(), calendar, value, schedule)
+			} else {
+				next, nextErr = NextSellCheckWithSchedule(context.Background(), calendar, value, schedule)
+			}
+			if nextErr != nil || next.Format("2006-01-02 15:04") != item.want {
+				t.Fatalf("next=%s err=%v want=%s", next, nextErr, item.want)
+			}
+		})
+	}
+}
+
 func TestTPlusOne(t *testing.T) {
 	loc := shanghaiLocation
 	entry := time.Date(2026, 8, 14, 10, 0, 0, 0, loc)

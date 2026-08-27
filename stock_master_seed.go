@@ -9,7 +9,7 @@ import (
 )
 
 var embeddedStockMasterSeedManifest = models.StockMasterSeedManifest{
-	GeneratedAt: time.Date(2026, time.June, 25, 0, 44, 5, 0, time.FixedZone("CST", 8*60*60)),
+	GeneratedAt: time.Date(2026, time.August, 27, 14, 58, 11, 0, time.FixedZone("CST", 8*60*60)),
 	RowCount:    5418,
 	SHA256:      "ee91ce3ae7f91238c24afa2817bc570f1f310683ef13b22424ddc69480502edb",
 }

@@ -97,6 +97,16 @@ func (s *Service) nextSellCheck(ctx context.Context, after time.Time) (time.Time
 	return NextSellCheckWithSchedule(ctx, s.calendar, after, s.reviewSchedule)
 }
 
+func (s *Service) nextSellReviewRetry(ctx context.Context, after time.Time) (time.Time, error) {
+	return NextSellReviewRetry(ctx, s.calendar, after, s.reviewSchedule)
+}
+
+// IsTradingDay exposes the runtime's strict trading calendar to the app-level
+// scheduler so startup recovery follows the same calendar as formal runs.
+func (s *Service) IsTradingDay(ctx context.Context, value time.Time) (bool, error) {
+	return s.calendar.IsTradingDay(ctx, value)
+}
+
 // SetRecommendationChartProvider installs the minute-cache adapter used by
 // the research chart endpoints. It is separate from the lifecycle collector:
 // a cached chart read must never trigger an upstream request.
@@ -238,7 +248,7 @@ func (s *Service) ProcessDue(ctx context.Context) error {
 		taskNow := s.now()
 		processErr := s.processOne(ctx, &due[index], taskNow)
 		if processErr != nil {
-			_ = s.recordError(ctx, due[index], taskNow, processErr)
+			_ = s.recordError(ctx, due[index], s.now(), processErr)
 		}
 		s.serial.Unlock()
 	}
@@ -265,7 +275,7 @@ func (s *Service) ProcessDue(ctx context.Context) error {
 			defer s.endLifecycle(recommendation.RecommendationID)
 			taskNow := s.now()
 			if err := s.processOne(ctx, &recommendation, taskNow); err != nil {
-				recordErr := s.recordError(ctx, recommendation, taskNow, err)
+				recordErr := s.recordError(ctx, recommendation, s.now(), err)
 				errorMu.Lock()
 				if recordErr != nil {
 					resultErr = errors.Join(resultErr, err, recordErr)
@@ -309,20 +319,14 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if err != nil {
 		return err
 	}
-	effectiveDue := recommendation.NextCheckAt
-	if effectiveDue == nil || effectiveDue.Before(firstCheck) {
-		effectiveDue = &firstCheck
-	}
 	local := ShanghaiTime(now)
 	y, m, d := local.Date()
-	staleDue := now.Sub(*effectiveDue) > 2*time.Minute
 	firstToday := time.Date(y, m, d, s.reviewSchedule.StartHour, s.reviewSchedule.StartMinute, 0, 0, shanghaiLocation)
-	if now.Before(firstCheck) || local.Before(firstToday) || staleDue {
-		next, err := s.nextSellCheck(ctx, now)
-		if err != nil {
-			return err
-		}
-		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next})
+	if now.Before(firstCheck) {
+		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": firstCheck})
+	}
+	if local.Before(firstToday) {
+		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": firstToday})
 	}
 	if recommendation.Status == "sell_pending" {
 		return s.retrySell(ctx, recommendation, now)
@@ -358,7 +362,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return err
 	}
 	if observation.Status == "critical_failed" || strings.TrimSpace(observation.CriticalFailure) != "" {
-		return s.deferForCriticalData(ctx, recommendation, observation, now)
+		return s.deferForCriticalData(ctx, recommendation, observation, s.now())
 	}
 	prompt := lifecyclePrompt(*recommendation, now, observation, position)
 	userMessage := LifecycleMessage{RecommendationID: recommendation.RecommendationID, Role: "user", Phase: "holding", Content: prompt, CreatedAt: now}
@@ -446,7 +450,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 }
 
 func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Recommendation, observation LifecycleObservation, now time.Time) error {
-	next, err := s.nextSellCheck(ctx, now)
+	next, err := s.nextSellReviewRetry(ctx, now)
 	if err != nil {
 		return err
 	}
@@ -535,7 +539,7 @@ func (s *Service) recordError(ctx context.Context, recommendation Recommendation
 	if recommendation.Status == "buy_pending" {
 		return s.deferBuyProcessingError(ctx, recommendation.RecommendationID, now, processErr)
 	}
-	next, err := s.nextSellCheck(ctx, now)
+	next, err := s.nextSellReviewRetry(ctx, now)
 	if err != nil {
 		return err
 	}

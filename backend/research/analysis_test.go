@@ -408,6 +408,29 @@ func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 	}
 }
 
+func TestLatestAnalysisForScheduledSlotSupportsLegacyCronTimestamps(t *testing.T) {
+	repo := researchTestRepo(t)
+	slot := time.Date(2026, 8, 17, 14, 30, 0, 0, shanghaiLocation)
+	manualAt := slot.Add(2*time.Minute + 17*time.Second + 123*time.Nanosecond)
+	legacyCronAt := slot.Add(3 * time.Second)
+	manual := AnalysisRun{RunID: newID(), ScheduledFor: manualAt, StartedAt: manualAt, Status: "failed"}
+	scheduled := AnalysisRun{RunID: newID(), ScheduledFor: legacyCronAt, StartedAt: legacyCronAt, Status: "success"}
+	if err := repo.CreateAnalysis(context.Background(), &manual); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateAnalysis(context.Background(), &scheduled); err != nil {
+		t.Fatal(err)
+	}
+	got, exists, err := repo.LatestAnalysisForScheduledSlot(context.Background(), slot)
+	if err != nil || !exists || got.RunID != scheduled.RunID {
+		t.Fatalf("got=%+v exists=%t err=%v", got, exists, err)
+	}
+	_, exists, err = repo.LatestAnalysisForScheduledSlot(context.Background(), slot.AddDate(0, 0, 1))
+	if err != nil || exists {
+		t.Fatalf("missing slot exists=%t err=%v", exists, err)
+	}
+}
+
 func TestScheduledAnalysisGateCreatesNoRunAndManualBypassesTime(t *testing.T) {
 	weekend := time.Date(2026, 8, 15, 10, 0, 0, 0, shanghaiLocation)
 	emptySector := `{"analysis":"暂无方向","directions":[],"candidates":[]}`

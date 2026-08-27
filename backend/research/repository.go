@@ -120,6 +120,20 @@ func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
 	return count > 0, err
 }
 
+// LatestAnalysisForScheduledSlot finds the newest attempt for one configured
+// slot. New scheduled runs persist the exact zero-second slot timestamp. The
+// one-minute window also recognizes runs written by versions before 1.8.2,
+// which stored the cron invocation timestamp instead of the planned slot.
+func (r *Repository) LatestAnalysisForScheduledSlot(ctx context.Context, scheduledFor time.Time) (AnalysisRun, bool, error) {
+	var result AnalysisRun
+	err := r.db.WithContext(ctx).Where("scheduled_for >= ? AND scheduled_for < ?", scheduledFor, scheduledFor.Add(time.Minute)).
+		Order("started_at DESC, id DESC").First(&result).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return AnalysisRun{}, false, nil
+	}
+	return result, err == nil, err
+}
+
 func (r *Repository) CreateAnalysis(ctx context.Context, run *AnalysisRun) error {
 	return r.db.WithContext(ctx).Create(run).Error
 }

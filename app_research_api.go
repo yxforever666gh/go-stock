@@ -14,7 +14,8 @@ import (
 )
 
 const (
-	researchSnapshotEntryKey = "ResearchAccountDailyCloseSnapshot"
+	researchSnapshotEntryKey       = "ResearchAccountDailyCloseSnapshot"
+	scheduledAnalysisRetryInterval = 5 * time.Minute
 )
 
 func (a *App) replaceResearchRuntime(configID int) error {
@@ -53,7 +54,7 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 	// model switch. Register them even when AI analysis is disabled.
 	a.ensureResearchAccountCrons()
 	for key, entryID := range a.snapshotCronEntries() {
-		if strings.HasPrefix(key, aiAnalysisEntryPrefix) || key == aiLifecycleEntryKey {
+		if strings.HasPrefix(key, aiAnalysisEntryPrefix) || key == aiLifecycleEntryKey || key == aiRecoveryEntryKey {
 			a.cron.Remove(entryID)
 			a.deleteCronEntry(key)
 		}
@@ -95,14 +96,24 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
 	}
 	for index, hhmm := range times {
 		spec := buildSummaryCronSpec(hhmm)
-		entryID, addErr := a.cron.AddFunc(spec, func() { a.runScheduledAIAnalysis() })
+		entryID, addErr := a.cron.AddFunc(spec, func() {
+			now := research.ShanghaiTime(time.Now())
+			a.runScheduledAIAnalysis(scheduledAnalysisSlot(now, hhmm))
+		})
 		if addErr != nil {
 			a.recordSchedulerRegistrationError("AIAnalysis:"+hhmm, spec, addErr)
 			continue
 		}
 		a.setCronEntry(fmt.Sprintf("%s%d", aiAnalysisEntryPrefix, index), entryID)
 	}
-	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描待买入和固定卖出检查时点", times)
+	recoveryID, recoveryErr := a.cron.AddFunc("@every 1m", func() { a.processScheduledAIAnalysisRecovery() })
+	if recoveryErr != nil {
+		a.recordSchedulerRegistrationError(aiRecoveryEntryKey, "@every 1m", recoveryErr)
+		return
+	}
+	a.setCronEntry(aiRecoveryEntryKey, recoveryID)
+	a.goTask(func(context.Context) { a.processScheduledAIAnalysisRecovery() })
+	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描待买入和独立持仓复查时间", times)
 }
 
 func (a *App) ensureResearchAccountCrons() {
@@ -139,13 +150,13 @@ func (a *App) processScheduledResearchSnapshot() {
 	}
 }
 
-func (a *App) runScheduledAIAnalysis() {
-	if err := a.startAIAnalysis(research.AnalysisModeScheduled); err != nil {
+func (a *App) runScheduledAIAnalysis(scheduledFor time.Time) {
+	if err := a.startAIAnalysis(research.AnalysisModeScheduled, scheduledFor); err != nil {
 		logger.SugaredLogger.Errorf("AI 分析启动失败: %v", err)
 	}
 }
 
-func (a *App) startAIAnalysis(origin string) error {
+func (a *App) startAIAnalysis(origin string, scheduledFor time.Time) error {
 	a.aiAnalysisRunMu.Lock()
 	defer a.aiAnalysisRunMu.Unlock()
 	if a.aiAnalysisRunning {
@@ -174,6 +185,9 @@ func (a *App) startAIAnalysis(origin string) error {
 		return fmt.Errorf("AI 分析配置不可用: %w", err)
 	}
 	now := time.Now()
+	if scheduledFor.IsZero() {
+		scheduledFor = now
+	}
 	a.aiAnalysisRunning = true
 	a.goTask(func(ctx context.Context) {
 		defer func() {
@@ -181,7 +195,7 @@ func (a *App) startAIAnalysis(origin string) error {
 			a.aiAnalysisRunning = false
 			a.aiAnalysisRunMu.Unlock()
 		}()
-		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: now, AIConfigID: selected.ID,
+		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: scheduledFor, AIConfigID: selected.ID,
 			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName, Mode: origin})
 		if runErr != nil {
 			if errors.Is(runErr, research.ErrScheduledAnalysisSkipped) {
@@ -200,10 +214,108 @@ func (a *App) startAIAnalysis(origin string) error {
 // follows the persisted running report and only enables the button again after
 // that report reaches a terminal status.
 func (a *App) startManualAIAnalysis() (bool, error) {
-	if err := a.startAIAnalysis(research.AnalysisModeManual); err != nil {
+	if err := a.startAIAnalysis(research.AnalysisModeManual, time.Time{}); err != nil {
 		return false, err
 	}
 	return true, nil
+}
+
+func scheduledAnalysisSlot(day time.Time, hhmm string) time.Time {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(hhmm))
+	if err != nil {
+		return time.Time{}
+	}
+	local := research.ShanghaiTime(day)
+	year, month, date := local.Date()
+	return time.Date(year, month, date, parsed.Hour(), parsed.Minute(), 0, 0, local.Location())
+}
+
+func latestConfiguredAnalysisSlot(ctx context.Context, service *research.Service, now time.Time, times []string) (time.Time, error) {
+	local := research.ShanghaiTime(now)
+	for scanned := 0; scanned < 740; scanned++ {
+		day := local.AddDate(0, 0, -scanned)
+		trading, err := service.IsTradingDay(ctx, day)
+		if err != nil {
+			return time.Time{}, err
+		}
+		if !trading {
+			continue
+		}
+		for index := len(times) - 1; index >= 0; index-- {
+			candidate := scheduledAnalysisSlot(day, times[index])
+			if !candidate.IsZero() && !candidate.After(local) {
+				return candidate, nil
+			}
+		}
+	}
+	return time.Time{}, errors.New("最近交易日内没有可恢复的 AI 分析节点")
+}
+
+func sameShanghaiTradingDate(left, right time.Time) bool {
+	return research.ShanghaiTime(left).Format("2006-01-02") == research.ShanghaiTime(right).Format("2006-01-02")
+}
+
+func scheduledAnalysisRecoveryDue(now time.Time, latest research.AnalysisRun, exists bool) bool {
+	if !exists {
+		return true
+	}
+	if latest.Status != "failed" || latest.CompletedAt == nil {
+		return false
+	}
+	// A failed task never rolls into another trading day. A genuinely missed
+	// slot has no row and is handled by the branch above.
+	if !sameShanghaiTradingDate(latest.StartedAt, now) {
+		return false
+	}
+	return !now.Before(latest.CompletedAt.Add(scheduledAnalysisRetryInterval))
+}
+
+func (a *App) processScheduledAIAnalysisRecovery() {
+	if !a.aiRecoveryRunMu.TryLock() {
+		return
+	}
+	defer a.aiRecoveryRunMu.Unlock()
+	setting := a.services.Config.GetConfig()
+	if setting == nil || setting.Settings == nil || !setting.AIAnalysisEnabled {
+		return
+	}
+	times, err := data.NormalizeAIAnalysisTimes(setting.AIAnalysisTimes)
+	if err != nil || len(times) == 0 {
+		return
+	}
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		logger.SugaredLogger.Errorf("AI 分析恢复运行时不可用: %v", err)
+		return
+	}
+	ctx := a.taskContext()
+	now := time.Now()
+	trading, err := runtime.Service.IsTradingDay(ctx, now)
+	if err != nil {
+		logger.SugaredLogger.Errorf("AI 分析恢复检查交易日失败: %v", err)
+		return
+	}
+	if !trading || !research.IsTradingSession(now) {
+		return
+	}
+	slot, err := latestConfiguredAnalysisSlot(ctx, runtime.Service, now, times)
+	if err != nil {
+		logger.SugaredLogger.Errorf("AI 分析恢复定位最近节点失败: %v", err)
+		return
+	}
+	latest, exists, err := runtime.Repository.LatestAnalysisForScheduledSlot(ctx, slot)
+	if err != nil {
+		logger.SugaredLogger.Errorf("AI 分析恢复读取节点状态失败 slot=%s: %v", slot.Format(time.RFC3339), err)
+		return
+	}
+	if !scheduledAnalysisRecoveryDue(now, latest, exists) {
+		return
+	}
+	if err := a.startAIAnalysis(research.AnalysisModeScheduled, slot); err != nil {
+		logger.SugaredLogger.Infof("AI 分析恢复等待下次扫描 slot=%s: %v", slot.Format(time.RFC3339), err)
+		return
+	}
+	logger.SugaredLogger.Infof("AI 分析恢复已启动 slot=%s retry=%t", slot.Format(time.RFC3339), exists)
 }
 
 func (a *App) processDueAILifecycle() {

@@ -564,7 +564,7 @@ func TestMigratedPositionNominalWeekendDueRunsAtStrictMonday0950(t *testing.T) {
 	}
 }
 
-func TestCriticalHoldingDataSkipsAIAndUsesNextFixedSlot(t *testing.T) {
+func TestCriticalHoldingDataSkipsAIAndRetriesAfterFiveMinutes(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
 	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
@@ -577,7 +577,7 @@ func TestCriticalHoldingDataSkipsAIAndUsesNextFixedSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if len(ai.requests) != 0 || stored.NextCheckAt.Format("15:04") != "10:20" {
+	if len(ai.requests) != 0 || stored.NextCheckAt.Format("15:04") != "10:10" {
 		t.Fatalf("requests=%d stored=%+v", len(ai.requests), stored)
 	}
 }
@@ -640,21 +640,85 @@ func TestLateHoldingResponseCrossingCloseIsDeferred(t *testing.T) {
 	}
 }
 
-func TestStaleOverdueSellCheckIsNotReplayed(t *testing.T) {
+func TestStaleOverdueSellCheckRunsImmediatelyWithoutReplayingIntervals(t *testing.T) {
 	repo := researchTestRepo(t)
 	due := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
 	now := due.Add(3 * time.Minute)
 	rec := seedRecommendation(t, repo, "active", due.AddDate(0, 0, -1), due, "")
 	seedOpenPosition(t, repo, rec, due.AddDate(0, 0, -1))
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"卖出","reason":"不应补跑"}`}}}
+	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"持有","reason":"恢复后立即复查","sourceRefs":[],"dataSufficiency":"充足"}`}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	if len(ai.requests) != 0 || stored.NextCheckAt.Format("15:04") != "10:20" {
+	if len(ai.requests) != 1 || stored.NextCheckAt.Format("15:04") != "10:23" {
 		t.Fatalf("requests=%d stored=%+v", len(ai.requests), stored)
+	}
+}
+
+func TestHoldingModelFailureRetriesFiveMinutesAfterActualFailure(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -1))
+	ai := &scriptedAI{errors: []error{errors.New("model unavailable")}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if len(ai.requests) != 1 || stored.NextCheckAt == nil || stored.NextCheckAt.Format("15:04") != "10:10" {
+		t.Fatalf("requests=%d stored=%+v", len(ai.requests), stored)
+	}
+	var retryEvents int64
+	if err := repo.DB().Model(&DecisionEvent{}).Where("recommendation_id = ? AND decision_type = ?", rec.RecommendationID, "错误重试").Count(&retryEvents).Error; err != nil {
+		t.Fatal(err)
+	}
+	if retryEvents != 1 {
+		t.Fatalf("retry events=%d", retryEvents)
+	}
+}
+
+func TestHoldingSuccessReanchorsFromActualCompletion(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 10, 5, 0, 0, shanghaiLocation)
+	finishAt := now.Add(7 * time.Minute)
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -1))
+	ai := &advancingAI{clock: &now, finishAt: finishAt, result: CompletionResult{Content: `{"action":"持有","reason":"量价稳定","sourceRefs":[],"dataSufficiency":"充足"}`}}
+	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.NextCheckAt == nil || stored.NextCheckAt.Format("15:04") != "10:27" {
+		t.Fatalf("stored=%+v", stored)
+	}
+}
+
+func TestHoldingBeforeConfiguredStartKeepsFirstReviewTimeWithLongInterval(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 8, 18, 9, 30, 0, 0, shanghaiLocation)
+	due := now.AddDate(0, 0, -1)
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -2), due, "")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -2))
+	schedule, err := NewSellReviewSchedule("09:55", 120)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, openCalendar{})
+	service.SetSellReviewSchedule(schedule)
+	service.now = func() time.Time { return now }
+	if err := service.ProcessDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
+	if stored.NextCheckAt == nil || stored.NextCheckAt.Format("15:04") != "09:55" {
+		t.Fatalf("stored=%+v", stored)
 	}
 }
 

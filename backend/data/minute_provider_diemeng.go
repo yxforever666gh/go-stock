@@ -26,10 +26,6 @@ const (
 	diemengMaxPages                = 50
 )
 
-// NOTE: User requested to store the API key in-repo for personal use across machines.
-// You can override this at runtime via env `GO_STOCK_DIEMENG_API_KEY`.
-const defaultDiemengAPIKey = "b8c0c3039e34bb7a65997e525cf554d6b3b69c306529daa4d0"
-
 var (
 	diemengFetchMu   sync.Mutex
 	diemengLastFetch time.Time
@@ -81,10 +77,7 @@ func hasDiemengKey() bool {
 }
 
 func diemengAPIKey() string {
-	if v := strings.TrimSpace(appconfig.Load().Diemeng.APIKey); v != "" {
-		return v
-	}
-	return strings.TrimSpace(defaultDiemengAPIKey)
+	return strings.TrimSpace(appconfig.Load().Diemeng.APIKey)
 }
 
 func diemengBaseURL() string {

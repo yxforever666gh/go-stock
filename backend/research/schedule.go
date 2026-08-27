@@ -49,20 +49,6 @@ func NewSellReviewSchedule(start string, interval int) (SellReviewSchedule, erro
 	return SellReviewSchedule{StartHour: hour, StartMinute: minute, IntervalMinute: interval}, nil
 }
 
-func (schedule SellReviewSchedule) clocks() [][2]int {
-	if schedule.IntervalMinute < 5 || schedule.IntervalMinute > 120 {
-		schedule = DefaultSellReviewSchedule()
-	}
-	result := make([][2]int, 0, 32)
-	for minute := schedule.StartHour*60 + schedule.StartMinute; minute <= 11*60+30; minute += schedule.IntervalMinute {
-		result = append(result, [2]int{minute / 60, minute % 60})
-	}
-	for minute := 13 * 60; minute < 15*60; minute += schedule.IntervalMinute {
-		result = append(result, [2]int{minute / 60, minute % 60})
-	}
-	return result
-}
-
 // NextTradingSessionOpen returns the next point at which a queued direct buy
 // may be attempted. It keeps an in-session time unchanged, moves lunch to
 // 13:00, and consults the strict calendar before selecting a later 09:30 open.
@@ -125,17 +111,34 @@ func FirstSellCheckWithSchedule(ctx context.Context, calendar TradingCalendar, e
 	return time.Time{}, errors.New("no next trading day found within calendar scan limit")
 }
 
-// NextSellCheck returns the next configured sell-review slot. Slots never
-// drift with model latency and missed slots are not replayed.
+// NextSellCheck returns the next sell-review time relative to the completion
+// of the current stock's review. Each holding therefore keeps an independent
+// cadence instead of snapping back to a shared intraday clock grid.
 func NextSellCheck(ctx context.Context, calendar TradingCalendar, after time.Time) (time.Time, error) {
 	return NextSellCheckWithSchedule(ctx, calendar, after, DefaultSellReviewSchedule())
 }
 
 func NextSellCheckWithSchedule(ctx context.Context, calendar TradingCalendar, after time.Time, schedule SellReviewSchedule) (time.Time, error) {
+	return nextSellCheckAfter(ctx, calendar, after, schedule, time.Duration(schedule.IntervalMinute)*time.Minute)
+}
+
+// NextSellReviewRetry returns the next fixed five-minute retry for a failed
+// holding review. When the retry would fall in lunch or after the close, it is
+// moved to the next tradable boundary; after the close this becomes the next
+// trading day's configured review start.
+func NextSellReviewRetry(ctx context.Context, calendar TradingCalendar, after time.Time, schedule SellReviewSchedule) (time.Time, error) {
+	return nextSellCheckAfter(ctx, calendar, after, schedule, 5*time.Minute)
+}
+
+func nextSellCheckAfter(ctx context.Context, calendar TradingCalendar, after time.Time, schedule SellReviewSchedule, delay time.Duration) (time.Time, error) {
 	if calendar == nil {
 		return time.Time{}, errors.New("trading calendar is unavailable")
 	}
+	if schedule.IntervalMinute < 5 || schedule.IntervalMinute > 120 {
+		schedule = DefaultSellReviewSchedule()
+	}
 	local := ShanghaiTime(after)
+	target := local.Add(delay)
 	for scanned := 0; scanned < 740; scanned++ {
 		day := local.AddDate(0, 0, scanned)
 		trading, err := calendar.IsTradingDay(ctx, day)
@@ -146,11 +149,24 @@ func NextSellCheckWithSchedule(ctx context.Context, calendar TradingCalendar, af
 			continue
 		}
 		y, m, d := day.Date()
-		for _, clock := range schedule.clocks() {
-			candidate := time.Date(y, m, d, clock[0], clock[1], 0, 0, shanghaiLocation)
-			if candidate.After(local) {
-				return candidate, nil
-			}
+		start := time.Date(y, m, d, schedule.StartHour, schedule.StartMinute, 0, 0, shanghaiLocation)
+		if scanned > 0 {
+			return start, nil
+		}
+		morningClose := time.Date(y, m, d, 11, 30, 0, 0, shanghaiLocation)
+		afternoonOpen := time.Date(y, m, d, 13, 0, 0, 0, shanghaiLocation)
+		closeAt := time.Date(y, m, d, 15, 0, 0, 0, shanghaiLocation)
+		if target.Before(start) {
+			return start, nil
+		}
+		if !target.After(morningClose) {
+			return target, nil
+		}
+		if target.Before(afternoonOpen) {
+			return afternoonOpen, nil
+		}
+		if target.Before(closeAt) {
+			return target, nil
 		}
 	}
 	return time.Time{}, errors.New("no sell check found within calendar scan limit")
