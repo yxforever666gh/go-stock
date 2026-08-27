@@ -66,6 +66,7 @@ func TestResearchAIClientRetriesFiveTimesThenFallsBackInEnabledTableOrder(t *tes
 	called := make([]uint, 0, 6)
 	client := &ResearchAIClient{
 		loadSetting: func() *SettingConfig { return setting },
+		retryWait:   func(context.Context, time.Duration) error { return nil },
 		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
 			called = append(called, config.ID)
 			if _, ok := ctx.Deadline(); ok {
@@ -109,6 +110,7 @@ func TestResearchAIClientHardTimeoutThenFallback(t *testing.T) {
 		loadSetting:    func() *SettingConfig { return setting },
 		attemptTimeout: 10 * time.Millisecond,
 		maxAttempts:    2,
+		retryWait:      func(context.Context, time.Duration) error { return nil },
 		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
 			called = append(called, config.ID)
 			if config.ID == 1 {
@@ -131,6 +133,48 @@ func TestResearchAIClientHardTimeoutThenFallback(t *testing.T) {
 	}
 	if result.Content != "ok" || result.Model != "model-2" {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestResearchAIClientBacksOffAndCoolsDownSharedEndpoint(t *testing.T) {
+	setting := &SettingConfig{AiConfigs: []*AIConfig{
+		{ID: 1, Sort: 1, Name: "primary", BaseUrl: "https://shared.example/v1/", ModelName: "model-1"},
+		{ID: 2, Sort: 2, Name: "fallback", BaseUrl: "https://shared.example/v1", ModelName: "model-2"},
+	}}
+	waits := make([]time.Duration, 0, 2)
+	client := &ResearchAIClient{
+		loadSetting: func() *SettingConfig { return setting },
+		maxAttempts: 2,
+		retryWait: func(_ context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			return nil
+		},
+		completeProvider: func(_ context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
+			if config.ID == 1 {
+				return "", "", "", &aiProviderCallError{Category: "network_error", Message: "connection reset", Retryable: true}
+			}
+			return "ok", "response-2", config.ModelName, nil
+		},
+	}
+	result, err := client.Complete(context.Background(), research.CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result=%+v", result)
+	}
+	want := []time.Duration{time.Second, researchSameEndpointFallbackCooldown}
+	if !reflect.DeepEqual(waits, want) {
+		t.Fatalf("waits=%v want=%v", waits, want)
+	}
+}
+
+func TestResearchModelRetryDelayIsExponentiallyBounded(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second}
+	for index, expected := range want {
+		if got := researchModelRetryDelay(index + 1); got != expected {
+			t.Fatalf("attempt=%d delay=%s want=%s", index+1, got, expected)
+		}
 	}
 }
 

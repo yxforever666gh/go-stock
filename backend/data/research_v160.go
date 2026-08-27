@@ -30,11 +30,15 @@ type ResearchAIClient struct {
 	completeProvider researchProviderCompletion
 	attemptTimeout   time.Duration
 	maxAttempts      int
+	retryWait        func(context.Context, time.Duration) error
 }
 
 const (
-	researchModelAttemptTimeout = 300 * time.Second
-	researchModelMaxAttempts    = 5
+	researchModelAttemptTimeout          = 300 * time.Second
+	researchModelMaxAttempts             = 5
+	researchModelRetryBaseDelay          = time.Second
+	researchModelRetryMaxDelay           = 8 * time.Second
+	researchSameEndpointFallbackCooldown = 8 * time.Second
 )
 
 var errResearchModelInactive = errors.New("model stream had no activity before timeout")
@@ -55,6 +59,50 @@ func (client *ResearchAIClient) modelMaxAttempts() int {
 		return client.maxAttempts
 	}
 	return researchModelMaxAttempts
+}
+
+func researchModelRetryDelay(failedAttempt int) time.Duration {
+	if failedAttempt <= 1 {
+		return researchModelRetryBaseDelay
+	}
+	delay := researchModelRetryBaseDelay << (failedAttempt - 1)
+	if delay > researchModelRetryMaxDelay {
+		return researchModelRetryMaxDelay
+	}
+	return delay
+}
+
+func waitResearchRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		if cause := context.Cause(ctx); cause != nil {
+			return cause
+		}
+		return ctx.Err()
+	}
+}
+
+func (client *ResearchAIClient) waitForRetry(ctx context.Context, delay time.Duration) error {
+	if client.retryWait != nil {
+		return client.retryWait(ctx, delay)
+	}
+	return waitResearchRetry(ctx, delay)
+}
+
+func sameResearchEndpoint(left, right *models.AIConfig) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftURL := strings.ToLower(strings.TrimRight(strings.TrimSpace(left.BaseUrl), "/"))
+	rightURL := strings.ToLower(strings.TrimRight(strings.TrimSpace(right.BaseUrl), "/"))
+	return leftURL != "" && leftURL == rightURL
 }
 
 func (client *ResearchAIClient) completeModelAttempt(ctx context.Context, config *models.AIConfig, messages []map[string]any, previousResponseID string, activity func(AIStreamActivity)) (string, string, string, error) {
@@ -294,8 +342,12 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 			}
 			emitResearchAttempt(request.OnAttempt, record)
 			if lastInfo.retryable && attempt < maxAttempts {
-				logger.SugaredLogger.Warnf("研究中心 AI 调用失败，重试当前模型。phase=%s model=%s/%s attempt=%d/%d inactivity_timeout=%s category=%s http_status=%d error=%s",
-					request.Phase, label, strings.TrimSpace(config.ModelName), attempt, maxAttempts, attemptTimeout, lastInfo.category, lastInfo.statusCode, lastInfo.message)
+				retryDelay := researchModelRetryDelay(attempt)
+				logger.SugaredLogger.Warnf("研究中心 AI 调用失败，退避后重试当前模型。phase=%s model=%s/%s attempt=%d/%d retry_in=%s inactivity_timeout=%s category=%s http_status=%d error=%s",
+					request.Phase, label, strings.TrimSpace(config.ModelName), attempt, maxAttempts, retryDelay, attemptTimeout, lastInfo.category, lastInfo.statusCode, lastInfo.message)
+				if waitErr := client.waitForRetry(ctx, retryDelay); waitErr != nil {
+					return research.CompletionResult{}, waitErr
+				}
 				continue
 			}
 			break
@@ -307,6 +359,13 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 			nextLabel := strings.TrimSpace(next.Name) + "/" + strings.TrimSpace(next.ModelName)
 			logger.SugaredLogger.Warnf("研究中心 AI 调用失败，按回退顺序切换。phase=%s from=%s/%s attempts=%d to=%s inactivity_timeout=%s category=%s http_status=%d error=%s",
 				request.Phase, label, strings.TrimSpace(config.ModelName), attemptsMade, nextLabel, attemptTimeout, lastInfo.category, lastInfo.statusCode, lastInfo.message)
+			if lastInfo.retryable && sameResearchEndpoint(config, next) {
+				logger.SugaredLogger.Warnf("研究中心 AI 回退配置共用同一端点，冷却后切换。phase=%s from=%s/%s to=%s cooldown=%s",
+					request.Phase, label, strings.TrimSpace(config.ModelName), nextLabel, researchSameEndpointFallbackCooldown)
+				if waitErr := client.waitForRetry(ctx, researchSameEndpointFallbackCooldown); waitErr != nil {
+					return research.CompletionResult{}, waitErr
+				}
+			}
 		}
 	}
 	if len(attemptErrors) == 0 {
@@ -416,13 +475,14 @@ func (ResearchTradingCalendar) IsTradingDayCached(value time.Time) (bool, bool) 
 }
 
 type ResearchSourceCollector struct {
-	news          *MarketNewsApi
-	stocks        *StockDataApi
-	clock         func() time.Time
-	newsWindowMu  sync.Mutex
-	newsWindowKey string
-	newsWindow    NewsWindowResult
-	newsWindowErr error
+	news              *MarketNewsApi
+	stocks            *StockDataApi
+	clock             func() time.Time
+	refreshMarketNews func(context.Context)
+	newsWindowMu      sync.Mutex
+	newsWindowKey     string
+	newsWindow        NewsWindowResult
+	newsWindowErr     error
 }
 
 type researchSourceJob struct {
@@ -441,7 +501,14 @@ func NewResearchSourceCollectorWithProviders(news *MarketNewsApi, stocks *StockD
 	if stocks == nil {
 		stocks = NewStockDataApi()
 	}
-	return &ResearchSourceCollector{news: news, stocks: stocks, clock: time.Now}
+	return &ResearchSourceCollector{
+		news:   news,
+		stocks: stocks,
+		clock:  time.Now,
+		refreshMarketNews: func(ctx context.Context) {
+			news.RefreshResearchNews(ctx, 15*time.Second)
+		},
+	}
 }
 
 func (collector *ResearchSourceCollector) collectedAt() time.Time {
@@ -452,6 +519,9 @@ func (collector *ResearchSourceCollector) collectedAt() time.Time {
 }
 
 func (collector *ResearchSourceCollector) CollectMarket(ctx context.Context, now time.Time) ([]research.SourceDocument, error) {
+	if collector != nil && collector.refreshMarketNews != nil {
+		collector.refreshMarketNews(ctx)
+	}
 	jobs := []researchSourceJob{
 		{"财联社/Sina/TradingView市场快讯", func() any {
 			result, err := collector.news.GetNewsWindow(nil, now.Add(-24*time.Hour), now)

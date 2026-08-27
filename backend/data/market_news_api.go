@@ -11,6 +11,7 @@ import (
 	"go-stock/backend/models"
 	"go-stock/backend/util"
 	"io"
+	"math"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -367,7 +368,7 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 	if err != nil {
 		logger.SugaredLogger.Errorf("TelegraphList err:%v", err)
 		fetchErr = err
-		return &telegraphs
+		return m.GetNewTelegraph(crawlTimeOut)
 	}
 	networkPath = outcome.networkPath
 
@@ -389,6 +390,10 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 		if !exists || !rollDataOK {
 			fetchErr = errors.New("CLS telegraph API response is missing data.roll_data")
 			return m.GetNewTelegraph(30)
+		}
+		if len(rollData) == 0 {
+			fetchErr = errors.New("CLS telegraph API returned an empty data.roll_data")
+			return m.GetNewTelegraph(crawlTimeOut)
 		}
 		for _, v := range rollData {
 			news := safeMap(v)
@@ -453,6 +458,39 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 
 	fetchErr = nil
 	return &telegraphs
+}
+
+// RefreshResearchNews refreshes the two fast, text-complete market-news feeds
+// before a research window is read. The calls are bounded by their provider
+// timeouts and run concurrently so a broken CLS endpoint cannot prevent Sina
+// from keeping the persisted event-time window current.
+func (m MarketNewsApi) RefreshResearchNews(ctx context.Context, timeout time.Duration) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	timeoutSeconds := int64(math.Ceil(timeout.Seconds()))
+	if timeoutSeconds < 1 {
+		timeoutSeconds = 1
+	}
+	done := make(chan struct{}, 2)
+	go func() {
+		defer func() { done <- struct{}{} }()
+		m.TelegraphList(timeoutSeconds)
+	}()
+	go func() {
+		defer func() { done <- struct{}{} }()
+		m.GetSinaNews(uint(timeoutSeconds))
+	}()
+	for completed := 0; completed < cap(done); completed++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+		}
+	}
 }
 
 func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {

@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+const marketNewsPollingMinimumInterval = 5 * time.Minute
+
 func (a *App) domReady(ctx context.Context) {
 	defer PanicHandler()
 	if !a.tryMarkDomReadyDone() {
@@ -63,23 +65,52 @@ func (a *App) registerRealtimeRuntime(config *models.SettingConfig) {
 	a.registerCronTask("MonitorStockPrices", fmt.Sprintf("@every %ds", interval), func() {
 		MonitorStockPrices(a)
 	})
+	if marketNewsPollingEnabled(config) {
+		a.registerNewsPollingCrons(interval)
+	}
 }
 
 func (a *App) registerNewsPollingCrons(interval int64) {
-	a.registerCronTask("GetNewTelegraph", fmt.Sprintf("@every %ds", interval+10), func() {
+	pollingInterval := marketNewsPollingInterval(interval)
+	spec := fmt.Sprintf("@every %ds", int64(pollingInterval/time.Second))
+	a.registerCronTask("GetNewTelegraph", spec, func() {
 		news := a.services.Market.TelegraphList(30)
 		emitEvent(a.taskContext(), "newTelegraph", news)
 	})
 
-	a.registerCronTask("newSinaNews", fmt.Sprintf("@every %ds", interval+10), func() {
+	a.registerCronTask("newSinaNews", spec, func() {
 		news := a.services.Market.GetSinaNews(30)
 		emitEvent(a.taskContext(), "newSinaNews", news)
 	})
 
-	a.registerCronTask("tradingViewNews", fmt.Sprintf("@every %ds", interval+10), func() {
+	a.registerCronTask("tradingViewNews", spec, func() {
 		news := a.services.Market.TradingViewNews()
 		emitEvent(a.taskContext(), "tradingViewNews", news)
 	})
+}
+
+func marketNewsPollingEnabled(config *models.SettingConfig) bool {
+	if config == nil || config.Settings == nil {
+		return false
+	}
+	if config.EnableNews {
+		return true
+	}
+	if config.AIAnalysisAutoEnabled != nil {
+		return *config.AIAnalysisAutoEnabled
+	}
+	if config.LegacyAIAnalysisEnable != nil {
+		return *config.LegacyAIAnalysisEnable
+	}
+	return config.AIAnalysisEnabled
+}
+
+func marketNewsPollingInterval(configuredSeconds int64) time.Duration {
+	interval := time.Duration(configuredSeconds+10) * time.Second
+	if interval < marketNewsPollingMinimumInterval {
+		return marketNewsPollingMinimumInterval
+	}
+	return interval
 }
 
 func (a *App) registerFundRuntime(config *models.SettingConfig) {
@@ -94,6 +125,11 @@ func (a *App) registerFundRuntime(config *models.SettingConfig) {
 func (a *App) startImmediateRuntimeTasks(config *models.SettingConfig) {
 	a.goTask(func(context.Context) { a.services.Market.EnsureMarketDataSelfCheck("app_dom_ready") })
 	a.goTask(func(context.Context) { MonitorStockPrices(a) })
+	if marketNewsPollingEnabled(config) {
+		a.goTask(func(context.Context) { a.services.Market.TelegraphList(30) })
+		a.goTask(func(context.Context) { a.services.Market.GetSinaNews(30) })
+		a.goTask(func(context.Context) { a.services.Market.TradingViewNews() })
+	}
 	if config.EnableFund {
 		a.goTask(func(context.Context) { MonitorFundPrices(a) })
 		a.goTask(func(context.Context) { a.services.Fund.AllFund() })

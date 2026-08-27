@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/json"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coocood/freecache"
 	"github.com/duke-git/lancet/v2/random"
@@ -15,6 +17,21 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/tidwall/gjson"
 )
+
+func TestRefreshResearchNewsPopulatesCurrentEventWindow(t *testing.T) {
+	requireIntegration(t)
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "stock.db"))
+	InitAnalyzeSentiment()
+	now := time.Now()
+	NewMarketNewsApi().RefreshResearchNews(context.Background(), 15*time.Second)
+	window, err := NewMarketNewsApi().GetNewsWindow(nil, now.Add(-24*time.Hour), time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if window.Status != NewsWindowStatusOK || len(window.Items) == 0 {
+		t.Fatalf("refreshed window status=%q items=%d warning=%q", window.Status, len(window.Items), window.Warning)
+	}
+}
 
 // @Author spark
 // @Date 2025/4/23 17:58

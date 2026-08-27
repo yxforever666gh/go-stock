@@ -6,9 +6,26 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+	"go-stock/backend/models"
 	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 )
+
+func TestMarketNewsPollingSupportsResearchAndHasSafeMinimumInterval(t *testing.T) {
+	disabled := false
+	if marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{}, AIAnalysisAutoEnabled: &disabled}) {
+		t.Fatal("market news polling should be disabled when both news and research are disabled")
+	}
+	if !marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{AIAnalysisEnabled: true}}) {
+		t.Fatal("AI research must keep market news polling enabled")
+	}
+	if got := marketNewsPollingInterval(1); got != marketNewsPollingMinimumInterval {
+		t.Fatalf("short polling interval=%s want=%s", got, marketNewsPollingMinimumInterval)
+	}
+	if got := marketNewsPollingInterval(600); got != 610*time.Second {
+		t.Fatalf("configured polling interval=%s want=610s", got)
+	}
+}
 
 func TestSchedulerRegistrationFailurePreventsReadyAssembly(t *testing.T) {
 	app := &App{
