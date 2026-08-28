@@ -8,6 +8,7 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/models"
 	cliports "go-stock/internal/cli/ports"
+	appservice "go-stock/internal/service"
 
 	"github.com/coocood/freecache"
 	"gorm.io/gorm"
@@ -439,12 +440,34 @@ func (*fundAdapter) GetFollowedFund() []models.FollowedFund {
 	return data.NewFundApi().GetFollowedFund()
 }
 
+func (*fundAdapter) GetFollowedETFs() ([]models.ETFWatchlistItem, error) {
+	return data.NewFundApi().GetFollowedETFs()
+}
+
 func (*fundAdapter) FollowFund(code string) (string, error) {
 	return legacyCommandResult(data.NewFundApi().FollowFund(code))
 }
 
+func (*fundAdapter) FollowETF(item models.ETFWatchlistItem) (string, error) {
+	if err := data.NewFundApi().FollowETF(item); err != nil {
+		return "关注 ETF 失败", err
+	}
+	return "关注 ETF 成功", nil
+}
+
 func (*fundAdapter) UnFollowFund(code string) (string, error) {
 	return legacyCommandResult(data.NewFundApi().UnFollowFund(code))
+}
+
+func (*fundAdapter) UnFollowETF(code string) (string, error) {
+	found, err := data.NewFundApi().UnFollowETF(code)
+	if err != nil {
+		return "取消关注 ETF 失败", err
+	}
+	if !found {
+		return "ETF 自选不存在", appservice.ErrNotFound
+	}
+	return "取消关注 ETF 成功", nil
 }
 
 func (*fundAdapter) AllFund() {

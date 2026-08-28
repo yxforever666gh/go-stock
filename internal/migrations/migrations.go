@@ -245,6 +245,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV19Definition,
 		apply:       applyKnowledgeSchema,
 	},
+	{
+		id: 20, name: "fund_rankings_and_exchange_traded_funds",
+		description: "App 2.5.0 adds fund and ETF ranking caches, ETF detail snapshots and an isolated ETF watchlist without rewriting historical research, recommendation, account or trading data.",
+		definition:  mainMigrationV20Definition,
+		apply:       applyFundETFSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -827,6 +833,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 19 {
 		if err := verifyMainSchema19Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 20 {
+		if err := verifyMainSchema20Runtime(database); err != nil {
 			return result, err
 		}
 	}

@@ -34,8 +34,11 @@ type ConfigService interface {
 type FundService interface {
 	GetFundList(string) []models.FundBasic
 	GetFollowedFund() []models.FollowedFund
+	GetFollowedETFs() ([]models.ETFWatchlistItem, error)
 	FollowFund(string) (string, error)
+	FollowETF(models.ETFWatchlistItem) (string, error)
 	UnFollowFund(string) (string, error)
+	UnFollowETF(string) (string, error)
 	AllFund()
 	CrawlFundBasic(string) (*models.FundBasic, error)
 	CrawlFundNetEstimatedUnit(string)

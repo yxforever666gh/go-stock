@@ -181,13 +181,13 @@ VALUES ('hit-1','retrieval-1','version-1',1,0.9,1,'adopted','verified','approved
 func TestSchema19VerifierRejectsMissingKnowledgeGuard(t *testing.T) {
 	database := openMigrationTestDB(t)
 	applyPublishedMigrationPrefix(t, database, mainMigrations, 19, "2.4.0")
-	if _, err := VerifyMain(database); err != nil {
+	if err := verifyMainSchema19Runtime(database); err != nil {
 		t.Fatalf("valid schema 19 failed verification: %v", err)
 	}
 	if err := database.Exec(`DROP TRIGGER immutable_knowledge_retrieval_hits_update`).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := VerifyMain(database); err == nil {
+	if err := verifyMainSchema19Runtime(database); err == nil {
 		t.Fatal("schema 19 verifier accepted a missing immutable retrieval-hit guard")
 	}
 }

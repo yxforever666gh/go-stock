@@ -39,6 +39,13 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		{http.MethodGet, "/api/v1/market/margin"},
 		{http.MethodGet, "/api/v1/instruments/sh600000/auction"},
 		{http.MethodGet, "/api/v1/instruments/sh600000/trades"},
+		{http.MethodGet, "/api/v1/funds/rankings"},
+		{http.MethodGet, "/api/v1/etfs/rankings"},
+		{http.MethodGet, "/api/v1/etfs/search"},
+		{http.MethodGet, "/api/v1/etfs/510300"},
+		{http.MethodGet, "/api/v1/watchlist/etfs"},
+		{http.MethodPost, "/api/v1/watchlist/etfs"},
+		{http.MethodDelete, "/api/v1/watchlist/etfs/510300"},
 		{http.MethodPost, "/api/v1/research/analysis-runs"},
 		{http.MethodGet, "/api/v1/research/recommendations/example"},
 		{http.MethodPost, "/api/v1/exports/config"},
@@ -184,5 +191,31 @@ func TestWriteCommandResultMapsDomainErrors(t *testing.T) {
 				t.Fatalf("unexpected error body %q", recorder.Body.String())
 			}
 		})
+	}
+}
+
+func TestFundAndETFMarketRoutesRejectInvalidQueriesBeforeProviderWork(t *testing.T) {
+	mux := testWebV1Mux()
+	tests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/v1/funds/rankings?category=invalid"},
+		{method: http.MethodGet, path: "/api/v1/etfs/rankings?pageSize=101"},
+		{method: http.MethodGet, path: "/api/v1/etfs/search"},
+		{method: http.MethodGet, path: "/api/v1/etfs/not-an-etf"},
+		{method: http.MethodPost, path: "/api/v1/watchlist/etfs", body: `{"code":"510300","name":"沪深300ETF","market":"SZ","category":"broad"}`},
+	}
+	for _, item := range tests {
+		req := httptest.NewRequest(item.method, "http://127.0.0.1:34115"+item.path, strings.NewReader(item.body))
+		if item.body != "" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusBadRequest {
+			t.Errorf("%s %s status=%d body=%q", item.method, item.path, recorder.Code, recorder.Body.String())
+		}
 	}
 }

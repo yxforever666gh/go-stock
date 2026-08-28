@@ -4,6 +4,12 @@ function normalizedErrors(value) {
   return [value]
 }
 
+function normalizedTimestamp(value) {
+  const timestamp = String(value || '').trim()
+  if (!timestamp || /^0{3,4}1-01-01(?:T|\s|$)/.test(timestamp)) return ''
+  return timestamp
+}
+
 export function parseDataEnvelope(payload, fallbackData = []) {
   const objectPayload = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null
   const isEnvelope = objectPayload && Object.prototype.hasOwnProperty.call(objectPayload, 'data')
@@ -19,8 +25,8 @@ export function parseDataEnvelope(payload, fallbackData = []) {
   return {
     data: data ?? fallbackData,
     source: objectPayload?.source ?? objectPayload?.sources ?? '',
-    asOf: objectPayload?.asOf ?? objectPayload?.as_of ?? '',
-    fetchedAt: objectPayload?.fetchedAt ?? objectPayload?.fetched_at ?? '',
+    asOf: normalizedTimestamp(objectPayload?.asOf ?? objectPayload?.as_of),
+    fetchedAt: normalizedTimestamp(objectPayload?.fetchedAt ?? objectPayload?.fetched_at),
     status,
     errors,
     sources,

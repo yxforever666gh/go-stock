@@ -449,7 +449,7 @@ func TestEmptyDatabasesUpgradeDirectlyToSchema17AndMinute3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 19 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 20 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 }
@@ -481,7 +481,7 @@ func TestPublished151BaselineUpgradesDirectlyToSchema17(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentVersion != 19 || len(status.Pending) != 0 {
+	if status.CurrentVersion != 20 || len(status.Pending) != 0 {
 		t.Fatalf("upgraded status=%+v", status)
 	}
 	if database.Migrator().HasTable("ai_recommend_stocks") {

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.4.0
+  version: 2.5.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -101,6 +101,50 @@ paths:
       responses: {"200": {description: Sort updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/funds/search:
     get: {operationId: searchFunds, responses: {"200": {description: Fund search}}}
+  /api/v1/funds/rankings:
+    get:
+      operationId: fundRankings
+      parameters:
+        - {name: category, in: query, schema: {type: string, enum: [all, stock, mixed, bond, index, qdii, fof]}}
+        - {name: period, in: query, schema: {type: string, enum: [day, week, month, 3m, 6m, 1y, 3y, ytd, since_inception, scale]}}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: sortDirection, in: query, schema: {type: string, enum: [asc, desc]}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1}}
+        - {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        "200": {description: Off-exchange fund rankings with normalized NAV date and provider state, content: {application/json: {schema: {$ref: "#/components/schemas/FundRankingEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/v1/etfs/rankings:
+    get:
+      operationId: etfRankings
+      parameters:
+        - {name: category, in: query, schema: {type: string, enum: [all, broad, industry, cross_border, bond, commodity, money]}}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: sort, in: query, schema: {type: string, enum: [changeRate, amount, turnoverRate, premiumRate, scale, netInflow]}}
+        - {name: sortDirection, in: query, schema: {type: string, enum: [asc, desc]}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1}}
+        - {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      responses:
+        "200": {description: Exchange-traded-fund rankings, content: {application/json: {schema: {$ref: "#/components/schemas/ETFRankingEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/v1/etfs/search:
+    get:
+      operationId: etfSearch
+      parameters:
+        - {name: q, in: query, required: true, schema: {type: string, minLength: 1}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50}}
+      responses:
+        "200": {description: Search listed exchange-traded funds by normalized code or name, content: {application/json: {schema: {$ref: "#/components/schemas/ETFSearchEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/v1/etfs/{code}:
+    get:
+      operationId: etfDetail
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Exchange-traded-fund identity, quote, NAV, scale, flow and holdings, content: {application/json: {schema: {$ref: "#/components/schemas/ETFDetailEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
   /api/v1/watchlist/funds:
     get: {operationId: listFollowedFunds, responses: {"200": {description: Followed funds}}}
     post:
@@ -109,6 +153,20 @@ paths:
       responses: {"200": {description: Fund followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/watchlist/funds/{code}:
     delete: {operationId: unfollowFund, responses: {"200": {description: Fund unfollowed}}}
+  /api/v1/watchlist/etfs:
+    get:
+      operationId: listFollowedETFs
+      responses: {"200": {description: Followed exchange-traded funds, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ETFWatchlistItem"}}}}}}
+    post:
+      operationId: followETF
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ETFWatchlistRequest"}}}}
+      responses: {"200": {description: ETF followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/watchlist/etfs/{code}:
+    delete:
+      operationId: unfollowETF
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+      responses: {"200": {description: ETF unfollowed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "404": {$ref: "#/components/responses/NotFound"}}
   /api/v1/market/telegraphs:
     get: {operationId: listTelegraphs, responses: {"200": {description: Telegraphs}}}
   /api/v1/market/telegraphs/refresh:
@@ -665,6 +723,127 @@ components:
         availableAt: {type: string, format: date-time}
         sourceRef: {type: string}
         message: {type: string}
+    FundRankingItem:
+      type: object
+      required: [code, name, category, rank]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        category: {type: string, enum: [all, stock, mixed, bond, index, qdii, fof]}
+        nav: {type: number, nullable: true}
+        navDate: {type: string, format: date}
+        dayReturn: {type: number, nullable: true}
+        weekReturn: {type: number, nullable: true}
+        monthReturn: {type: number, nullable: true}
+        threeMonthReturn: {type: number, nullable: true}
+        sixMonthReturn: {type: number, nullable: true}
+        oneYearReturn: {type: number, nullable: true}
+        threeYearReturn: {type: number, nullable: true}
+        yearToDateReturn: {type: number, nullable: true}
+        sinceInceptionReturn: {type: number, nullable: true}
+        scale: {type: number, nullable: true, description: Latest fund scale in CNY.}
+        scaleDate: {type: string, format: date}
+        rank: {type: integer, minimum: 1}
+    FundRankingPage:
+      type: object
+      required: [items, total, page, pageSize, category, period]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/FundRankingItem"}}
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        pageSize: {type: integer, minimum: 1, maximum: 100}
+        category: {type: string, enum: [all, stock, mixed, bond, index, qdii, fof]}
+        period: {type: string, enum: [day, week, month, 3m, 6m, 1y, 3y, ytd, since_inception, scale]}
+        navDate: {type: string, format: date}
+    FundRankingEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/FundRankingPage"}}
+    ETFRankingItem:
+      type: object
+      required: [code, name, market, category, rank]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        market: {type: string, enum: [SH, SZ]}
+        category: {type: string, enum: [broad, industry, cross_border, bond, commodity, money]}
+        price: {type: number, nullable: true}
+        changeRate: {type: number, nullable: true}
+        amount: {type: number, nullable: true}
+        turnoverRate: {type: number, nullable: true}
+        nav: {type: number, nullable: true}
+        navDate: {type: string, format: date}
+        premiumRate: {type: number, nullable: true}
+        shares: {type: number, nullable: true}
+        scale: {type: number, nullable: true}
+        netInflow: {type: number, nullable: true}
+        quoteTime: {type: string, format: date-time}
+        rank: {type: integer, minimum: 1}
+    ETFRankingPage:
+      type: object
+      required: [items, total, page, pageSize, category, sort]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/ETFRankingItem"}}
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        pageSize: {type: integer, minimum: 1, maximum: 100}
+        category: {type: string, enum: [all, broad, industry, cross_border, bond, commodity, money]}
+        sort: {type: string, enum: [changeRate, amount, turnoverRate, premiumRate, scale, netInflow]}
+    ETFRankingEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ETFRankingPage"}}
+    ETFSearchEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {type: array, items: {$ref: "#/components/schemas/ETFRankingItem"}}}
+    ETFHolding:
+      type: object
+      required: [code, name]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        weight: {type: number, nullable: true}
+        asOf: {type: string, format: date}
+    ETFDetail:
+      allOf:
+        - {$ref: "#/components/schemas/ETFRankingItem"}
+        - type: object
+          required: [trackingIndex, managementFee, holdings, chartInstrument]
+          properties:
+            trackingIndex: {type: string}
+            managementFee: {type: number, nullable: true}
+            listDate: {type: string, format: date}
+            holdings: {type: array, items: {$ref: "#/components/schemas/ETFHolding"}}
+            chartInstrument: {$ref: "#/components/schemas/InstrumentID"}
+    ETFDetailEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ETFDetail"}}
+    ETFWatchlistRequest:
+      type: object
+      required: [code, name, market, category]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        market: {type: string, enum: [SH, SZ]}
+        category: {type: string, enum: [broad, industry, cross_border, bond, commodity, money]}
+    ETFWatchlistItem:
+      allOf:
+        - {$ref: "#/components/schemas/ETFWatchlistRequest"}
+        - type: object
+          required: [createdAt, updatedAt]
+          properties:
+            createdAt: {type: string, format: date-time}
+            updatedAt: {type: string, format: date-time}
     MarketBreadthData:
       type: object
       required: [total, advances, declines, flat, limitUps, limitDowns, medianChangePct]

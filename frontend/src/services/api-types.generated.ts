@@ -12,11 +12,16 @@ export const API_PATHS = {
   createResearchReplay: "/api/v1/research/replays",
   deleteGroup: "/api/v1/groups/{id}",
   deleteInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
+  etfDetail: "/api/v1/etfs/{code}",
+  etfRankings: "/api/v1/etfs/rankings",
+  etfSearch: "/api/v1/etfs/search",
   exportConfig: "/api/v1/exports/config",
   exportResearch2AnalysisRunAudit: "/api/v1/research2/analysis-runs/{id}/audit/export",
   exportResearchAnalysisRunAudit: "/api/v1/research/analysis-runs/{id}/audit/export",
+  followETF: "/api/v1/watchlist/etfs",
   followFund: "/api/v1/watchlist/funds",
   followStock: "/api/v1/watchlist/stocks",
+  fundRankings: "/api/v1/funds/rankings",
   getAccountPerformance: "/api/v1/research/account/performance",
   getAnalysisRun: "/api/v1/research/analysis-runs/{id}",
   getCLSCalendar: "/api/v1/market/calendars/cls",
@@ -66,6 +71,7 @@ export const API_PATHS = {
   listAIConfigs: "/api/v1/ai/configs",
   listAccountCashFlows: "/api/v1/research/account/cash-flows",
   listAnalysisRuns: "/api/v1/research/analysis-runs",
+  listFollowedETFs: "/api/v1/watchlist/etfs",
   listFollowedFunds: "/api/v1/watchlist/funds",
   listFollowedStocks: "/api/v1/watchlist/stocks",
   listFuturesPositions: "/api/v1/market/futures/positions",
@@ -96,6 +102,7 @@ export const API_PATHS = {
   startAnalysisRun: "/api/v1/research/analysis-runs",
   testAIConfig: "/api/v1/ai/configs/test",
   testResearch2Email: "/api/v1/research2/email/test",
+  unfollowETF: "/api/v1/watchlist/etfs/{code}",
   unfollowFund: "/api/v1/watchlist/funds/{code}",
   unfollowStock: "/api/v1/watchlist/stocks/{code}",
   updateGroupSort: "/api/v1/groups/{id}/sort",
@@ -359,6 +366,73 @@ export type DecisionEvent = {
   sourceRefs?: string
 }
 
+export type ETFDetail = ETFRankingItem & {
+  chartInstrument: InstrumentID
+  holdings: Array<ETFHolding>
+  listDate?: string
+  managementFee: number | null
+  trackingIndex: string
+}
+
+export type ETFDetailEnvelope = DataEnvelope & {
+  data: ETFDetail
+}
+
+export type ETFHolding = {
+  asOf?: string
+  code: string
+  name: string
+  weight?: number | null
+}
+
+export type ETFRankingEnvelope = DataEnvelope & {
+  data: ETFRankingPage
+}
+
+export type ETFRankingItem = {
+  amount?: number | null
+  category: "broad" | "industry" | "cross_border" | "bond" | "commodity" | "money"
+  changeRate?: number | null
+  code: string
+  market: "SH" | "SZ"
+  name: string
+  nav?: number | null
+  navDate?: string
+  netInflow?: number | null
+  premiumRate?: number | null
+  price?: number | null
+  quoteTime?: string
+  rank: number
+  scale?: number | null
+  shares?: number | null
+  turnoverRate?: number | null
+}
+
+export type ETFRankingPage = {
+  category: "all" | "broad" | "industry" | "cross_border" | "bond" | "commodity" | "money"
+  items: Array<ETFRankingItem>
+  page: number
+  pageSize: number
+  sort: "changeRate" | "amount" | "turnoverRate" | "premiumRate" | "scale" | "netInflow"
+  total: number
+}
+
+export type ETFSearchEnvelope = DataEnvelope & {
+  data: Array<ETFRankingItem>
+}
+
+export type ETFWatchlistItem = ETFWatchlistRequest & {
+  createdAt: string
+  updatedAt: string
+}
+
+export type ETFWatchlistRequest = {
+  category: "broad" | "industry" | "cross_border" | "bond" | "commodity" | "money"
+  code: string
+  market: "SH" | "SZ"
+  name: string
+}
+
 export type ErrorResponse = {
   error: string
 }
@@ -421,6 +495,40 @@ export type FundFlowRow = {
   name: string
   netAmount: number
   outAmount: number
+}
+
+export type FundRankingEnvelope = DataEnvelope & {
+  data: FundRankingPage
+}
+
+export type FundRankingItem = {
+  category: "all" | "stock" | "mixed" | "bond" | "index" | "qdii" | "fof"
+  code: string
+  dayReturn?: number | null
+  monthReturn?: number | null
+  name: string
+  nav?: number | null
+  navDate?: string
+  oneYearReturn?: number | null
+  rank: number
+  scale?: number | null
+  scaleDate?: string
+  sinceInceptionReturn?: number | null
+  sixMonthReturn?: number | null
+  threeMonthReturn?: number | null
+  threeYearReturn?: number | null
+  weekReturn?: number | null
+  yearToDateReturn?: number | null
+}
+
+export type FundRankingPage = {
+  category: "all" | "stock" | "mixed" | "bond" | "index" | "qdii" | "fof"
+  items: Array<FundRankingItem>
+  navDate?: string
+  page: number
+  pageSize: number
+  period: "day" | "week" | "month" | "3m" | "6m" | "1y" | "3y" | "ytd" | "since_inception" | "scale"
+  total: number
 }
 
 export type FuturesPositionRow = {

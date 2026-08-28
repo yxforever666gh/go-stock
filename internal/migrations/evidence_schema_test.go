@@ -276,10 +276,10 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 19 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 20 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
-	if len(mainStatus.Records) < 5 || mainStatus.Records[len(mainStatus.Records)-5].ID != 15 || mainStatus.Records[len(mainStatus.Records)-4].ID != 16 || mainStatus.Records[len(mainStatus.Records)-3].ID != 17 || mainStatus.Records[len(mainStatus.Records)-2].ID != 18 || mainStatus.Records[len(mainStatus.Records)-1].ID != 19 {
-		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 19: %+v", mainStatus.Records)
+	if len(mainStatus.Records) < 6 || mainStatus.Records[len(mainStatus.Records)-6].ID != 15 || mainStatus.Records[len(mainStatus.Records)-5].ID != 16 || mainStatus.Records[len(mainStatus.Records)-4].ID != 17 || mainStatus.Records[len(mainStatus.Records)-3].ID != 18 || mainStatus.Records[len(mainStatus.Records)-2].ID != 19 || mainStatus.Records[len(mainStatus.Records)-1].ID != 20 {
+		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 20: %+v", mainStatus.Records)
 	}
 }

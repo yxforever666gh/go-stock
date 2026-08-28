@@ -49,6 +49,8 @@ Assert-Transition 17 3 18 3 $true $true $false
 Assert-Transition 17 3 18 4 $true $true $true
 Assert-Transition 18 3 19 3 $true $true $false
 Assert-Transition 18 3 19 4 $true $true $true
+Assert-Transition 19 3 20 3 $true $true $false
+Assert-Transition 19 3 20 4 $true $true $true
 
 Assert-TransitionRejected 14 2 16 2
 Assert-TransitionRejected 14 2 14 4
@@ -70,10 +72,14 @@ Assert-TransitionRejected 18 3 20 3
 Assert-TransitionRejected 18 3 19 5
 Assert-TransitionRejected 18 3 17 3
 Assert-TransitionRejected 18 3 18 2
+Assert-TransitionRejected 19 3 21 3
+Assert-TransitionRejected 19 3 20 5
+Assert-TransitionRejected 19 3 18 3
+Assert-TransitionRejected 19 3 19 2
 
 $previousPointer = [pscustomobject]@{
-    appVersion = "2.3.0"
-    mainSchemaVersion = 18
+    appVersion = "2.4.0"
+    mainSchemaVersion = 19
     minuteSchemaVersion = 3
     commit = "fixture"
     binary = "fixture.exe"

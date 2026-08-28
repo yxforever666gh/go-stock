@@ -27,6 +27,11 @@ test('normalizes current and legacy data payloads', () => {
   assert.equal(result.evidenceSetId, 'evidence-1')
   assert.equal(parseDataEnvelope({data: []}).status, 'ok')
   assert.equal(parseDataEnvelope({data: [], status: 'unavailable', errors: ['down']}).status, 'unavailable')
+  const unavailable = parseDataEnvelope({
+    data: [], status: 'unavailable', asOf: '0001-01-01T00:00:00Z', fetchedAt: '2026-08-28T10:00:01+08:00',
+  })
+  assert.equal(unavailable.asOf, '')
+  assert.equal(unavailable.fetchedAt, '2026-08-28T10:00:01+08:00')
 })
 
 test('retains the last successful data when a refresh becomes stale', () => {
