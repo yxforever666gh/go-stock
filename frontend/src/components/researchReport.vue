@@ -3,6 +3,7 @@ import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NTag, useMessage} from 'naive-ui'
 import {formatInteger, formatNumber} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
+import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
 import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/research-api'
 
 const message = useMessage()
@@ -209,28 +210,32 @@ onBeforeUnmount(stopPolling)
   </n-space>
 
   <n-modal v-model:show="detailVisible">
-    <n-card style="width:min(1180px, 94vw); max-height:90vh" title="AI 分析报告" closable @close="detailVisible = false">
+    <n-card style="width:min(1380px, 96vw); max-height:92vh" title="AI 分析报告" closable @close="detailVisible = false">
       <n-scrollbar style="max-height:78vh">
         <n-spin :show="!detail">
           <template v-if="detail">
-            <n-descriptions bordered :column="3" size="small">
-              <n-descriptions-item label="运行状态">{{ statusLabels[detail.status] || detail.status }}</n-descriptions-item>
-              <n-descriptions-item label="模型">{{ detail.providerName }} / {{ detail.modelName }}</n-descriptions-item>
-              <n-descriptions-item label="来源">{{ sourceSummary(detail.sourceStatusJson) }}</n-descriptions-item>
-            </n-descriptions>
-            <n-divider title-placement="left">完整决策报告</n-divider>
-            <AppMarkdownPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
-            <n-collapse>
-              <n-collapse-item title="大盘层" name="market"><AppMarkdownPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
-              <n-collapse-item title="板块层" name="sector"><AppMarkdownPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
-              <n-collapse-item title="个股层" name="stock"><AppMarkdownPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
-              <n-collapse-item title="模型调用记录" name="attempts">
-                <n-data-table :columns="attemptColumns" :data="attemptRows(detail.modelAttemptLogJson)" :scroll-x="1650" size="small"/>
-              </n-collapse-item>
-              <n-collapse-item title="来源状态" name="sources">
-                <n-data-table :columns="sourceColumns" :data="sourceRows(detail.sourceStatusJson)" :scroll-x="900" size="small"/>
-              </n-collapse-item>
-            </n-collapse>
+            <ResearchAuditPanel owner-type="research1" :owner-id="String(detail.runId || detailRunID)" :active="detailVisible">
+              <template #final-result>
+                <n-descriptions bordered :column="3" size="small">
+                  <n-descriptions-item label="运行状态">{{ statusLabels[detail.status] || detail.status }}</n-descriptions-item>
+                  <n-descriptions-item label="模型">{{ detail.providerName }} / {{ detail.modelName }}</n-descriptions-item>
+                  <n-descriptions-item label="来源">{{ sourceSummary(detail.sourceStatusJson) }}</n-descriptions-item>
+                </n-descriptions>
+                <n-divider title-placement="left">完整决策报告</n-divider>
+                <AppMarkdownPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
+                <n-collapse>
+                  <n-collapse-item title="大盘层" name="market"><AppMarkdownPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
+                  <n-collapse-item title="板块层" name="sector"><AppMarkdownPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>
+                  <n-collapse-item title="个股层" name="stock"><AppMarkdownPreview :model-value="detail.stockReport || '无'"/></n-collapse-item>
+                  <n-collapse-item title="模型调用记录" name="attempts">
+                    <n-data-table :columns="attemptColumns" :data="attemptRows(detail.modelAttemptLogJson)" :scroll-x="1650" size="small"/>
+                  </n-collapse-item>
+                  <n-collapse-item title="来源状态" name="sources">
+                    <n-data-table :columns="sourceColumns" :data="sourceRows(detail.sourceStatusJson)" :scroll-x="900" size="small"/>
+                  </n-collapse-item>
+                </n-collapse>
+              </template>
+            </ResearchAuditPanel>
           </template>
         </n-spin>
       </n-scrollbar>

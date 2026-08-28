@@ -276,10 +276,10 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 17 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 18 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
-	if len(mainStatus.Records) < 3 || mainStatus.Records[len(mainStatus.Records)-3].ID != 15 || mainStatus.Records[len(mainStatus.Records)-2].ID != 16 || mainStatus.Records[len(mainStatus.Records)-1].ID != 17 {
+	if len(mainStatus.Records) < 4 || mainStatus.Records[len(mainStatus.Records)-4].ID != 15 || mainStatus.Records[len(mainStatus.Records)-3].ID != 16 || mainStatus.Records[len(mainStatus.Records)-2].ID != 17 || mainStatus.Records[len(mainStatus.Records)-1].ID != 18 {
 		t.Fatalf("schema 14 fixture did not advance through migrations 15, 16 and 17: %+v", mainStatus.Records)
 	}
 }

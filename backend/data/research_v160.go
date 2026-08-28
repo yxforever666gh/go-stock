@@ -19,6 +19,7 @@ import (
 	"go-stock/backend/marketdata"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/backend/researchaudit"
 
 	"gorm.io/gorm"
 )
@@ -27,6 +28,7 @@ type researchProviderCompletion func(context.Context, *models.AIConfig, []map[st
 
 type ResearchAIClient struct {
 	configID         int
+	forceConfig      bool
 	loadSetting      func() *SettingConfig
 	completeProvider researchProviderCompletion
 	attemptTimeout   time.Duration
@@ -46,6 +48,13 @@ var errResearchModelInactive = errors.New("model stream had no activity before t
 
 func NewResearchAIClient(configID int) *ResearchAIClient {
 	return &ResearchAIClient{configID: configID}
+}
+
+// NewResearchReplayAIClient pins an isolated audit replay to the explicitly
+// selected model configuration. Formal research keeps its normal configured
+// fallback order; a replay must not silently switch to a different model.
+func NewResearchReplayAIClient(configID int) *ResearchAIClient {
+	return &ResearchAIClient{configID: configID, forceConfig: true}
 }
 
 func (client *ResearchAIClient) modelAttemptTimeout() time.Duration {
@@ -249,6 +258,9 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 	// constructor's config ID is retained only for callers that still record the
 	// primary row; it must not override the user-visible fallback order.
 	order := ResolveAIFallbackOrder(setting, 0)
+	if client.forceConfig {
+		order = []int{client.configID}
+	}
 	if len(order) == 0 {
 		return research.CompletionResult{}, errors.New("没有已启用的 AI 模型")
 	}
@@ -285,6 +297,9 @@ func (client *ResearchAIClient) Complete(ctx context.Context, request research.C
 				ID:    fmt.Sprintf("%s-%d-%d-%d", request.Phase, config.ID, attempt, startedAt.UnixNano()),
 				Phase: request.Phase, ConfigID: config.ID, ProviderName: label,
 				ModelName: strings.TrimSpace(config.ModelName), APIProtocol: NormalizeAIAPIProtocol(config.ApiProtocol),
+				MaxTokens: config.MaxTokens, Temperature: config.Temperature, RequestTimeoutSeconds: config.TimeOut,
+				InactivityTimeoutSeconds: int(attemptTimeout / time.Second), FallbackIndex: index + 1, FallbackCount: len(orderedConfigs),
+				ForcedConfig: client.forceConfig, PreviousResponseIDPresent: strings.TrimSpace(request.PreviousResponseID) != "",
 				Attempt: attempt, MaxAttempts: maxAttempts, StartedAt: startedAt, Status: "waiting_response",
 			}
 			emitResearchAttempt(request.OnAttempt, record)
@@ -832,10 +847,12 @@ func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Re
 	service.SetRecommendationChartProvider(NewResearchChartProviderWithStorage(quoteProvider, minuteDB))
 	var collector research.SourceCollector = NewResearchSourceCollectorWithProviders(news, stocks)
 	runner := research.NewAnalysisRunner(service, collector)
+	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)))
 	experimentalEvidence := setting != nil && setting.Settings != nil && setting.ExperimentalEvidenceEnabled
 	if experimentalEvidence {
 		collector = researchCollectorWithExperimentalEvidence(true, collector, NewMarketEvidenceService(), newThemeEvidenceReader(mainDB))
 		runner = research.NewAnalysisRunner(service, collector)
+		runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)))
 		runner.ConfigureEvidence(marketdata.NewRepository(mainDB), researchThemeEvidenceProfile)
 	}
 	return &ResearchRuntime{Repository: repository, Service: service, Runner: runner}, nil

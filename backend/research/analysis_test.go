@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"go-stock/backend/marketdata"
+	"go-stock/backend/researchaudit"
 	"math"
 	"strings"
 	"testing"
@@ -94,6 +95,9 @@ func TestEndToEndAnalysisDirectBuyTPlusOneSaleAndNetYield(t *testing.T) {
 		{Content: "市场风险可控"}, {Content: sector}, {Content: stock}, {Content: final, ResponseID: "shared-final"},
 		{Content: `{"action":"卖出","reason":"次日冲高转弱"}`, ResponseID: "stock-sale"},
 	}}
+	if err := repo.DB().AutoMigrate(&researchaudit.PromptVersion{}, &researchaudit.Payload{}, &researchaudit.RunState{}, &researchaudit.Replay{}, &researchaudit.ReplayResult{}); err != nil {
+		t.Fatal(err)
+	}
 	quotes := &scriptedQuotes{quotes: []Quote{
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: current},
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: current},
@@ -101,11 +105,22 @@ func TestEndToEndAnalysisDirectBuyTPlusOneSaleAndNetYield(t *testing.T) {
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 11.1, PreviousClose: 10.1, At: time.Date(2026, 8, 17, 9, 50, 1, 0, shanghaiLocation)},
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 11.1, PreviousClose: 10.1, At: time.Date(2026, 8, 17, 9, 50, 2, 0, shanghaiLocation)},
 	}}
-	service := NewService(repo, ai, quotes, weekdayTradingCalendar{})
+	service := NewService(repo, &attemptReportingAI{delegate: ai}, quotes, weekdayTradingCalendar{})
 	service.now = func() time.Time { return current }
-	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: current, AIConfigID: 1, ModelName: "gpt-5.6-sol"})
+	runner := NewAnalysisRunner(service, fixedCollector{})
+	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(repo.DB())))
+	run, err := runner.Run(context.Background(), AnalysisRequest{ScheduledFor: current, AIConfigID: 1, ModelName: "gpt-5.6-sol"})
 	if err != nil || run.RecommendationCount != 1 {
 		t.Fatalf("analysis run=%+v err=%v", run, err)
+	}
+	audit, auditErr := researchaudit.NewRecorder(researchaudit.NewRepository(repo.DB())).Audit(context.Background(), researchaudit.OwnerResearch1, run.RunID)
+	if auditErr != nil || audit.Status != researchaudit.StatusComplete || len(audit.Payloads) != 4 {
+		t.Fatalf("audit=%+v err=%v", audit, auditErr)
+	}
+	for _, payload := range audit.Payloads {
+		if payload.ProviderName != "provider" || payload.ModelName != "model" || !strings.Contains(payload.ModelParametersJSON, `"actualConfigId":1`) {
+			t.Fatalf("actual fallback identity missing: %+v", payload.Payload)
+		}
 	}
 	items, _ := repo.ListRecommendations(context.Background(), 10, 0)
 	active, _ := repo.Recommendation(context.Background(), items[0].RecommendationID)

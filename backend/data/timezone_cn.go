@@ -27,4 +27,3 @@ func cnLocation() *time.Location {
 	}
 	return cnLoc
 }
-

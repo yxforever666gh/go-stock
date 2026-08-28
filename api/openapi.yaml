@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.2.0
+  version: 2.3.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -337,6 +337,24 @@ paths:
       operationId: getAnalysisRun
       responses:
         "200": {description: Analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/AnalysisRun"}}}}
+  /api/v1/research/analysis-runs/{id}/audit:
+    get:
+      operationId: getResearchAnalysisRunAudit
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Immutable redacted audit detail or an explicit legacy-unavailable result, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchAuditDetail"}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/research/analysis-runs/{id}/audit/export:
+    get:
+      operationId: exportResearchAnalysisRunAudit
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Redacted immutable audit ZIP bundle, content: {application/zip: {schema: {type: string, format: binary}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/research/recommendations:
     get:
       operationId: listRecommendations
@@ -393,6 +411,24 @@ paths:
       operationId: getResearch2AnalysisRun
       responses:
         "200": {description: Research Center 2 analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AnalysisRun"}}}}
+  /api/v1/research2/analysis-runs/{id}/audit:
+    get:
+      operationId: getResearch2AnalysisRunAudit
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Immutable redacted audit detail or an explicit legacy-unavailable result, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchAuditDetail"}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/research2/analysis-runs/{id}/audit/export:
+    get:
+      operationId: exportResearch2AnalysisRunAudit
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Redacted immutable audit ZIP bundle, content: {application/zip: {schema: {type: string, format: binary}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/research2/recommendations:
     get:
       operationId: listResearch2Recommendations
@@ -413,6 +449,28 @@ paths:
       operationId: getResearch2Performance
       responses:
         "200": {description: Research Center 2 overnight performance, content: {application/json: {schema: {$ref: "#/components/schemas/Research2Performance"}}}}
+  /api/v1/research/replays:
+    post:
+      operationId: createResearchReplay
+      description: Replays one immutable evidence and prompt snapshot with another model configuration without writing formal recommendations, trades, positions, or accounts.
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/CreateResearchReplayRequest"}}}
+      responses:
+        "202": {description: Replay accepted, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchReplay"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/research/replays/{id}:
+    get:
+      operationId: getResearchReplay
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Replay state, immutable result, and comparison summary, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchReplay"}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/exports/config:
     post:
       operationId: exportConfig
@@ -1307,6 +1365,81 @@ components:
         emailSentAt: {type: string, format: date-time, nullable: true}
         emailAttemptCount: {type: integer}
         emailLastError: {type: string}
+    ResearchAuditRunState:
+      type: object
+      required: [status, payloadCount, lastError, createdAt, updatedAt]
+      properties:
+        status: {type: string, enum: [capturing, complete, failed, legacy_unavailable]}
+        payloadCount: {type: integer, minimum: 0}
+        lastError: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    ResearchAuditPayload:
+      type: object
+      required: [payloadId, phase, callSequence, attempt, providerName, modelName, modelParameters, finalPrompt, finalPromptSha256, evidenceSnapshot, evidenceSha256, tools, rawResponse, rawResponseSha256, repairedResponse, repairedResponseSha256, repairLog, redactionCount, createdAt]
+      properties:
+        payloadId: {type: string}
+        phase: {type: string}
+        callSequence: {type: integer, minimum: 1}
+        attempt: {type: integer, minimum: 1}
+        providerName: {type: string}
+        modelName: {type: string}
+        modelParameters: {$ref: "#/components/schemas/JsonObject"}
+        finalPrompt: {type: string}
+        finalPromptSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        evidenceSnapshot: {type: string}
+        evidenceSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        tools: {type: array, items: {type: string}}
+        rawResponse: {type: string}
+        rawResponseSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
+        repairedResponse: {type: string}
+        repairedResponseSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
+        repairLog: {type: string}
+        redactionCount: {type: integer, minimum: 0}
+        createdAt: {type: string, format: date-time}
+    ResearchAuditDetail:
+      type: object
+      required: [availability, ownerType, ownerId, state, payloads]
+      properties:
+        availability: {type: string, enum: [available, legacy_unavailable]}
+        ownerType: {type: string, enum: [research1, research2, replay]}
+        ownerId: {type: string}
+        cutoffAt:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        state: {$ref: "#/components/schemas/ResearchAuditRunState"}
+        payloads: {type: array, items: {$ref: "#/components/schemas/ResearchAuditPayload"}}
+    CreateResearchReplayRequest:
+      type: object
+      required: [sourceOwnerType, sourceOwnerId, modelConfigId]
+      properties:
+        sourceOwnerType: {type: string, enum: [research1, research2]}
+        sourceOwnerId: {type: string}
+        modelConfigId: {type: integer, minimum: 1}
+    ResearchReplay:
+      type: object
+      required: [replayId, sourceOwnerType, sourceOwnerId, modelConfigId, status, cutoffAt, createdAt, lastError, result, resultSha256, diffSummary]
+      properties:
+        replayId: {type: string}
+        sourceOwnerType: {type: string, enum: [research1, research2]}
+        sourceOwnerId: {type: string}
+        modelConfigId: {type: integer, minimum: 1}
+        status: {type: string, enum: [queued, running, completed, failed]}
+        cutoffAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        startedAt:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        completedAt:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+        lastError: {type: string}
+        result: {type: string}
+        resultSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
+        diffSummary: {$ref: "#/components/schemas/JsonObject"}
     Research2Recommendation:
       type: object
       required: [recommendationId, analysisRunId, rank, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]

@@ -2,6 +2,7 @@
 import {h, onMounted, ref} from 'vue'
 import {NButton, NTag, useMessage} from 'naive-ui'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
+import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
 import {GetResearch2Run, ListResearch2Runs} from '../services/research2-api'
 
 const message = useMessage(), loading = ref(false), rows = ref([]), detail = ref(null), visible = ref(false)
@@ -32,5 +33,23 @@ onMounted(refresh)
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1450" :row-key="row => row.runId"/>
   </n-space>
-  <n-modal v-model:show="visible"><n-card title="隔夜强势分析报告" closable style="width:min(1200px,94vw);max-height:94vh" @close="visible=false"><n-scrollbar style="max-height:82vh"><n-spin :show="!detail"><template v-if="detail"><n-alert type="info" :show-icon="false" style="margin-bottom:12px">邮件：{{ emailLabels[detail.emailDeliveryStatus] || '未排队' }}；尝试 {{ detail.emailAttemptCount || 0 }} 次；发送时间 {{ dateTime(detail.emailSentAt) }}<template v-if="detail.emailLastError">；错误：{{ detail.emailLastError }}</template></n-alert><AppMarkdownPreview :model-value="detail.reportMarkdown || detail.failureReason || '暂无报告'"/></template></n-spin></n-scrollbar></n-card></n-modal>
+  <n-modal v-model:show="visible">
+    <n-card title="隔夜强势分析报告" closable style="width:min(1380px,96vw);max-height:94vh" @close="visible=false">
+      <n-scrollbar style="max-height:82vh">
+        <n-spin :show="!detail">
+          <template v-if="detail">
+            <ResearchAuditPanel owner-type="research2" :owner-id="String(detail.runId)" :active="visible">
+              <template #final-result>
+                <n-alert type="info" :show-icon="false" style="margin-bottom:12px">
+                  邮件：{{ emailLabels[detail.emailDeliveryStatus] || '未排队' }}；尝试 {{ detail.emailAttemptCount || 0 }} 次；发送时间 {{ dateTime(detail.emailSentAt) }}
+                  <template v-if="detail.emailLastError">；错误：{{ detail.emailLastError }}</template>
+                </n-alert>
+                <AppMarkdownPreview :model-value="detail.reportMarkdown || detail.failureReason || '暂无报告'"/>
+              </template>
+            </ResearchAuditPanel>
+          </template>
+        </n-spin>
+      </n-scrollbar>
+    </n-card>
+  </n-modal>
 </template>

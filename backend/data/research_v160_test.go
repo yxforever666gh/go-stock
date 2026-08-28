@@ -90,6 +90,30 @@ func TestResearchAIClientRetriesFiveTimesThenFallsBackInEnabledTableOrder(t *tes
 	}
 }
 
+func TestResearchReplayAIClientPinsRequestedConfiguration(t *testing.T) {
+	setting := &SettingConfig{AiConfigs: []*AIConfig{
+		{ID: 1, Sort: 1, Name: "global-first", ModelName: "model-1"},
+		{ID: 2, Sort: 2, Name: "replay-selected", ModelName: "model-2"},
+	}}
+	client := NewResearchReplayAIClient(2)
+	client.loadSetting = func() *SettingConfig { return setting }
+	var called []uint
+	client.completeProvider = func(_ context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(AIStreamActivity)) (string, string, string, error) {
+		called = append(called, config.ID)
+		return "selected", "response-2", config.ModelName, nil
+	}
+	result, err := client.Complete(context.Background(), research.CompletionRequest{Phase: "replay", Prompt: "fixed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(called, []uint{2}) {
+		t.Fatalf("called configs=%v, want only requested config 2", called)
+	}
+	if result.Model != "model-2" || result.Content != "selected" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
 func TestResearchAIClientDefaultRetryPolicy(t *testing.T) {
 	client := &ResearchAIClient{}
 	if got := client.modelAttemptTimeout(); got != 300*time.Second {
@@ -221,7 +245,7 @@ func TestResearchAIClientActiveInferenceResetsInactivityTimeout(t *testing.T) {
 
 func TestResearchAIClientFatalErrorFallsBackImmediately(t *testing.T) {
 	setting := &SettingConfig{AiConfigs: []*AIConfig{
-		{ID: 1, Sort: 1, Name: "bad-key", ModelName: "model-1", ApiKey: "secret-key", BaseUrl: "https://secret.example"},
+		{ID: 1, Sort: 1, Name: "bad-key", ModelName: "model-1", ApiKey: "secret-key", BaseUrl: "https://secret.example", MaxTokens: 64, TimeOut: 90},
 		{ID: 2, Sort: 2, Name: "fallback", ModelName: "model-2"},
 	}}
 	called := make([]uint, 0, 2)
@@ -256,6 +280,9 @@ func TestResearchAIClientFatalErrorFallsBackImmediately(t *testing.T) {
 	}
 	if failed == nil || failed.NextAction != "fallback_next_model" || failed.Retryable {
 		t.Fatalf("failed record=%+v", failed)
+	}
+	if failed.APIProtocol == "" || failed.FallbackCount != 2 || failed.FallbackIndex != 1 || failed.MaxTokens == 0 || failed.RequestTimeoutSeconds == 0 {
+		t.Fatalf("audit model parameters missing: %+v", failed)
 	}
 	if strings.Contains(failed.ErrorMessage, "secret-key") || strings.Contains(failed.ErrorMessage, "secret.example") {
 		t.Fatalf("error was not sanitized: %q", failed.ErrorMessage)

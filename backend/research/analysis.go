@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"go-stock/backend/marketdata"
+	"go-stock/backend/researchaudit"
 )
 
 const finalReportTableHeader = "| 股票名称 | 股票代码 | AI分析摘要 | 主要风险 | 来源编号 |"
@@ -62,6 +63,18 @@ type AnalysisRunner struct {
 	collector       SourceCollector
 	evidence        *marketdata.Repository
 	evidenceProfile string
+	audit           *researchaudit.Recorder
+	auditSequence   int
+	auditCutoff     time.Time
+}
+
+// ConfigureAudit installs the mandatory 2.3 immutable model-call recorder.
+// A configured recorder is fail-closed: the model is not called if its final
+// redacted request cannot first be prepared for persistence.
+func (r *AnalysisRunner) ConfigureAudit(recorder *researchaudit.Recorder) {
+	if r != nil {
+		r.audit = recorder
+	}
 }
 
 func NewAnalysisRunner(service *Service, collector SourceCollector) *AnalysisRunner {
@@ -86,7 +99,32 @@ func (r *AnalysisRunner) completeAIForRun(ctx context.Context, run *AnalysisRun,
 		return r.completeAI(ctx, request)
 	}
 	var persistErr error
+	var auditPrepared researchaudit.PreparedCall
+	var auditAttempts []ModelAttemptRecord
+	if r.audit != nil {
+		r.auditSequence++
+		cutoff := r.auditCutoff
+		var cutoffAt *time.Time
+		if !cutoff.IsZero() {
+			cutoffAt = &cutoff
+		}
+		prepared, err := r.audit.Prepare(ctx, researchaudit.CallInput{
+			OwnerType: researchaudit.OwnerResearch1, OwnerID: run.RunID, Phase: request.Phase,
+			CallSequence: r.auditSequence, Attempt: 1, ProviderName: run.ProviderName, ModelName: run.ModelName,
+			ModelParameters: map[string]any{"aiConfigId": run.AIConfigID}, CutoffAt: cutoffAt,
+			Prompt: request.Prompt, Evidence: map[string]any{"evidenceSetId": run.EvidenceSetID, "sourceStatus": json.RawMessage(defaultAuditJSON(run.SourceStatusJSON))}, Tools: []string{},
+		})
+		if err != nil {
+			return CompletionResult{}, fmt.Errorf("准备研究审计载荷: %w", err)
+		}
+		auditPrepared = prepared
+		request.Prompt = prepared.Prompt
+		for index := range request.Messages {
+			request.Messages[index].Content, _ = researchaudit.RedactText(request.Messages[index].Content)
+		}
+	}
 	request.OnAttempt = func(record ModelAttemptRecord) {
+		auditAttempts = append(auditAttempts, record)
 		if persistErr != nil {
 			return
 		}
@@ -115,6 +153,28 @@ func (r *AnalysisRunner) completeAIForRun(ctx context.Context, run *AnalysisRun,
 		}
 	}
 	result, err := r.completeAI(ctx, request)
+	if r.audit != nil {
+		attemptLog, _ := json.Marshal(auditAttempts)
+		callResult := researchaudit.CallResult{RawResponse: result.Content, ModelName: result.Model, RepairLog: string(attemptLog), ModelParameters: AuditModelParameters(auditAttempts)}
+		if len(auditAttempts) > 0 {
+			last := auditAttempts[len(auditAttempts)-1]
+			callResult.ProviderName = last.ProviderName
+			callResult.ModelName = last.ModelName
+			callResult.ActualConfigID = last.ConfigID
+		}
+		if strings.HasSuffix(request.Phase, "_repair") {
+			callResult.RawResponse, callResult.RepairedResponse = "", result.Content
+		}
+		if err != nil {
+			callResult.RepairLog = string(attemptLog) + "\nerror=" + err.Error()
+		}
+		auditCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		auditErr := r.audit.Record(auditCtx, auditPrepared, callResult)
+		cancel()
+		if auditErr != nil {
+			err = errors.Join(err, fmt.Errorf("保存研究审计载荷: %w", auditErr))
+		}
+	}
 	if persistErr != nil {
 		if err != nil {
 			return result, errors.Join(err, persistErr)
@@ -122,6 +182,13 @@ func (r *AnalysisRunner) completeAIForRun(ctx context.Context, run *AnalysisRun,
 		return result, persistErr
 	}
 	return result, err
+}
+
+func defaultAuditJSON(value string) string {
+	if json.Valid([]byte(value)) {
+		return value
+	}
+	return "[]"
 }
 
 func decodeModelAttemptLog(value string) []ModelAttemptRecord {
@@ -246,6 +313,26 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 			return run, errors.Join(stageErr, saveErr)
 		}
 		return run, stageErr
+	}
+	if r.audit != nil {
+		r.auditSequence = 0
+		r.auditCutoff = researchEvidenceCutoff(now, request.EvidenceCutoffAt)
+		if err := r.audit.Begin(ctx, researchaudit.OwnerResearch1, run.RunID); err != nil {
+			return finishFailure(fmt.Errorf("启动研究审计: %w", err))
+		}
+		defer func() {
+			auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var auditErr error
+			if resultErr != nil || result.Status == "failed" {
+				auditErr = r.audit.Fail(auditCtx, researchaudit.OwnerResearch1, run.RunID, resultErr)
+			} else {
+				auditErr = r.audit.Complete(auditCtx, researchaudit.OwnerResearch1, run.RunID)
+			}
+			if auditErr != nil {
+				resultErr = errors.Join(resultErr, fmt.Errorf("完成研究审计: %w", auditErr))
+			}
+		}()
 	}
 	capacity, err := r.service.recommendationCapacity(ctx)
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"go-stock/backend/marketdata"
 	"go-stock/backend/research"
 	"go-stock/backend/research2"
+	"go-stock/backend/researchaudit"
 	"go-stock/backend/themes"
 
 	"github.com/google/uuid"
@@ -61,7 +62,9 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, _ *gorm.DB) (*Research
 		collector.themes = newThemeEvidenceReader(mainDB)
 	}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks}
-	return &Research2Runtime{Repository: repository, Runner: research2.NewRunner(repository, NewResearchAIClient(configID), collector, calendar), Trading: research2.NewTradingService(repository, market, calendar), Email: research2.NewEmailService(repository, nil)}, nil
+	runner := research2.NewRunner(repository, NewResearchAIClient(configID), collector, calendar)
+	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)))
+	return &Research2Runtime{Repository: repository, Runner: runner, Trading: research2.NewTradingService(repository, market, calendar), Email: research2.NewEmailService(repository, nil)}, nil
 }
 
 type research2MarketRow struct {

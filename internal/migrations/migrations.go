@@ -233,6 +233,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV17Definition,
 		apply:       applyThemeCatalystSchema,
 	},
+	{
+		id: 18, name: "research_audit_and_replay",
+		description: "App 2.3.0 adds immutable prompt and payload audit archives plus controlled replay state without rewriting historical research, account, trading, drawing or theme data.",
+		definition:  mainMigrationV18Definition,
+		apply:       applyResearchAuditSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -805,6 +811,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 17 {
 		if err := verifyMainSchema17Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 18 {
+		if err := verifyMainSchema18Runtime(database); err != nil {
 			return result, err
 		}
 	}

@@ -3,11 +3,13 @@ package research2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"go-stock/backend/research"
+	"go-stock/backend/researchaudit"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -19,8 +21,12 @@ type sequenceAI struct {
 	calls     int
 }
 
-func (a *sequenceAI) Complete(_ context.Context, _ research.CompletionRequest) (research.CompletionResult, error) {
+func (a *sequenceAI) Complete(_ context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
 	a.calls++
+	if request.OnAttempt != nil {
+		now := time.Date(2026, 8, 27, 1, 56, a.calls, 0, time.UTC)
+		request.OnAttempt(research.ModelAttemptRecord{ID: fmt.Sprintf("attempt-%d", a.calls), Phase: request.Phase, ConfigID: 7, ProviderName: "fixture-provider", ModelName: "fixture-model", Attempt: 1, MaxAttempts: 1, StartedAt: now, CompletedAt: &now, Status: "success"})
+	}
 	index := a.calls - 1
 	if index >= len(a.responses) {
 		index = len(a.responses) - 1
@@ -115,6 +121,41 @@ func TestRunnerRetriesOnceWhenModelJSONIsInvalid(t *testing.T) {
 	}
 	if ai.calls != 2 || run.Status != "no_recommendation" || !strings.Contains(run.ReportMarkdown, "隔离报告") {
 		t.Fatalf("calls=%d run=%+v", ai.calls, run)
+	}
+}
+
+func TestRunnerRecordsBothModelCallsWithActualProviderAndIsolatedRetryLogs(t *testing.T) {
+	repository := research2TestRepository(t)
+	if err := repository.DB().AutoMigrate(&researchaudit.PromptVersion{}, &researchaudit.Payload{}, &researchaudit.RunState{}, &researchaudit.Replay{}, &researchaudit.ReplayResult{}); err != nil {
+		t.Fatal(err)
+	}
+	ai := &sequenceAI{responses: []string{
+		`{"tradingDay":true,"reportMarkdown":"损坏"æ}`,
+		`{"tradingDay":true,"conclusion":"空仓","reportMarkdown":"空仓","recommendations":[]}`,
+	}}
+	loc := shanghai()
+	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "测试证据", SourceStatusJSON: "[]"}}, testCalendar{})
+	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(repository.DB())))
+	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
+	run, err := runner.Run(context.Background(), scheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := researchaudit.NewRecorder(researchaudit.NewRepository(repository.DB())).Audit(context.Background(), researchaudit.OwnerResearch2, run.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.Status != researchaudit.StatusComplete || len(view.Payloads) != 2 {
+		t.Fatalf("audit=%+v", view)
+	}
+	for _, payload := range view.Payloads {
+		if payload.ProviderName != "fixture-provider" || payload.ModelName != "fixture-model" || !strings.Contains(payload.ModelParametersJSON, `"actualConfigId":7`) {
+			t.Fatalf("actual provider/model not recorded: %+v", payload.Payload)
+		}
+	}
+	if strings.Contains(view.Payloads[1].RepairLog, "attempt-1") || !strings.Contains(view.Payloads[1].RepairLog, "attempt-2") {
+		t.Fatalf("repair retry log crossed calls: %q", view.Payloads[1].RepairLog)
 	}
 }
 

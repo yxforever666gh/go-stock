@@ -6,9 +6,12 @@ export const API_PATHS = {
   checkForUpdates: "/api/v1/system/update-check",
   connectEventsWebSocket: "/api/v1/events/ws",
   createGroup: "/api/v1/groups",
+  createResearchReplay: "/api/v1/research/replays",
   deleteGroup: "/api/v1/groups/{id}",
   deleteInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
   exportConfig: "/api/v1/exports/config",
+  exportResearch2AnalysisRunAudit: "/api/v1/research2/analysis-runs/{id}/audit/export",
+  exportResearchAnalysisRunAudit: "/api/v1/research/analysis-runs/{id}/audit/export",
   followFund: "/api/v1/watchlist/funds",
   followStock: "/api/v1/watchlist/stocks",
   getAccountPerformance: "/api/v1/research/account/performance",
@@ -32,8 +35,11 @@ export const API_PATHS = {
   getRecommendationChart: "/api/v1/research/recommendations/{id}/chart",
   getResearch2Account: "/api/v1/research2/account",
   getResearch2AnalysisRun: "/api/v1/research2/analysis-runs/{id}",
+  getResearch2AnalysisRunAudit: "/api/v1/research2/analysis-runs/{id}/audit",
   getResearch2Performance: "/api/v1/research2/account/performance",
   getResearch2Recommendation: "/api/v1/research2/recommendations/{id}",
+  getResearchAnalysisRunAudit: "/api/v1/research/analysis-runs/{id}/audit",
+  getResearchReplay: "/api/v1/research/replays/{id}",
   getSettings: "/api/v1/settings",
   getSimulatedAccount: "/api/v1/research/account",
   getStockKLine: "/api/v1/stocks/{code}/kline",
@@ -274,6 +280,12 @@ export type ChartProviderError = {
 export type CommandResponse = {
   message?: string
   ok: boolean
+}
+
+export type CreateResearchReplayRequest = {
+  modelConfigId: number
+  sourceOwnerId: string
+  sourceOwnerType: "research1" | "research2"
 }
 
 export type DataEnvelope = {
@@ -758,6 +770,61 @@ export type Research2Trade = {
   tradeId: string
   tradedAt: string
   transferFee: number
+}
+
+export type ResearchAuditDetail = {
+  availability: "available" | "legacy_unavailable"
+  cutoffAt?: string | null
+  ownerId: string
+  ownerType: "research1" | "research2" | "replay"
+  payloads: Array<ResearchAuditPayload>
+  state: ResearchAuditRunState
+}
+
+export type ResearchAuditPayload = {
+  attempt: number
+  callSequence: number
+  createdAt: string
+  evidenceSha256: string
+  evidenceSnapshot: string
+  finalPrompt: string
+  finalPromptSha256: string
+  modelName: string
+  modelParameters: JsonObject
+  payloadId: string
+  phase: string
+  providerName: string
+  rawResponse: string
+  rawResponseSha256: string
+  redactionCount: number
+  repairLog: string
+  repairedResponse: string
+  repairedResponseSha256: string
+  tools: Array<string>
+}
+
+export type ResearchAuditRunState = {
+  createdAt: string
+  lastError: string
+  payloadCount: number
+  status: "capturing" | "complete" | "failed" | "legacy_unavailable"
+  updatedAt: string
+}
+
+export type ResearchReplay = {
+  completedAt?: string | null
+  createdAt: string
+  cutoffAt: string
+  diffSummary: JsonObject
+  lastError: string
+  modelConfigId: number
+  replayId: string
+  result: string
+  resultSha256: string
+  sourceOwnerId: string
+  sourceOwnerType: "research1" | "research2"
+  startedAt?: string | null
+  status: "queued" | "running" | "completed" | "failed"
 }
 
 export type SentimentRequest = {

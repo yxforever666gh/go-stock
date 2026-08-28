@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go-stock/backend/research"
+	"go-stock/backend/researchaudit"
 
 	"github.com/google/uuid"
 )
@@ -99,7 +100,14 @@ type Runner struct {
 	calendar   Calendar
 	now        func() time.Time
 	waitUntil  func(context.Context, time.Time) error
+	audit      *researchaudit.Recorder
 	mu         sync.Mutex
+}
+
+func (r *Runner) ConfigureAudit(recorder *researchaudit.Recorder) {
+	if r != nil {
+		r.audit = recorder
+	}
 }
 
 func NewRunner(repository *Repository, ai research.AIClient, collector EvidenceCollector, calendar Calendar) *Runner {
@@ -152,6 +160,16 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	if err := r.repository.CreateRun(ctx, &run); err != nil {
 		return run, err
 	}
+	auditStarted := false
+	if r.audit != nil {
+		if err := r.audit.Begin(ctx, researchaudit.OwnerResearch2, run.RunID); err != nil {
+			completed := r.now().In(shanghai())
+			run.GeneratedAt, run.Status, run.FailureReason = &completed, "failed", "启动研究审计失败: "+err.Error()
+			_ = r.repository.SaveRun(ctx, &run)
+			return run, err
+		}
+		auditStarted = true
+	}
 	finishFailure := func(status, reason string, cause error) (AnalysisRun, error) {
 		completed := r.now().In(shanghai())
 		run.GeneratedAt = &completed
@@ -159,6 +177,15 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		run.FailureReason = reason
 		run.OnTime = !completed.After(time.Date(local.Year(), local.Month(), local.Day(), 10, 0, 0, 0, shanghai()))
 		_ = r.repository.SaveRun(ctx, &run)
+		if auditStarted {
+			auditCtx, cancelAudit := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancelAudit()
+			if cause != nil {
+				_ = r.audit.Fail(auditCtx, researchaudit.OwnerResearch2, run.RunID, cause)
+			} else {
+				_ = r.audit.Complete(auditCtx, researchaudit.OwnerResearch2, run.RunID)
+			}
+		}
 		return run, cause
 	}
 	tradeDay, err := r.calendar.IsTradingDay(ctx, local)
@@ -215,8 +242,22 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	var result research.CompletionResult
 	var output modelOutput
 	for structureAttempt := 1; structureAttempt <= 2; structureAttempt++ {
+		phase := "research2_overnight_strength"
+		if structureAttempt > 1 {
+			phase += "_repair"
+		}
+		var prepared researchaudit.PreparedCall
+		if r.audit != nil {
+			prepared, err = r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: map[string]any{"evidenceSetId": evidence.EvidenceSetID, "sourceStatus": json.RawMessage(defaultJSON(evidence.SourceStatusJSON, "[]")), "documents": evidence.Documents}, Tools: []string{}, ModelParameters: map[string]any{"modelDeadline": modelDeadline}})
+			if err != nil {
+				return finishFailure("failed", "准备研究审计载荷失败: "+err.Error(), err)
+			}
+			prompt = prepared.Prompt
+		}
+		callAttempts := make(map[string]research.ModelAttemptRecord)
 		result, err = r.ai.Complete(modelCtx, research.CompletionRequest{RecommendationID: run.RunID, Phase: "research2_overnight_strength", Prompt: prompt, OnAttempt: func(record research.ModelAttemptRecord) {
 			attempts[record.ID] = record
+			callAttempts[record.ID] = record
 			run.ProviderName = record.ProviderName
 			values := make([]research.ModelAttemptRecord, 0, len(attempts))
 			for _, item := range attempts {
@@ -229,6 +270,33 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			defer cancelPersist()
 			_ = r.repository.SaveRun(persistCtx, &run)
 		}})
+		if r.audit != nil {
+			attemptValues := make([]research.ModelAttemptRecord, 0, len(callAttempts))
+			for _, item := range callAttempts {
+				attemptValues = append(attemptValues, item)
+			}
+			sort.Slice(attemptValues, func(i, j int) bool { return attemptValues[i].StartedAt.Before(attemptValues[j].StartedAt) })
+			attemptJSON, _ := json.Marshal(attemptValues)
+			callResult := researchaudit.CallResult{RawResponse: result.Content, ModelName: result.Model, RepairLog: string(attemptJSON), ModelParameters: research.AuditModelParameters(attemptValues)}
+			if len(attemptValues) > 0 {
+				last := attemptValues[len(attemptValues)-1]
+				callResult.ProviderName = last.ProviderName
+				callResult.ModelName = last.ModelName
+				callResult.ActualConfigID = last.ConfigID
+			}
+			if structureAttempt > 1 {
+				callResult.RawResponse, callResult.RepairedResponse = "", result.Content
+			}
+			if err != nil {
+				callResult.RepairLog += "\nerror=" + err.Error()
+			}
+			auditCtx, cancelAudit := context.WithTimeout(context.WithoutCancel(modelCtx), 5*time.Second)
+			auditErr := r.audit.Record(auditCtx, prepared, callResult)
+			cancelAudit()
+			if auditErr != nil {
+				return finishFailure("failed", "保存研究审计载荷失败: "+auditErr.Error(), auditErr)
+			}
+		}
 		if err != nil {
 			return finishFailure("failed", "大模型分析失败: "+err.Error(), err)
 		}
@@ -271,7 +339,17 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		}
 	}
 	if err = r.repository.SaveRun(ctx, &run); err != nil {
+		if auditStarted {
+			_ = r.audit.Fail(context.Background(), researchaudit.OwnerResearch2, run.RunID, err)
+		}
 		return run, err
+	}
+	if auditStarted {
+		auditCtx, cancelAudit := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelAudit()
+		if err = r.audit.Complete(auditCtx, researchaudit.OwnerResearch2, run.RunID); err != nil {
+			return run, err
+		}
 	}
 	return run, nil
 }
