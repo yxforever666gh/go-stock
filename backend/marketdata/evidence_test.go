@@ -149,6 +149,33 @@ func TestPrimaryFallbackCollector(t *testing.T) {
 	}
 }
 
+func TestProviderChainCollectorPrefersCompleteFallbackAndKeepsAttemptStates(t *testing.T) {
+	primaryCalls, partialCalls, fallbackCalls := 0, 0, 0
+	collector := ProviderChainCollector[string]{Providers: []Provider[string]{
+		testProvider[string]{name: "primary", calls: &primaryCalls, result: ProviderResult[string]{Status: StatusUnavailable, Err: errors.New("EOF")}},
+		testProvider[string]{name: "partial", calls: &partialCalls, result: ProviderResult[string]{Status: StatusPartial, Data: "partial-data", Warning: "95% coverage"}},
+		testProvider[string]{name: "fallback", calls: &fallbackCalls, result: ProviderResult[string]{Status: StatusOK, Data: "complete-data"}},
+	}}
+	result := collector.Collect(context.Background(), ProviderRequest{})
+	if result.Status != StatusOK || result.Source != "fallback" || result.Data != "complete-data" {
+		t.Fatalf("unexpected chain result: %#v", result)
+	}
+	if primaryCalls != 1 || partialCalls != 1 || fallbackCalls != 1 || len(result.Sources) != 3 || len(result.Errors) != 1 {
+		t.Fatalf("unexpected chain attempts: calls=%d/%d/%d result=%#v", primaryCalls, partialCalls, fallbackCalls, result)
+	}
+}
+
+func TestProviderChainCollectorReturnsBestPartialWhenLaterSourcesFail(t *testing.T) {
+	collector := ProviderChainCollector[string]{Providers: []Provider[string]{
+		testProvider[string]{name: "partial", result: ProviderResult[string]{Status: StatusPartial, Data: "usable"}},
+		testProvider[string]{name: "down", result: ProviderResult[string]{Status: StatusUnavailable, Err: errors.New("down")}},
+	}}
+	result := collector.Collect(context.Background(), ProviderRequest{})
+	if result.Status != StatusPartial || result.Source != "partial" || result.Data != "usable" || len(result.Sources) != 2 || len(result.Errors) != 1 {
+		t.Fatalf("unexpected partial chain result: %#v", result)
+	}
+}
+
 func TestDataEnvelopePublicContract(t *testing.T) {
 	encoded, err := json.Marshal(DataEnvelope[[]string]{Data: []string{}, Source: "eastmoney", AsOf: time.Now(), FetchedAt: time.Now(), Status: StatusOK, Errors: []DataError{}})
 	if err != nil {

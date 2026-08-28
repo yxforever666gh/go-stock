@@ -68,6 +68,52 @@ type PrimaryFallbackCollector[T any] struct {
 	Fallback Provider[T]
 }
 
+// ProviderChainCollector tries providers in priority order. Complete data
+// wins immediately; partial or stale data is retained as a candidate while
+// later providers are given a chance to return a complete snapshot.
+type ProviderChainCollector[T any] struct {
+	Providers []Provider[T]
+}
+
+func (c ProviderChainCollector[T]) Collect(ctx context.Context, request ProviderRequest) DataEnvelope[T] {
+	var zero T
+	providers := make([]Provider[T], 0, len(c.Providers))
+	for _, provider := range c.Providers {
+		if provider != nil {
+			providers = append(providers, provider)
+		}
+	}
+	if len(providers) == 0 {
+		return DataEnvelope[T]{Status: StatusUnavailable, Data: zero, Source: "", FetchedAt: time.Now(), Sources: []SourceState{}, Warnings: []string{"未配置数据源"}, Errors: []DataError{{Provider: "", Code: "provider_unconfigured", Message: "未配置数据源"}}}
+	}
+
+	type candidate struct {
+		provider Provider[T]
+		result   ProviderResult[T]
+	}
+	var best *candidate
+	sources := make([]SourceState, 0, len(providers))
+	warnings := make([]string, 0, len(providers))
+	for _, provider := range providers {
+		result := collectProvider(ctx, provider, request)
+		sources = append(sources, sourceState(provider, result))
+		warnings = append(warnings, warningsFor(result)...)
+		if !usableStatus(result.Status) {
+			continue
+		}
+		if result.Status == StatusOK || result.Status == StatusEmpty {
+			return envelopeFrom(result, provider, sources, uniqueStrings(warnings))
+		}
+		if best == nil || (best.result.Status == StatusStale && result.Status == StatusPartial) {
+			best = &candidate{provider: provider, result: result}
+		}
+	}
+	if best != nil {
+		return envelopeFrom(best.result, best.provider, sources, uniqueStrings(warnings))
+	}
+	return envelopeFrom(ProviderResult[T]{Status: StatusUnavailable, Data: zero}, providers[0], sources, uniqueStrings(warnings))
+}
+
 func (c PrimaryFallbackCollector[T]) Collect(ctx context.Context, request ProviderRequest) DataEnvelope[T] {
 	var zero T
 	if c.Primary == nil && c.Fallback == nil {

@@ -24,10 +24,14 @@ const sources = computed(() => {
   return String(value || '未标注')
 })
 
-const errors = computed(() => {
+const issues = computed(() => {
   const rows = props.envelope?.errors || []
-  return rows.map(item => typeof item === 'string' ? item : (item?.message || JSON.stringify(item))).filter(Boolean)
+  const messages = rows.map(item => typeof item === 'string' ? item : (item?.message || JSON.stringify(item))).filter(Boolean)
+  if (!messages.length && props.error) messages.push(props.error)
+  return [...new Set(messages)]
 })
+
+const issueLabel = computed(() => props.envelope?.status === 'unavailable' ? '异常' : '降级')
 
 function dateTime(value) {
   if (!value) return '--'
@@ -46,13 +50,12 @@ function dateTime(value) {
       <n-text depth="3">来源：{{ sources }}</n-text>
       <n-text depth="3">数据截至：{{ dateTime(envelope?.asOf) }}</n-text>
       <n-text depth="3">采集于：{{ dateTime(envelope?.fetchedAt) }}</n-text>
-      <n-popover v-if="errors.length || error" trigger="hover" placement="bottom-start">
+      <n-popover v-if="issues.length" trigger="hover" placement="bottom-start">
         <template #trigger>
-          <n-tag size="small" type="warning" :bordered="false">异常 {{ errors.length || 1 }}</n-tag>
+          <n-tag size="small" :type="envelope?.status === 'unavailable' ? 'error' : 'warning'" :bordered="false">{{ issueLabel }} {{ issues.length }}</n-tag>
         </template>
         <n-list size="small" style="max-width: 520px">
-          <n-list-item v-if="error">{{ error }}</n-list-item>
-          <n-list-item v-for="item in errors" :key="item">{{ item }}</n-list-item>
+          <n-list-item v-for="item in issues" :key="item">{{ item }}</n-list-item>
         </n-list>
       </n-popover>
     </n-flex>

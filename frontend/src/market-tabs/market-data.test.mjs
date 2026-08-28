@@ -17,6 +17,7 @@ import {
 
 const drawerSource = await readFile(new URL('../components/InstrumentMicrostructureDrawer.vue', import.meta.url), 'utf8')
 const breadthSource = await readFile(new URL('../components/MarketBreadthOverview.vue', import.meta.url), 'utf8')
+const evidenceStatusSource = await readFile(new URL('../components/EvidenceStatusBar.vue', import.meta.url), 'utf8')
 const marketDataSource = await readFile(new URL('./market-data.js', import.meta.url), 'utf8')
 
 test('normalizes market row collections and provider field aliases', () => {
@@ -70,6 +71,16 @@ test('microstructure state is keyed by code, asset type, market and date and res
 
 test('breadth and auction summaries consume the complete 2.0 evidence fields', () => {
   for (const field of ['newHighs', 'newLows', 'medianChangePct']) assert.match(breadthSource, new RegExp(field))
+  assert.match(breadthSource, /\['ok', 'partial', 'stale'\]/)
+  assert.match(breadthSource, /usable\.value \? numberValue\([\s\S]*?\) : '—'/)
+  assert.match(breadthSource, /if \(!usable\.value\) return null/)
+  assert.match(breadthSource, /riseRatio === null \? '—'/)
   assert.match(marketDataSource, /data\.finalSnapshot \|\| data\.summary/)
   for (const field of ['auctionStrength', 'gapPct']) assert.match(drawerSource, new RegExp(field))
+})
+
+test('evidence status distinguishes degraded success from total failure', () => {
+  assert.match(evidenceStatusSource, /status === 'unavailable' \? '异常' : '降级'/)
+  assert.match(evidenceStatusSource, /\[\.\.\.new Set\(messages\)\]/)
+  assert.match(evidenceStatusSource, /status === 'unavailable' \? 'error' : 'warning'/)
 })

@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-stock/backend/db"
@@ -118,14 +119,19 @@ type TradesData struct {
 }
 
 type MarketEvidenceService struct {
-	client   *resty.Client
-	now      func() time.Time
-	urls     marketEvidenceURLs
-	minuteDB *gorm.DB
+	client       *resty.Client
+	now          func() time.Time
+	urls         marketEvidenceURLs
+	mainDB       *gorm.DB
+	minuteDB     *gorm.DB
+	breadthMu    sync.RWMutex
+	breadthCache *breadthCacheEntry
 }
 
 type marketEvidenceURLs struct {
 	breadth           string
+	breadthDelay      string
+	breadthTencent    string
 	fundFlowEastmoney string
 	fundFlowSina      string
 	margin            string
@@ -146,9 +152,12 @@ func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceServ
 	service := &MarketEvidenceService{
 		client:   newFetchRestyClient().SetTimeout(8 * time.Second),
 		now:      time.Now,
+		mainDB:   db.Dao,
 		minuteDB: minuteDB,
 		urls: marketEvidenceURLs{
 			breadth:           "https://push2.eastmoney.com/api/qt/clist/get",
+			breadthDelay:      "https://push2delay.eastmoney.com/api/qt/clist/get",
+			breadthTencent:    "http://qt.gtimg.cn/",
 			fundFlowEastmoney: "https://data.eastmoney.com/dataapi/bkzj/getbkzj",
 			fundFlowSina:      "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk",
 			margin:            "https://datacenter-web.eastmoney.com/api/data/v1/get",
@@ -170,11 +179,7 @@ func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceServ
 }
 
 func (s *MarketEvidenceService) Breadth(ctx context.Context) marketdata.DataEnvelope[BreadthData] {
-	collector := marketdata.PrimaryFallbackCollector[BreadthData]{
-		Primary:  &eastmoneyBreadthProvider{service: s},
-		Fallback: unavailableProvider[BreadthData]{name: "sina", reason: "新浪未提供等价的全市场涨跌家数稳定接口"},
-	}
-	return withEvidenceProfile(collector.Collect(ctx, marketdata.ProviderRequest{}))
+	return s.collectBreadth(ctx)
 }
 
 func (s *MarketEvidenceService) FundFlows(ctx context.Context, request marketdata.ProviderRequest) marketdata.DataEnvelope[[]FundFlowRow] {
@@ -282,134 +287,6 @@ func (p unavailableProvider[T]) Name() string { return p.name }
 func (p unavailableProvider[T]) Collect(_ context.Context, _ marketdata.ProviderRequest) marketdata.ProviderResult[T] {
 	var zero T
 	return marketdata.ProviderResult[T]{Status: marketdata.StatusUnavailable, Data: zero, Warning: p.reason, Err: errors.New(p.reason)}
-}
-
-type eastmoneyBreadthProvider struct{ service *MarketEvidenceService }
-
-func (p *eastmoneyBreadthProvider) Name() string { return "eastmoney" }
-func (p *eastmoneyBreadthProvider) Collect(ctx context.Context, _ marketdata.ProviderRequest) marketdata.ProviderResult[BreadthData] {
-	now := p.service.now()
-	response, err := p.service.client.R().SetContext(ctx).SetHeader("Referer", "https://quote.eastmoney.com/center/gridlist.html").SetHeader("User-Agent", marketEvidenceUserAgent()).SetQueryParams(map[string]string{
-		"pn": "1", "pz": "6000", "po": "1", "np": "1", "fltt": "2", "invt": "2", "fid": "f3",
-		"fs": "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23", "fields": "f2,f3,f12,f13,f14,f15,f16",
-	}).Get(p.service.urls.breadth)
-	if err != nil {
-		return providerFailure[BreadthData](now, p.service.urls.breadth, err)
-	}
-	if response.StatusCode() >= 400 {
-		return providerFailure[BreadthData](now, p.service.urls.breadth, fmt.Errorf("HTTP %d", response.StatusCode()))
-	}
-	data, total, err := parseEastmoneyBreadth(response.Body())
-	if err != nil {
-		return providerFailure[BreadthData](now, p.service.urls.breadth, err)
-	}
-	available := p.service.now()
-	status := marketdata.StatusOK
-	warnings := make([]string, 0, 2)
-	if data.NewHighs == nil || data.NewLows == nil {
-		status = marketdata.StatusPartial
-		warnings = append(warnings, "现价与最高/最低价没有可判定样本，对应新高/新低字段返回 null")
-	}
-	if total > data.Total {
-		status = marketdata.StatusPartial
-		warnings = append(warnings, fmt.Sprintf("仅取得 %d/%d 条市场快照", data.Total, total))
-	}
-	return marketdata.ProviderResult[BreadthData]{Status: status, AsOf: now, AvailableAt: &available, Data: data, SourceRef: p.service.urls.breadth, Warning: strings.Join(warnings, "；")}
-}
-
-func parseEastmoneyBreadth(body []byte) (BreadthData, int, error) {
-	var payload struct {
-		Data struct {
-			Total int             `json:"total"`
-			Diff  json.RawMessage `json:"diff"`
-		} `json:"data"`
-	}
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return BreadthData{}, 0, err
-	}
-	var rows []map[string]any
-	if err := json.Unmarshal(payload.Data.Diff, &rows); err != nil {
-		var keyed map[string]map[string]any
-		if keyedErr := json.Unmarshal(payload.Data.Diff, &keyed); keyedErr != nil {
-			return BreadthData{}, payload.Data.Total, fmt.Errorf("decode breadth rows: %w", err)
-		}
-		keys := make([]string, 0, len(keyed))
-		for key := range keyed {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			rows = append(rows, keyed[key])
-		}
-	}
-	result := BreadthData{Total: len(rows)}
-	changes := make([]float64, 0, len(rows))
-	newHighs, newLows := 0, 0
-	highSamples, lowSamples := 0, 0
-	for _, row := range rows {
-		current, currentOK := anyFloat(row["f2"])
-		high, highOK := anyFloat(row["f15"])
-		low, lowOK := anyFloat(row["f16"])
-		if currentOK && current > 0 && highOK && high > 0 {
-			highSamples++
-			if current >= high {
-				newHighs++
-			}
-		}
-		if currentOK && current > 0 && lowOK && low > 0 {
-			lowSamples++
-			if current <= low {
-				newLows++
-			}
-		}
-
-		change, ok := anyFloat(row["f3"])
-		if !ok {
-			continue
-		}
-		changes = append(changes, change)
-		switch {
-		case change > 0:
-			result.Advances++
-		case change < 0:
-			result.Declines++
-		default:
-			result.Flat++
-		}
-		code, name := anyString(row["f12"]), strings.ToUpper(anyString(row["f14"]))
-		limitThreshold := 9.8
-		if strings.Contains(name, "ST") {
-			limitThreshold = 4.8
-		}
-		if strings.HasPrefix(code, "300") || strings.HasPrefix(code, "301") || strings.HasPrefix(code, "688") || strings.HasPrefix(code, "689") {
-			limitThreshold = 19.8
-		}
-		if change >= limitThreshold {
-			result.LimitUps++
-		}
-		if change <= -limitThreshold {
-			result.LimitDowns++
-		}
-	}
-	if highSamples > 0 {
-		result.NewHighs = &newHighs
-	}
-	if lowSamples > 0 {
-		result.NewLows = &newLows
-	}
-	if len(rows) == 0 {
-		return result, payload.Data.Total, errors.New("empty breadth response")
-	}
-	sort.Float64s(changes)
-	if len(changes) > 0 {
-		middle := len(changes) / 2
-		if len(changes)%2 == 0 {
-			result.MedianChangePct = (changes[middle-1] + changes[middle]) / 2
-		} else {
-			result.MedianChangePct = changes[middle]
-		}
-	}
-	return result, payload.Data.Total, nil
 }
 
 type eastmoneyFundFlowProvider struct{ service *MarketEvidenceService }

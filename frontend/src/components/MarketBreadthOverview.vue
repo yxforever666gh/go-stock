@@ -15,22 +15,34 @@ const {data, envelope, error, loading, refresh} = useMarketDataResource({
 })
 
 const breadth = computed(() => data.value?.summary || data.value || {})
+const usable = computed(() => ['ok', 'partial', 'stale'].includes(String(envelope.value?.status || ''))
+  && numberValue(breadth.value, ['total', 'totalCount', 'sampleCount']) > 0)
+
+function breadthValue(keys) {
+  return usable.value ? numberValue(breadth.value, keys) : '—'
+}
+
+function optionalBreadthValue(keys, options = {}) {
+  return usable.value ? formatOptionalMetric(breadth.value, keys, options) : '—'
+}
+
 const metrics = computed(() => [
-  {label: '全市场', value: numberValue(breadth.value, ['total', 'totalCount', 'sampleCount']), type: 'info'},
-  {label: '上涨', value: numberValue(breadth.value, ['advances', 'advanceCount', 'upCount', 'advancers']), type: 'error'},
-  {label: '下跌', value: numberValue(breadth.value, ['declines', 'declineCount', 'downCount', 'decliners']), type: 'success'},
-  {label: '平盘', value: numberValue(breadth.value, ['flat', 'flatCount', 'unchangedCount']), type: 'default'},
-  {label: '涨停', value: numberValue(breadth.value, ['limitUps', 'limitUpCount', 'upLimitCount']), type: 'error'},
-  {label: '跌停', value: numberValue(breadth.value, ['limitDowns', 'limitDownCount', 'downLimitCount']), type: 'success'},
-  {label: '日内新高', value: formatOptionalMetric(breadth.value, ['newHighs', 'newHighCount']), type: 'error', unit: '只'},
-  {label: '日内新低', value: formatOptionalMetric(breadth.value, ['newLows', 'newLowCount']), type: 'success', unit: '只'},
-  {label: '涨跌中位数', value: formatOptionalMetric(breadth.value, ['medianChangePct', 'medianChangePercent'], {digits: 2, signed: true}), type: 'info', unit: '%'},
+  {label: '全市场', value: breadthValue(['total', 'totalCount', 'sampleCount']), type: 'info'},
+  {label: '上涨', value: breadthValue(['advances', 'advanceCount', 'upCount', 'advancers']), type: 'error'},
+  {label: '下跌', value: breadthValue(['declines', 'declineCount', 'downCount', 'decliners']), type: 'success'},
+  {label: '平盘', value: breadthValue(['flat', 'flatCount', 'unchangedCount']), type: 'default'},
+  {label: '涨停', value: breadthValue(['limitUps', 'limitUpCount', 'upLimitCount']), type: 'error'},
+  {label: '跌停', value: breadthValue(['limitDowns', 'limitDownCount', 'downLimitCount']), type: 'success'},
+  {label: '日内新高', value: optionalBreadthValue(['newHighs', 'newHighCount']), type: 'error', unit: '只'},
+  {label: '日内新低', value: optionalBreadthValue(['newLows', 'newLowCount']), type: 'success', unit: '只'},
+  {label: '涨跌中位数', value: optionalBreadthValue(['medianChangePct', 'medianChangePercent'], {digits: 2, signed: true}), type: 'info', unit: '%'},
 ])
 
 const riseRatio = computed(() => {
+  if (!usable.value) return null
   const total = metrics.value[0].value
   const up = metrics.value[1].value
-  return total > 0 ? Math.min(100, Math.max(0, up / total * 100)) : 0
+  return total > 0 ? Math.min(100, Math.max(0, up / total * 100)) : null
 })
 </script>
 
@@ -46,8 +58,8 @@ const riseRatio = computed(() => {
     </n-grid>
     <n-flex align="center" :wrap="false" class="breadth-scale">
       <n-text depth="3">上涨占比</n-text>
-      <n-progress type="line" :percentage="riseRatio" :show-indicator="false" status="success"/>
-      <n-text>{{ riseRatio.toFixed(1) }}%</n-text>
+      <n-progress type="line" :percentage="riseRatio ?? 0" :show-indicator="false" :status="riseRatio === null ? 'default' : 'success'"/>
+      <n-text>{{ riseRatio === null ? '—' : `${riseRatio.toFixed(1)}%` }}</n-text>
     </n-flex>
   </n-card>
 </template>

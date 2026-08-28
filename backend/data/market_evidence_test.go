@@ -15,7 +15,7 @@ import (
 )
 
 func TestMarketEvidenceParsers(t *testing.T) {
-	breadth, total, err := parseEastmoneyBreadth([]byte(`{"data":{"total":3,"diff":[{"f3":1.2,"f12":"600000","f14":"A"},{"f3":-2.3,"f12":"000001","f14":"B"},{"f3":0,"f12":"510300","f14":"ETF"}]}}`))
+	breadth, total, _, err := parseEastmoneyBreadth([]byte(`{"data":{"total":3,"diff":[{"f3":1.2,"f12":"600000","f14":"A"},{"f3":-2.3,"f12":"000001","f14":"B"},{"f3":0,"f12":"510300","f14":"ETF"}]}}`))
 	if err != nil || total != 3 || breadth.Advances != 1 || breadth.Declines != 1 || breadth.Flat != 1 {
 		t.Fatalf("breadth=%#v total=%d err=%v", breadth, total, err)
 	}
@@ -41,7 +41,7 @@ func TestEastmoneyBreadthFixtureAndProviderStatus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	breadth, total, err := parseEastmoneyBreadth(fixture)
+	breadth, total, _, err := parseEastmoneyBreadth(fixture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func TestEastmoneyBreadthFixtureAndProviderStatus(t *testing.T) {
 	if result.Status != marketdata.StatusOK || result.Warning != "" {
 		t.Fatalf("status=%q warning=%q", result.Status, result.Warning)
 	}
-	for _, field := range []string{"f2", "f15", "f16"} {
+	for _, field := range []string{"f2", "f15", "f16", "f124"} {
 		if !containsCommaSeparatedField(requestedFields, field) {
 			t.Fatalf("requested fields %q missing %s", requestedFields, field)
 		}
@@ -88,7 +88,7 @@ func TestEastmoneyBreadthPartialWhenHighLowSamplesUnavailable(t *testing.T) {
 }
 
 func TestEastmoneyBreadthComparableSamplesReturnZeroCounts(t *testing.T) {
-	breadth, _, err := parseEastmoneyBreadth([]byte(`{"data":{"total":1,"diff":[{"f2":9,"f3":0.1,"f12":"600000","f14":"A","f15":10,"f16":8}]}}`))
+	breadth, _, _, err := parseEastmoneyBreadth([]byte(`{"data":{"total":1,"diff":[{"f2":9,"f3":0.1,"f12":"600000","f14":"A","f15":10,"f16":8}]}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
