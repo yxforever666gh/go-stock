@@ -149,8 +149,8 @@ func getInfoWriterSyncer() zapcore.WriteSyncer {
 	infoLumberIO := &lumberjack.Logger{
 		Filename:   filename,
 		MaxSize:    10, // megabytes
-		MaxBackups: 100,
-		MaxAge:     28,    // days
+		MaxBackups: 12,
+		MaxAge:     7,     // days
 		Compress:   false, //Compress确定是否应该使用gzip压缩已旋转的日志文件。默认值是不执行压缩。
 	}
 	return zapcore.AddSync(infoLumberIO)
@@ -164,8 +164,8 @@ func getErrorWriterSyncer() zapcore.WriteSyncer {
 	lumberWriteSyncer := &lumberjack.Logger{
 		Filename:   filename,
 		MaxSize:    10, // megabytes
-		MaxBackups: 100,
-		MaxAge:     28,    // days
+		MaxBackups: 12,
+		MaxAge:     7,     // days
 		Compress:   false, //Compress确定是否应该使用gzip压缩已旋转的日志文件。默认值是不执行压缩。
 	}
 	return zapcore.AddSync(lumberWriteSyncer)

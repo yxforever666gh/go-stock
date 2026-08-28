@@ -102,6 +102,15 @@ go run .
 .\scripts\network-audit.ps1
 ```
 
+磁盘清理默认只预览，并验证生产双库、保留发布和逐级回滚归档；确认清单后才显式执行：
+
+```powershell
+.\scripts\cleanup-workspace.ps1
+.\scripts\cleanup-workspace.ps1 -Apply
+```
+
+清理会保留当前版本、同 schema 的直接前一版本、每个 2.x 数据库 schema 的一个版本、`1.8.7` 边界版本及其配套迁移归档。生产数据库、当前日志、Git 数据和前端依赖始终不属于清理目标。
+
 ## 验证
 
 ```powershell
