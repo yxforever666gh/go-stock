@@ -26,6 +26,14 @@ type App struct {
 	domReadyDone       bool
 	schedulerErrorsMu  sync.Mutex
 	schedulerErrors    []error
+	themeRuntimeMu     sync.Mutex
+	themeRuntime       themeLifecycleCollector
+	themeFactory       themeLifecycleFactory
+	themeClock         func() time.Time
+	themeOpenTradeDay  func(time.Time) (bool, error)
+	themeRunMu         sync.Mutex
+	themeErrorsMu      sync.Mutex
+	themeErrors        []error
 	researchRuntimeMu  sync.RWMutex
 	researchRuntime    *data.ResearchRuntime
 	researchFactory    func(int) (*data.ResearchRuntime, error)
@@ -49,6 +57,7 @@ const research2AnalysisEntryKey = "Research2Analysis0950"
 const research2TradingEntryKey = "Research2TradingMinute"
 const research2MetricsEntryKey = "Research2Metrics1505"
 const research2EmailEntryKey = "Research2EmailDelivery"
+const themeLifecycleEntryKey = "ThemeLifecycle1510"
 
 // NewApp creates a new App application struct
 func NewApp() *App {
@@ -65,19 +74,25 @@ func NewAppWithServices(services service.AppServices) *App {
 	c := cron.New(cron.WithSeconds())
 	runtime := newRuntimeCoordinator(context.Background())
 	return &App{
-		ctx:              runtime.Context(),
-		runtime:          runtime,
-		cache:            cache,
-		cron:             c,
-		cronEntrys:       make(map[string]cron.EntryID),
-		services:         services,
-		researchFactory:  data.NewResearchRuntime,
-		research2Factory: data.NewResearch2Runtime,
+		ctx:               runtime.Context(),
+		runtime:           runtime,
+		cache:             cache,
+		cron:              c,
+		cronEntrys:        make(map[string]cron.EntryID),
+		services:          services,
+		themeClock:        time.Now,
+		themeOpenTradeDay: data.IsCNOpenTradeDayStrict,
+		researchFactory:   data.NewResearchRuntime,
+		research2Factory:  data.NewResearch2Runtime,
 	}
 }
 
 func NewAppWithRuntime(appRuntime bootstrap.AppRuntime) *App {
 	app := NewAppWithServices(appRuntime.Services)
+	if appRuntime.Clock != nil {
+		app.themeClock = appRuntime.Clock.Now
+	}
+	app.configureThemeLifecycleRuntime(appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	app.researchFactory = func(configID int) (*data.ResearchRuntime, error) {
 		return data.NewResearchRuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	}

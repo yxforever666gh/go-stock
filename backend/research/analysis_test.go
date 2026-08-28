@@ -1,6 +1,7 @@
 package research
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,15 @@ type fixedCollector struct{}
 type cutoffEvidenceCollector struct{}
 
 func (cutoffEvidenceCollector) CollectMarket(_ context.Context, now time.Time) ([]SourceDocument, error) {
-	return []SourceDocument{{SourceName: "market-normal", Category: "market", CollectedAt: now, AvailableAt: &now, Content: "market-normal-content"}}, nil
+	future := now.Add(time.Hour)
+	return []SourceDocument{
+		{SourceName: "market-normal", Category: "market", CollectedAt: now, AvailableAt: &now, Content: "market-normal-content"},
+		{SourceID: "theme-snapshot:snapshot-equal", SourceName: "theme-snapshot-equal", Category: "theme", CollectedAt: now, AvailableAt: &now, Content: "THEME_EQUAL"},
+		{SourceID: "theme-catalyst:claim-support", SourceName: "theme-claim-support", Category: "catalyst", CollectedAt: now, AvailableAt: &now, Content: "CLAIM_SUPPORT"},
+		{SourceID: "theme-catalyst:claim-contradict", SourceName: "theme-claim-contradict", Category: "catalyst", CollectedAt: now, AvailableAt: &now, Content: "CLAIM_CONTRADICT"},
+		{SourceID: "theme-catalyst:claim-future", SourceName: "theme-claim-future", Category: "catalyst", CollectedAt: now.Add(-time.Hour), AvailableAt: &future, Content: "THEME_FUTURE_SECRET"},
+		{SourceID: "theme-catalyst:claim-null", SourceName: "theme-claim-null", Category: "catalyst", CollectedAt: now.Add(-time.Hour), AvailableAt: nil, Content: "THEME_NULL_SECRET"},
+	}, nil
 }
 
 func (cutoffEvidenceCollector) CollectSectors(_ context.Context, now time.Time) ([]SourceDocument, error) {
@@ -147,7 +156,7 @@ func TestFinalReportAllowsCashAndAtMostTwo(t *testing.T) {
 }
 
 func TestCandidateAndSourceBounds(t *testing.T) {
-	candidates := []StockCandidate{{Code: "600000", Name: "甲"}, {Code: "sh600000", Name: "重复"}, {Code: "430001", Name: "北交"}, {Code: "300001", Name: "乙"}}
+	candidates := []StockCandidate{{Code: "600000", Name: "甲"}, {Code: "sh600000", Name: "重复"}, {Code: "430001", Name: "北交"}, {Code: "300001", Name: "乙"}, {Code: "sh512000", Name: "ETF背景"}, {Code: "sz159001", Name: "基金背景"}}
 	valid := validUniqueCandidates(candidates, 50)
 	if len(valid) != 2 || valid[0].Code != "sh600000" || valid[1].Code != "sz300001" {
 		t.Fatalf("valid=%+v", valid)
@@ -694,14 +703,17 @@ func TestExperimentalEvidenceUsesRunWideIDsAndActualFreezeCutoff(t *testing.T) {
 	service := NewService(repo, ai, quotes, openCalendar{})
 	service.now = func() time.Time { return now }
 	runner := NewAnalysisRunner(service, cutoffEvidenceCollector{})
-	runner.ConfigureEvidence(marketdata.NewRepository(repo.db), "market-evidence-v1")
+	runner.ConfigureEvidence(marketdata.NewRepository(repo.db), "market-evidence-v2")
 
 	run, err := runner.Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.EvidenceSetID == "" || len(ai.requests) < 2 || strings.Contains(ai.requests[1].Prompt, "FUTURE_SECRET") {
+	if run.EvidenceSetID == "" || run.EvidenceProfileVersion != "market-evidence-v2" || len(ai.requests) < 2 || strings.Contains(ai.requests[1].Prompt, "FUTURE_SECRET") || strings.Contains(ai.requests[1].Prompt, "THEME_NULL_SECRET") {
 		t.Fatalf("future evidence reached prompt or batch link missing: run=%+v prompt=%q", run, ai.requests[1].Prompt)
+	}
+	if strings.Contains(ai.requests[0].Prompt, "THEME_EQUAL") || !strings.Contains(ai.requests[1].Prompt, "THEME_EQUAL") || !strings.Contains(ai.requests[1].Prompt, "CLAIM_SUPPORT") || !strings.Contains(ai.requests[1].Prompt, "CLAIM_CONTRADICT") {
+		t.Fatalf("theme/catalyst evidence was not isolated to the sector stage: market=%q sector=%q", ai.requests[0].Prompt, ai.requests[1].Prompt)
 	}
 	evidenceRepo := marketdata.NewRepository(repo.db)
 	batch, err := evidenceRepo.Batch(context.Background(), run.EvidenceSetID)
@@ -715,19 +727,58 @@ func TestExperimentalEvidenceUsesRunWideIDsAndActualFreezeCutoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 4 {
-		t.Fatalf("evidence items=%d, want 4: %+v", len(items), items)
+	if len(items) != 9 {
+		t.Fatalf("evidence items=%d, want 9: %+v", len(items), items)
 	}
 	seenIDs := map[string]bool{}
 	statuses := map[string]string{}
+	expectedThemeIDs := map[string]bool{
+		"theme-snapshot:snapshot-equal":   false,
+		"theme-catalyst:claim-support":    false,
+		"theme-catalyst:claim-contradict": false,
+		"theme-catalyst:claim-future":     false,
+		"theme-catalyst:claim-null":       false,
+	}
 	for _, item := range items {
 		if seenIDs[item.SourceID] {
 			t.Fatalf("duplicate run-wide source id %q", item.SourceID)
 		}
 		seenIDs[item.SourceID] = true
 		statuses[item.SourceName] = item.Status
+		if _, ok := expectedThemeIDs[item.SourceID]; ok {
+			expectedThemeIDs[item.SourceID] = true
+		}
 	}
-	if statuses["market-normal"] != marketdata.StatusOK || statuses["sector-normal"] != marketdata.StatusOK || statuses["stock-normal"] != marketdata.StatusOK || statuses["sector-future"] != marketdata.StatusAfterCutoff {
+	if statuses["market-normal"] != marketdata.StatusOK || statuses["sector-normal"] != marketdata.StatusOK || statuses["stock-normal"] != marketdata.StatusOK || statuses["sector-future"] != marketdata.StatusAfterCutoff || statuses["theme-claim-future"] != marketdata.StatusAfterCutoff || statuses["theme-claim-null"] != marketdata.StatusUnavailable {
 		t.Fatalf("unexpected evidence statuses: %#v", statuses)
+	}
+	for sourceID, found := range expectedThemeIDs {
+		if !found {
+			t.Fatalf("theme source id was not preserved: %s / %+v", sourceID, items)
+		}
+	}
+}
+
+func TestThemeEvidenceStageHookDoesNotChangeLegacyOrStockFiltering(t *testing.T) {
+	now := time.Now()
+	legacy := []SourceDocument{{SourceName: "sector", Category: "sector", CollectedAt: now, Content: "legacy-sector"}}
+	before, _ := json.Marshal(filterSources(legacy, "sector"))
+	after, _ := json.Marshal(filterSources(append([]SourceDocument(nil), legacy...), "sector"))
+	if !bytes.Equal(before, after) {
+		t.Fatalf("theme hook changed legacy sector bytes: before=%s after=%s", before, after)
+	}
+	sources := append(legacy,
+		SourceDocument{SourceID: "theme-snapshot:1", Category: "theme", Content: "theme"},
+		SourceDocument{SourceID: "theme-catalyst:1", Category: "catalyst", Content: "catalyst"},
+		SourceDocument{SourceID: "theme-catalyst:failed", Category: "catalyst", Error: "after cutoff"},
+	)
+	if got := filterSources(sources, "sector"); len(got) != 4 {
+		t.Fatalf("sector stage did not receive theme/catalyst: %+v", got)
+	}
+	if got := filterSources(sources, "market"); len(got) != 0 {
+		t.Fatalf("market stage received theme/catalyst: %+v", got)
+	}
+	if got := filterSourcesForCandidates(sources, []StockCandidate{{Code: "sh600000", Name: "浦发银行"}}); len(got) != 0 {
+		t.Fatalf("theme/catalyst bypassed stock candidate filtering: %+v", got)
 	}
 }

@@ -42,6 +42,16 @@ func TestGenerateTypeScriptIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestGenerateTypeScriptSupportsOpenAPI31NullUnion(t *testing.T) {
+	value, err := tsType(&schema{OneOf: []*schema{{Ref: "#/components/schemas/ThemeSnapshot"}, {Type: "null"}}}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value != "ThemeSnapshot | null" {
+		t.Fatalf("null union = %q, want ThemeSnapshot | null", value)
+	}
+}
+
 func TestValidateGoRoutesRejectsContractDrift(t *testing.T) {
 	tempDir := t.TempDir()
 	filename := filepath.Join(tempDir, "routes.go")

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.1.0
+  version: 2.2.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -268,6 +268,61 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/themes:
+    get:
+      operationId: listThemes
+      parameters:
+        - {name: date, in: query, schema: {type: string, format: date}}
+        - {name: stage, in: query, schema: {type: string, enum: [观察, 发酵, 加速, 分歧, 退潮]}}
+        - {name: q, in: query, schema: {type: string}}
+        - {name: sort, in: query, schema: {type: string, enum: [rank, heat, stage], default: rank}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Frozen daily theme ranking, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeListEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/themes/{id}:
+    get:
+      operationId: getTheme
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+      responses:
+        "200": {description: Theme identity, selected snapshot and constituents, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeDetailEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/themes/{id}/daily-snapshots:
+    get:
+      operationId: listThemeDailySnapshots
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+        - {name: stage, in: query, schema: {type: string, enum: [观察, 发酵, 加速, 分歧, 退潮]}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Immutable daily lifecycle snapshots, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeDailySnapshotsEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/themes/{id}/catalysts:
+    get:
+      operationId: listThemeCatalysts
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+        - {name: status, in: query, schema: {type: string, enum: [active, disputed, retracted, expired]}}
+        - {name: minCredibility, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: cursor, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Catalyst timeline with parallel supporting and contradicting source claims, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeCatalystsEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/research/analysis-runs:
     get:
@@ -652,6 +707,183 @@ components:
         adjustment: {type: string, enum: [none, qfq, hfq]}
         expectedRevision: {type: integer, format: int64, minimum: 0}
         drawings: {type: array, maxItems: 500, items: {$ref: "#/components/schemas/ChartDrawing"}}
+    ThemeLifecycleStage:
+      type: string
+      enum: [观察, 发酵, 加速, 分歧, 退潮]
+    ThemeSummary:
+      type: object
+      required: [themeId, name, aliases, snapshotId, cycleNo, lifecycleStage, stageChanged, rank, heatScore, summary, constituentCount, catalystCount, conflictingCatalystCount, representativeSecurities, observedAt, frozenAt]
+      properties:
+        themeId: {type: string}
+        name: {type: string}
+        aliases: {type: array, items: {type: string}}
+        snapshotId: {type: string}
+        cycleNo: {type: integer, minimum: 1}
+        lifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        previousLifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        stageChanged: {type: boolean}
+        rank: {type: integer, minimum: 1}
+        heatScore: {type: number}
+        summary: {type: string}
+        constituentCount: {type: integer, minimum: 0}
+        catalystCount: {type: integer, minimum: 0}
+        conflictingCatalystCount: {type: integer, minimum: 0}
+        representativeSecurities: {type: array, maxItems: 3, items: {$ref: "#/components/schemas/ThemeRepresentativeSecurity"}}
+        observedAt: {type: string, format: date-time}
+        frozenAt: {type: string, format: date-time}
+    ThemeRepresentativeSecurity:
+      type: object
+      required: [assetType, market, code, name, role]
+      properties:
+        assetType: {type: string, enum: [stock, index, etf, fund]}
+        market: {type: string}
+        code: {type: string}
+        name: {type: string}
+        role: {type: string}
+    ThemeListData:
+      type: object
+      required: [tradeDate, items]
+      properties:
+        tradeDate: {type: string, format: date}
+        items: {type: array, items: {$ref: "#/components/schemas/ThemeSummary"}}
+        nextCursor: {type: string}
+    ThemeListEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ThemeListData"}}
+    ThemeIdentity:
+      type: object
+      required: [themeId, name, aliases, description, status]
+      properties:
+        themeId: {type: string}
+        name: {type: string}
+        aliases: {type: array, items: {type: string}}
+        description: {type: string}
+        status: {type: string, enum: [active, archived]}
+    ThemeSnapshot:
+      type: object
+      required: [snapshotId, tradeDate, cycleNo, lifecycleStage, rank, heatScore, summary, constituentCount, catalystCount, conflictingCatalystCount, observedAt, frozenAt]
+      properties:
+        snapshotId: {type: string}
+        tradeDate: {type: string, format: date}
+        cycleNo: {type: integer, minimum: 1}
+        lifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        rank: {type: integer, minimum: 1}
+        heatScore: {type: number}
+        summary: {type: string}
+        constituentCount: {type: integer, minimum: 0}
+        catalystCount: {type: integer, minimum: 0}
+        conflictingCatalystCount: {type: integer, minimum: 0}
+        observedAt: {type: string, format: date-time}
+        frozenAt: {type: string, format: date-time}
+    ThemeConstituent:
+      type: object
+      required: [constituentId, assetType, market, code, name, role, rank, contributionScore]
+      properties:
+        constituentId: {type: string}
+        assetType: {type: string, enum: [stock, index, etf, fund]}
+        market: {type: string}
+        code: {type: string}
+        name: {type: string}
+        role: {type: string}
+        rank: {type: integer, minimum: 1}
+        contributionScore: {type: number}
+    ThemeCatalystSummary:
+      type: object
+      required: [total, supports, contradicts, hasConflict]
+      properties:
+        total: {type: integer, minimum: 0}
+        supports: {type: integer, minimum: 0}
+        contradicts: {type: integer, minimum: 0}
+        hasConflict: {type: boolean}
+    ThemeDetailData:
+      type: object
+      required: [theme, snapshot, constituents, catalystSummary]
+      properties:
+        theme: {$ref: "#/components/schemas/ThemeIdentity"}
+        snapshot:
+          oneOf:
+            - {$ref: "#/components/schemas/ThemeSnapshot"}
+            - {type: "null"}
+        constituents: {type: array, items: {$ref: "#/components/schemas/ThemeConstituent"}}
+        catalystSummary: {$ref: "#/components/schemas/ThemeCatalystSummary"}
+    ThemeDetailEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ThemeDetailData"}}
+    ThemeDailySnapshot:
+      type: object
+      required: [snapshotId, tradeDate, cycleNo, lifecycleStage, rank, heatScore, summary, constituentCount, catalystCount, frozenAt]
+      properties:
+        snapshotId: {type: string}
+        tradeDate: {type: string, format: date}
+        cycleNo: {type: integer, minimum: 1}
+        lifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        rank: {type: integer, minimum: 1}
+        heatScore: {type: number}
+        summary: {type: string}
+        constituentCount: {type: integer, minimum: 0}
+        catalystCount: {type: integer, minimum: 0}
+        frozenAt: {type: string, format: date-time}
+    ThemeDailySnapshotsData:
+      type: object
+      required: [themeId, items]
+      properties:
+        themeId: {type: string}
+        items: {type: array, items: {$ref: "#/components/schemas/ThemeDailySnapshot"}}
+        nextCursor: {type: string}
+    ThemeDailySnapshotsEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ThemeDailySnapshotsData"}}
+    ThemeCatalystSource:
+      type: object
+      required: [sourceClaimId, sourceName, sourceRef, stance, sourceCredibilityScore, summary, availableAt, collectedAt, evidenceItemIds]
+      properties:
+        sourceClaimId: {type: string}
+        sourceName: {type: string}
+        sourceRef: {type: string}
+        stance: {type: string, enum: [supports, contradicts, neutral]}
+        sourceCredibilityScore: {type: integer, minimum: 0, maximum: 100}
+        summary: {type: string}
+        publishedAt: {type: string, format: date-time, nullable: true}
+        availableAt: {type: string, format: date-time}
+        collectedAt: {type: string, format: date-time}
+        evidenceItemIds: {type: array, items: {type: string}}
+    ThemeCatalyst:
+      type: object
+      required: [catalystEventId, eventType, title, summary, eventAt, firstAvailableAt, credibilityScore, status, hasConflict, sources]
+      properties:
+        catalystEventId: {type: string}
+        eventType: {type: string}
+        title: {type: string}
+        summary: {type: string}
+        eventAt: {type: string, format: date-time}
+        firstAvailableAt: {type: string, format: date-time}
+        credibilityScore: {type: integer, minimum: 0, maximum: 100}
+        status: {type: string, enum: [active, disputed, retracted, expired]}
+        hasConflict: {type: boolean}
+        sources: {type: array, items: {$ref: "#/components/schemas/ThemeCatalystSource"}}
+    ThemeCatalystsData:
+      type: object
+      required: [themeId, tradeDate, items]
+      properties:
+        themeId: {type: string}
+        tradeDate: {type: string, format: date}
+        items: {type: array, items: {$ref: "#/components/schemas/ThemeCatalyst"}}
+        nextCursor: {type: string}
+    ThemeCatalystsEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ThemeCatalystsData"}}
     EvidenceBatch:
       type: object
       required: [evidenceSetId, ownerType, ownerId, cutoffAt, status, contentHash]

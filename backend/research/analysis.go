@@ -942,7 +942,7 @@ func failedSource(category, name string, at time.Time, err error) SourceDocument
 func filterSources(sources []SourceDocument, category string) []SourceDocument {
 	result := []SourceDocument{}
 	for _, s := range sources {
-		if s.Category == category || s.Error != "" {
+		if sourceBelongsToStage(s, category) {
 			result = append(result, s)
 		}
 	}

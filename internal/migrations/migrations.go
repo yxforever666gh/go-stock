@@ -227,6 +227,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV16Definition,
 		apply:       applyChartDrawingSchema,
 	},
+	{
+		id: 17, name: "market_themes_and_catalysts",
+		description: "App 2.2.0 adds normalized market themes, immutable daily snapshots, catalyst claims, constituents and evidence links without rewriting historical research, account or trading data.",
+		definition:  mainMigrationV17Definition,
+		apply:       applyThemeCatalystSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -794,6 +800,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 16 {
 		if err := verifyMainSchema16Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 17 {
+		if err := verifyMainSchema17Runtime(database); err != nil {
 			return result, err
 		}
 	}

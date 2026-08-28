@@ -180,7 +180,7 @@ VALUES ('stock','sh600000',1,1,10.5,100,'fixture',1)`
 	}
 }
 
-func TestSchema14Minute2UpgradesThroughSchema16Minute3WithoutRewritingResearchHistory(t *testing.T) {
+func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHistory(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	applyPublishedMigrationPrefix(t, mainDB, mainMigrations, 14, "1.8.7")
@@ -276,10 +276,10 @@ func TestSchema14Minute2UpgradesThroughSchema16Minute3WithoutRewritingResearchHi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 16 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 17 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
-	if len(mainStatus.Records) < 2 || mainStatus.Records[len(mainStatus.Records)-2].ID != 15 || mainStatus.Records[len(mainStatus.Records)-1].ID != 16 {
-		t.Fatalf("schema 14 fixture did not advance through migrations 15 and 16: %+v", mainStatus.Records)
+	if len(mainStatus.Records) < 3 || mainStatus.Records[len(mainStatus.Records)-3].ID != 15 || mainStatus.Records[len(mainStatus.Records)-2].ID != 16 || mainStatus.Records[len(mainStatus.Records)-1].ID != 17 {
+		t.Fatalf("schema 14 fixture did not advance through migrations 15, 16 and 17: %+v", mainStatus.Records)
 	}
 }

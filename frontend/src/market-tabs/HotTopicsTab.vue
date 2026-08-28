@@ -1,36 +1,72 @@
 <script setup>
-import HotStockList from '../components/HotStockList.vue'
-import HotTopics from '../components/HotTopics.vue'
-import InvestCalendarTimeLine from '../components/InvestCalendarTimeLine.vue'
-import ClsCalendarTimeLine from '../components/ClsCalendarTimeLine.vue'
+import {onMounted, ref, watch} from 'vue'
+import {useRoute, useRouter} from 'vue-router'
+import {shanghaiDate} from './market-session.js'
+import CurrentHotTopicsPane from './CurrentHotTopicsPane.vue'
+import DailyThemesPane from './DailyThemesPane.vue'
+
+const props = defineProps({active: {type: Boolean, default: false}})
+const route = useRoute()
+const router = useRouter()
+
+function validHotView(value) {
+  return value === 'daily-themes' ? 'daily-themes' : 'current'
+}
+
+const hotView = ref(validHotView(route.query.hotView))
+const selectedDate = ref(String(route.query.date || shanghaiDate()))
+const selectedThemeId = ref(String(route.query.themeId || ''))
+
+function replaceQuery(values) {
+  const query = {...route.query, ...values, name: '当前热门'}
+  for (const key of ['themeId', 'date']) {
+    if (!query[key]) delete query[key]
+  }
+  void router.replace({name: 'market', query})
+}
+
+function updateHotView(value) {
+  hotView.value = validHotView(value)
+  replaceQuery({hotView: hotView.value, date: hotView.value === 'daily-themes' ? selectedDate.value : route.query.date})
+}
+
+function updateDate(value) {
+  selectedDate.value = value || shanghaiDate()
+  selectedThemeId.value = ''
+  replaceQuery({hotView: 'daily-themes', date: selectedDate.value, themeId: undefined})
+}
+
+function updateThemeId(value) {
+  selectedThemeId.value = String(value || '')
+  replaceQuery({hotView: 'daily-themes', date: selectedDate.value, themeId: selectedThemeId.value || undefined})
+}
+
+watch(() => [route.query.hotView, route.query.date, route.query.themeId], ([view, date, themeId]) => {
+  hotView.value = validHotView(view)
+  selectedDate.value = String(date || shanghaiDate())
+  selectedThemeId.value = String(themeId || '')
+})
+
+onMounted(() => {
+  if (hotView.value === 'daily-themes' && !route.query.date) replaceQuery({hotView: 'daily-themes', date: selectedDate.value})
+})
 </script>
 
 <template>
-  <n-tabs type="card" animated>
-    <n-tab-pane name="全球" tab="全球">
-      <HotStockList :market-type="'10'" />
-    </n-tab-pane>
-    <n-tab-pane name="沪深" tab="沪深">
-      <HotStockList :market-type="'12'" />
-    </n-tab-pane>
-    <n-tab-pane name="港股" tab="港股">
-      <HotStockList :market-type="'13'" />
-    </n-tab-pane>
-    <n-tab-pane name="美股" tab="美股">
-      <HotStockList :market-type="'11'" />
-    </n-tab-pane>
-    <n-tab-pane name="热门话题" tab="热门话题">
-      <n-grid :cols="1" :y-gap="10">
-        <n-grid-item>
-          <HotTopics />
-        </n-grid-item>
-      </n-grid>
-    </n-tab-pane>
-    <n-tab-pane name="重大事件时间轴" tab="重大事件时间轴">
-      <InvestCalendarTimeLine />
-    </n-tab-pane>
-    <n-tab-pane name="财经日历" tab="财经日历">
-      <ClsCalendarTimeLine />
-    </n-tab-pane>
-  </n-tabs>
+  <section>
+    <n-tabs :value="hotView" type="segment" animated display-directive="if" @update:value="updateHotView">
+      <n-tab-pane name="current" tab="当前热门">
+        <CurrentHotTopicsPane :active="active && hotView === 'current'"/>
+      </n-tab-pane>
+      <n-tab-pane name="daily-themes" tab="每日炒作题材">
+        <DailyThemesPane
+            :active="active && hotView === 'daily-themes'"
+            :date="selectedDate"
+            :theme-id="selectedThemeId"
+            @update:date="updateDate"
+            @update:theme-id="updateThemeId"
+        />
+      </n-tab-pane>
+    </n-tabs>
+  </section>
 </template>

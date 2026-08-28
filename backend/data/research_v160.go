@@ -832,10 +832,11 @@ func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Re
 	service.SetRecommendationChartProvider(NewResearchChartProviderWithStorage(quoteProvider, minuteDB))
 	var collector research.SourceCollector = NewResearchSourceCollectorWithProviders(news, stocks)
 	runner := research.NewAnalysisRunner(service, collector)
-	if setting != nil && setting.Settings != nil && setting.ExperimentalEvidenceEnabled {
-		collector = NewExperimentalResearchSourceCollector(collector, NewMarketEvidenceService())
+	experimentalEvidence := setting != nil && setting.Settings != nil && setting.ExperimentalEvidenceEnabled
+	if experimentalEvidence {
+		collector = researchCollectorWithExperimentalEvidence(true, collector, NewMarketEvidenceService(), newThemeEvidenceReader(mainDB))
 		runner = research.NewAnalysisRunner(service, collector)
-		runner.ConfigureEvidence(marketdata.NewRepository(mainDB), marketEvidenceProfile)
+		runner.ConfigureEvidence(marketdata.NewRepository(mainDB), researchThemeEvidenceProfile)
 	}
 	return &ResearchRuntime{Repository: repository, Service: service, Runner: runner}, nil
 }

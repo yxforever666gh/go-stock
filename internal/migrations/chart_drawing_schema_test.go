@@ -81,7 +81,7 @@ func TestSchema16VerifierRejectsMissingImmutabilityGuard(t *testing.T) {
 	}
 }
 
-func TestSchema15To16PreservesResearchAccountingAndLeavesMinuteSchema3Unchanged(t *testing.T) {
+func TestSchema15To17PreservesResearchAccountingAndLeavesMinuteSchema3Unchanged(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	applyPublishedMigrationPrefix(t, mainDB, mainMigrations, 15, "2.0.0")
@@ -188,7 +188,7 @@ VALUES ('stock','sh600000','1m','qfq',1,10,11,9,10.5,'fixture',1)`).Error; err !
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 16 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 17 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 	var minuteMigrationCountAfter, barCount int64

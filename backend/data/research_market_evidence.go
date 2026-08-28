@@ -9,6 +9,7 @@ import (
 
 	"go-stock/backend/marketdata"
 	"go-stock/backend/research"
+	"go-stock/backend/themes"
 )
 
 // ExperimentalResearchSourceCollector augments the unchanged legacy corpus
@@ -17,13 +18,18 @@ import (
 type ExperimentalResearchSourceCollector struct {
 	base   research.SourceCollector
 	market *MarketEvidenceService
+	themes themes.EvidenceReader
 }
 
-func NewExperimentalResearchSourceCollector(base research.SourceCollector, market *MarketEvidenceService) *ExperimentalResearchSourceCollector {
+func NewExperimentalResearchSourceCollector(base research.SourceCollector, market *MarketEvidenceService, themeReaders ...themes.EvidenceReader) *ExperimentalResearchSourceCollector {
 	if market == nil {
 		market = NewMarketEvidenceService()
 	}
-	return &ExperimentalResearchSourceCollector{base: base, market: market}
+	var themeReader themes.EvidenceReader
+	if len(themeReaders) > 0 {
+		themeReader = themeReaders[0]
+	}
+	return &ExperimentalResearchSourceCollector{base: base, market: market, themes: themeReader}
 }
 
 func (c *ExperimentalResearchSourceCollector) CollectMarket(ctx context.Context, at time.Time) ([]research.SourceDocument, error) {
@@ -69,6 +75,9 @@ func (c *ExperimentalResearchSourceCollector) CollectMarket(ctx context.Context,
 		ordered[value.index] = value.document
 	}
 	documents = append(documents, ordered...)
+	if c.themes != nil {
+		documents = append(documents, themeResearchEvidenceDocuments(c.themes.ResearchEvidence(ctx, at), at)...)
+	}
 	return documents, baseErr
 }
 

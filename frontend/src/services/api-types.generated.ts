@@ -44,6 +44,7 @@ export const API_PATHS = {
   getStockResearchReports: "/api/v1/market/stocks/{code}/research-reports",
   getStockSnapshot: "/api/v1/stocks/{code}/snapshot",
   getSystemInfo: "/api/v1/system/info",
+  getTheme: "/api/v1/themes/{id}",
   initializeGroupSort: "/api/v1/groups/initialize-sort",
   listAIConfigs: "/api/v1/ai/configs",
   listAccountCashFlows: "/api/v1/research/account/cash-flows",
@@ -64,6 +65,9 @@ export const API_PATHS = {
   listStockNotices: "/api/v1/market/stocks/notices",
   listStockResearchReports: "/api/v1/market/stocks/research-reports",
   listTelegraphs: "/api/v1/market/telegraphs",
+  listThemeCatalysts: "/api/v1/themes/{id}/catalysts",
+  listThemeDailySnapshots: "/api/v1/themes/{id}/daily-snapshots",
+  listThemes: "/api/v1/themes",
   putInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
   queryStocks: "/api/v1/stocks/query",
   refreshRecommendationChart: "/api/v1/research/recommendations/{id}/chart/refresh",
@@ -823,6 +827,158 @@ export type SystemVersionStatus = {
 
 export type TelegraphRefreshRequest = {
   source: string
+}
+
+export type ThemeCatalyst = {
+  catalystEventId: string
+  credibilityScore: number
+  eventAt: string
+  eventType: string
+  firstAvailableAt: string
+  hasConflict: boolean
+  sources: Array<ThemeCatalystSource>
+  status: "active" | "disputed" | "retracted" | "expired"
+  summary: string
+  title: string
+}
+
+export type ThemeCatalystSource = {
+  availableAt: string
+  collectedAt: string
+  evidenceItemIds: Array<string>
+  publishedAt?: string | null
+  sourceClaimId: string
+  sourceCredibilityScore: number
+  sourceName: string
+  sourceRef: string
+  stance: "supports" | "contradicts" | "neutral"
+  summary: string
+}
+
+export type ThemeCatalystSummary = {
+  contradicts: number
+  hasConflict: boolean
+  supports: number
+  total: number
+}
+
+export type ThemeCatalystsData = {
+  items: Array<ThemeCatalyst>
+  nextCursor?: string
+  themeId: string
+  tradeDate: string
+}
+
+export type ThemeCatalystsEnvelope = DataEnvelope & {
+  data: ThemeCatalystsData
+}
+
+export type ThemeConstituent = {
+  assetType: "stock" | "index" | "etf" | "fund"
+  code: string
+  constituentId: string
+  contributionScore: number
+  market: string
+  name: string
+  rank: number
+  role: string
+}
+
+export type ThemeDailySnapshot = {
+  catalystCount: number
+  constituentCount: number
+  cycleNo: number
+  frozenAt: string
+  heatScore: number
+  lifecycleStage: ThemeLifecycleStage
+  rank: number
+  snapshotId: string
+  summary: string
+  tradeDate: string
+}
+
+export type ThemeDailySnapshotsData = {
+  items: Array<ThemeDailySnapshot>
+  nextCursor?: string
+  themeId: string
+}
+
+export type ThemeDailySnapshotsEnvelope = DataEnvelope & {
+  data: ThemeDailySnapshotsData
+}
+
+export type ThemeDetailData = {
+  catalystSummary: ThemeCatalystSummary
+  constituents: Array<ThemeConstituent>
+  snapshot: ThemeSnapshot | null
+  theme: ThemeIdentity
+}
+
+export type ThemeDetailEnvelope = DataEnvelope & {
+  data: ThemeDetailData
+}
+
+export type ThemeIdentity = {
+  aliases: Array<string>
+  description: string
+  name: string
+  status: "active" | "archived"
+  themeId: string
+}
+
+export type ThemeLifecycleStage = "观察" | "发酵" | "加速" | "分歧" | "退潮"
+
+export type ThemeListData = {
+  items: Array<ThemeSummary>
+  nextCursor?: string
+  tradeDate: string
+}
+
+export type ThemeListEnvelope = DataEnvelope & {
+  data: ThemeListData
+}
+
+export type ThemeRepresentativeSecurity = {
+  assetType: "stock" | "index" | "etf" | "fund"
+  code: string
+  market: string
+  name: string
+  role: string
+}
+
+export type ThemeSnapshot = {
+  catalystCount: number
+  conflictingCatalystCount: number
+  constituentCount: number
+  cycleNo: number
+  frozenAt: string
+  heatScore: number
+  lifecycleStage: ThemeLifecycleStage
+  observedAt: string
+  rank: number
+  snapshotId: string
+  summary: string
+  tradeDate: string
+}
+
+export type ThemeSummary = {
+  aliases: Array<string>
+  catalystCount: number
+  conflictingCatalystCount: number
+  constituentCount: number
+  cycleNo: number
+  frozenAt: string
+  heatScore: number
+  lifecycleStage: ThemeLifecycleStage
+  name: string
+  observedAt: string
+  previousLifecycleStage?: ThemeLifecycleStage
+  rank: number
+  representativeSecurities: Array<ThemeRepresentativeSecurity>
+  snapshotId: string
+  stageChanged: boolean
+  summary: string
+  themeId: string
 }
 
 export type TradeTick = {

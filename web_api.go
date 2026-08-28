@@ -40,6 +40,7 @@ func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status 
 	registerMarketEvidenceRoutes(mux, app)
 	registerInstrumentEvidenceRoutes(mux, app)
 	registerInstrumentChartRoutes(mux, app)
+	registerThemeRoutes(mux, app)
 	registerResearchRoutes(mux, app)
 	registerResearch2Routes(mux, app)
 	registerExportRoutes(mux, app)
