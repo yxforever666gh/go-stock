@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.5.1
+  version: 2.6.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -205,6 +205,16 @@ paths:
       operationId: analyzeWeightedSentiment
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SentimentRequest"}}}}
       responses: {"200": {description: Weighted sentiment}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/market/hot/words:
+    get:
+      operationId: listMarketHotWords
+      parameters:
+        - {name: hours, in: query, schema: {type: integer, minimum: 1, maximum: 72, default: 24}}
+        - {name: baselineDays, in: query, schema: {type: integer, minimum: 3, maximum: 30, default: 7}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+      responses:
+        "200": {description: Explainable recent market hot words, content: {application/json: {schema: {$ref: "#/components/schemas/HotWordsEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
   /api/v1/market/hot/stocks:
     get: {operationId: listHotStocks, responses: {"200": {description: Hot stocks}}}
   /api/v1/market/hot/events:
@@ -694,7 +704,7 @@ components:
         source: {type: string}
         asOf: {type: string, format: date-time}
         fetchedAt: {type: string, format: date-time}
-        status: {type: string, enum: [ok, partial, stale, unavailable, after_cutoff]}
+        status: {type: string, enum: [ok, partial, empty, stale, unavailable, after_cutoff]}
         errors:
           type: array
           items: {$ref: "#/components/schemas/DataSourceError"}
@@ -857,6 +867,70 @@ components:
         newHighs: {type: integer, nullable: true}
         newLows: {type: integer, nullable: true}
         medianChangePct: {type: number}
+    HotWordsWindow:
+      type: object
+      required: [from, to, hours]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        hours: {type: integer}
+    HotWordsBaseline:
+      type: object
+      required: [from, to, requestedDays, effectiveDays, documentCount, available, mode]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        requestedDays: {type: integer}
+        effectiveDays: {type: integer}
+        documentCount: {type: integer}
+        available: {type: boolean}
+        mode: {type: string, enum: [burst, coverage_fallback]}
+    HotWordsSentiment:
+      type: object
+      required: [score, category, description, positiveCount, negativeCount]
+      properties:
+        score: {type: number, minimum: -100, maximum: 100}
+        category: {type: integer, minimum: 0, maximum: 2}
+        description: {type: string}
+        positiveCount: {type: integer}
+        negativeCount: {type: integer}
+    HotWordRepresentativeNews:
+      type: object
+      required: [id, title, excerpt, source, publishedAt]
+      properties:
+        id: {type: integer}
+        title: {type: string}
+        excerpt: {type: string}
+        source: {type: string}
+        publishedAt: {type: string, format: date-time}
+        url: {type: string, format: uri}
+    HotWordItem:
+      type: object
+      required: [rank, word, score, documentCount, occurrenceCount, documentShare, baselineDocumentCount, sourceCount, sources, latestAt, confidence, representativeNews]
+      properties:
+        rank: {type: integer}
+        word: {type: string}
+        score: {type: number}
+        documentCount: {type: integer}
+        occurrenceCount: {type: integer}
+        documentShare: {type: number, minimum: 0, maximum: 1}
+        baselineDocumentCount: {type: integer}
+        burstRatio: {type: number, nullable: true}
+        growthPct: {type: number, nullable: true}
+        sourceCount: {type: integer}
+        sources: {type: array, items: {type: string}}
+        latestAt: {type: string, format: date-time}
+        confidence: {type: string, enum: [low, medium, high]}
+        representativeNews: {type: array, maxItems: 3, items: {$ref: "#/components/schemas/HotWordRepresentativeNews"}}
+    HotWordsData:
+      type: object
+      required: [window, baseline, currentDocumentCount, sentiment, items]
+      properties:
+        window: {$ref: "#/components/schemas/HotWordsWindow"}
+        baseline: {$ref: "#/components/schemas/HotWordsBaseline"}
+        currentDocumentCount: {type: integer}
+        sentiment: {$ref: "#/components/schemas/HotWordsSentiment"}
+        items: {type: array, items: {$ref: "#/components/schemas/HotWordItem"}}
     FundFlowRow:
       type: object
       required: [code, name, netAmount, inAmount, outAmount, changePct]
@@ -953,6 +1027,12 @@ components:
         - type: object
           required: [data]
           properties: {data: {$ref: "#/components/schemas/MarketBreadthData"}}
+    HotWordsEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/HotWordsData"}}
     FundFlowEnvelope:
       allOf:
         - {$ref: "#/components/schemas/DataEnvelope"}

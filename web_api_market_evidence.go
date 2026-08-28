@@ -11,11 +11,31 @@ import (
 )
 
 var marketEvidenceServiceFactory = data.NewMarketEvidenceService
+var marketHotWordsServiceFactory = data.NewMarketHotWordsService
 
 // registerMarketEvidenceRoutes is intentionally isolated so the 2.0 route
 // surface can be mounted in one line from the central router.
 func registerMarketEvidenceRoutes(mux *http.ServeMux, _ *App) {
 	service := marketEvidenceServiceFactory()
+	hotWordsService := marketHotWordsServiceFactory()
+	mux.HandleFunc("GET /api/v1/market/hot/words", func(w http.ResponseWriter, r *http.Request) {
+		hours, err := queryBoundedInt(r, "hours", 24, 1, 72)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, badMarketEvidence(data.HotWordsData{Items: []data.HotWordItem{}}, "validation", "invalid_hours", err.Error()))
+			return
+		}
+		baselineDays, err := queryBoundedInt(r, "baselineDays", 7, 3, 30)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, badMarketEvidence(data.HotWordsData{Items: []data.HotWordItem{}}, "validation", "invalid_baseline_days", err.Error()))
+			return
+		}
+		limit, err := queryBoundedInt(r, "limit", 30, 1, 100)
+		if err != nil {
+			writeJSON(w, http.StatusBadRequest, badMarketEvidence(data.HotWordsData{Items: []data.HotWordItem{}}, "validation", "invalid_limit", err.Error()))
+			return
+		}
+		writeJSON(w, http.StatusOK, hotWordsService.HotWords(r.Context(), data.HotWordsQuery{Hours: hours, BaselineDays: baselineDays, Limit: limit}))
+	})
 	mux.HandleFunc("GET /api/v1/market/breadth", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, service.Breadth(r.Context()))
 	})

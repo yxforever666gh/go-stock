@@ -1,5 +1,5 @@
 <script setup>
-import AnalyzeMartket from '../components/AnalyzeMartket.vue'
+import MarketHotWords from '../components/MarketHotWords.vue'
 import NewsList from '../components/newsList.vue'
 import MarketBreadthOverview from '../components/MarketBreadthOverview.vue'
 
@@ -39,7 +39,7 @@ function handleRefresh(source) {
       <MarketBreadthOverview :active="active" />
     </n-gi>
     <n-gi>
-      <AnalyzeMartket :active="active" :dark-theme="darkTheme" :chart-height="300" :kDays="1" :name="'最近24小时热词'" />
+      <MarketHotWords :active="active" :dark-theme="darkTheme" />
     </n-gi>
     <n-gi>
       <n-grid :cols="foreignNewsList.length ? 3 : 2" :y-gap="0">

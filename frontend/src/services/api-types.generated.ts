@@ -82,6 +82,7 @@ export const API_PATHS = {
   listIndustryResearchReports: "/api/v1/market/industries/research-reports",
   listInstrumentTrades: "/api/v1/instruments/{code}/trades",
   listMarketFundFlows: "/api/v1/market/fund-flows",
+  listMarketHotWords: "/api/v1/market/hot/words",
   listRecommendations: "/api/v1/research/recommendations",
   listResearch2AnalysisRuns: "/api/v1/research2/analysis-runs",
   listResearch2Recommendations: "/api/v1/research2/recommendations",
@@ -335,7 +336,7 @@ export type DataEnvelope = {
   fetchedAt: string
   source: string
   sources?: Array<DataSourceState>
-  status: "ok" | "partial" | "stale" | "unavailable" | "after_cutoff"
+  status: "ok" | "partial" | "empty" | "stale" | "unavailable" | "after_cutoff"
   warnings?: Array<string>
 }
 
@@ -558,6 +559,68 @@ export type FuturesPositionsEnvelope = DataEnvelope & {
 
 export type GroupSortRequest = {
   sort: number
+}
+
+export type HotWordItem = {
+  baselineDocumentCount: number
+  burstRatio?: number | null
+  confidence: "low" | "medium" | "high"
+  documentCount: number
+  documentShare: number
+  growthPct?: number | null
+  latestAt: string
+  occurrenceCount: number
+  rank: number
+  representativeNews: Array<HotWordRepresentativeNews>
+  score: number
+  sourceCount: number
+  sources: Array<string>
+  word: string
+}
+
+export type HotWordRepresentativeNews = {
+  excerpt: string
+  id: number
+  publishedAt: string
+  source: string
+  title: string
+  url?: string
+}
+
+export type HotWordsBaseline = {
+  available: boolean
+  documentCount: number
+  effectiveDays: number
+  from: string
+  mode: "burst" | "coverage_fallback"
+  requestedDays: number
+  to: string
+}
+
+export type HotWordsData = {
+  baseline: HotWordsBaseline
+  currentDocumentCount: number
+  items: Array<HotWordItem>
+  sentiment: HotWordsSentiment
+  window: HotWordsWindow
+}
+
+export type HotWordsEnvelope = DataEnvelope & {
+  data: HotWordsData
+}
+
+export type HotWordsSentiment = {
+  category: number
+  description: string
+  negativeCount: number
+  positiveCount: number
+  score: number
+}
+
+export type HotWordsWindow = {
+  from: string
+  hours: number
+  to: string
 }
 
 export type InstrumentID = {

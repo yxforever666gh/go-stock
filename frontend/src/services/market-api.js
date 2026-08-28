@@ -24,6 +24,8 @@ export const InvestCalendarTimeLine = (yearMonth) => requestJSON(withQuery(API_P
 export const ClsCalendar = () => requestJSON(API_PATHS.getCLSCalendar)
 
 export const GetMarketBreadth = () => requestDataEnvelope(API_PATHS.getMarketBreadth)
+export const GetMarketHotWords = ({hours = 24, baselineDays = 7, limit = 30} = {}) =>
+  requestDataEnvelope(withQuery(API_PATHS.listMarketHotWords, {hours, baselineDays, limit}))
 export const GetMarketFundFlows = ({scope, date, sort = 'netamount', limit = 100} = {}) =>
   requestDataEnvelope(withQuery(API_PATHS.listMarketFundFlows, {scope, date, sort, limit}))
 export const GetMarketFuturesPositions = ({symbol = 'IF', date} = {}) =>

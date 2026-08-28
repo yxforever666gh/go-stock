@@ -8,6 +8,7 @@ const pathsSource = await readFile(new URL('./api-types.generated.ts', import.me
 test('market evidence services only use canonical API_PATHS', () => {
   const operations = [
     ['getMarketBreadth', '/api/v1/market/breadth'],
+    ['listMarketHotWords', '/api/v1/market/hot/words'],
     ['listMarketFundFlows', '/api/v1/market/fund-flows'],
     ['listFuturesPositions', '/api/v1/market/futures/positions'],
     ['getMarginTrading', '/api/v1/market/margin'],
@@ -20,4 +21,6 @@ test('market evidence services only use canonical API_PATHS', () => {
   }
   assert.equal(serviceSource.includes('/api/v1/'), false)
   assert.match(serviceSource, /requestDataEnvelope/)
+  assert.match(serviceSource, /GetMarketHotWords = \(\{hours = 24, baselineDays = 7, limit = 30\} = \{\}\)/)
+  assert.match(serviceSource, /withQuery\(API_PATHS\.listMarketHotWords, \{hours, baselineDays, limit\}\)/)
 })

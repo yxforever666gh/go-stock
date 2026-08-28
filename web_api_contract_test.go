@@ -33,6 +33,7 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		{http.MethodGet, "/livez"},
 		{http.MethodGet, "/readyz"},
 		{http.MethodGet, "/api/v1/market/hot/stocks"},
+		{http.MethodGet, "/api/v1/market/hot/words"},
 		{http.MethodGet, "/api/v1/market/breadth"},
 		{http.MethodGet, "/api/v1/market/fund-flows"},
 		{http.MethodGet, "/api/v1/market/futures/positions"},
