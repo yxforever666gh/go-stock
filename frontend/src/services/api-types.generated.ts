@@ -6,6 +6,9 @@ export const API_PATHS = {
   checkForUpdates: "/api/v1/system/update-check",
   connectEventsWebSocket: "/api/v1/events/ws",
   createGroup: "/api/v1/groups",
+  createKnowledgeDocument: "/api/v1/knowledge/documents",
+  createKnowledgeDocumentVersion: "/api/v1/knowledge/documents/{id}/versions",
+  createKnowledgeMemoryCandidate: "/api/v1/knowledge/memory-candidates",
   createResearchReplay: "/api/v1/research/replays",
   deleteGroup: "/api/v1/groups/{id}",
   deleteInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
@@ -52,6 +55,14 @@ export const API_PATHS = {
   getSystemInfo: "/api/v1/system/info",
   getTheme: "/api/v1/themes/{id}",
   initializeGroupSort: "/api/v1/groups/initialize-sort",
+  knowledgeDocument: "/api/v1/knowledge/documents/{id}",
+  knowledgeDocumentVersions: "/api/v1/knowledge/documents/{id}/versions",
+  knowledgeDocuments: "/api/v1/knowledge/documents",
+  knowledgeFromResearch: "/api/v1/knowledge/documents/from-research",
+  knowledgeMemoryCandidateDecision: "/api/v1/knowledge/memory-candidates/{id}/decision",
+  knowledgeMemoryCandidates: "/api/v1/knowledge/memory-candidates",
+  knowledgeSearch: "/api/v1/knowledge/search",
+  knowledgeVersionDecision: "/api/v1/knowledge/versions/{id}/decision",
   listAIConfigs: "/api/v1/ai/configs",
   listAccountCashFlows: "/api/v1/research/account/cash-flows",
   listAnalysisRuns: "/api/v1/research/analysis-runs",
@@ -282,6 +293,26 @@ export type CommandResponse = {
   ok: boolean
 }
 
+export type CreateKnowledgeDocumentRequest = {
+  contentBase64: string
+  filename: string
+  mimeType: "text/plain" | "text/markdown" | "application/pdf"
+  title?: string
+}
+
+export type CreateKnowledgeFromResearchRequest = {
+  sourceOwnerId: string
+  sourceOwnerType: "research1" | "research2"
+  title?: string
+}
+
+export type CreateKnowledgeMemoryCandidateRequest = {
+  content?: string
+  sourceOwnerId: string
+  sourceOwnerType: "research1" | "research2"
+  title?: string
+}
+
 export type CreateResearchReplayRequest = {
   modelConfigId: number
   sourceOwnerId: string
@@ -428,6 +459,98 @@ export type InstrumentID = {
 }
 
 export type JsonObject = unknown
+
+export type KnowledgeDecisionRequest = {
+  decision: "approved" | "rejected"
+  reason: string
+}
+
+export type KnowledgeDocumentDetail = {
+  document: KnowledgeDocumentSummary
+  latestVersion: KnowledgeDocumentVersion
+}
+
+export type KnowledgeDocumentPage = {
+  items: Array<KnowledgeDocumentSummary>
+  page: number
+  pageSize: number
+  total: number
+}
+
+export type KnowledgeDocumentSummary = {
+  createdAt: string
+  documentId: string
+  documentType: "text" | "markdown" | "pdf" | "research_report" | "memory"
+  latestContentSha256: string
+  latestSourceFilename: string
+  latestStatus: "draft" | "approved" | "rejected" | "superseded"
+  latestVersionNumber: number
+  originType: "upload" | "research_report" | "memory_candidate"
+  sourceOwnerId: string
+  sourceOwnerType: string
+  title: string
+  updatedAt: string
+}
+
+export type KnowledgeDocumentVersion = {
+  contentSha256: string
+  contentText: string
+  createdAt: string
+  createdBy: "user" | "system" | "ai"
+  decidedAt?: string | null
+  decidedBy: string
+  decisionReason: string
+  documentId: string
+  extractionStatus: "pending" | "complete" | "failed"
+  mimeType: string
+  sourceFilename: string
+  status: "draft" | "approved" | "rejected" | "superseded"
+  versionId: string
+  versionNumber: number
+}
+
+export type KnowledgeMemoryCandidate = {
+  approvedVersionId?: string
+  candidateId: string
+  content: string
+  contentSha256: string
+  createdAt: string
+  decidedAt?: string | null
+  decidedBy: string
+  decisionReason: string
+  sourceOwnerId: string
+  sourceOwnerType: "research1" | "research2"
+  status: "draft" | "approved" | "rejected"
+  title: string
+}
+
+export type KnowledgeSearchHit = {
+  contentSha256: string
+  documentId: string
+  excerpt: string
+  score: number
+  sourceOwnerId: string
+  sourceOwnerType: string
+  status: "approved"
+  title: string
+  versionId: string
+}
+
+export type KnowledgeVersionDecisionState = {
+  approvalReason?: string
+  approvedAt?: string
+  approvedByActorType?: string
+  approvedByUserId?: string
+  createdAt: string
+  rejectedAt?: string
+  rejectedByActorType?: string
+  rejectedByUserId?: string
+  rejectionReason?: string
+  stateId: string
+  status: "draft" | "approved" | "rejected" | "superseded"
+  updatedAt: string
+  versionId: string
+}
 
 export type LifecycleMessage = {
   content?: string

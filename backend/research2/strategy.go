@@ -11,7 +11,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
+	"go-stock/backend/knowledge"
 	"go-stock/backend/research"
 	"go-stock/backend/researchaudit"
 
@@ -101,7 +103,16 @@ type Runner struct {
 	now        func() time.Time
 	waitUntil  func(context.Context, time.Time) error
 	audit      *researchaudit.Recorder
+	knowledge  knowledge.ResearchRetriever
 	mu         sync.Mutex
+}
+
+// ConfigureKnowledge gives Research 2 only the narrow approved-retrieval
+// capability; no document or approval methods are exposed to this runner.
+func (r *Runner) ConfigureKnowledge(retriever knowledge.ResearchRetriever) {
+	if r != nil {
+		r.knowledge = retriever
+	}
 }
 
 func (r *Runner) ConfigureAudit(recorder *researchaudit.Recorder) {
@@ -217,6 +228,12 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	}
 	if err != nil {
 		return finishFailure("failed", "策略证据采集失败: "+err.Error(), err)
+	}
+	if r.knowledge != nil {
+		retrieval, retrievalErr := r.knowledge.RetrieveForResearch(ctx, knowledge.ResearchRetrievalRequest{OwnerType: "research2", OwnerID: run.RunID, Query: research2KnowledgeQuery(evidence.Prompt), CutoffAt: cutoff, Limit: 5, ExperimentalEnabled: true})
+		if retrievalErr == nil && strings.TrimSpace(retrieval.Prompt) != "" {
+			evidence.Prompt = strings.TrimSpace(evidence.Prompt) + "\n\n" + retrieval.Prompt
+		}
 	}
 	if r.now().Before(cutoff) {
 		if err = r.waitUntil(ctx, cutoff); err != nil {
@@ -352,6 +369,21 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		}
 	}
 	return run, nil
+}
+
+func research2KnowledgeQuery(evidencePrompt string) string {
+	value := strings.TrimSpace(evidencePrompt)
+	if len(value) > 1024 {
+		end := 1024
+		for end > 0 && !utf8.ValidString(value[:end]) {
+			end--
+		}
+		value = value[:end]
+	}
+	if value == "" {
+		return "市场 题材 风险 行业 个股"
+	}
+	return "市场 题材 风险 行业 个股 " + value
 }
 
 func buildPrompt(evidence Evidence, cutoff time.Time) string {

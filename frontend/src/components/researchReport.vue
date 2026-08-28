@@ -5,6 +5,7 @@ import {formatInteger, formatNumber} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
 import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/research-api'
+import {CreateKnowledgeFromResearch, CreateKnowledgeMemoryCandidate} from '../services/knowledge-api'
 
 const message = useMessage()
 const loading = ref(false)
@@ -13,6 +14,8 @@ const detailVisible = ref(false)
 const detail = ref(null)
 const detailRunID = ref('')
 const starting = ref(false)
+const savingKnowledgeDraft = ref(false)
+const creatingMemoryCandidate = ref(false)
 let waitingForManualRun = false
 let manualBaselineRunID = ''
 let pollTimer = null
@@ -194,6 +197,42 @@ async function refreshDetail(silent = false) {
   }
 }
 
+async function saveKnowledgeDraft() {
+  const runId = String(detail.value?.runId || detailRunID.value || '')
+  if (!runId || savingKnowledgeDraft.value) return
+  savingKnowledgeDraft.value = true
+  try {
+    await CreateKnowledgeFromResearch({
+      sourceOwnerType: 'research1',
+      sourceOwnerId: runId,
+      title: `AI 分析报告 ${dateTime(detail.value?.completedAt || detail.value?.startedAt)}`,
+    })
+    message.success('报告已保存为知识草稿，批准前不会进入研究检索')
+  } catch (error) {
+    message.error(error?.message || String(error))
+  } finally {
+    savingKnowledgeDraft.value = false
+  }
+}
+
+async function createMemoryCandidate() {
+  const runId = String(detail.value?.runId || detailRunID.value || '')
+  if (!runId || creatingMemoryCandidate.value) return
+  creatingMemoryCandidate.value = true
+  try {
+    await CreateKnowledgeMemoryCandidate({
+      sourceOwnerType: 'research1',
+      sourceOwnerId: runId,
+      title: `AI 分析记忆候选 ${dateTime(detail.value?.completedAt || detail.value?.startedAt)}`,
+    })
+    message.success('已从报告生成记忆候选；必须由用户批准后才能进入研究检索')
+  } catch (error) {
+    message.error(error?.message || String(error))
+  } finally {
+    creatingMemoryCandidate.value = false
+  }
+}
+
 onMounted(refresh)
 onBeforeUnmount(stopPolling)
 </script>
@@ -221,6 +260,10 @@ onBeforeUnmount(stopPolling)
                   <n-descriptions-item label="模型">{{ detail.providerName }} / {{ detail.modelName }}</n-descriptions-item>
                   <n-descriptions-item label="来源">{{ sourceSummary(detail.sourceStatusJson) }}</n-descriptions-item>
                 </n-descriptions>
+                <n-flex justify="end" style="margin-top: 10px">
+                  <n-button secondary type="warning" :loading="creatingMemoryCandidate" @click="createMemoryCandidate">生成记忆候选</n-button>
+                  <n-button secondary type="primary" :loading="savingKnowledgeDraft" @click="saveKnowledgeDraft">保存为知识草稿</n-button>
+                </n-flex>
                 <n-divider title-placement="left">完整决策报告</n-divider>
                 <AppMarkdownPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
                 <n-collapse>

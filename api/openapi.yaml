@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.3.0
+  version: 2.4.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -470,6 +470,127 @@ paths:
       responses:
         "200": {description: Replay state, immutable result, and comparison summary, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchReplay"}}}}
         "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/documents:
+    get:
+      operationId: knowledgeDocuments
+      parameters:
+        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
+        - {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
+        - {name: status, in: query, schema: {type: string, enum: [draft, approved, rejected, superseded]}}
+        - {name: q, in: query, schema: {type: string}}
+      responses:
+        "200": {description: Paged knowledge documents, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentPage"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+    post:
+      operationId: createKnowledgeDocument
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeDocumentRequest"}}}
+      responses:
+        "201": {description: Draft immutable knowledge document version, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "413": {description: Decoded document exceeds 10 MiB, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/documents/from-research:
+    post:
+      operationId: knowledgeFromResearch
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeFromResearchRequest"}}}
+      responses:
+        "201": {description: Research report saved as a knowledge draft, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/documents/{id}:
+    get:
+      operationId: knowledgeDocument
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Knowledge document and latest immutable version, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/documents/{id}/versions:
+    get:
+      operationId: knowledgeDocumentVersions
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: Immutable knowledge document versions, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/KnowledgeDocumentVersion"}}}}}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+    post:
+      operationId: createKnowledgeDocumentVersion
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeDocumentRequest"}}}
+      responses:
+        "201": {description: New draft immutable version, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "413": {description: Decoded document exceeds 10 MiB, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/versions/{id}/decision:
+    post:
+      operationId: knowledgeVersionDecision
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDecisionRequest"}}}
+      responses:
+        "200": {description: Updated user decision state, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeVersionDecisionState"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/search:
+    get:
+      operationId: knowledgeSearch
+      parameters:
+        - {name: q, in: query, required: true, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
+      responses:
+        "200": {description: Approved non-superseded FTS5 results, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/KnowledgeSearchHit"}}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/memory-candidates:
+    get:
+      operationId: knowledgeMemoryCandidates
+      parameters:
+        - {name: status, in: query, schema: {type: string, enum: [draft, approved, rejected]}}
+      responses:
+        "200": {description: AI-generated memory candidates awaiting a user decision, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/KnowledgeMemoryCandidate"}}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+    post:
+      operationId: createKnowledgeMemoryCandidate
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeMemoryCandidateRequest"}}}
+      responses:
+        "201": {description: Draft memory candidate, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeMemoryCandidate"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+  /api/v1/knowledge/memory-candidates/{id}/decision:
+    post:
+      operationId: knowledgeMemoryCandidateDecision
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDecisionRequest"}}}
+      responses:
+        "200": {description: User-approved or rejected memory candidate, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeMemoryCandidate"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
         "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/exports/config:
     post:
@@ -1440,6 +1561,135 @@ components:
         result: {type: string}
         resultSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
         diffSummary: {$ref: "#/components/schemas/JsonObject"}
+    CreateKnowledgeDocumentRequest:
+      type: object
+      required: [filename, mimeType, contentBase64]
+      properties:
+        title: {type: string}
+        filename: {type: string}
+        mimeType: {type: string, enum: [text/plain, text/markdown, application/pdf]}
+        contentBase64: {type: string, format: byte}
+    CreateKnowledgeFromResearchRequest:
+      type: object
+      required: [sourceOwnerType, sourceOwnerId]
+      properties:
+        sourceOwnerType: {type: string, enum: [research1, research2]}
+        sourceOwnerId: {type: string}
+        title: {type: string}
+    CreateKnowledgeMemoryCandidateRequest:
+      type: object
+      required: [sourceOwnerType, sourceOwnerId]
+      properties:
+        sourceOwnerType: {type: string, enum: [research1, research2]}
+        sourceOwnerId: {type: string}
+        title: {type: string}
+        content: {type: string}
+    KnowledgeDecisionRequest:
+      type: object
+      required: [decision, reason]
+      properties:
+        decision: {type: string, enum: [approved, rejected]}
+        reason: {type: string}
+    KnowledgeDocumentSummary:
+      type: object
+      required: [documentId, title, documentType, originType, sourceOwnerType, sourceOwnerId, latestVersionNumber, latestStatus, latestSourceFilename, latestContentSha256, createdAt, updatedAt]
+      properties:
+        documentId: {type: string}
+        title: {type: string}
+        documentType: {type: string, enum: [text, markdown, pdf, research_report, memory]}
+        originType: {type: string, enum: [upload, research_report, memory_candidate]}
+        sourceOwnerType: {type: string}
+        sourceOwnerId: {type: string}
+        latestVersionNumber: {type: integer, minimum: 1}
+        latestStatus: {type: string, enum: [draft, approved, rejected, superseded]}
+        latestSourceFilename: {type: string}
+        latestContentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    KnowledgeDocumentVersion:
+      type: object
+      required: [versionId, documentId, versionNumber, status, mimeType, sourceFilename, contentText, contentSha256, extractionStatus, createdBy, createdAt, decisionReason, decidedBy]
+      properties:
+        versionId: {type: string}
+        documentId: {type: string}
+        versionNumber: {type: integer, minimum: 1}
+        status: {type: string, enum: [draft, approved, rejected, superseded]}
+        mimeType: {type: string}
+        sourceFilename: {type: string}
+        contentText: {type: string}
+        contentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        extractionStatus: {type: string, enum: [pending, complete, failed]}
+        createdBy: {type: string, enum: [user, system, ai]}
+        createdAt: {type: string, format: date-time}
+        decisionReason: {type: string}
+        decidedBy: {type: string}
+        decidedAt:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
+    KnowledgeDocumentDetail:
+      type: object
+      required: [document, latestVersion]
+      properties:
+        document: {$ref: "#/components/schemas/KnowledgeDocumentSummary"}
+        latestVersion: {$ref: "#/components/schemas/KnowledgeDocumentVersion"}
+    KnowledgeVersionDecisionState:
+      type: object
+      required: [stateId, versionId, status, createdAt, updatedAt]
+      properties:
+        stateId: {type: string}
+        versionId: {type: string}
+        status: {type: string, enum: [draft, approved, rejected, superseded]}
+        approvedByActorType: {type: string}
+        approvedByUserId: {type: string}
+        approvalReason: {type: string}
+        approvedAt: {type: string, format: date-time}
+        rejectedByActorType: {type: string}
+        rejectedByUserId: {type: string}
+        rejectionReason: {type: string}
+        rejectedAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+    KnowledgeDocumentPage:
+      type: object
+      required: [items, total, page, pageSize]
+      properties:
+        items: {type: array, items: {$ref: "#/components/schemas/KnowledgeDocumentSummary"}}
+        total: {type: integer, minimum: 0}
+        page: {type: integer, minimum: 1}
+        pageSize: {type: integer, minimum: 1}
+    KnowledgeSearchHit:
+      type: object
+      required: [documentId, versionId, title, excerpt, score, contentSha256, sourceOwnerType, sourceOwnerId, status]
+      properties:
+        documentId: {type: string}
+        versionId: {type: string}
+        title: {type: string}
+        excerpt: {type: string}
+        score: {type: number}
+        contentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        sourceOwnerType: {type: string}
+        sourceOwnerId: {type: string}
+        status: {type: string, enum: [approved]}
+    KnowledgeMemoryCandidate:
+      type: object
+      required: [candidateId, sourceOwnerType, sourceOwnerId, title, content, contentSha256, status, decisionReason, decidedBy, createdAt]
+      properties:
+        candidateId: {type: string}
+        sourceOwnerType: {type: string, enum: [research1, research2]}
+        sourceOwnerId: {type: string}
+        title: {type: string}
+        content: {type: string}
+        contentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        status: {type: string, enum: [draft, approved, rejected]}
+        approvedVersionId: {type: string}
+        decisionReason: {type: string}
+        decidedBy: {type: string}
+        createdAt: {type: string, format: date-time}
+        decidedAt:
+          oneOf:
+            - {type: string, format: date-time}
+            - {type: "null"}
     Research2Recommendation:
       type: object
       required: [recommendationId, analysisRunId, rank, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]

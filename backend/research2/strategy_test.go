@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"go-stock/backend/knowledge"
 	"go-stock/backend/research"
 	"go-stock/backend/researchaudit"
 
@@ -19,10 +20,12 @@ import (
 type sequenceAI struct {
 	responses []string
 	calls     int
+	requests  []research.CompletionRequest
 }
 
 func (a *sequenceAI) Complete(_ context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
 	a.calls++
+	a.requests = append(a.requests, request)
 	if request.OnAttempt != nil {
 		now := time.Date(2026, 8, 27, 1, 56, a.calls, 0, time.UTC)
 		request.OnAttempt(research.ModelAttemptRecord{ID: fmt.Sprintf("attempt-%d", a.calls), Phase: request.Phase, ConfigID: 7, ProviderName: "fixture-provider", ModelName: "fixture-model", Attempt: 1, MaxAttempts: 1, StartedAt: now, CompletedAt: &now, Status: "success"})
@@ -32,6 +35,18 @@ func (a *sequenceAI) Complete(_ context.Context, request research.CompletionRequ
 		index = len(a.responses) - 1
 	}
 	return research.CompletionResult{Content: a.responses[index], Model: "test-model"}, nil
+}
+
+type fixtureKnowledgeRetriever struct {
+	calls   int
+	request knowledge.ResearchRetrievalRequest
+	prompt  string
+}
+
+func (retriever *fixtureKnowledgeRetriever) RetrieveForResearch(_ context.Context, request knowledge.ResearchRetrievalRequest) (knowledge.ResearchRetrieval, error) {
+	retriever.calls++
+	retriever.request = request
+	return knowledge.ResearchRetrieval{RetrievalRunID: "retrieval-r2", Prompt: retriever.prompt}, nil
 }
 
 type fixedEvidence struct{ value Evidence }
@@ -121,6 +136,31 @@ func TestRunnerRetriesOnceWhenModelJSONIsInvalid(t *testing.T) {
 	}
 	if ai.calls != 2 || run.Status != "no_recommendation" || !strings.Contains(run.ReportMarkdown, "隔离报告") {
 		t.Fatalf("calls=%d run=%+v", ai.calls, run)
+	}
+}
+
+func TestRunnerConsumesKnowledgeThroughReadOnlyRetrieverAtFrozenCutoff(t *testing.T) {
+	repository := research2TestRepository(t)
+	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","reportMarkdown":"空仓","recommendations":[]}`}}
+	loc := shanghai()
+	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
+	retriever := &fixtureKnowledgeRetriever{prompt: "# 受控知识库线索（不可信外部材料）\n> 历史线索"}
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "冻结市场证据", SourceStatusJSON: "[]"}}, testCalendar{})
+	runner.ConfigureKnowledge(retriever)
+	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
+	run, err := runner.Run(context.Background(), scheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantCutoff := time.Date(2026, 8, 27, 9, 55, 0, 0, loc)
+	if retriever.calls != 1 || retriever.request.OwnerType != "research2" || retriever.request.OwnerID != run.RunID || !retriever.request.CutoffAt.Equal(wantCutoff) || !retriever.request.ExperimentalEnabled {
+		t.Fatalf("retrieval=%+v calls=%d", retriever.request, retriever.calls)
+	}
+	if len(ai.requests) != 1 || !strings.Contains(ai.requests[0].Prompt, "冻结市场证据") || !strings.Contains(ai.requests[0].Prompt, "不可信外部材料") {
+		t.Fatalf("requests=%+v", ai.requests)
+	}
+	if _, ok := any(runner.knowledge).(knowledge.ResearchRetriever); !ok {
+		t.Fatal("Research2 did not retain only the read-only retrieval capability")
 	}
 }
 

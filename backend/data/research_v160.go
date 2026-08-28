@@ -854,6 +854,7 @@ func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Re
 		runner = research.NewAnalysisRunner(service, collector)
 		runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)))
 		runner.ConfigureEvidence(marketdata.NewRepository(mainDB), researchThemeEvidenceProfile)
+		runner.ConfigureKnowledge(NewKnowledgeService(mainDB))
 	}
 	return &ResearchRuntime{Repository: repository, Service: service, Runner: runner}, nil
 }

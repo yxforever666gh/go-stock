@@ -239,6 +239,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV18Definition,
 		apply:       applyResearchAuditSchema,
 	},
+	{
+		id: 19, name: "controlled_knowledge_and_memory",
+		description: "App 2.4.0 adds immutable knowledge versions, explicit user approval state, FTS5 retrieval and auditable memory candidates without rewriting historical research, account or trading data.",
+		definition:  mainMigrationV19Definition,
+		apply:       applyKnowledgeSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -816,6 +822,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 18 {
 		if err := verifyMainSchema18Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 19 {
+		if err := verifyMainSchema19Runtime(database); err != nil {
 			return result, err
 		}
 	}

@@ -64,6 +64,9 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, _ *gorm.DB) (*Research
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks}
 	runner := research2.NewRunner(repository, NewResearchAIClient(configID), collector, calendar)
 	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)))
+	if experimentalEvidence {
+		runner.ConfigureKnowledge(NewKnowledgeService(mainDB))
+	}
 	return &Research2Runtime{Repository: repository, Runner: runner, Trading: research2.NewTradingService(repository, market, calendar), Email: research2.NewEmailService(repository, nil)}, nil
 }
 

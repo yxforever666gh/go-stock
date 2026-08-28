@@ -1,6 +1,6 @@
 {
   "name": "go-stock",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "description": "",
   "main": "",
@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "node --max-old-space-size=4096 ./node_modules/vite/bin/vite.js build",
     "lint": "eslint \"src/**/*.{js,mjs,ts,vue}\"",
-    "test:runtime": "node --test src/services/browser-runtime.test.mjs src/services/data-envelope.test.mjs src/services/http-error.test.mjs src/services/market-api.test.mjs src/services/instruments-api.test.mjs src/services/themes-api.test.mjs src/services/research-audit-api.test.mjs src/app-shell/version-label.test.mjs src/app-shell/menu-options.test.mjs src/components/settings-email-scope.test.mjs src/components/themes/theme-model.test.mjs src/components/chart/chart-integration.test.mjs src/composables/usePolling.test.mjs src/composables/useMarketDataResource.test.mjs src/market-tabs/market-data.test.mjs src/market-tabs/market-session.test.mjs src/market-tabs/market-tab-registry.test.mjs src/charting/chart-contract.test.mjs src/charting/indicators.test.mjs src/charting/chart-options.test.mjs src/charting/drawing-model.test.mjs src/charting/research-chart-adapter.test.mjs src/utils/number-format.test.mjs src/utils/research-performance.test.mjs src/utils/research-trade-chart.test.mjs",
+    "test:runtime": "node --test src/services/browser-runtime.test.mjs src/services/data-envelope.test.mjs src/services/http-error.test.mjs src/services/market-api.test.mjs src/services/instruments-api.test.mjs src/services/themes-api.test.mjs src/services/research-audit-api.test.mjs src/services/knowledge-api.test.mjs src/app-shell/version-label.test.mjs src/app-shell/menu-options.test.mjs src/components/settings-email-scope.test.mjs src/components/themes/theme-model.test.mjs src/components/knowledge/knowledge-model.test.mjs src/components/chart/chart-integration.test.mjs src/composables/usePolling.test.mjs src/composables/useMarketDataResource.test.mjs src/market-tabs/market-data.test.mjs src/market-tabs/market-session.test.mjs src/market-tabs/market-tab-registry.test.mjs src/charting/chart-contract.test.mjs src/charting/indicators.test.mjs src/charting/chart-options.test.mjs src/charting/drawing-model.test.mjs src/charting/research-chart-adapter.test.mjs src/utils/number-format.test.mjs src/utils/research-performance.test.mjs src/utils/research-trade-chart.test.mjs",
     "ci": "npm run test:runtime && npm run lint && npm run build",
     "preview": "vite preview"
   },

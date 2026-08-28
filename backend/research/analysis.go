@@ -12,6 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go-stock/backend/knowledge"
 	"go-stock/backend/marketdata"
 	"go-stock/backend/researchaudit"
 )
@@ -64,8 +65,17 @@ type AnalysisRunner struct {
 	evidence        *marketdata.Repository
 	evidenceProfile string
 	audit           *researchaudit.Recorder
+	knowledge       knowledge.ResearchRetriever
 	auditSequence   int
 	auditCutoff     time.Time
+}
+
+// ConfigureKnowledge enables approved, read-only knowledge retrieval. Runtime
+// wiring calls it only when experimental_evidence_enabled is true.
+func (r *AnalysisRunner) ConfigureKnowledge(retriever knowledge.ResearchRetriever) {
+	if r != nil {
+		r.knowledge = retriever
+	}
 }
 
 // ConfigureAudit installs the mandatory 2.3 immutable model-call recorder.
@@ -374,6 +384,23 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 		return finishFailure(fmt.Errorf("大盘层失败: %w", err))
 	}
 	run.MarketReport = strings.TrimSpace(marketResult.Content)
+	knowledgeContext := ""
+	if r.knowledge != nil {
+		knowledgeCutoff := request.EvidenceCutoffAt
+		if knowledgeCutoff.IsZero() {
+			// Unlike the staged market batch's provisional ceiling, knowledge is
+			// queried once. Its audit cutoff must therefore be the actual query
+			// time so the persisted run and prompt never claim future visibility.
+			knowledgeCutoff = r.service.now()
+		}
+		retrieval, retrievalErr := r.knowledge.RetrieveForResearch(ctx, knowledge.ResearchRetrievalRequest{OwnerType: knowledgeOwnerResearch1, OwnerID: run.RunID, Query: knowledgeQuery(run.MarketReport), CutoffAt: knowledgeCutoff, Limit: 5, ExperimentalEnabled: true})
+		if retrievalErr != nil {
+			allSources = append(allSources, failedSource("knowledge", "受控知识库检索", r.service.now(), retrievalErr))
+			run.SourceStatusJSON = sourceStatusJSON(allSources)
+		} else {
+			knowledgeContext = retrieval.Prompt
+		}
+	}
 
 	sectorAsOf := r.service.now()
 	sectorSources, sectorCollectErr := r.collector.CollectSectors(ctx, sectorAsOf)
@@ -391,7 +418,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	allSources = dedupeSources(append(allSources, sectorSources...))
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 	sectorStageAt := r.service.now()
-	sectorResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "sector_analysis", Prompt: sectorStagePrompt(sectorStageAt, run.MarketReport, filterSources(allSources, "sector"), recentHistoryContext)})
+	sectorResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "sector_analysis", Prompt: appendKnowledgeContext(sectorStagePrompt(sectorStageAt, run.MarketReport, filterSources(allSources, "sector"), recentHistoryContext), knowledgeContext)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("板块层失败: %w", err))
 	}
@@ -437,7 +464,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 		allSources = dedupeSources(append(allSources, stockSources...))
 		run.SourceStatusJSON = sourceStatusJSON(allSources)
 		stockStageAt := r.service.now()
-		batchResult, callErr := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "stock_analysis", Prompt: stockStagePrompt(stockStageAt, run.MarketReport, run.SectorReport, batch, stockSources, recentHistoryContext)})
+		batchResult, callErr := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "stock_analysis", Prompt: appendKnowledgeContext(stockStagePrompt(stockStageAt, run.MarketReport, run.SectorReport, batch, stockSources, recentHistoryContext), knowledgeContext)})
 		if callErr != nil {
 			allSources = append(allSources, failedSource("stock", fmt.Sprintf("个股分析批次%d", start/10+1), r.service.now(), callErr))
 			continue
@@ -476,7 +503,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 
 	maxRecommendations := len(shortlist)
 	finalStageAt := r.service.now()
-	finalResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_decision", Prompt: finalStagePrompt(finalStageAt, run.MarketReport, run.SectorReport, run.StockReport, shortlist, maxRecommendations, recentHistoryContext)})
+	finalResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "final_decision", Prompt: appendKnowledgeContext(finalStagePrompt(finalStageAt, run.MarketReport, run.SectorReport, run.StockReport, shortlist, maxRecommendations, recentHistoryContext), knowledgeContext)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("决策层失败: %w", err))
 	}
