@@ -1,5 +1,8 @@
 import { API_PATHS } from './api-types.generated'
 import { requestJSON, withPath, withQuery } from './http-client'
+import {parseDataEnvelope} from './data-envelope.js'
+
+const requestDataEnvelope = async (path) => parseDataEnvelope(await requestJSON(path))
 
 export const GetTelegraphList = (source) => requestJSON(withQuery(API_PATHS.listTelegraphs, { source }))
 export const ReFleshTelegraphList = (source) => requestJSON(API_PATHS.refreshTelegraphs, { method: 'POST', body: { source } })
@@ -19,3 +22,15 @@ export const HotEvent = (size) => requestJSON(withQuery(API_PATHS.listHotEvents,
 export const HotTopic = (size) => requestJSON(withQuery(API_PATHS.listHotTopics, { size }))
 export const InvestCalendarTimeLine = (yearMonth) => requestJSON(withQuery(API_PATHS.getInvestmentCalendar, { yearMonth }))
 export const ClsCalendar = () => requestJSON(API_PATHS.getCLSCalendar)
+
+export const GetMarketBreadth = () => requestDataEnvelope(API_PATHS.getMarketBreadth)
+export const GetMarketFundFlows = ({scope, date, sort = 'netamount', limit = 100} = {}) =>
+  requestDataEnvelope(withQuery(API_PATHS.listMarketFundFlows, {scope, date, sort, limit}))
+export const GetMarketFuturesPositions = ({symbol = 'IF', date} = {}) =>
+  requestDataEnvelope(withQuery(API_PATHS.listFuturesPositions, {symbol, date}))
+export const GetMarketMargin = ({scope = 'market', code, date} = {}) =>
+  requestDataEnvelope(withQuery(API_PATHS.getMarginTrading, {scope, code, date}))
+export const GetInstrumentAuction = (code, {assetType, date} = {}) =>
+  requestDataEnvelope(withQuery(withPath(API_PATHS.getInstrumentAuction, {code}), {assetType, date}))
+export const GetInstrumentTrades = (code, {assetType, date, cursor, limit = 100} = {}) =>
+  requestDataEnvelope(withQuery(withPath(API_PATHS.listInstrumentTrades, {code}), {assetType, date, cursor, limit}))

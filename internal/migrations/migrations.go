@@ -215,6 +215,12 @@ var mainMigrations = []migration{
 		},
 		apply: applyResearch2ReportEmail,
 	},
+	{
+		id: 15, name: "research_evidence_and_market_cache",
+		description: "App 2.0.0 adds immutable research evidence sets, nullable future-run version links and an opt-in evidence switch without rewriting historical research or account state.",
+		definition:  mainMigrationV15Definition,
+		apply:       applyResearchEvidenceSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -270,6 +276,12 @@ var minuteMigrations = []migration{
 		}
 		return verifyMinuteSchema(tx)
 	}},
+	{
+		id: 3, name: "market_evidence_cache",
+		description: "App 2.0.0 adds typed multi-period bars, auction snapshots and trade ticks to the isolated minute cache.",
+		definition:  minuteMigrationV3Definition,
+		apply:       applyMarketEvidenceCacheSchema,
+	},
 }
 
 func applyMainSchema(tx *gorm.DB) error   { return applyFrozenMainSchemaV2(tx) }
@@ -766,6 +778,21 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 14 {
 		if err := verifyMainSchema14Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 15 {
+		if err := verifyMainSchema15Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "minute" && expected >= 2 {
+		if err := verifyMinuteSchema(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "minute" && expected >= 3 {
+		if err := verifyMinuteSchema3Runtime(database); err != nil {
 			return result, err
 		}
 	}

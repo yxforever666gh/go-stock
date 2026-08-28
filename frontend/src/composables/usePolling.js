@@ -4,12 +4,13 @@ export function createPollingController(task, interval, options = {}) {
   const setTimer = options.setTimer ?? setInterval
   const clearTimer = options.clearTimer ?? clearInterval
   const documentRef = options.documentRef ?? (typeof document === 'undefined' ? null : document)
+  const shouldRun = options.shouldRun ?? (() => true)
   let timer
   let running = false
   let stopped = true
 
   async function run() {
-    if (stopped || running || documentRef?.hidden) return false
+    if (stopped || running || documentRef?.hidden || !shouldRun()) return false
     running = true
     try {
       await task()
@@ -32,7 +33,7 @@ export function createPollingController(task, interval, options = {}) {
     timer = undefined
   }
 
-  return { run, start, stop, isRunning: () => running }
+  return { run, start, stop, isRunning: () => running, isStopped: () => stopped }
 }
 
 export function usePolling(task, interval, options) {

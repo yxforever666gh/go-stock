@@ -247,16 +247,36 @@ function New-RollbackReceipt {
     return $receipt
 }
 
+function Get-SchemaTransition {
+    param($PreviousPointer, $NewPointer)
+    if ($null -eq $PreviousPointer -or $null -eq $NewPointer) {
+        throw "Schema transition requires both previous and new release pointers"
+    }
+    $mainDelta = [int]$NewPointer.mainSchemaVersion - [int]$PreviousPointer.mainSchemaVersion
+    $minuteDelta = [int]$NewPointer.minuteSchemaVersion - [int]$PreviousPointer.minuteSchemaVersion
+    if ($mainDelta -lt 0 -or $minuteDelta -lt 0) {
+        throw "Use rollback with an archive receipt to downgrade either database schema"
+    }
+    if ($mainDelta -gt 1 -or $minuteDelta -gt 1) {
+        throw "Maintenance deployment supports at most a one-version upgrade for each database"
+    }
+    return [pscustomobject]@{
+        RequiresMigration = ($mainDelta -gt 0 -or $minuteDelta -gt 0)
+        MainChanged = ($mainDelta -gt 0)
+        MinuteChanged = ($minuteDelta -gt 0)
+        MainDelta = $mainDelta
+        MinuteDelta = $minuteDelta
+    }
+}
+
 function New-DatabaseArchive {
     param($PreviousPointer, $NewPointer)
-    if ([int]$NewPointer.mainSchemaVersion -ne ([int]$PreviousPointer.mainSchemaVersion + 1)) {
-        throw "Maintenance deployment only supports a one-version main schema upgrade"
-    }
-    if ([int]$PreviousPointer.minuteSchemaVersion -ne [int]$NewPointer.minuteSchemaVersion) {
-        throw "Main schema maintenance deployment must not change the minute database schema"
+    $transition = Get-SchemaTransition $PreviousPointer $NewPointer
+    if (-not $transition.RequiresMigration) {
+        throw "Database archive is only created for a schema upgrade"
     }
     New-Item -ItemType Directory -Force -Path $ArchivesRoot | Out-Null
-    $name = "pre-$($NewPointer.appVersion)-schema$($NewPointer.mainSchemaVersion)-$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')).zip"
+    $name = "pre-$($NewPointer.appVersion)-main$($NewPointer.mainSchemaVersion)-minute$($NewPointer.minuteSchemaVersion)-$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')).zip"
     $path = Assert-ChildPath (Join-Path $ArchivesRoot $name) $ArchivesRoot
     $result = Invoke-DatabaseJSON $NewPointer.binary @("db", "archive", "--output", $path, "--source-app-version", [string]$PreviousPointer.appVersion, "--source-commit", [string]$PreviousPointer.commit)
     if ($null -eq $result.archive) { throw "Archive command did not return archive metadata" }
@@ -388,24 +408,23 @@ function Invoke-Deploy {
     if (-not (Test-Path -LiteralPath $context.Binary) -or -not (Test-Path -LiteralPath $context.ZoneInfo)) { $pointer = Invoke-Build }
     else { $pointer = New-Pointer $context }
     $previous = if (Test-Path -LiteralPath $CurrentPointer) { Read-ReleasePointer $CurrentPointer } else { $null }
-    $schemaUpgrade = $null -ne $previous -and [int]$pointer.mainSchemaVersion -gt [int]$previous.mainSchemaVersion
-    if ($null -ne $previous -and [int]$pointer.mainSchemaVersion -lt [int]$previous.mainSchemaVersion) {
-        throw "Use rollback with an archive receipt to downgrade the main schema"
-    }
+    $schemaTransition = if ($null -ne $previous) { Get-SchemaTransition $previous $pointer } else { $null }
     $receiptPath = Join-Path $DeploymentsRoot ("previous-" + [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss") + ".json")
     $archive = $null
     $maintenanceReceipt = $null
     $migrationStarted = $false
     $safetyCopy = ""
     try {
-        if ($schemaUpgrade) {
+        if ($null -ne $schemaTransition -and $schemaTransition.RequiresMigration) {
             Stop-Current
             $archive = New-DatabaseArchive $previous $pointer
             $maintenanceReceipt = New-RollbackReceipt $previous $archive.Path $archive.SHA256
             Write-JSONAtomic $receiptPath $maintenanceReceipt
             $migrationStarted = $true
             [void](Invoke-DatabaseJSON $pointer.binary @("db", "migrate"))
-            [void](Invoke-DatabaseJSON $pointer.binary @("db", "compact", "--database", "main"))
+            if ($schemaTransition.MainChanged) {
+                [void](Invoke-DatabaseJSON $pointer.binary @("db", "compact", "--database", "main"))
+            }
             [void](Invoke-DatabaseJSON $pointer.binary @("db", "verify"))
         } elseif ($null -ne $previous) {
             Write-JSONAtomic $receiptPath (New-RollbackReceipt $previous)
@@ -457,9 +476,11 @@ function Invoke-Rollback {
     if ($hasArchive) { Write-Output "Restored both databases from $($pointer.databaseArchive)" }
 }
 
-switch ($Command) {
-    "build" { Invoke-Build | Out-Null }
-    "deploy" { Invoke-Deploy }
-    "activate" { Invoke-Deploy }
-    "rollback" { Invoke-Rollback }
+if ($MyInvocation.InvocationName -ne ".") {
+    switch ($Command) {
+        "build" { Invoke-Build | Out-Null }
+        "deploy" { Invoke-Deploy }
+        "activate" { Invoke-Deploy }
+        "rollback" { Invoke-Rollback }
+    }
 }

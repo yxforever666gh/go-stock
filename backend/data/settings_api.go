@@ -149,6 +149,7 @@ func UpdateConfig(s *SettingConfig) string {
 		"http_proxy":                       s.HttpProxy,
 		"http_proxy_enabled":               s.HttpProxyEnabled,
 		"force_no_proxy_for_fetch":         s.ForceNoProxyForFetch,
+		"experimental_evidence_enabled":    s.ExperimentalEvidenceEnabled,
 		"qgqp_b_id":                        s.QgqpBId,
 		"ai_analysis_enabled":              s.AIAnalysisEnabled,
 		"research2_auto_enabled":           s.Research2AutoEnabled,

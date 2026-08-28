@@ -3,7 +3,6 @@ package research
 import "time"
 
 const (
-	AppVersion  = "1.8.7"
 	InitialCash = 500000.0
 	// LegacyInitialCash freezes the published pre-1.7.7 account basis for
 	// historical migrations and correction commands.
@@ -17,25 +16,28 @@ const (
 )
 
 type AnalysisRun struct {
-	ID                  uint       `json:"id" gorm:"primaryKey"`
-	RunID               string     `json:"runId" gorm:"size:36;uniqueIndex;not null"`
-	ScheduledFor        time.Time  `json:"scheduledFor" gorm:"index"`
-	StartedAt           time.Time  `json:"startedAt" gorm:"index"`
-	CompletedAt         *time.Time `json:"completedAt"`
-	Status              string     `json:"status" gorm:"size:32;index;not null"`
-	AIConfigID          uint       `json:"aiConfigId"`
-	ProviderName        string     `json:"providerName" gorm:"size:128"`
-	ModelName           string     `json:"modelName" gorm:"size:128"`
-	MarketReport        string     `json:"marketReport" gorm:"type:text"`
-	SectorReport        string     `json:"sectorReport" gorm:"type:text"`
-	StockReport         string     `json:"stockReport" gorm:"type:text"`
-	FinalReport         string     `json:"finalReport" gorm:"type:text"`
-	SourceStatusJSON    string     `json:"sourceStatusJson" gorm:"type:text"`
-	ModelAttemptLogJSON string     `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
-	FailureReason       string     `json:"failureReason" gorm:"type:text"`
-	RecommendationCount int        `json:"recommendationCount"`
-	CreatedAt           time.Time  `json:"createdAt"`
-	UpdatedAt           time.Time  `json:"updatedAt"`
+	ID                     uint       `json:"id" gorm:"primaryKey"`
+	RunID                  string     `json:"runId" gorm:"size:36;uniqueIndex;not null"`
+	ScheduledFor           time.Time  `json:"scheduledFor" gorm:"index"`
+	StartedAt              time.Time  `json:"startedAt" gorm:"index"`
+	CompletedAt            *time.Time `json:"completedAt"`
+	Status                 string     `json:"status" gorm:"size:32;index;not null"`
+	AIConfigID             uint       `json:"aiConfigId"`
+	ProviderName           string     `json:"providerName" gorm:"size:128"`
+	ModelName              string     `json:"modelName" gorm:"size:128"`
+	MarketReport           string     `json:"marketReport" gorm:"type:text"`
+	SectorReport           string     `json:"sectorReport" gorm:"type:text"`
+	StockReport            string     `json:"stockReport" gorm:"type:text"`
+	FinalReport            string     `json:"finalReport" gorm:"type:text"`
+	SourceStatusJSON       string     `json:"sourceStatusJson" gorm:"type:text"`
+	ModelAttemptLogJSON    string     `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
+	StrategyVersion        string     `json:"strategyVersion,omitempty" gorm:"column:strategy_version;size:64"`
+	EvidenceProfileVersion string     `json:"evidenceProfileVersion,omitempty" gorm:"column:evidence_profile_version;size:64"`
+	EvidenceSetID          string     `json:"evidenceSetId,omitempty" gorm:"column:evidence_set_id;size:36;index"`
+	FailureReason          string     `json:"failureReason" gorm:"type:text"`
+	RecommendationCount    int        `json:"recommendationCount"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
 }
 
 // ModelAttemptRecord is the persisted, sanitized state of one provider call.

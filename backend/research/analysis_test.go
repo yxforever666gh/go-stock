@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go-stock/backend/marketdata"
 	"math"
 	"strings"
 	"testing"
@@ -12,6 +13,24 @@ import (
 )
 
 type fixedCollector struct{}
+
+type cutoffEvidenceCollector struct{}
+
+func (cutoffEvidenceCollector) CollectMarket(_ context.Context, now time.Time) ([]SourceDocument, error) {
+	return []SourceDocument{{SourceName: "market-normal", Category: "market", CollectedAt: now, AvailableAt: &now, Content: "market-normal-content"}}, nil
+}
+
+func (cutoffEvidenceCollector) CollectSectors(_ context.Context, now time.Time) ([]SourceDocument, error) {
+	future := now.Add(time.Hour)
+	return []SourceDocument{
+		{SourceName: "sector-normal", Category: "sector", CollectedAt: now, AvailableAt: &now, Content: "sector-normal-content"},
+		{SourceName: "sector-future", Category: "sector", CollectedAt: now, AvailableAt: &future, Content: "FUTURE_SECRET"},
+	}, nil
+}
+
+func (cutoffEvidenceCollector) CollectStocks(_ context.Context, now time.Time, _ []StockCandidate) ([]SourceDocument, error) {
+	return []SourceDocument{{SourceName: "stock-normal", Category: "stock", CollectedAt: now, AvailableAt: &now, Content: "stock-normal-content"}}, nil
+}
 
 type attemptReportingAI struct {
 	delegate *scriptedAI
@@ -658,5 +677,57 @@ func TestAnalysisRunRepairsReportAndCreatesAtMostTwoIsolatedSessions(t *testing.
 		if strings.Contains(messages[0].Content, other) {
 			t.Fatalf("cross-stock context: %s", messages[0].Content)
 		}
+	}
+}
+
+func TestExperimentalEvidenceUsesRunWideIDsAndActualFreezeCutoff(t *testing.T) {
+	repo := researchTestRepo(t)
+	if err := repo.db.AutoMigrate(&marketdata.EvidenceBatch{}, &marketdata.EvidenceItem{}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 28, 10, 0, 0, 0, shanghaiLocation)
+	sector := `{"analysis":"板块","directions":["银行"],"candidates":[{"code":"600000","name":"浦发银行"}]}`
+	stock := `{"analysis":"个股","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"结构改善","mainRisk":"资金回落","sourceRefs":"S004"}]}`
+	final := "建议。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|结构改善|资金回落|S004|"
+	ai := &scriptedAI{results: []CompletionResult{{Content: "市场"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}}}
+	service := NewService(repo, ai, quotes, openCalendar{})
+	service.now = func() time.Time { return now }
+	runner := NewAnalysisRunner(service, cutoffEvidenceCollector{})
+	runner.ConfigureEvidence(marketdata.NewRepository(repo.db), "market-evidence-v1")
+
+	run, err := runner.Run(context.Background(), AnalysisRequest{ScheduledFor: now, Mode: AnalysisModeManual})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.EvidenceSetID == "" || len(ai.requests) < 2 || strings.Contains(ai.requests[1].Prompt, "FUTURE_SECRET") {
+		t.Fatalf("future evidence reached prompt or batch link missing: run=%+v prompt=%q", run, ai.requests[1].Prompt)
+	}
+	evidenceRepo := marketdata.NewRepository(repo.db)
+	batch, err := evidenceRepo.Batch(context.Background(), run.EvidenceSetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.Status != marketdata.StatusFrozen || batch.FrozenAt == nil || !batch.CutoffAt.Equal(now) {
+		t.Fatalf("batch did not freeze at actual collection boundary: %+v", batch)
+	}
+	items, err := evidenceRepo.Items(context.Background(), run.EvidenceSetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 4 {
+		t.Fatalf("evidence items=%d, want 4: %+v", len(items), items)
+	}
+	seenIDs := map[string]bool{}
+	statuses := map[string]string{}
+	for _, item := range items {
+		if seenIDs[item.SourceID] {
+			t.Fatalf("duplicate run-wide source id %q", item.SourceID)
+		}
+		seenIDs[item.SourceID] = true
+		statuses[item.SourceName] = item.Status
+	}
+	if statuses["market-normal"] != marketdata.StatusOK || statuses["sector-normal"] != marketdata.StatusOK || statuses["stock-normal"] != marketdata.StatusOK || statuses["sector-future"] != marketdata.StatusAfterCutoff {
+		t.Fatalf("unexpected evidence statuses: %#v", statuses)
 	}
 }

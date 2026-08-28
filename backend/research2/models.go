@@ -8,48 +8,54 @@ const (
 )
 
 type AnalysisRun struct {
-	ID                  uint       `json:"id" gorm:"primaryKey"`
-	RunID               string     `json:"runId" gorm:"size:36;uniqueIndex;not null"`
-	TradingDate         string     `json:"tradingDate" gorm:"size:10;uniqueIndex;not null"`
-	ScheduledFor        time.Time  `json:"scheduledFor" gorm:"index;not null"`
-	StartedAt           time.Time  `json:"startedAt" gorm:"index;not null"`
-	EvidenceCutoffAt    time.Time  `json:"evidenceCutoffAt"`
-	GeneratedAt         *time.Time `json:"generatedAt" gorm:"index"`
-	Status              string     `json:"status" gorm:"size:32;index;not null"`
-	ProviderName        string     `json:"providerName" gorm:"size:128"`
-	ModelName           string     `json:"modelName" gorm:"size:128"`
-	ReportMarkdown      string     `json:"reportMarkdown" gorm:"type:text"`
-	SourceStatusJSON    string     `json:"sourceStatusJson" gorm:"type:text;not null;default:'[]'"`
-	ModelAttemptLogJSON string     `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
-	FailureReason       string     `json:"failureReason" gorm:"type:text"`
-	RecommendationCount int        `json:"recommendationCount"`
-	OnTime              bool       `json:"onTime"`
-	CreatedAt           time.Time  `json:"createdAt"`
-	UpdatedAt           time.Time  `json:"updatedAt"`
-	EmailDeliveryStatus string     `json:"emailDeliveryStatus,omitempty" gorm:"-"`
-	EmailSentAt         *time.Time `json:"emailSentAt,omitempty" gorm:"-"`
-	EmailAttemptCount   int        `json:"emailAttemptCount,omitempty" gorm:"-"`
-	EmailLastError      string     `json:"emailLastError,omitempty" gorm:"-"`
+	ID                     uint       `json:"id" gorm:"primaryKey"`
+	RunID                  string     `json:"runId" gorm:"size:36;uniqueIndex;not null"`
+	TradingDate            string     `json:"tradingDate" gorm:"size:10;uniqueIndex;not null"`
+	ScheduledFor           time.Time  `json:"scheduledFor" gorm:"index;not null"`
+	StartedAt              time.Time  `json:"startedAt" gorm:"index;not null"`
+	EvidenceCutoffAt       time.Time  `json:"evidenceCutoffAt"`
+	GeneratedAt            *time.Time `json:"generatedAt" gorm:"index"`
+	Status                 string     `json:"status" gorm:"size:32;index;not null"`
+	ProviderName           string     `json:"providerName" gorm:"size:128"`
+	ModelName              string     `json:"modelName" gorm:"size:128"`
+	ReportMarkdown         string     `json:"reportMarkdown" gorm:"type:text"`
+	SourceStatusJSON       string     `json:"sourceStatusJson" gorm:"type:text;not null;default:'[]'"`
+	ModelAttemptLogJSON    string     `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
+	StrategyVersion        string     `json:"strategyVersion,omitempty" gorm:"column:strategy_version;size:64"`
+	EvidenceProfileVersion string     `json:"evidenceProfileVersion,omitempty" gorm:"column:evidence_profile_version;size:64"`
+	EvidenceSetID          string     `json:"evidenceSetId,omitempty" gorm:"column:evidence_set_id;size:36;index"`
+	FailureReason          string     `json:"failureReason" gorm:"type:text"`
+	RecommendationCount    int        `json:"recommendationCount"`
+	OnTime                 bool       `json:"onTime"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
+	EmailDeliveryStatus    string     `json:"emailDeliveryStatus,omitempty" gorm:"-"`
+	EmailSentAt            *time.Time `json:"emailSentAt,omitempty" gorm:"-"`
+	EmailAttemptCount      int        `json:"emailAttemptCount,omitempty" gorm:"-"`
+	EmailLastError         string     `json:"emailLastError,omitempty" gorm:"-"`
 }
 
 func (AnalysisRun) TableName() string { return "research2_analysis_runs" }
 
 type AnalysisRunSummary struct {
-	RunID               string     `json:"runId"`
-	TradingDate         string     `json:"tradingDate"`
-	ScheduledFor        time.Time  `json:"scheduledFor"`
-	EvidenceCutoffAt    time.Time  `json:"evidenceCutoffAt"`
-	GeneratedAt         *time.Time `json:"generatedAt"`
-	Status              string     `json:"status"`
-	ProviderName        string     `json:"providerName"`
-	ModelName           string     `json:"modelName"`
-	RecommendationCount int        `json:"recommendationCount"`
-	OnTime              bool       `json:"onTime"`
-	FailureReason       string     `json:"failureReason"`
-	EmailDeliveryStatus string     `json:"emailDeliveryStatus,omitempty"`
-	EmailSentAt         *time.Time `json:"emailSentAt,omitempty"`
-	EmailAttemptCount   int        `json:"emailAttemptCount,omitempty"`
-	EmailLastError      string     `json:"emailLastError,omitempty"`
+	RunID                  string     `json:"runId"`
+	TradingDate            string     `json:"tradingDate"`
+	ScheduledFor           time.Time  `json:"scheduledFor"`
+	EvidenceCutoffAt       time.Time  `json:"evidenceCutoffAt"`
+	GeneratedAt            *time.Time `json:"generatedAt"`
+	Status                 string     `json:"status"`
+	ProviderName           string     `json:"providerName"`
+	ModelName              string     `json:"modelName"`
+	StrategyVersion        string     `json:"strategyVersion,omitempty"`
+	EvidenceProfileVersion string     `json:"evidenceProfileVersion,omitempty"`
+	EvidenceSetID          string     `json:"evidenceSetId,omitempty"`
+	RecommendationCount    int        `json:"recommendationCount"`
+	OnTime                 bool       `json:"onTime"`
+	FailureReason          string     `json:"failureReason"`
+	EmailDeliveryStatus    string     `json:"emailDeliveryStatus,omitempty"`
+	EmailSentAt            *time.Time `json:"emailSentAt,omitempty"`
+	EmailAttemptCount      int        `json:"emailAttemptCount,omitempty"`
+	EmailLastError         string     `json:"emailLastError,omitempty"`
 }
 
 type EmailDelivery struct {

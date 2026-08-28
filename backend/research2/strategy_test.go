@@ -2,6 +2,7 @@ package research2
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,19 @@ func (a *sequenceAI) Complete(_ context.Context, _ research.CompletionRequest) (
 type fixedEvidence struct{ value Evidence }
 
 func (e fixedEvidence) Collect(context.Context, time.Time) (Evidence, error) { return e.value, nil }
+
+type failingRunEvidence struct {
+	value Evidence
+	err   error
+}
+
+func (e failingRunEvidence) Collect(context.Context, time.Time) (Evidence, error) {
+	return e.value, e.err
+}
+
+func (e failingRunEvidence) CollectForRun(context.Context, string, time.Time) (Evidence, error) {
+	return e.value, e.err
+}
 
 type testCalendar struct{}
 
@@ -101,6 +115,34 @@ func TestRunnerRetriesOnceWhenModelJSONIsInvalid(t *testing.T) {
 	}
 	if ai.calls != 2 || run.Status != "no_recommendation" || !strings.Contains(run.ReportMarkdown, "隔离报告") {
 		t.Fatalf("calls=%d run=%+v", ai.calls, run)
+	}
+}
+
+func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) {
+	repository := research2TestRepository(t)
+	loc := shanghai()
+	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
+	collectorErr := errors.New("fixture collection failed")
+	runner := NewRunner(repository, &sequenceAI{responses: []string{`{}`}}, failingRunEvidence{value: Evidence{
+		EvidenceProfileVersion: "profile-test",
+		EvidenceSetID:          "evidence-set-test",
+		SourceStatusJSON:       `[{"source":"fixture","status":"unavailable"}]`,
+	}, err: collectorErr}, testCalendar{})
+	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
+
+	run, err := runner.Run(context.Background(), scheduled)
+	if !errors.Is(err, collectorErr) || run.Status != "failed" {
+		t.Fatalf("run=%+v err=%v", run, err)
+	}
+	var stored AnalysisRun
+	if err := repository.DB().Where("run_id = ?", run.RunID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-overnight-v2" {
+		t.Fatalf("failed run lost evidence association: %+v", stored)
+	}
+	if !strings.Contains(stored.SourceStatusJSON, "fixture") {
+		t.Fatalf("failed run lost evidence source status: %q", stored.SourceStatusJSON)
 	}
 }
 

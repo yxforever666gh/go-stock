@@ -44,3 +44,22 @@ test('polling skips work while the page is hidden', async () => {
   assert.equal(calls, 0)
   controller.stop()
 })
+
+test('polling honors an active session predicate', async () => {
+  let tick
+  let active = false
+  let calls = 0
+  const controller = createPollingController(async () => { calls += 1 }, 1000, {
+    setTimer: callback => { tick = callback; return 1 },
+    clearTimer: () => {},
+    documentRef: {hidden: false},
+    shouldRun: () => active,
+  })
+  controller.start({immediate: false})
+  await tick()
+  assert.equal(calls, 0)
+  active = true
+  await tick()
+  assert.equal(calls, 1)
+  controller.stop()
+})

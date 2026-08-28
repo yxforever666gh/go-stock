@@ -3,27 +3,20 @@ import { RouterLink } from 'vue-router'
 import { NIcon, NText } from 'naive-ui'
 import {
   AlarmOutline,
-  AnalyticsOutline,
-  BarChartSharp,
   DiamondOutline,
   ExpandOutline,
-  Flag,
   FlaskOutline,
   LogoGithub,
   NewspaperOutline,
-  NewspaperSharp,
-  Pulse,
   SettingsOutline,
   SparklesOutline,
   StarOutline,
 } from '@vicons/ionicons5'
-import { Dragon, FirefoxBrowser, Gripfire } from '@vicons/fa'
-import { ReportAnalytics, ReportMoney, ReportSearch } from '@vicons/tabler'
-import { BoxSearch20Regular } from '@vicons/fluent'
-import { NotificationFilled, StockOutlined } from '@vicons/antd'
+import { ReportAnalytics, ReportMoney } from '@vicons/tabler'
 import { BrowserOpenURL, EventsEmit } from '../services/browser-runtime.mjs'
 import { formatGitHubVersionLabel } from './version-label.js'
 import {RESEARCH_CENTER1_LABEL, RESEARCH_CENTER2_LABEL, RESEARCH_TABS} from './research-menu-model.js'
+import {MARKET_TABS} from '../market-tabs/market-tab-registry.js'
 
 function renderIcon(icon) {
   return () => h(NIcon, null, { default: () => h(icon) })
@@ -61,22 +54,7 @@ function emitLater(eventName, payload) {
 }
 
 function createMarketChildren(activeKey) {
-  const marketTabs = [
-    ['market1', '市场快讯', NewspaperSharp, 0],
-    ['market2', '全球股指', BarChartSharp, 0],
-    ['market3', '重大指数', AnalyticsOutline, 0],
-    ['market4', '行业排名', Flag, 0],
-    ['market5', '个股资金流向', Pulse, 0],
-    ['market6', '龙虎榜', Dragon, 0],
-    ['market7', '个股研报', StockOutlined, 0],
-    ['market8', '公司公告', NotificationFilled, 0],
-    ['market9', '行业研究', ReportSearch, 0],
-    ['market10', '当前热门', Gripfire, 0],
-    ['market11', '指标选股', BoxSearch20Regular, 0],
-    ['market12', '名站优选', FirefoxBrowser, 0],
-  ]
-
-  return marketTabs.map(([key, name, icon, id]) => ({
+  return MARKET_TABS.map(({key, name, icon}, id) => ({
     label: createRouterLabel(
       name,
       {

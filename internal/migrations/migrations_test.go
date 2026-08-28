@@ -432,7 +432,7 @@ func TestSchema10RegistersInitialContributionWithoutChangingAccountOrPositions(t
 	}
 }
 
-func TestEmptyDatabasesUpgradeDirectlyToSchema14(t *testing.T) {
+func TestEmptyDatabasesUpgradeDirectlyToSchema15AndMinute3(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	if err := MigrateAll(mainDB, minuteDB); err != nil {
@@ -449,12 +449,12 @@ func TestEmptyDatabasesUpgradeDirectlyToSchema14(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 14 || minuteStatus.CurrentVersion != 2 {
+	if mainStatus.CurrentVersion != 15 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 }
 
-func TestPublished15BaselineUpgradesDirectlyToSchema14(t *testing.T) {
+func TestPublished15BaselineUpgradesDirectlyToSchema15(t *testing.T) {
 	database := openMigrationTestDB(t)
 	if err := database.AutoMigrate(&MigrationRecord{}); err != nil {
 		t.Fatal(err)
@@ -481,7 +481,7 @@ func TestPublished15BaselineUpgradesDirectlyToSchema14(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentVersion != 14 || len(status.Pending) != 0 {
+	if status.CurrentVersion != 15 || len(status.Pending) != 0 {
 		t.Fatalf("upgraded status=%+v", status)
 	}
 	if database.Migrator().HasTable("ai_recommend_stocks") {
@@ -489,7 +489,7 @@ func TestPublished15BaselineUpgradesDirectlyToSchema14(t *testing.T) {
 	}
 }
 
-func TestMinuteSchemaRemainsVersion2(t *testing.T) {
+func TestMinuteSchema3IncludesPublishedSchema2(t *testing.T) {
 	database := openMigrationTestDB(t)
 	for _, item := range minuteMigrations {
 		if err := item.apply(database); err != nil {
@@ -505,6 +505,7 @@ func TestPublishedMinuteMigrationChecksumsRemainFrozen(t *testing.T) {
 	want := map[int]string{
 		1: "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec",
 		2: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0",
+		3: "09a4f300170f52ad46b04e70467945ba9d9b12da545ce0f3faafa735ad4544af",
 	}
 	for _, item := range minuteMigrations {
 		if got := item.checksum(); got != want[item.id] {

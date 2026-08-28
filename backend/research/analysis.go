@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"go-stock/backend/marketdata"
 )
 
 const finalReportTableHeader = "| 股票名称 | 股票代码 | AI分析摘要 | 主要风险 | 来源编号 |"
@@ -25,12 +27,14 @@ const (
 var ErrScheduledAnalysisSkipped = errors.New("scheduled AI analysis skipped outside an open trading session")
 
 type SourceDocument struct {
-	SourceID    string    `json:"sourceId"`
-	SourceName  string    `json:"sourceName"`
-	Category    string    `json:"category"`
-	CollectedAt time.Time `json:"collectedAt"`
-	Content     string    `json:"content"`
-	Error       string    `json:"error,omitempty"`
+	SourceID    string     `json:"sourceId"`
+	SourceName  string     `json:"sourceName"`
+	SourceRef   string     `json:"-"`
+	Category    string     `json:"category"`
+	CollectedAt time.Time  `json:"collectedAt"`
+	AvailableAt *time.Time `json:"-"`
+	Content     string     `json:"content"`
+	Error       string     `json:"error,omitempty"`
 }
 
 type StockCandidate struct {
@@ -45,20 +49,32 @@ type SourceCollector interface {
 }
 
 type AnalysisRequest struct {
-	ScheduledFor time.Time
-	AIConfigID   uint
-	ProviderName string
-	ModelName    string
-	Mode         string
+	ScheduledFor     time.Time
+	AIConfigID       uint
+	ProviderName     string
+	ModelName        string
+	Mode             string
+	EvidenceCutoffAt time.Time
 }
 
 type AnalysisRunner struct {
-	service   *Service
-	collector SourceCollector
+	service         *Service
+	collector       SourceCollector
+	evidence        *marketdata.Repository
+	evidenceProfile string
 }
 
 func NewAnalysisRunner(service *Service, collector SourceCollector) *AnalysisRunner {
 	return &AnalysisRunner{service: service, collector: collector}
+}
+
+// ConfigureEvidence enables the 2.0 evidence persistence path. Production
+// leaves it unset unless experimental_evidence_enabled is true.
+func (r *AnalysisRunner) ConfigureEvidence(repository *marketdata.Repository, profile string) {
+	if r == nil {
+		return
+	}
+	r.evidence, r.evidenceProfile = repository, strings.TrimSpace(profile)
 }
 
 func (r *AnalysisRunner) completeAI(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
@@ -166,7 +182,7 @@ func recentRecommendationContext(source []RecommendationHistoryItem) string {
 	return string(data)
 }
 
-func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (AnalysisRun, error) {
+func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (result AnalysisRun, resultErr error) {
 	r.service.analysisMu.Lock()
 	defer r.service.analysisMu.Unlock()
 	now := r.service.now()
@@ -189,6 +205,36 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		RunID: newID(), ScheduledFor: request.ScheduledFor, StartedAt: now, Status: "running",
 		AIConfigID: request.AIConfigID, ProviderName: request.ProviderName, ModelName: request.ModelName,
 		ModelAttemptLogJSON: "[]",
+	}
+	var evidenceBatch *marketdata.EvidenceBatch
+	sourceSequence := 0
+	evidenceFrozen := false
+	freezeEvidence := func() error {
+		if evidenceBatch == nil || evidenceFrozen {
+			return nil
+		}
+		freezeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := r.evidence.FreezeBatch(freezeCtx, evidenceBatch.EvidenceSetID, r.service.now()); err != nil {
+			return fmt.Errorf("冻结研究证据: %w", err)
+		}
+		evidenceFrozen = true
+		return nil
+	}
+	if r.evidence != nil && r.evidenceProfile != "" {
+		cutoff := request.EvidenceCutoffAt
+		cutoff = researchEvidenceCutoff(now, cutoff)
+		batch, batchErr := r.evidence.CreateBatch(ctx, marketdata.CreateBatchRequest{OwnerType: "research1", OwnerID: run.RunID, CutoffAt: cutoff, CollectorVersion: "2.0", EvidenceProfileVersion: r.evidenceProfile})
+		if batchErr != nil {
+			return run, batchErr
+		}
+		evidenceBatch = &batch
+		run.StrategyVersion, run.EvidenceProfileVersion, run.EvidenceSetID = "research-v160-v2", r.evidenceProfile, batch.EvidenceSetID
+		defer func() {
+			if err := freezeEvidence(); err != nil {
+				resultErr = errors.Join(resultErr, err)
+			}
+		}()
 	}
 	if err := r.service.repository.CreateAnalysis(ctx, &run); err != nil {
 		return run, err
@@ -226,6 +272,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		allSources = append(allSources, failedSource("market", "市场数据汇总", r.service.now(), marketCollectErr))
 	}
 	allSources = dedupeSources(allSources)
+	assignRunSourceIDs(allSources, &sourceSequence)
+	if evidenceBatch != nil {
+		allSources, err = r.persistEvidenceSources(ctx, *evidenceBatch, allSources)
+		if err != nil {
+			return finishFailure(err)
+		}
+	}
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
 	marketStageAt := r.service.now()
@@ -237,11 +290,18 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 
 	sectorAsOf := r.service.now()
 	sectorSources, sectorCollectErr := r.collector.CollectSectors(ctx, sectorAsOf)
-	allSources = dedupeSources(append(allSources, sectorSources...))
 	if sectorCollectErr != nil {
-		allSources = append(allSources, failedSource("sector", "板块数据汇总", r.service.now(), sectorCollectErr))
+		sectorSources = append(sectorSources, failedSource("sector", "板块数据汇总", r.service.now(), sectorCollectErr))
 	}
-	allSources = dedupeSources(allSources)
+	sectorSources = dedupeSources(sectorSources)
+	assignRunSourceIDs(sectorSources, &sourceSequence)
+	if evidenceBatch != nil {
+		sectorSources, err = r.persistEvidenceSources(ctx, *evidenceBatch, sectorSources)
+		if err != nil {
+			return finishFailure(err)
+		}
+	}
+	allSources = dedupeSources(append(allSources, sectorSources...))
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 	sectorStageAt := r.service.now()
 	sectorResult, err := r.completeAIForRun(ctx, &run, CompletionRequest{Phase: "sector_analysis", Prompt: sectorStagePrompt(sectorStageAt, run.MarketReport, filterSources(allSources, "sector"), recentHistoryContext)})
@@ -279,8 +339,13 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		if stockCollectErr != nil {
 			stockSources = append(stockSources, failedSource("stock", fmt.Sprintf("个股数据汇总批次%d", start/10+1), r.service.now(), stockCollectErr))
 		}
-		for index := range stockSources {
-			stockSources[index].SourceID = fmt.Sprintf("S%03d", len(allSources)+index+1)
+		stockSources = dedupeSources(stockSources)
+		assignRunSourceIDs(stockSources, &sourceSequence)
+		if evidenceBatch != nil {
+			stockSources, err = r.persistEvidenceSources(ctx, *evidenceBatch, stockSources)
+			if err != nil {
+				return finishFailure(err)
+			}
 		}
 		allSources = dedupeSources(append(allSources, stockSources...))
 		run.SourceStatusJSON = sourceStatusJSON(allSources)
@@ -318,6 +383,9 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 	}
 	run.StockReport = strings.Join(stockReports, "\n\n")
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
+	if err := freezeEvidence(); err != nil {
+		return finishFailure(err)
+	}
 
 	maxRecommendations := len(shortlist)
 	finalStageAt := r.service.now()
@@ -395,6 +463,83 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (Anal
 		return run, err
 	}
 	return run, nil
+}
+
+func researchEvidenceCutoff(now, explicit time.Time) time.Time {
+	if !explicit.IsZero() {
+		return explicit
+	}
+	// Research 1 has no clock-fixed 09:55 boundary: it freezes after its staged
+	// collection.  This is only a provisional ceiling; every persistence step
+	// additionally clamps to the current collection time and FreezeBatch writes
+	// the actual freeze instant back to cutoff_at.
+	return now.Add(24 * time.Hour)
+}
+
+func (r *AnalysisRunner) persistEvidenceSources(ctx context.Context, batch marketdata.EvidenceBatch, sources []SourceDocument) ([]SourceDocument, error) {
+	items := make([]marketdata.EvidenceItem, 0, len(sources))
+	filtered := append([]SourceDocument(nil), sources...)
+	effectiveCutoff := batch.CutoffAt
+	if collectedThrough := r.service.now(); collectedThrough.Before(effectiveCutoff) {
+		effectiveCutoff = collectedThrough
+	}
+	for index := range filtered {
+		document := &filtered[index]
+		status := marketdata.StatusOK
+		if strings.TrimSpace(document.Error) != "" {
+			status = marketdata.StatusUnavailable
+		}
+		if document.AvailableAt == nil {
+			status = marketdata.StatusUnavailable
+			document.Content = ""
+			if strings.TrimSpace(document.Error) == "" {
+				document.Error = "来源未提供可验证的 availableAt，未纳入本次研究证据"
+			} else {
+				document.Error = strings.TrimSpace(document.Error) + "；来源未提供可验证的 availableAt"
+			}
+		} else if document.AvailableAt.After(effectiveCutoff) {
+			status = marketdata.StatusAfterCutoff
+			document.Content = ""
+			document.Error = "来源在证据截止后才可用，未纳入本次研究证据"
+		}
+		payload, marshalErr := marketdata.MarshalPayload(map[string]any{"content": document.Content, "error": document.Error})
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		items = append(items, marketdata.EvidenceItem{
+			EvidenceItemID: newID(), SourceID: evidenceDocumentSourceID(*document), SourceName: document.SourceName,
+			SourceRef: document.SourceRef, Category: document.Category, AvailableAt: document.AvailableAt,
+			CollectedAt: document.CollectedAt, Status: status, Payload: payload, Summary: evidenceDocumentSummary(*document),
+		})
+	}
+	if err := r.evidence.AppendItems(ctx, batch.EvidenceSetID, items); err != nil {
+		return nil, fmt.Errorf("保存研究证据: %w", err)
+	}
+	return filtered, nil
+}
+
+func evidenceDocumentSourceID(document SourceDocument) string {
+	if value := strings.TrimSpace(document.SourceID); value != "" {
+		return value
+	}
+	availableAt := ""
+	if document.AvailableAt != nil {
+		availableAt = document.AvailableAt.UTC().Format(time.RFC3339Nano)
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{
+		document.SourceName, document.SourceRef, document.Category, availableAt, document.Content, document.Error,
+	}, "\x1f")))
+	return "source-" + hex.EncodeToString(sum[:16])
+}
+
+func evidenceDocumentSummary(document SourceDocument) string {
+	if value := strings.TrimSpace(document.Error); value != "" {
+		return truncateUTF8(document.SourceName+": "+value, 512)
+	}
+	if value := strings.TrimSpace(document.Content); value != "" {
+		return truncateUTF8(value, 512)
+	}
+	return truncateUTF8(document.SourceName+" / "+document.Category, 512)
 }
 
 type sectorEnvelope struct {
@@ -684,6 +829,32 @@ func dedupeSources(source []SourceDocument) []SourceDocument {
 	return result
 }
 
+func assignRunSourceIDs(sources []SourceDocument, sequence *int) {
+	if sequence == nil {
+		return
+	}
+	for index := range sources {
+		if sources[index].SourceID != "" && !isGeneratedSourceID(sources[index].SourceID) {
+			continue
+		}
+		*sequence = *sequence + 1
+		sources[index].SourceID = fmt.Sprintf("S%03d", *sequence)
+	}
+}
+
+func isGeneratedSourceID(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 || value[0] != 'S' {
+		return false
+	}
+	for _, character := range value[1:] {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func sourceCorpus(sources []SourceDocument, maxBytes int) string {
 	if len(sources) == 0 || maxBytes <= 0 {
 		return ""
@@ -766,7 +937,7 @@ func sourceStatusJSON(sources []SourceDocument) string {
 	return string(data)
 }
 func failedSource(category, name string, at time.Time, err error) SourceDocument {
-	return SourceDocument{SourceName: name, Category: category, CollectedAt: at, Error: err.Error()}
+	return SourceDocument{SourceName: name, Category: category, CollectedAt: at, AvailableAt: &at, Error: err.Error()}
 }
 func filterSources(sources []SourceDocument, category string) []SourceDocument {
 	result := []SourceDocument{}

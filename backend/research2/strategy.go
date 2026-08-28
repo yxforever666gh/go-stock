@@ -21,13 +21,20 @@ import (
 var strategyPrompt string
 
 type Evidence struct {
-	Prompt           string
-	SourceStatusJSON string
-	Candidates       []research.StockCandidate
+	Prompt                 string
+	SourceStatusJSON       string
+	Candidates             []research.StockCandidate
+	Documents              []research.SourceDocument
+	EvidenceProfileVersion string
+	EvidenceSetID          string
 }
 
 type EvidenceCollector interface {
 	Collect(context.Context, time.Time) (Evidence, error)
+}
+
+type RunEvidenceCollector interface {
+	CollectForRun(context.Context, string, time.Time) (Evidence, error)
 }
 
 type Calendar interface {
@@ -165,11 +172,25 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	if now.Hour() > 15 || (now.Hour() == 15 && now.Minute() > 0) {
 		return finishFailure("missed_window", "报告生成窗口已经结束，今日不执行交易。", nil)
 	}
-	evidence, err := r.collector.Collect(ctx, cutoff)
+	var evidence Evidence
+	if collector, ok := r.collector.(RunEvidenceCollector); ok {
+		evidence, err = collector.CollectForRun(ctx, run.RunID, cutoff)
+	} else {
+		evidence, err = r.collector.Collect(ctx, cutoff)
+	}
+	run.SourceStatusJSON = defaultJSON(evidence.SourceStatusJSON, "[]")
+	if evidence.EvidenceSetID != "" {
+		run.StrategyVersion, run.EvidenceProfileVersion, run.EvidenceSetID = "research2-overnight-v2", evidence.EvidenceProfileVersion, evidence.EvidenceSetID
+		if saveErr := r.repository.SaveRun(ctx, &run); saveErr != nil {
+			if err == nil {
+				return run, saveErr
+			}
+			err = errors.Join(err, fmt.Errorf("保存证据关联失败: %w", saveErr))
+		}
+	}
 	if err != nil {
 		return finishFailure("failed", "策略证据采集失败: "+err.Error(), err)
 	}
-	run.SourceStatusJSON = defaultJSON(evidence.SourceStatusJSON, "[]")
 	if r.now().Before(cutoff) {
 		if err = r.waitUntil(ctx, cutoff); err != nil {
 			return finishFailure("failed", "等待09:55证据截止失败: "+err.Error(), err)

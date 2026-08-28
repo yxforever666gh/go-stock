@@ -1,3 +1,5 @@
+import {responseErrorMessage} from './http-error.js'
+
 export function withQuery(path: string, values: Record<string, unknown> = {}): string {
   const query = new URLSearchParams()
   Object.entries(values).forEach(([key, value]) => {
@@ -35,10 +37,7 @@ export async function requestJSON<T = unknown>(path: string, { method = 'GET', b
     }
   }
   if (!response.ok) {
-    const message = typeof payload === 'object' && payload !== null && 'error' in payload
-      ? String(payload.error)
-      : `请求失败: ${response.status}`
-    throw new Error(message)
+    throw new Error(responseErrorMessage(payload, response.status))
   }
   return payload as T
 }

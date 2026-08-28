@@ -47,6 +47,7 @@ const formValue = ref({
     reviewStartTime: '09:50',
     reviewIntervalMinutes: 15,
   },
+  experimentalEvidenceEnabled: false,
   research2AutoEnabled: true,
   research2Email: {
     enabled: false,
@@ -156,6 +157,7 @@ function applyConfigToForm(config) {
     reviewStartTime: config?.aiReviewStartTime || '09:50',
     reviewIntervalMinutes: config?.aiReviewIntervalMinutes || 15,
   }
+  formValue.value.experimentalEvidenceEnabled = config?.experimentalEvidenceEnabled === true
   formValue.value.research2AutoEnabled = config?.research2AutoEnabled !== false
   formValue.value.research2Email = {
     enabled: config?.research2EmailEnabled === true,
@@ -283,6 +285,7 @@ function buildConfigPayload() {
     aiAnalysisTimes: formValue.value.aiAnalysis.times,
     aiReviewStartTime: formValue.value.aiAnalysis.reviewStartTime,
     aiReviewIntervalMinutes: formValue.value.aiAnalysis.reviewIntervalMinutes,
+    experimentalEvidenceEnabled: formValue.value.experimentalEvidenceEnabled === true,
     research2AutoEnabled: formValue.value.research2AutoEnabled,
     research2EmailEnabled: formValue.value.research2Email.enabled,
     research2EmailTo: formValue.value.research2Email.to,
@@ -486,6 +489,10 @@ onBeforeUnmount(() => message.destroyAll())
             <n-form-item-gi v-if="settingsScope === 'research2'" :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
               <n-switch v-model:value="formValue.research2AutoEnabled" @update:value="handleImmediateFieldChange"/>
               <n-text depth="3" style="margin-left: 12px">固定 09:50 开始采集、09:55 冻结数据，10:00 模拟买入，下一交易日 10:00 模拟卖出。</n-text>
+            </n-form-item-gi>
+            <n-form-item-gi :span="24" label="实验市场证据：" path="experimentalEvidenceEnabled">
+              <n-switch v-model:value="formValue.experimentalEvidenceEnabled" @update:value="handleImmediateFieldChange"/>
+              <n-text depth="3" style="margin-left: 12px">默认关闭；开启后两套研究会接入实验市场证据并可能改变研究结果，市场行情页面不受影响。</n-text>
             </n-form-item-gi>
             <template v-if="settingsScope === 'research1'">
               <n-form-item-gi :span="6" label="自动分析：" path="aiAnalysis.autoEnabled">

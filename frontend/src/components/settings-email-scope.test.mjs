@@ -17,3 +17,12 @@ test('Research Center 2 report page exposes persisted delivery state', () => {
   assert.match(reportSource, /emailAttemptCount/)
   assert.match(reportSource, /emailLastError/)
 })
+
+test('both research settings expose a default-off experimental evidence switch and persist it', () => {
+  assert.match(settingsSource, /experimentalEvidenceEnabled:\s*false/)
+  assert.match(settingsSource, /config\?\.experimentalEvidenceEnabled === true/)
+  assert.match(settingsSource, /experimentalEvidenceEnabled:\s*formValue\.value\.experimentalEvidenceEnabled === true/)
+  assert.match(settingsSource, /path="experimentalEvidenceEnabled"/)
+  assert.match(settingsSource, /默认关闭；开启后两套研究会接入实验市场证据并可能改变研究结果，市场行情页面不受影响/)
+  assert.doesNotMatch(settingsSource, /v-if="settingsScope === '[^']+'"[^\n]*path="experimentalEvidenceEnabled"/)
+})

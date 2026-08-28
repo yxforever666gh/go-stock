@@ -1,24 +1,15 @@
 <script setup>
-import { defineAsyncComponent, onBeforeMount, onBeforeUnmount, ref } from 'vue'
+import {defineAsyncComponent, onBeforeMount, onBeforeUnmount, ref, watch} from 'vue'
 import { GetConfig } from '../services/settings-api'
 import { GetIndustryRank, GetTelegraphList, GlobalStockIndexes, ReFleshTelegraphList } from '../services/market-api'
 import { EventsOff, EventsOn } from '../services/browser-runtime.mjs'
-import { useRoute } from 'vue-router'
-
-const MarketNewsTab = defineAsyncComponent(() => import('../market-tabs/MarketNewsTab.vue'))
-const GlobalIndexesTab = defineAsyncComponent(() => import('../market-tabs/GlobalIndexesTab.vue'))
-const MajorIndexesTab = defineAsyncComponent(() => import('../market-tabs/MajorIndexesTab.vue'))
-const IndustryRankTab = defineAsyncComponent(() => import('../market-tabs/IndustryRankTab.vue'))
-const MoneyFlowTab = defineAsyncComponent(() => import('../market-tabs/MoneyFlowTab.vue'))
-const LongTigerTab = defineAsyncComponent(() => import('../market-tabs/LongTigerTab.vue'))
-const StockResearchTab = defineAsyncComponent(() => import('../market-tabs/StockResearchTab.vue'))
-const StockNoticeTab = defineAsyncComponent(() => import('../market-tabs/StockNoticeTab.vue'))
-const IndustryResearchTab = defineAsyncComponent(() => import('../market-tabs/IndustryResearchTab.vue'))
-const HotTopicsTab = defineAsyncComponent(() => import('../market-tabs/HotTopicsTab.vue'))
-const SelectStockTab = defineAsyncComponent(() => import('../market-tabs/SelectStockTab.vue'))
-const FavoriteSitesTab = defineAsyncComponent(() => import('../market-tabs/FavoriteSitesTab.vue'))
+import {useRoute, useRouter} from 'vue-router'
+import {DEFAULT_MARKET_TAB, findMarketTab, MARKET_TABS} from '../market-tabs/market-tab-registry.js'
+import {createPollingController} from '../composables/usePolling.js'
+import {isChinaTradingSession} from '../market-tabs/market-session.js'
 
 const route = useRoute()
+const router = useRouter()
 const panelHeight = ref(window.innerHeight - 240)
 const darkTheme = ref(false)
 const telegraphList = ref([])
@@ -27,32 +18,18 @@ const foreignNewsList = ref([])
 const globalStockIndexes = ref({})
 const industryRanks = ref([])
 const sort = ref('0')
-const nowTab = ref('市场快讯')
+const initialTab = findMarketTab(String(route.query.name || ''))?.name || DEFAULT_MARKET_TAB
+const nowTab = ref(initialTab)
 const stockCode = ref('')
-const visitedTabs = ref([])
-let indexTimer = null
-let marketTimer = null
+const marketTabs = MARKET_TABS.map(tab => ({...tab, component: defineAsyncComponent(tab.load)}))
 
-const marketTabComponents = {
-  市场快讯: MarketNewsTab,
-  全球股指: GlobalIndexesTab,
-  重大指数: MajorIndexesTab,
-  行业排名: IndustryRankTab,
-  个股资金流向: MoneyFlowTab,
-  龙虎榜: LongTigerTab,
-  个股研报: StockResearchTab,
-  公司公告: StockNoticeTab,
-  行业研究: IndustryResearchTab,
-  当前热门: HotTopicsTab,
-  指标选股: SelectStockTab,
-  名站优选: FavoriteSitesTab,
+function updateTab(name, syncRoute = true) {
+  if (!findMarketTab(name)) return
+  nowTab.value = name
+  if (syncRoute && route.query.name !== name) {
+    void router.replace({name: 'market', query: {...route.query, name}})
+  }
 }
-
-function markVisited(name) {
-  if (name && !visitedTabs.value.includes(name)) visitedTabs.value = [...visitedTabs.value, name]
-}
-function updateTab(name) { nowTab.value = name; markVisited(name) }
-function shouldRenderTab(name) { return visitedTabs.value.includes(name) }
 
 async function refreshNews(source) {
   const rows = await ReFleshTelegraphList(source)
@@ -68,36 +45,73 @@ async function refreshIndustry() {
 }
 function changeIndustryRankSort() { sort.value = sort.value === '0' ? '1' : '0'; refreshIndustry() }
 
+function hasOpenGlobalMarket() {
+  const states = Object.values(globalStockIndexes.value || {}).flatMap(value => Array.isArray(value) ? value : [])
+    .map(item => String(item?.state || '').toLowerCase()).filter(Boolean)
+  return states.length === 0 || states.includes('open')
+}
+
+const newsPolling = createPollingController(
+  () => Promise.all([refreshNews('财联社电报'), refreshNews('新浪财经'), refreshNews('外媒')]),
+  10000,
+  {shouldRun: () => nowTab.value === '市场快讯' && isChinaTradingSession()},
+)
+const indexPolling = createPollingController(refreshIndexes, 3000, {
+  shouldRun: () => nowTab.value === '全球股指' && hasOpenGlobalMarket(),
+})
+const industryPolling = createPollingController(refreshIndustry, 10000, {
+  shouldRun: () => nowTab.value === '行业排名' && isChinaTradingSession(),
+})
+
+async function activateLegacyTab(name) {
+  newsPolling.stop()
+  indexPolling.stop()
+  industryPolling.stop()
+  if (name === '市场快讯') {
+    const [cls, sina, foreign] = await Promise.all([GetTelegraphList('财联社电报'), GetTelegraphList('新浪财经'), GetTelegraphList('外媒')])
+    telegraphList.value = cls || []
+    sinaNewsList.value = sina || []
+    foreignNewsList.value = foreign || []
+    newsPolling.start({immediate: false})
+  } else if (name === '全球股指') {
+    await refreshIndexes()
+    indexPolling.start({immediate: false})
+  } else if (name === '行业排名') {
+    await refreshIndustry()
+    industryPolling.start({immediate: false})
+  }
+}
+
+watch(nowTab, name => { void activateLegacyTab(name) })
+watch(() => route.query.name, name => updateTab(findMarketTab(String(name || ''))?.name || DEFAULT_MARKET_TAB, false))
+watch(() => route.query.stockCode, code => { stockCode.value = String(code || '') })
+
 onBeforeMount(async () => {
-  const initial = String(route.query.name || '市场快讯')
-  nowTab.value = initial; stockCode.value = String(route.query.stockCode || ''); markVisited(initial)
+  stockCode.value = String(route.query.stockCode || '')
   window.onresize = () => { panelHeight.value = window.innerHeight - 240 }
   const cfg = await GetConfig(); darkTheme.value = cfg?.darkTheme === true
-  const [cls, sina, foreign] = await Promise.all([GetTelegraphList('财联社电报'), GetTelegraphList('新浪财经'), GetTelegraphList('外媒')])
-  telegraphList.value = cls || []; sinaNewsList.value = sina || []; foreignNewsList.value = foreign || []
-  await Promise.all([refreshIndexes(), refreshIndustry()])
-  indexTimer = setInterval(refreshIndexes, 3000)
-  marketTimer = setInterval(() => { refreshIndustry(); refreshNews('财联社电报'); refreshNews('新浪财经'); refreshNews('外媒') }, 10000)
   for (const event of ['changeMarketTab','newTelegraph','newSinaNews','tradingViewNews']) EventsOff(event)
   EventsOn('changeMarketTab', (msg) => updateTab(msg.name))
   EventsOn('newTelegraph', (rows) => { if (rows) telegraphList.value = [...rows, ...telegraphList.value].slice(0, telegraphList.value.length || rows.length) })
   EventsOn('newSinaNews', (rows) => { if (rows) sinaNewsList.value = [...rows, ...sinaNewsList.value].slice(0, sinaNewsList.value.length || rows.length) })
   EventsOn('tradingViewNews', (rows) => { if (rows) foreignNewsList.value = [...rows, ...foreignNewsList.value].slice(0, foreignNewsList.value.length || rows.length) })
+  await activateLegacyTab(nowTab.value)
 })
 
 onBeforeUnmount(() => {
   for (const event of ['changeMarketTab','newTelegraph','newSinaNews','tradingViewNews']) EventsOff(event)
-  clearInterval(indexTimer); clearInterval(marketTimer); window.onresize = null
+  newsPolling.stop(); indexPolling.stop(); industryPolling.stop(); window.onresize = null
 })
 </script>
 
 <template>
   <n-card>
     <n-tabs type="line" animated @update-value="updateTab" :value="nowTab">
-      <n-tab-pane v-for="(component, name) in marketTabComponents" :key="name" :name="name" :tab="name">
+      <n-tab-pane v-for="tab in marketTabs" :key="tab.key" :name="tab.name" :tab="tab.name">
         <component
-          :is="component"
-          v-if="shouldRenderTab(name)"
+          :is="tab.component"
+          v-if="nowTab === tab.name"
+          v-bind="tab.activeAware ? {active: nowTab === tab.name} : {}"
           :dark-theme="darkTheme"
           :telegraph-list="telegraphList"
           :sina-news-list="sinaNewsList"

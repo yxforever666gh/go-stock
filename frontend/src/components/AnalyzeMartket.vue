@@ -4,7 +4,13 @@ import {AnalyzeSentimentWithFreqWeight,GlobalStockIndexes} from "../services/mar
 import * as echarts from "echarts";
 import {onMounted,onUnmounted, ref} from "vue";
 import _ from "lodash";
-const { name,darkTheme,kDays ,chartHeight} = defineProps({
+import {createPollingController} from '../composables/usePolling.js'
+import {isChinaTradingSession} from '../market-tabs/market-session.js'
+const { name,darkTheme,kDays ,chartHeight,active} = defineProps({
+  active: {
+    type: Boolean,
+    default: true
+  },
   name: {
     type: String,
     default: ''
@@ -33,23 +39,22 @@ const globalStockIndexes = ref(null)
 const chartRef = ref(null);
 const gaugeChartRef = ref(null);
 const triggerAreas=ref(["main","extra","arrow"])
-let handleChartInterval=null
-let handleIndexInterval=null
+const chartPolling = createPollingController(handleChart, 1000 * 60, {
+  shouldRun: () => active && isChinaTradingSession(),
+})
+const indexPolling = createPollingController(getIndex, 1000 * 2, {
+  shouldRun: () => active && isChinaTradingSession(),
+})
 onMounted(() => {
   handleChart()
   getIndex()
-  handleChartInterval=setInterval(function () {
-    handleChart()
-  }, 1000 * 60)
-
-  handleIndexInterval=setInterval(function () {
-    getIndex()
-  }, 1000 * 2)
+  chartPolling.start({immediate: false})
+  indexPolling.start({immediate: false})
 })
 
 onUnmounted(()=>{
-  clearInterval(handleChartInterval)
-  clearInterval(handleIndexInterval)
+  chartPolling.stop()
+  indexPolling.stop()
 })
 
 function getIndex() {

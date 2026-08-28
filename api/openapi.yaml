@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 1.8.7
+  version: 2.0.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -157,6 +157,63 @@ paths:
     get: {operationId: getInvestmentCalendar, responses: {"200": {description: Investment calendar}}}
   /api/v1/market/calendars/cls:
     get: {operationId: getCLSCalendar, responses: {"200": {description: CLS calendar}}}
+  /api/v1/market/breadth:
+    get:
+      operationId: getMarketBreadth
+      responses:
+        "200": {description: Market breadth evidence, content: {application/json: {schema: {$ref: "#/components/schemas/MarketBreadthEnvelope"}}}}
+  /api/v1/market/fund-flows:
+    get:
+      operationId: listMarketFundFlows
+      parameters:
+        - {name: scope, in: query, required: true, schema: {type: string, enum: [sector, concept]}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+        - {name: sort, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: Sector or concept fund-flow evidence, content: {application/json: {schema: {$ref: "#/components/schemas/FundFlowEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+  /api/v1/market/futures/positions:
+    get:
+      operationId: listFuturesPositions
+      parameters:
+        - {name: symbol, in: query, required: true, schema: {type: string, enum: [IF, IH, IC, IM]}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+      responses:
+        "200": {description: CFFEX aggregate long/short position trend, content: {application/json: {schema: {$ref: "#/components/schemas/FuturesPositionsEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+  /api/v1/market/margin:
+    get:
+      operationId: getMarginTrading
+      parameters:
+        - {name: scope, in: query, schema: {type: string, enum: [market, security]}}
+        - {name: code, in: query, schema: {type: string}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+      responses:
+        "200": {description: SSE and SZSE margin-financing evidence, content: {application/json: {schema: {$ref: "#/components/schemas/MarginEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+  /api/v1/instruments/{code}/auction:
+    get:
+      operationId: getInstrumentAuction
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+      responses:
+        "200": {description: Call-auction snapshots, content: {application/json: {schema: {$ref: "#/components/schemas/AuctionEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+  /api/v1/instruments/{code}/trades:
+    get:
+      operationId: listInstrumentTrades
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
+        - {name: date, in: query, schema: {type: string, format: date}}
+        - {name: cursor, in: query, schema: {type: string}}
+        - {name: limit, in: query, schema: {type: integer}}
+      responses:
+        "200": {description: Time-and-sales evidence, content: {application/json: {schema: {$ref: "#/components/schemas/TradesEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
   /api/v1/research/analysis-runs:
     get:
       operationId: listAnalysisRuns
@@ -260,6 +317,9 @@ components:
     BadRequest:
       description: Invalid JSON request or parameters
       content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+    MarketDataBadRequest:
+      description: Invalid market-data query parameters
+      content: {application/json: {schema: {$ref: "#/components/schemas/DataEnvelope"}}}
     Forbidden:
       description: Request is not from the bound loopback origin
       content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
@@ -267,6 +327,225 @@ components:
     JsonObject:
       type: object
       description: Provider- or configuration-defined JSON object whose stable fields are not owned by this transport layer.
+    DataEnvelope:
+      type: object
+      required: [data, source, asOf, fetchedAt, status, errors]
+      properties:
+        data:
+          oneOf:
+            - {$ref: "#/components/schemas/JsonObject"}
+            - {type: array, items: {$ref: "#/components/schemas/JsonObject"}}
+        source: {type: string}
+        asOf: {type: string, format: date-time}
+        fetchedAt: {type: string, format: date-time}
+        status: {type: string, enum: [ok, partial, stale, unavailable, after_cutoff]}
+        errors:
+          type: array
+          items: {$ref: "#/components/schemas/DataSourceError"}
+        sources:
+          type: array
+          items: {$ref: "#/components/schemas/DataSourceState"}
+        warnings:
+          type: array
+          items: {type: string}
+        evidenceProfile: {type: string}
+        evidenceSetId: {type: string}
+    DataSourceError:
+      type: object
+      required: [provider, message]
+      properties:
+        provider: {type: string}
+        code: {type: string}
+        message: {type: string}
+    DataSourceState:
+      type: object
+      required: [provider, status]
+      properties:
+        provider: {type: string}
+        status: {type: string, enum: [ok, partial, stale, unavailable, after_cutoff]}
+        asOf: {type: string, format: date-time}
+        availableAt: {type: string, format: date-time}
+        sourceRef: {type: string}
+        message: {type: string}
+    MarketBreadthData:
+      type: object
+      required: [total, advances, declines, flat, limitUps, limitDowns, medianChangePct]
+      properties:
+        total: {type: integer}
+        advances: {type: integer}
+        declines: {type: integer}
+        flat: {type: integer}
+        limitUps: {type: integer}
+        limitDowns: {type: integer}
+        newHighs: {type: integer, nullable: true}
+        newLows: {type: integer, nullable: true}
+        medianChangePct: {type: number}
+    FundFlowRow:
+      type: object
+      required: [code, name, netAmount, inAmount, outAmount, changePct]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        netAmount: {type: number}
+        inAmount: {type: number}
+        outAmount: {type: number}
+        changePct: {type: number}
+    FuturesPositionRow:
+      type: object
+      required: [tradeDate, settlePrice, longPosition, longChange, shortPosition, shortChange, netPosition, indexClose, indexChange, basis]
+      properties:
+        tradeDate: {type: string, format: date}
+        settlePrice: {type: number}
+        longPosition: {type: integer, format: int64}
+        longChange: {type: integer, format: int64}
+        shortPosition: {type: integer, format: int64}
+        shortChange: {type: integer, format: int64}
+        netPosition: {type: integer, format: int64}
+        indexClose: {type: number}
+        indexChange: {type: number}
+        basis: {type: number}
+    FuturesPositionsData:
+      type: object
+      required: [variety, varietyName, contractCode, indexCode, rows]
+      properties:
+        variety: {type: string, enum: [IF, IH, IC, IM]}
+        varietyName: {type: string}
+        contractCode: {type: string}
+        indexCode: {type: string}
+        rows: {type: array, items: {$ref: "#/components/schemas/FuturesPositionRow"}}
+    MarginRow:
+      type: object
+      required: [date, financingBalance, securitiesBalance, marginBalance, financingBuy, securitiesSell]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        date: {type: string, format: date}
+        financingBalance: {type: number}
+        securitiesBalance: {type: number}
+        marginBalance: {type: number}
+        financingBuy: {type: number}
+        securitiesSell: {type: number, description: Securities lending sell volume in shares or fund units.}
+    MarginData:
+      type: object
+      required: [scope, rows]
+      properties:
+        scope: {type: string, enum: [market, security]}
+        rows: {type: array, items: {$ref: "#/components/schemas/MarginRow"}}
+    AuctionSnapshot:
+      type: object
+      required: [time, price, matchedVolume, matchedAmount]
+      properties:
+        time: {type: string}
+        price: {type: number}
+        matchedVolume: {type: number}
+        matchedAmount: {type: number}
+        unmatchedVolume: {type: number, nullable: true}
+        unmatchedSide: {type: string}
+    AuctionData:
+      type: object
+      required: [code, assetType, date, snapshots]
+      properties:
+        code: {type: string}
+        assetType: {type: string, enum: [stock, index, etf]}
+        date: {type: string, format: date}
+        snapshots: {type: array, items: {$ref: "#/components/schemas/AuctionSnapshot"}}
+        finalSnapshot: {$ref: "#/components/schemas/AuctionSnapshot"}
+        auctionStrength: {type: number, nullable: true}
+        gapPct: {type: number, nullable: true}
+    TradeTick:
+      type: object
+      required: [time, price, volume, amount]
+      properties:
+        time: {type: string}
+        price: {type: number}
+        volume: {type: number}
+        amount: {type: number}
+        side: {type: string, enum: [buy, sell, neutral]}
+    TradesData:
+      type: object
+      required: [code, assetType, date, items]
+      properties:
+        code: {type: string}
+        assetType: {type: string, enum: [stock, index, etf]}
+        date: {type: string, format: date}
+        items: {type: array, items: {$ref: "#/components/schemas/TradeTick"}}
+        nextCursor: {type: string}
+    MarketBreadthEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/MarketBreadthData"}}
+    FundFlowEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {type: array, items: {$ref: "#/components/schemas/FundFlowRow"}}}
+    FuturesPositionsEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/FuturesPositionsData"}}
+    MarginEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/MarginData"}}
+    AuctionEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/AuctionData"}}
+    TradesEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/TradesData"}}
+    InstrumentID:
+      type: object
+      required: [assetType, market, code]
+      properties:
+        assetType: {type: string, enum: [stock, index, etf]}
+        market: {type: string, enum: [SH, SZ, BJ, CFFEX]}
+        code: {type: string}
+    EvidenceBatch:
+      type: object
+      required: [evidenceSetId, ownerType, ownerId, cutoffAt, status, contentHash]
+      properties:
+        evidenceSetId: {type: string}
+        ownerType: {type: string}
+        ownerId: {type: string}
+        cutoffAt: {type: string, format: date-time}
+        collectorVersion: {type: string}
+        evidenceProfileVersion: {type: string}
+        status: {type: string, enum: [collecting, frozen, partial, failed]}
+        contentHash: {type: string}
+        frozenAt: {type: string, format: date-time, nullable: true}
+        items: {type: array, items: {$ref: "#/components/schemas/EvidenceItem"}}
+    EvidenceItem:
+      type: object
+      required: [evidenceItemId, evidenceSetId, sourceId, sourceName, category, collectedAt, status, contentHash]
+      properties:
+        evidenceItemId: {type: string}
+        evidenceSetId: {type: string}
+        sourceId: {type: string}
+        sourceName: {type: string}
+        sourceRef: {type: string}
+        category: {type: string}
+        entityType: {type: string}
+        entityId: {type: string}
+        eventAt: {type: string, format: date-time}
+        availableAt: {type: string, format: date-time}
+        collectedAt: {type: string, format: date-time}
+        status: {type: string, enum: [ok, partial, stale, unavailable, after_cutoff]}
+        summary: {type: string}
+        contentHash: {type: string}
+        errorMessage: {type: string}
     ErrorResponse:
       type: object
       required: [error]
@@ -379,6 +658,9 @@ components:
         finalReport: {type: string}
         sourceStatusJson: {type: string}
         modelAttemptLogJson: {type: string}
+        strategyVersion: {type: string}
+        evidenceProfileVersion: {type: string}
+        evidenceSetId: {type: string}
         failureReason: {type: string}
         recommendationCount: {type: integer}
     AnalysisRunSummary:
@@ -622,6 +904,9 @@ components:
         reportMarkdown: {type: string}
         sourceStatusJson: {type: string}
         modelAttemptLogJson: {type: string}
+        strategyVersion: {type: string}
+        evidenceProfileVersion: {type: string}
+        evidenceSetId: {type: string}
         failureReason: {type: string}
         recommendationCount: {type: integer}
         onTime: {type: boolean}
@@ -641,6 +926,9 @@ components:
         status: {type: string}
         providerName: {type: string}
         modelName: {type: string}
+        strategyVersion: {type: string}
+        evidenceProfileVersion: {type: string}
+        evidenceSetId: {type: string}
         recommendationCount: {type: integer}
         onTime: {type: boolean}
         failureReason: {type: string}

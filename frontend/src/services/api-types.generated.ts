@@ -17,9 +17,12 @@ export const API_PATHS = {
   getIndustryMoneyRank: "/api/v1/market/industries/money-rank",
   getIndustryRank: "/api/v1/market/industries/rank",
   getIndustryResearchReports: "/api/v1/market/industries/{code}/research-reports",
+  getInstrumentAuction: "/api/v1/instruments/{code}/auction",
   getInvestmentCalendar: "/api/v1/market/calendars/investment",
   getLiveness: "/livez",
   getLongTigerRank: "/api/v1/market/long-tiger",
+  getMarginTrading: "/api/v1/market/margin",
+  getMarketBreadth: "/api/v1/market/breadth",
   getMarketDictionary: "/api/v1/market/dictionary",
   getReadiness: "/readyz",
   getRecommendation: "/api/v1/research/recommendations/{id}",
@@ -44,11 +47,14 @@ export const API_PATHS = {
   listAnalysisRuns: "/api/v1/research/analysis-runs",
   listFollowedFunds: "/api/v1/watchlist/funds",
   listFollowedStocks: "/api/v1/watchlist/stocks",
+  listFuturesPositions: "/api/v1/market/futures/positions",
   listGroups: "/api/v1/groups",
   listHotEvents: "/api/v1/market/hot/events",
   listHotStocks: "/api/v1/market/hot/stocks",
   listHotTopics: "/api/v1/market/hot/topics",
   listIndustryResearchReports: "/api/v1/market/industries/research-reports",
+  listInstrumentTrades: "/api/v1/instruments/{code}/trades",
+  listMarketFundFlows: "/api/v1/market/fund-flows",
   listRecommendations: "/api/v1/research/recommendations",
   listResearch2AnalysisRuns: "/api/v1/research2/analysis-runs",
   listResearch2Recommendations: "/api/v1/research2/recommendations",
@@ -139,6 +145,8 @@ export type AccountPerformancePoint = {
 
 export type AnalysisRun = {
   completedAt?: string
+  evidenceProfileVersion?: string
+  evidenceSetId?: string
   failureReason?: string
   finalReport: string
   marketReport?: string
@@ -153,6 +161,7 @@ export type AnalysisRun = {
   startedAt: string
   status: string
   stockReport?: string
+  strategyVersion?: string
 }
 
 export type AnalysisRunSummary = {
@@ -169,6 +178,29 @@ export type AnalysisRunSummary = {
   status: string
 }
 
+export type AuctionData = {
+  assetType: "stock" | "index" | "etf"
+  auctionStrength?: number | null
+  code: string
+  date: string
+  finalSnapshot?: AuctionSnapshot
+  gapPct?: number | null
+  snapshots: Array<AuctionSnapshot>
+}
+
+export type AuctionEnvelope = DataEnvelope & {
+  data: AuctionData
+}
+
+export type AuctionSnapshot = {
+  matchedAmount: number
+  matchedVolume: number
+  price: number
+  time: string
+  unmatchedSide?: string
+  unmatchedVolume?: number | null
+}
+
 export type ChartProviderError = {
   message: string
   provider: string
@@ -177,6 +209,34 @@ export type ChartProviderError = {
 export type CommandResponse = {
   message?: string
   ok: boolean
+}
+
+export type DataEnvelope = {
+  asOf: string
+  data: JsonObject | Array<JsonObject>
+  errors: Array<DataSourceError>
+  evidenceProfile?: string
+  evidenceSetId?: string
+  fetchedAt: string
+  source: string
+  sources?: Array<DataSourceState>
+  status: "ok" | "partial" | "stale" | "unavailable" | "after_cutoff"
+  warnings?: Array<string>
+}
+
+export type DataSourceError = {
+  code?: string
+  message: string
+  provider: string
+}
+
+export type DataSourceState = {
+  asOf?: string
+  availableAt?: string
+  message?: string
+  provider: string
+  sourceRef?: string
+  status: "ok" | "partial" | "stale" | "unavailable" | "after_cutoff"
 }
 
 export type DecisionEvent = {
@@ -195,6 +255,37 @@ export type ErrorResponse = {
   error: string
 }
 
+export type EvidenceBatch = {
+  collectorVersion?: string
+  contentHash: string
+  cutoffAt: string
+  evidenceProfileVersion?: string
+  evidenceSetId: string
+  frozenAt?: string | null
+  items?: Array<EvidenceItem>
+  ownerId: string
+  ownerType: string
+  status: "collecting" | "frozen" | "partial" | "failed"
+}
+
+export type EvidenceItem = {
+  availableAt?: string
+  category: string
+  collectedAt: string
+  contentHash: string
+  entityId?: string
+  entityType?: string
+  errorMessage?: string
+  eventAt?: string
+  evidenceItemId: string
+  evidenceSetId: string
+  sourceId: string
+  sourceName: string
+  sourceRef?: string
+  status: "ok" | "partial" | "stale" | "unavailable" | "after_cutoff"
+  summary?: string
+}
+
 export type ExportRequest = {
   mode?: "download" | "server"
 }
@@ -211,8 +302,52 @@ export type FundCodeRequest = {
   fundCode: string
 }
 
+export type FundFlowEnvelope = DataEnvelope & {
+  data: Array<FundFlowRow>
+}
+
+export type FundFlowRow = {
+  changePct: number
+  code: string
+  inAmount: number
+  name: string
+  netAmount: number
+  outAmount: number
+}
+
+export type FuturesPositionRow = {
+  basis: number
+  indexChange: number
+  indexClose: number
+  longChange: number
+  longPosition: number
+  netPosition: number
+  settlePrice: number
+  shortChange: number
+  shortPosition: number
+  tradeDate: string
+}
+
+export type FuturesPositionsData = {
+  contractCode: string
+  indexCode: string
+  rows: Array<FuturesPositionRow>
+  variety: "IF" | "IH" | "IC" | "IM"
+  varietyName: string
+}
+
+export type FuturesPositionsEnvelope = DataEnvelope & {
+  data: FuturesPositionsData
+}
+
 export type GroupSortRequest = {
   sort: number
+}
+
+export type InstrumentID = {
+  assetType: "stock" | "index" | "etf"
+  code: string
+  market: "SH" | "SZ" | "BJ" | "CFFEX"
 }
 
 export type JsonObject = unknown
@@ -244,6 +379,42 @@ export type LifecycleObservation = {
 
 export type LivenessStatus = {
   ok: boolean
+}
+
+export type MarginData = {
+  rows: Array<MarginRow>
+  scope: "market" | "security"
+}
+
+export type MarginEnvelope = DataEnvelope & {
+  data: MarginData
+}
+
+export type MarginRow = {
+  code?: string
+  date: string
+  financingBalance: number
+  financingBuy: number
+  marginBalance: number
+  name?: string
+  securitiesBalance: number
+  securitiesSell: number
+}
+
+export type MarketBreadthData = {
+  advances: number
+  declines: number
+  flat: number
+  limitDowns: number
+  limitUps: number
+  medianChangePct: number
+  newHighs?: number | null
+  newLows?: number | null
+  total: number
+}
+
+export type MarketBreadthEnvelope = DataEnvelope & {
+  data: MarketBreadthData
 }
 
 export type Position = {
@@ -394,6 +565,8 @@ export type Research2AnalysisRun = {
   emailLastError?: string
   emailSentAt?: string | null
   evidenceCutoffAt: string
+  evidenceProfileVersion?: string
+  evidenceSetId?: string
   failureReason?: string
   generatedAt?: string
   modelAttemptLogJson: string
@@ -407,6 +580,7 @@ export type Research2AnalysisRun = {
   sourceStatusJson: string
   startedAt: string
   status: "running" | "success" | "no_recommendation" | "failed" | "skipped_non_trading_day" | "missed_window"
+  strategyVersion?: string
   tradingDate: string
 }
 
@@ -416,6 +590,8 @@ export type Research2AnalysisRunSummary = {
   emailLastError?: string
   emailSentAt?: string | null
   evidenceCutoffAt: string
+  evidenceProfileVersion?: string
+  evidenceSetId?: string
   failureReason?: string
   generatedAt?: string
   modelName?: string
@@ -425,6 +601,7 @@ export type Research2AnalysisRunSummary = {
   runId: string
   scheduledFor: string
   status: string
+  strategyVersion?: string
   tradingDate: string
 }
 
@@ -576,6 +753,26 @@ export type SystemVersionStatus = {
 
 export type TelegraphRefreshRequest = {
   source: string
+}
+
+export type TradeTick = {
+  amount: number
+  price: number
+  side?: "buy" | "sell" | "neutral"
+  time: string
+  volume: number
+}
+
+export type TradesData = {
+  assetType: "stock" | "index" | "etf"
+  code: string
+  date: string
+  items: Array<TradeTick>
+  nextCursor?: string
+}
+
+export type TradesEnvelope = DataEnvelope & {
+  data: TradesData
 }
 
 export type UpdateCheckRequest = {

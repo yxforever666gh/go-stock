@@ -16,6 +16,7 @@ import (
 
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/backend/marketdata"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
 
@@ -653,7 +654,8 @@ func runResearchSourceJobs(ctx context.Context, category string, clock func() ti
 		go func() {
 			defer wait.Done()
 			if ctx.Err() != nil {
-				documents[index] = research.SourceDocument{SourceName: jobs[index].name, Category: category, CollectedAt: researchSourceNow(clock), Error: ctx.Err().Error()}
+				available := researchSourceNow(clock)
+				documents[index] = research.SourceDocument{SourceName: jobs[index].name, Category: category, CollectedAt: available, AvailableAt: &available, Error: ctx.Err().Error()}
 				return
 			}
 			documents[index] = executeResearchSourceJob(jobs[index].name, category, clock, jobs[index].run)
@@ -666,7 +668,9 @@ func runResearchSourceJobs(ctx context.Context, category string, clock func() ti
 func executeResearchSourceJob(name, category string, clock func() time.Time, run func() any) (document research.SourceDocument) {
 	document = research.SourceDocument{SourceName: name, Category: category}
 	defer func() {
-		document.CollectedAt = researchSourceNow(clock)
+		available := researchSourceNow(clock)
+		document.CollectedAt = available
+		document.AvailableAt = &available
 		if recovered := recover(); recovered != nil {
 			document.Content = ""
 			document.Error = fmt.Sprintf("来源调用异常: %v", recovered)
@@ -817,7 +821,8 @@ func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Re
 	quoteProvider := NewResearchQuoteProviderWithStockData(stocks)
 	lifecycleCollector := NewResearchLifecycleContextCollectorWithProviders(quoteProvider, stocks, news)
 	service := research.NewService(repository, NewResearchAIClient(configID), quoteProvider, ResearchTradingCalendar{}, lifecycleCollector)
-	if setting := GetSettingConfig(); setting != nil && setting.Settings != nil {
+	setting := GetSettingConfig()
+	if setting != nil && setting.Settings != nil {
 		schedule, scheduleErr := research.NewSellReviewSchedule(setting.AIReviewStartTime, setting.AIReviewIntervalMinutes)
 		if scheduleErr != nil {
 			return nil, scheduleErr
@@ -825,8 +830,14 @@ func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Re
 		service.SetSellReviewSchedule(schedule)
 	}
 	service.SetRecommendationChartProvider(NewResearchChartProviderWithStorage(quoteProvider, minuteDB))
-	collector := NewResearchSourceCollectorWithProviders(news, stocks)
-	return &ResearchRuntime{Repository: repository, Service: service, Runner: research.NewAnalysisRunner(service, collector)}, nil
+	var collector research.SourceCollector = NewResearchSourceCollectorWithProviders(news, stocks)
+	runner := research.NewAnalysisRunner(service, collector)
+	if setting != nil && setting.Settings != nil && setting.ExperimentalEvidenceEnabled {
+		collector = NewExperimentalResearchSourceCollector(collector, NewMarketEvidenceService())
+		runner = research.NewAnalysisRunner(service, collector)
+		runner.ConfigureEvidence(marketdata.NewRepository(mainDB), marketEvidenceProfile)
+	}
+	return &ResearchRuntime{Repository: repository, Service: service, Runner: runner}, nil
 }
 
 func ResolveAIAnalysisConfig(setting *SettingConfig) (*models.AIConfig, error) {
