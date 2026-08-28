@@ -2,7 +2,7 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 1.8.6
+## 当前版本：App 1.8.7
 
 Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本保留市场行情、股票自选和基金，并建立研究中心从 AI 分析到模拟交易净收益的完整流程。
 

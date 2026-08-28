@@ -1,6 +1,7 @@
 package data
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"go-stock/backend/db"
@@ -66,9 +68,93 @@ type research2MarketRow struct {
 
 type research2MarketResponse struct {
 	Data struct {
-		Total int                  `json:"total"`
-		Diff  []research2MarketRow `json:"diff"`
+		Total int                 `json:"total"`
+		Diff  research2MarketRows `json:"diff"`
 	} `json:"data"`
+}
+
+type research2MarketRows []research2MarketRow
+
+// UnmarshalJSON accepts both response shapes currently emitted by Eastmoney:
+// np=1 returns an array, while np=2 returns an object keyed by row number.
+// Numeric quote fields may also be "-" for unavailable/suspended instruments;
+// those values become zero and are filtered out by candidate selection.
+func (rows *research2MarketRows) UnmarshalJSON(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	var payload any
+	if err := decoder.Decode(&payload); err != nil {
+		return err
+	}
+	var values []any
+	switch typed := payload.(type) {
+	case nil:
+		*rows = nil
+		return nil
+	case []any:
+		values = typed
+	case map[string]any:
+		keys := make([]string, 0, len(typed))
+		for key := range typed {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			left, leftErr := strconv.Atoi(keys[i])
+			right, rightErr := strconv.Atoi(keys[j])
+			if leftErr == nil && rightErr == nil {
+				return left < right
+			}
+			return keys[i] < keys[j]
+		})
+		values = make([]any, 0, len(keys))
+		for _, key := range keys {
+			values = append(values, typed[key])
+		}
+	default:
+		return fmt.Errorf("unexpected full-market diff type %T", payload)
+	}
+
+	result := make(research2MarketRows, 0, len(values))
+	for index, value := range values {
+		fields, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("unexpected full-market row %d type %T", index, value)
+		}
+		result = append(result, research2MarketRow{
+			Price: research2MarketNumber(fields["f2"]), ChangeRate: research2MarketNumber(fields["f3"]),
+			Volume: research2MarketNumber(fields["f5"]), Amount: research2MarketNumber(fields["f6"]),
+			Turnover: research2MarketNumber(fields["f8"]), Code: research2MarketText(fields["f12"]),
+			Market: int(research2MarketNumber(fields["f13"])), Name: research2MarketText(fields["f14"]),
+			High: research2MarketNumber(fields["f15"]), Low: research2MarketNumber(fields["f16"]),
+			Open: research2MarketNumber(fields["f17"]), PreClose: research2MarketNumber(fields["f18"]),
+			ListingDate: int64(research2MarketNumber(fields["f26"])), MainFlow: research2MarketNumber(fields["f62"]),
+			Timestamp: int64(research2MarketNumber(fields["f124"])),
+		})
+	}
+	*rows = result
+	return nil
+}
+
+func research2MarketNumber(value any) float64 {
+	switch typed := value.(type) {
+	case json.Number:
+		result, _ := typed.Float64()
+		return result
+	case float64:
+		return typed
+	case string:
+		result, _ := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return result
+	default:
+		return 0
+	}
+}
+
+func research2MarketText(value any) string {
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text)
+	}
+	return ""
 }
 
 type Research2EvidenceCollector struct {
@@ -87,7 +173,7 @@ func (c *Research2EvidenceCollector) Collect(ctx context.Context, cutoff time.Ti
 		return research2.Evidence{}, errors.New("research2 evidence collector is unavailable")
 	}
 	now := time.Now().In(shanghaiDataLocation())
-	initialCtx, initialCancel := context.WithTimeout(ctx, 8*time.Second)
+	initialCtx, initialCancel := context.WithTimeout(ctx, 20*time.Second)
 	initialRows, err := c.fetchFullMarket(initialCtx)
 	initialCancel()
 	if err != nil {
@@ -122,7 +208,7 @@ func (c *Research2EvidenceCollector) Collect(ctx context.Context, cutoff time.Ti
 			return research2.Evidence{}, err
 		}
 	}
-	freezeCtx, freezeCancel := context.WithTimeout(ctx, 8*time.Second)
+	freezeCtx, freezeCancel := context.WithTimeout(ctx, 20*time.Second)
 	rows, err := c.fetchFullMarket(freezeCtx)
 	freezeCancel()
 	if err != nil {
@@ -202,26 +288,120 @@ func research2DataWaitUntil(ctx context.Context, target time.Time) error {
 }
 
 func (c *Research2EvidenceCollector) fetchFullMarket(ctx context.Context) ([]research2MarketRow, error) {
-	const endpoint = "https://82.push2.eastmoney.com/api/qt/clist/get"
-	response, err := c.stocks.client.R().SetContext(ctx).SetQueryParams(map[string]string{
-		"pn": "1", "pz": "20000", "po": "1", "np": "2", "fid": "f3",
-		"fs":     "m:1+t:2,m:0+t:6,b:MK0021,b:MK0022,b:MK0023,b:MK0024",
-		"fields": "f2,f3,f5,f6,f8,f12,f13,f14,f15,f16,f17,f18,f26,f62,f124",
-	}).SetHeader("Referer", "https://quote.eastmoney.com/center/gridlist.html").Get(endpoint)
+	// np=2 can return the complete market in one number-keyed object. Prefer
+	// that low-latency shape, then fall back to capped np=1 pages when a large
+	// response is interrupted by an Eastmoney edge server.
+	if bulk, bulkErr := c.fetchFullMarketRequest(ctx, 1, 20000, "2", 2); bulkErr == nil && len(bulk.Data.Diff) >= bulk.Data.Total && bulk.Data.Total > 0 {
+		return []research2MarketRow(bulk.Data.Diff), nil
+	}
+	const pageSize = 100
+	first, err := c.fetchFullMarketPage(ctx, 1, pageSize)
 	if err != nil {
 		return nil, err
 	}
-	if response.StatusCode() >= 400 {
-		return nil, fmt.Errorf("HTTP %d", response.StatusCode())
-	}
-	var payload research2MarketResponse
-	if err = json.Unmarshal(response.Body(), &payload); err != nil {
-		return nil, err
-	}
-	if len(payload.Data.Diff) == 0 {
+	if len(first.Data.Diff) == 0 {
 		return nil, errors.New("empty full-market response")
 	}
-	return payload.Data.Diff, nil
+	pageCount := (first.Data.Total + pageSize - 1) / pageSize
+	if pageCount <= 1 {
+		if len(first.Data.Diff) < first.Data.Total {
+			return nil, fmt.Errorf("incomplete full-market response: got %d of %d rows", len(first.Data.Diff), first.Data.Total)
+		}
+		return []research2MarketRow(first.Data.Diff), nil
+	}
+	pages := make([][]research2MarketRow, pageCount)
+	pages[0] = []research2MarketRow(first.Data.Diff)
+	type pageResult struct {
+		page int
+		rows []research2MarketRow
+		err  error
+	}
+	jobs := make(chan int)
+	results := make(chan pageResult, pageCount-1)
+	workerCount := 6
+	if pageCount-1 < workerCount {
+		workerCount = pageCount - 1
+	}
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for page := range jobs {
+				payload, pageErr := c.fetchFullMarketPage(ctx, page, pageSize)
+				results <- pageResult{page: page, rows: []research2MarketRow(payload.Data.Diff), err: pageErr}
+			}
+		}()
+	}
+	go func() {
+		for page := 2; page <= pageCount; page++ {
+			jobs <- page
+		}
+		close(jobs)
+		workers.Wait()
+		close(results)
+	}()
+	for result := range results {
+		if result.err != nil {
+			return nil, fmt.Errorf("full-market page %d/%d: %w", result.page, pageCount, result.err)
+		}
+		pages[result.page-1] = result.rows
+	}
+	rows := make([]research2MarketRow, 0, first.Data.Total)
+	for _, page := range pages {
+		rows = append(rows, page...)
+	}
+	if len(rows) < first.Data.Total {
+		return nil, fmt.Errorf("incomplete full-market response: got %d of %d rows", len(rows), first.Data.Total)
+	}
+	return rows, nil
+}
+
+func (c *Research2EvidenceCollector) fetchFullMarketPage(ctx context.Context, page, pageSize int) (research2MarketResponse, error) {
+	return c.fetchFullMarketRequest(ctx, page, pageSize, "1", 3)
+}
+
+func (c *Research2EvidenceCollector) fetchFullMarketRequest(ctx context.Context, page, pageSize int, responseShape string, attempts int) (research2MarketResponse, error) {
+	endpoints := []string{
+		"https://82.push2.eastmoney.com/api/qt/clist/get",
+		"https://80.push2.eastmoney.com/api/qt/clist/get",
+		"https://push2delay.eastmoney.com/api/qt/clist/get",
+	}
+	var lastErr error
+	if attempts < 1 {
+		attempts = 1
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		endpoint := endpoints[(page+attempt-2)%len(endpoints)]
+		response, err := c.stocks.client.R().SetContext(ctx).SetQueryParams(map[string]string{
+			"pn": strconv.Itoa(page), "pz": strconv.Itoa(pageSize), "po": "1", "np": responseShape, "fltt": "2", "invt": "2", "fid": "f3",
+			"ut": "bd1d9ddb04089700cf9c27f6f7426281", "_": strconv.FormatInt(time.Now().UnixMilli(), 10),
+			"fs":     "m:1+t:2,m:0+t:6,b:MK0021,b:MK0022,b:MK0023,b:MK0024",
+			"fields": "f2,f3,f5,f6,f8,f12,f13,f14,f15,f16,f17,f18,f26,f62,f124",
+		}).SetHeader("Referer", "https://quote.eastmoney.com/center/gridlist.html").SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36").Get(endpoint)
+		if err != nil {
+			lastErr = err
+		} else if response.StatusCode() >= 400 {
+			lastErr = fmt.Errorf("HTTP %d", response.StatusCode())
+		} else {
+			var payload research2MarketResponse
+			if decodeErr := json.Unmarshal(response.Body(), &payload); decodeErr == nil {
+				return payload, nil
+			} else {
+				lastErr = decodeErr
+			}
+		}
+		if attempt < attempts {
+			timer := time.NewTimer(100 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return research2MarketResponse{}, ctx.Err()
+			case <-timer.C:
+			}
+		}
+	}
+	return research2MarketResponse{}, lastErr
 }
 
 func selectResearch2Candidates(rows []research2MarketRow, limit int, asOf time.Time) []research.StockCandidate {

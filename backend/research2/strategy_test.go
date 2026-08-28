@@ -104,6 +104,39 @@ func TestRunnerRetriesOnceWhenModelJSONIsInvalid(t *testing.T) {
 	}
 }
 
+func TestRunnerStoresScoreAbove50EvenWhenModelConclusionSaysStayOut(t *testing.T) {
+	repository := research2TestRepository(t)
+	ai := &sequenceAI{responses: []string{
+		`{"tradingDay":true,"conclusion":"空仓，不推荐任何股票","reportMarkdown":"# 结论\n\n空仓，不推荐。","recommendations":[{"rank":1,"code":"sh600000","name":"模型名称","marketScore":10,"sectorScore":10,"stockScore":10,"catalystScore":10,"riskDeduction":0,"finalScore":51,"referencePrice":10,"buyLower":9,"buyUpper":11}]}`,
+	}}
+	loc := shanghai()
+	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{
+		Prompt:           "测试证据",
+		SourceStatusJSON: "[]",
+		Candidates:       []research.StockCandidate{{Code: "sh600000", Name: "证据名称"}},
+	}}, testCalendar{})
+	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
+
+	run, err := runner.Run(context.Background(), scheduled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := repository.ListRecommendations(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.Status != "success" || run.RecommendationCount != 1 || len(items) != 1 {
+		t.Fatalf("run=%+v recommendations=%+v", run, items)
+	}
+	if items[0].FinalScore != 51 || items[0].StockCode != "sh600000" {
+		t.Fatalf("unexpected stored recommendation: %+v", items[0])
+	}
+	if !strings.Contains(run.ReportMarkdown, "按最终分入库") {
+		t.Fatalf("expected score discrepancy warning, report=%q", run.ReportMarkdown)
+	}
+}
+
 func TestValidateRecommendationsRejectsStocksOutsideFrozenEvidence(t *testing.T) {
 	loc := shanghai()
 	generated := time.Date(2026, 8, 27, 9, 58, 0, 0, loc)

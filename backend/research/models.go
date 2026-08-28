@@ -3,7 +3,7 @@ package research
 import "time"
 
 const (
-	AppVersion  = "1.8.5"
+	AppVersion  = "1.8.7"
 	InitialCash = 500000.0
 	// LegacyInitialCash freezes the published pre-1.7.7 account basis for
 	// historical migrations and correction commands.

@@ -256,7 +256,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 }
 
 func buildPrompt(evidence Evidence, cutoff time.Time) string {
-	return strings.Join([]string{strategyPrompt, "\n# 本次执行的强制参数", "- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"), "- 09:55冻结核心证据；报告尽量在09:55—10:00送达。", "- 正常买入时刻为当日10:00；报告晚于10:00但仍处于连续竞价时，按报告生成后的首个可成交分钟执行并标记late。", "- 卖出时刻固定为下一交易日10:00。", "- 独立账户初始资金12,000元；实际可买标的按数量等额分配现金，数量向下取整到100股并计入费用。", "- 不得编造核心行情；来源引用必须能在下方证据中找到。", "\n# 输出协议（只输出JSON，不加代码围栏）", `{"tradingDay":true,"conclusion":"...","reportMarkdown":"完整Markdown报告","recommendations":[{"rank":1,"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"buyLower":0,"buyUpper":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["来源名"]}]}`, "\n# 截止前采集的证据", evidence.Prompt}, "\n")
+	return strings.Join([]string{strategyPrompt, "\n# 本次执行的强制参数", "- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"), "- 09:55冻结核心证据；报告尽量在09:55—10:00送达。", "- 正常买入时刻为当日10:00；报告晚于10:00但仍处于连续竞价时，按报告生成后的首个可成交分钟执行并标记late。", "- 卖出时刻固定为下一交易日10:00。", "- 独立账户初始资金12,000元；实际可买标的按数量等额分配现金，数量向下取整到100股并计入费用。", "- 不得编造核心行情；来源引用必须能在下方证据中找到。", "- recommendations是入库清单：最终分>50必须列入，最终分<=50不得列入；conclusion或reportMarkdown中的空仓、不推荐等文字不能否决入库。", "\n# 输出协议（只输出JSON，不加代码围栏）", `{"tradingDay":true,"conclusion":"...","reportMarkdown":"完整Markdown报告","recommendations":[{"rank":1,"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"buyLower":0,"buyUpper":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["来源名"]}]}`, "\n# 截止前采集的证据", evidence.Prompt}, "\n")
 }
 
 func ParseModelOutput(content string) (modelOutput, error) {
@@ -307,10 +307,13 @@ func validateRecommendations(runID string, generated, tradingDay time.Time, cand
 			warnings = append(warnings, code+"不在09:55冻结候选集合中")
 			continue
 		}
-		calculated := value.MarketScore + value.SectorScore + value.StockScore + value.CatalystScore - value.RiskDeduction
-		if value.FinalScore <= 50 || math.Abs(value.FinalScore-calculated) > 1.01 {
-			warnings = append(warnings, code+"评分不满足规则")
+		if value.FinalScore <= 50 {
+			warnings = append(warnings, code+"最终分未超过50")
 			continue
+		}
+		calculated := value.MarketScore + value.SectorScore + value.StockScore + value.CatalystScore - value.RiskDeduction
+		if math.Abs(value.FinalScore-calculated) > 1.01 {
+			warnings = append(warnings, code+"分项加总与最终分不一致，按最终分入库")
 		}
 		if value.ReferencePrice <= 0 || value.BuyLower <= 0 || value.BuyUpper < value.BuyLower {
 			warnings = append(warnings, code+"价格区间无效")
