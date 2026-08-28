@@ -47,21 +47,13 @@ import {Add} from '@vicons/ionicons5'
 import {useRoute, useRouter} from 'vue-router'
 import MoneyTrend from "./moneyTrend.vue";
 import StockSparkLine from "./stockSparkLine.vue";
-import { useStockHeavyFeatures } from '../composables/useStockHeavyFeatures'
 import { useDraggableGroupTabs } from '../composables/useDraggableGroupTabs'
+import ProfessionalKLinePanel from './chart/ProfessionalKLinePanel.vue'
 
 const route = useRoute()
 const router = useRouter()
 
 const dialog = useDialog()
-
-const upColor = '#ec0000';
-const upBorderColor = '';
-const downColor = '#00da3c';
-const downBorderColor = '';
-const kLineChartRef = ref(null);
-const kLineChartRef2 = ref(null);
-
 
 const message = useMessage()
 const notify = useNotification()
@@ -96,20 +88,6 @@ const data = reactive({
   darkTheme: false,
   changePercent: 0
 })
-const feishiInterval = ref(null)
-const {
-  renderDailyKLine,
-  renderMinuteChart,
-} = useStockHeavyFeatures({
-  data,
-  downColor,
-  kLineChartRef,
-  kLineChartRef2,
-  message,
-  upColor,
-})
-
-
 const currentGroupId = ref(0)
 
 
@@ -361,8 +339,6 @@ onBeforeUnmount(() => {
   //clearInterval(ticker.value)
   message.destroyAll()
   notify.destroyAll()
-  clearInterval(feishiInterval.value)
-
   EventsOff("refresh")
   EventsOff("showSearch")
   EventsOff("stock_price")
@@ -638,15 +614,6 @@ function setStock(code, name) {
   modalShow.value = true
 }
 
-function clearFeishi() {
-  //console.log("clearFeishi")
-  clearInterval(feishiInterval.value)
-}
-
-function showFsChart(code, name) {
-  return renderMinuteChart(code, name)
-}
-
 function showFenshi(code, name, changePercent) {
   data.code = code
   data.name = name
@@ -661,17 +628,6 @@ function showFenshi(code, name, changePercent) {
   }
 
   modalShow2.value = true
-}
-
-function handleFeishi() {
-  showFsChart(data.code, data.name);
-  feishiInterval.value = setInterval(() => {
-    showFsChart(data.code, data.name);
-  }, 1000 * 10)
-}
-
-function handleKLine() {
-  return renderDailyKLine()
 }
 
 function showMoney(code, name) {
@@ -1262,15 +1218,31 @@ function searchStockReport(stockCode) {
       </n-flex>
     </template>
   </n-modal>
-  <n-modal v-model:show="modalShow2" :title="data.name+' '+ data.changePercent+'%'" style="width: 1000px"
-           :preset="'card'" @after-enter="handleFeishi" @after-leave="clearFeishi">
-    <!--    <n-image :src="data.fenshiURL" />-->
-    <div ref="kLineChartRef2" style="width: 1000px; height: 500px;"></div>
+  <n-modal v-model:show="modalShow2" :title="data.name+' '+ data.changePercent+'%'" style="width: 1100px"
+           :preset="'card'">
+    <ProfessionalKLinePanel
+        v-if="modalShow2"
+        :code="data.code"
+        :name="data.name"
+        asset-type="stock"
+        initial-period="1m"
+        initial-adjustment="none"
+        initial-view-mode="line"
+        :chart-height="520"
+        :dark-theme="data.darkTheme"
+    />
   </n-modal>
-  <n-modal v-model:show="modalShow3" :title="data.name" style="width: 1000px" :preset="'card'"
-           @after-enter="handleKLine">
-    <!--    <n-image :src="data.kURL" />-->
-    <div ref="kLineChartRef" style="width: 1000px; height: 500px;"></div>
+  <n-modal v-model:show="modalShow3" :title="data.name" style="width: 1100px" :preset="'card'">
+    <ProfessionalKLinePanel
+        v-if="modalShow3"
+        :code="data.code"
+        :name="data.name"
+        asset-type="stock"
+        initial-period="day"
+        initial-adjustment="qfq"
+        :chart-height="520"
+        :dark-theme="data.darkTheme"
+    />
   </n-modal>
 
   <n-modal v-model:show="modalShow5" :title="data.name+'资金趋势'" style="width: 1000px" :preset="'card'">

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.0.0
+  version: 2.1.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -214,6 +214,61 @@ paths:
       responses:
         "200": {description: Time-and-sales evidence, content: {application/json: {schema: {$ref: "#/components/schemas/TradesEnvelope"}}}}
         "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+  /api/v1/instruments/{code}/chart:
+    get:
+      operationId: getInstrumentChart
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
+        - {name: market, in: query, schema: {type: string, enum: [SH, SZ]}}
+        - {name: period, in: query, schema: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}}
+        - {name: adjustment, in: query, schema: {type: string, enum: [none, qfq, hfq]}}
+        - {name: from, in: query, schema: {type: string, format: date-time}}
+        - {name: to, in: query, schema: {type: string, format: date-time}}
+        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000}}
+      responses:
+        "200": {description: Unified stock, index, or exchange-traded-fund chart, content: {application/json: {schema: {$ref: "#/components/schemas/ChartEnvelope"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /api/v1/instruments/{code}/drawings:
+    get:
+      operationId: getInstrumentDrawings
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
+        - {name: market, in: query, schema: {type: string, enum: [SH, SZ]}}
+        - {name: period, in: query, required: true, schema: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}}
+        - {name: adjustment, in: query, required: true, schema: {type: string, enum: [none, qfq, hfq]}}
+      responses:
+        "200": {description: Current drawing document for the isolated chart scope, content: {application/json: {schema: {$ref: "#/components/schemas/ChartDrawingDocument"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+    put:
+      operationId: putInstrumentDrawings
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: "#/components/schemas/PutChartDrawingsRequest"}}}
+      responses:
+        "200": {description: Revised drawing document, content: {application/json: {schema: {$ref: "#/components/schemas/ChartDrawingDocument"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
+    delete:
+      operationId: deleteInstrumentDrawings
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string}}
+        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
+        - {name: market, in: query, schema: {type: string, enum: [SH, SZ]}}
+        - {name: period, in: query, required: true, schema: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}}
+        - {name: adjustment, in: query, required: true, schema: {type: string, enum: [none, qfq, hfq]}}
+        - {name: expectedRevision, in: query, required: true, schema: {type: integer, format: int64, minimum: 0}}
+      responses:
+        "200": {description: Soft-deleted drawing document, content: {application/json: {schema: {$ref: "#/components/schemas/ChartDrawingDocument"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/research/analysis-runs:
     get:
       operationId: listAnalysisRuns
@@ -320,6 +375,15 @@ components:
     MarketDataBadRequest:
       description: Invalid market-data query parameters
       content: {application/json: {schema: {$ref: "#/components/schemas/DataEnvelope"}}}
+    NotFound:
+      description: Requested resource was not found
+      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+    Conflict:
+      description: Request conflicts with the current resource revision
+      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+    InternalServerError:
+      description: Request failed because of an internal service or storage error
+      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
     Forbidden:
       description: Request is not from the bound loopback origin
       content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
@@ -513,6 +577,81 @@ components:
         assetType: {type: string, enum: [stock, index, etf]}
         market: {type: string, enum: [SH, SZ, BJ, CFFEX]}
         code: {type: string}
+    ChartBar:
+      type: object
+      required: [time, open, high, low, close, volume, amount]
+      properties:
+        time: {type: string, format: date-time}
+        open: {type: number}
+        high: {type: number}
+        low: {type: number}
+        close: {type: number}
+        volume: {type: number}
+        amount: {type: number}
+        source: {type: string}
+    ChartMissingInterval:
+      type: object
+      required: [from, to, reason]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        reason: {type: string}
+    ChartData:
+      type: object
+      required: [instrument, period, adjustment, timezone, rangeFrom, rangeTo, bars, missingIntervals]
+      properties:
+        instrument: {$ref: "#/components/schemas/InstrumentID"}
+        period: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}
+        adjustment: {type: string, enum: [none, qfq, hfq]}
+        timezone: {type: string}
+        rangeFrom: {type: string, format: date-time}
+        rangeTo: {type: string, format: date-time}
+        bars: {type: array, items: {$ref: "#/components/schemas/ChartBar"}}
+        missingIntervals: {type: array, items: {$ref: "#/components/schemas/ChartMissingInterval"}}
+    ChartEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/ChartData"}}
+    ChartDrawingPoint:
+      type: object
+      required: [time, value]
+      properties:
+        time: {type: string, format: date-time}
+        value: {type: number}
+    ChartDrawing:
+      type: object
+      required: [id, type, points]
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [measure, trend_line, ray, horizontal_line, wave, fibonacci_retracement]}
+        points: {type: array, items: {$ref: "#/components/schemas/ChartDrawingPoint"}}
+        style: {$ref: "#/components/schemas/JsonObject"}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
+        deletedAt: {type: string, format: date-time, nullable: true}
+    ChartDrawingDocument:
+      type: object
+      required: [instrument, period, adjustment, revision, drawings, updatedAt]
+      properties:
+        instrument: {$ref: "#/components/schemas/InstrumentID"}
+        period: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}
+        adjustment: {type: string, enum: [none, qfq, hfq]}
+        revision: {type: integer, format: int64, minimum: 0}
+        drawings: {type: array, items: {$ref: "#/components/schemas/ChartDrawing"}}
+        deletedAt: {type: string, format: date-time, nullable: true}
+        updatedAt: {type: string, format: date-time}
+    PutChartDrawingsRequest:
+      type: object
+      required: [assetType, market, period, adjustment, expectedRevision, drawings]
+      properties:
+        assetType: {type: string, enum: [stock, index, etf]}
+        market: {type: string, enum: [SH, SZ]}
+        period: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}
+        adjustment: {type: string, enum: [none, qfq, hfq]}
+        expectedRevision: {type: integer, format: int64, minimum: 0}
+        drawings: {type: array, maxItems: 500, items: {$ref: "#/components/schemas/ChartDrawing"}}
     EvidenceBatch:
       type: object
       required: [evidenceSetId, ownerType, ownerId, cutoffAt, status, contentHash]

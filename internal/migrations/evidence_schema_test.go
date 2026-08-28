@@ -180,7 +180,7 @@ VALUES ('stock','sh600000',1,1,10.5,100,'fixture',1)`
 	}
 }
 
-func TestSchema14Minute2UpgradePreservesAllResearchHistory(t *testing.T) {
+func TestSchema14Minute2UpgradesThroughSchema16Minute3WithoutRewritingResearchHistory(t *testing.T) {
 	mainDB := openMigrationTestDB(t)
 	minuteDB := openMigrationTestDB(t)
 	applyPublishedMigrationPrefix(t, mainDB, mainMigrations, 14, "1.8.7")
@@ -276,7 +276,10 @@ func TestSchema14Minute2UpgradePreservesAllResearchHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 15 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 16 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
+	}
+	if len(mainStatus.Records) < 2 || mainStatus.Records[len(mainStatus.Records)-2].ID != 15 || mainStatus.Records[len(mainStatus.Records)-1].ID != 16 {
+		t.Fatalf("schema 14 fixture did not advance through migrations 15 and 16: %+v", mainStatus.Records)
 	}
 }

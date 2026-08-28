@@ -1,11 +1,12 @@
 <script setup>
-import * as echarts from 'echarts'
-import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import {computed, ref, watch} from 'vue'
 import {useMessage} from 'naive-ui'
 import {GetAIRecommendationChart, RefreshAIRecommendationChart} from '../services/research-api'
-import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
-import {tradingDaySeparatorIndexes, weightedExecutionPrice} from '../utils/research-trade-chart'
+import {formatMoney, formatPercent, formatPrice} from '../utils/number-format'
+import {adaptResearchChart, researchChartOverlays} from '../charting/research-chart-adapter.js'
 import {useResearchChartPreferences} from '../composables/useResearchChartPreferences'
+import ChartDataMeta from './chart/ChartDataMeta.vue'
+import MarketChartCanvas from './chart/MarketChartCanvas.vue'
 
 const props = defineProps({
   recommendationId: {type: String, required: true},
@@ -14,7 +15,7 @@ const props = defineProps({
 
 const message = useMessage()
 const {showPriceLines} = useResearchChartPreferences()
-const chartElement = ref(null)
+const chartCanvas = ref(null)
 const chartData = ref(null)
 const initialLoading = ref(false)
 const refreshing = ref(false)
@@ -22,222 +23,33 @@ const mode = ref('line')
 const selectedSession = ref(null)
 const cacheError = ref('')
 const refreshError = ref('')
-let chart = null
-let resizeObserver = null
 let requestVersion = 0
 
-const bars = computed(() => [...(chartData.value?.bars || [])].sort((left, right) => new Date(left.at) - new Date(right.at)))
+const model = computed(() => adaptResearchChart(chartData.value || {}))
 const trades = computed(() => chartData.value?.trades?.length ? chartData.value.trades : props.fallbackTrades)
 const sessions = computed(() => chartData.value?.sessions || [])
 const sessionOptions = computed(() => sessions.value.map(item => ({label: `${item.date}${item.status === 'missing' ? '（缺失）' : ''}`, value: item.date})))
 const hasBuyTrade = computed(() => trades.value.some(item => String(item.side).toLowerCase() === 'buy'))
 const isPartial = computed(() => chartData.value?.status === 'partial')
-const isEmpty = computed(() => chartData.value?.status === 'empty' || (!initialLoading.value && bars.value.length === 0))
+const isEmpty = computed(() => chartData.value?.status === 'empty' || (!initialLoading.value && model.value.bars.length === 0))
 const currentYield = computed(() => Number(chartData.value?.currentNetYieldRate || 0))
-const barSourceLabels = computed(() => [...new Set(bars.value.map(item => minuteSourceLabel(item.source)).filter(Boolean))])
-
-function minuteSourceLabel(value) {
-  const source = String(value || '').trim().toLowerCase()
-  if (!source) return ''
-  if (source === 'tencent') return '腾讯'
-  if (source === 'sina') return '新浪'
-  if (source === 'diemeng' || source === 'diemeng_dump') return '私人来源'
-  if (source.startsWith('akshare:em')) return 'AKShare（东方财富）'
-  if (source.startsWith('akshare:sina')) return 'AKShare（新浪）'
-  if (source.startsWith('akshare')) return 'AKShare'
-  return value
-}
-
-function finite(value, fallback = 0) {
-  const number = Number(value)
-  return Number.isFinite(number) ? number : fallback
-}
-
-function dateTime(value) {
-  if (!value) return '--'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value).replace('T', ' ').slice(0, 19)
-  return new Intl.DateTimeFormat('zh-CN', {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-    second: '2-digit', hour12: false,
-  }).format(date).replaceAll('/', '-')
-}
-
-function shortTime(value) {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return String(value).slice(0, 16).replace('T', ' ')
-  const parts = new Intl.DateTimeFormat('zh-CN', {
-    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(date)
-  return parts.replaceAll('/', '-')
-}
-
-function sessionKey(value) {
-  return String(value || '').slice(0, 10)
-}
-
-function escapeHTML(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;')
-}
-
-function previousCloseFor(bar) {
-  return finite(sessions.value.find(item => item.date === sessionKey(bar.at))?.previousClose)
-}
-
-function tooltipHTML(params) {
-  const first = Array.isArray(params) ? params.find(item => item.seriesName === (mode.value === 'line' ? '分时' : '1分钟K')) : null
-  const bar = bars.value[first?.dataIndex]
-  if (!bar) return ''
-  const previousClose = previousCloseFor(bar)
-  const change = previousClose > 0 ? (finite(bar.close) - previousClose) / previousClose : 0
-  const barTime = new Date(bar.at).getTime()
-  const profitAvailable = bar.netPnl !== null && bar.netPnl !== undefined && trades.value.some(item => {
-    return String(item.side).toLowerCase() === 'buy' && new Date(item.tradedAt).getTime() <= barTime + 60000
-  })
-  return [
-    `<strong>${escapeHTML(dateTime(bar.at))}</strong>`,
-    `开盘：${formatPrice(bar.open)}　最高：${formatPrice(bar.high)}`,
-    `最低：${formatPrice(bar.low)}　收盘：${formatPrice(bar.close)}`,
-    `涨跌幅：<span style="color:${change >= 0 ? '#d03050' : '#18a058'}">${formatPercent(change)}</span>`,
-    `成交量：${escapeHTML(formatInteger(bar.volume))}　成交额：${escapeHTML(formatNumber(bar.amount, 2))}`,
-    profitAvailable ? `预估净收益：<span style="color:${finite(bar.netPnl) >= 0 ? '#d03050' : '#18a058'}">${escapeHTML(formatMoney(bar.netPnl))}（${escapeHTML(formatPercent(bar.netYieldRate))}）</span>` : '预估净收益：--',
-    `来源：${escapeHTML(bar.source || '--')}`,
-  ].join('<br>')
-}
-
-function tradeMarkPoints(categories) {
-  const categorySet = new Set(categories)
-  return trades.value.flatMap(item => {
-    if (!item.markerAt || !categorySet.has(item.markerAt)) return []
-    const isBuy = String(item.side).toLowerCase() === 'buy'
-    return [{
-      name: isBuy ? '买入' : '卖出',
-      coord: [item.markerAt, finite(item.executionPrice)],
-      value: isBuy ? 'B' : 'S',
-      symbol: 'pin',
-      symbolSize: 48,
-      itemStyle: {color: isBuy ? '#d03050' : '#18a058'},
-      label: {show: true, color: '#fff', fontWeight: 'bold', formatter: isBuy ? 'B' : 'S'},
-      tooltip: {
-        formatter: `${isBuy ? '买入' : '卖出'} ${escapeHTML(dateTime(item.tradedAt))}<br>成交价：${formatPrice(item.executionPrice)}<br>数量：${formatInteger(item.quantity)}<br>费用：${formatMoney(item.totalFees)}${item.markerSnapped ? '<br>标记已吸附至最近分钟柱' : ''}`,
-      },
-    }]
-  })
-}
-
-function buildMarkPoints(categories) {
-  if (!bars.value.length) return []
-  const highest = bars.value.reduce((result, item) => finite(item.high) > finite(result.high) ? item : result)
-  const lowest = bars.value.reduce((result, item) => finite(item.low) < finite(result.low) ? item : result)
-  return [
-    ...tradeMarkPoints(categories),
-    {name: '区间最高', coord: [highest.at, finite(highest.high)], value: formatPrice(highest.high), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'top', color: '#d03050', formatter: '高 {c}'}},
-    {name: '区间最低', coord: [lowest.at, finite(lowest.low)], value: formatPrice(lowest.low), symbol: 'circle', symbolSize: 9, label: {show: true, position: 'bottom', color: '#18a058', formatter: '低 {c}'}},
-  ]
-}
-
-function tradingDayMarkLines(categories, separatorIndexes) {
-  return [...separatorIndexes].map(index => ({
-    name: '交易日分隔',
-    xAxis: categories[index],
-    label: {show: false},
-    lineStyle: {color: '#6b7280', type: 'dashed', width: 1.2, opacity: 0.85},
-  }))
-}
-
-function renderChart() {
-  if (!chart || chart.isDisposed()) return
-  if (!bars.value.length) {
-    chart.clear()
-    return
-  }
-  const categories = bars.value.map(item => item.at)
-  const separatorIndexes = tradingDaySeparatorIndexes(categories)
-  const dayMarkLines = tradingDayMarkLines(categories, separatorIndexes)
-  const visibleStart = Math.max(0, 100 - (Math.min(300, bars.value.length) / bars.value.length) * 100)
-  const buyPrice = weightedExecutionPrice(trades.value, 'buy')
-  const sellPrice = weightedExecutionPrice(trades.value, 'sell')
-  const latestPrice = finite(chartData.value?.currentPrice, finite(bars.value.at(-1)?.close))
-  const mainData = mode.value === 'line'
-    ? bars.value.map(item => finite(item.close))
-    : bars.value.map(item => [finite(item.open), finite(item.close), finite(item.low), finite(item.high)])
-  const markLines = []
-  if (showPriceLines.value) {
-    if (latestPrice > 0) markLines.push({name: '最新价', yAxis: latestPrice, label: {formatter: `最新 ${formatPrice(latestPrice)}`}, lineStyle: {color: '#2080f0', type: 'dotted'}})
-    if (buyPrice > 0) markLines.push({name: '买入均价', yAxis: buyPrice, label: {formatter: `买入 ${formatPrice(buyPrice)}`}, lineStyle: {color: '#d03050', type: 'dashed'}})
-    if (sellPrice > 0) markLines.push({name: '卖出均价', yAxis: sellPrice, label: {formatter: `卖出 ${formatPrice(sellPrice)}`}, lineStyle: {color: '#18a058', type: 'dashed'}})
-  }
-  const mainSeries = {
-    name: mode.value === 'line' ? '分时' : '1分钟K',
-    type: mode.value === 'line' ? 'line' : 'candlestick',
-    data: mainData,
-    showSymbol: false,
-    sampling: mode.value === 'line' ? 'lttb' : undefined,
-    lineStyle: mode.value === 'line' ? {color: '#2080f0', width: 1.5} : undefined,
-    areaStyle: mode.value === 'line' ? {color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{offset: 0, color: 'rgba(32,128,240,.22)'}, {offset: 1, color: 'rgba(32,128,240,.02)'}])} : undefined,
-    itemStyle: mode.value === 'candle' ? {color: '#d03050', color0: '#18a058', borderColor: '#d03050', borderColor0: '#18a058'} : undefined,
-    markPoint: {symbolKeepAspect: true, data: buildMarkPoints(categories)},
-    markLine: {symbol: ['none', 'none'], silent: true, data: [...markLines, ...dayMarkLines]},
-  }
-  chart.setOption({
-    animation: false,
-    grid: [
-      {left: 72, right: 78, top: 26, height: 320},
-      {left: 72, right: 78, top: 382, height: 72},
-    ],
-    tooltip: {
-      trigger: 'axis',
-      confine: true,
-      axisPointer: {type: 'cross'},
-      formatter: tooltipHTML,
-      extraCssText: 'line-height:1.75;box-shadow:0 4px 18px rgba(0,0,0,.18);',
-    },
-    axisPointer: {link: [{xAxisIndex: [0, 1]}], label: {backgroundColor: '#5c677d'}},
-    xAxis: [
-      {type: 'category', data: categories, boundaryGap: true, axisLabel: {formatter: shortTime, hideOverlap: true}, axisLine: {show: true}, axisTick: {show: true}},
-      {type: 'category', gridIndex: 1, data: categories, boundaryGap: true, axisLabel: {show: false}, axisTick: {show: false}},
-    ],
-    yAxis: [
-      {type: 'value', scale: true, position: 'right', axisLabel: {formatter: value => formatNumber(value, 2)}, axisLine: {show: true}, axisTick: {show: true}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.35}}},
-      {type: 'value', scale: true, gridIndex: 1, position: 'right', splitNumber: 2, axisLabel: {formatter: formatInteger}, axisLine: {show: true}, axisTick: {show: true}, splitLine: {show: false}},
-    ],
-    dataZoom: [
-      {type: 'inside', xAxisIndex: [0, 1], start: visibleStart, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true},
-      {type: 'slider', xAxisIndex: [0, 1], start: visibleStart, end: 100, height: 22, bottom: 10, brushSelect: true},
-    ],
-    series: [
-      mainSeries,
-      {
-        name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1,
-        data: bars.value.map(item => ({value: finite(item.volume), itemStyle: {color: finite(item.close) >= finite(item.open) ? 'rgba(208,48,80,.7)' : 'rgba(24,160,88,.7)'}})),
-        markLine: {symbol: ['none', 'none'], silent: true, label: {show: false}, data: dayMarkLines},
-      },
-    ],
-  }, true)
-}
+const overlays = computed(() => researchChartOverlays(model.value, trades.value, {showPriceLines: showPriceLines.value}))
+const chartConfig = computed(() => ({
+  viewMode: mode.value,
+  mainIndicators: [],
+  subIndicator: 'VOL',
+  initialVisibleBars: 300,
+}))
 
 function resetRange() {
-  if (!chart) return
   selectedSession.value = null
-  chart.dispatchAction({type: 'dataZoom', dataZoomIndex: 0, start: 0, end: 100})
-  chart.dispatchAction({type: 'dataZoom', dataZoomIndex: 1, start: 0, end: 100})
+  chartCanvas.value?.resetZoom()
 }
 
 function locateSession(date) {
-  if (!chart || !date) return
-  const indices = bars.value.map((item, index) => sessionKey(item.at) === date ? index : -1).filter(index => index >= 0)
-  if (!indices.length) {
-    message.warning(`${date} 暂无分钟数据`)
-    return
-  }
-  chart.dispatchAction({type: 'dataZoom', dataZoomIndex: 0, startValue: indices[0], endValue: indices.at(-1)})
-  chart.dispatchAction({type: 'dataZoom', dataZoomIndex: 1, startValue: indices[0], endValue: indices.at(-1)})
+  if (!date) return
+  const found = chartCanvas.value?.zoomToTimeRange(`${date}T00:00:00`, `${date}T23:59:59`)
+  if (!found) message.warning(`${date} 暂无分钟数据`)
 }
 
 async function refreshChart(automatic = false, version = requestVersion) {
@@ -248,9 +60,9 @@ async function refreshChart(automatic = false, version = requestVersion) {
     const result = await RefreshAIRecommendationChart(props.recommendationId)
     if (version !== requestVersion) return
     chartData.value = result
-  } catch (error) {
+  } catch (reason) {
     if (version !== requestVersion) return
-    refreshError.value = error?.message || String(error)
+    refreshError.value = reason?.message || String(reason)
     if (!automatic) message.error(refreshError.value)
   } finally {
     if (version === requestVersion) refreshing.value = false
@@ -266,9 +78,9 @@ async function loadInitial() {
   initialLoading.value = true
   try {
     chartData.value = await GetAIRecommendationChart(props.recommendationId)
-  } catch (error) {
+  } catch (reason) {
     if (version !== requestVersion) return
-    cacheError.value = error?.message || String(error)
+    cacheError.value = reason?.message || String(reason)
   } finally {
     if (version === requestVersion) initialLoading.value = false
   }
@@ -276,23 +88,6 @@ async function loadInitial() {
 }
 
 watch(() => props.recommendationId, () => { void loadInitial() }, {immediate: true})
-watch([bars, mode, showPriceLines], async () => { await nextTick(); renderChart() }, {deep: true})
-
-onMounted(() => {
-  if (chartElement.value) {
-    chart = echarts.init(chartElement.value)
-    resizeObserver = new ResizeObserver(() => chart?.resize())
-    resizeObserver.observe(chartElement.value)
-    renderChart()
-  }
-})
-
-onBeforeUnmount(() => {
-  requestVersion++
-  resizeObserver?.disconnect()
-  if (chart && !chart.isDisposed()) chart.dispose()
-  chart = null
-})
 </script>
 
 <template>
@@ -330,26 +125,22 @@ onBeforeUnmount(() => {
     <n-alert v-if="refreshError || (cacheError && !chartData)" type="error" :bordered="false" class="chart-alert">
       {{ refreshError || cacheError }}。{{ chartData ? '已保留上次缓存图表。' : '' }}
     </n-alert>
-    <n-collapse v-if="chartData?.providerErrors?.length" class="provider-errors">
-      <n-collapse-item title="数据源异常详情" name="errors">
-        <n-list size="small">
-          <n-list-item v-for="item in chartData.providerErrors" :key="`${item.provider}-${item.message}`">
-            <n-text strong>{{ item.provider }}</n-text>：{{ item.message }}
-          </n-list-item>
-        </n-list>
-      </n-collapse-item>
-    </n-collapse>
 
+    <ChartDataMeta :model="model" :loading="initialLoading || refreshing" :error="refreshError || cacheError" @refresh="refreshChart(false)"/>
     <n-spin :show="initialLoading || (refreshing && !chartData)" description="正在读取分钟行情">
-      <div v-show="bars.length" ref="chartElement" class="chart-canvas"/>
-      <n-empty v-if="!bars.length && !initialLoading && !refreshing" description="暂无分钟走势" class="chart-empty"/>
+      <MarketChartCanvas
+          v-show="model.bars.length"
+          ref="chartCanvas"
+          :model="model"
+          :config="chartConfig"
+          :overlays="overlays"
+          :height="520"
+      />
+      <n-empty v-if="!model.bars.length && !initialLoading && !refreshing" description="暂无分钟走势" class="chart-empty"/>
     </n-spin>
     <n-flex justify="space-between" class="chart-footnote">
-      <n-text depth="3">
-        <template v-if="barSourceLabels.length">图表来源：{{ barSourceLabels.join('、') }}；</template>
-        十字光标可查看 OHLC、量价来源及扣除全部交易成本后的逐分钟净收益；滚轮缩放，按住拖动平移。
-      </n-text>
-      <n-text depth="3">数据截至 {{ dateTime(chartData?.refreshedAt || chartData?.quoteAt) }}</n-text>
+      <n-text depth="3">十字光标保留 OHLC、量价来源及扣除全部交易成本后的逐分钟净收益；真实成交标记不会被普通证券行情替换。</n-text>
+      <n-text depth="3">数据截至 {{ String(chartData?.refreshedAt || chartData?.quoteAt || '--').replace('T', ' ').slice(0, 19) }}</n-text>
     </n-flex>
   </section>
 </template>
@@ -372,15 +163,8 @@ onBeforeUnmount(() => {
   font-size: 18px;
 }
 
-.chart-alert,
-.provider-errors {
+.chart-alert {
   margin: 8px 0;
-}
-
-.chart-canvas {
-  width: 100%;
-  height: 520px;
-  min-height: 520px;
 }
 
 .chart-empty {
@@ -391,12 +175,5 @@ onBeforeUnmount(() => {
 .chart-footnote {
   gap: 12px;
   margin-top: 4px;
-}
-
-@media (max-width: 900px) {
-  .chart-canvas {
-    height: 480px;
-    min-height: 480px;
-  }
 }
 </style>

@@ -140,6 +140,69 @@ func TestValidateReferencesRejectsMissingTarget(t *testing.T) {
 	}
 }
 
+func TestValidateInstrumentChartErrorResponsesAcceptsActualRouteShapes(t *testing.T) {
+	if err := validateInstrumentChartErrorResponses(instrumentChartContractFixture()); err != nil {
+		t.Fatalf("valid instrument chart error contract rejected: %v", err)
+	}
+}
+
+func TestValidateInstrumentChartErrorResponsesRejectsWrongSchemaAndMissingDeleteNotFound(t *testing.T) {
+	wrongSchema := instrumentChartContractFixture()
+	wrongSchema.Paths["/api/v1/instruments/{code}/chart"].Get.Responses["400"] = jsonResponse("#/components/schemas/DataEnvelope")
+	if err := validateInstrumentChartErrorResponses(wrongSchema); err == nil || !strings.Contains(err.Error(), "getInstrumentChart response 400") {
+		t.Fatalf("wrong chart error schema was not rejected: %v", err)
+	}
+
+	missingNotFound := instrumentChartContractFixture()
+	delete(missingNotFound.Paths["/api/v1/instruments/{code}/drawings"].Delete.Responses, "404")
+	if err := validateInstrumentChartErrorResponses(missingNotFound); err == nil || !strings.Contains(err.Error(), "deleteInstrumentDrawings is missing 404") {
+		t.Fatalf("missing DELETE 404 was not rejected: %v", err)
+	}
+
+	optionalError := instrumentChartContractFixture()
+	optionalError.Components.Schemas["ErrorResponse"].Required = nil
+	if err := validateInstrumentChartErrorResponses(optionalError); err == nil || !strings.Contains(err.Error(), "error string property must be required") {
+		t.Fatalf("optional error field was not rejected: %v", err)
+	}
+}
+
+func instrumentChartContractFixture() *document {
+	errorRef := func(name string) *response { return &response{Ref: "#/components/responses/" + name} }
+	return &document{
+		Paths: map[string]pathItem{
+			"/api/v1/instruments/{code}/chart": {Get: &operation{OperationID: "getInstrumentChart", Responses: map[string]*response{
+				"400": errorRef("BadRequest"),
+			}}},
+			"/api/v1/instruments/{code}/drawings": {
+				Get: &operation{OperationID: "getInstrumentDrawings", Responses: map[string]*response{
+					"400": errorRef("BadRequest"), "500": errorRef("InternalServerError"),
+				}},
+				Put: &operation{OperationID: "putInstrumentDrawings", Responses: map[string]*response{
+					"400": errorRef("BadRequest"), "409": errorRef("Conflict"), "500": errorRef("InternalServerError"),
+				}},
+				Delete: &operation{OperationID: "deleteInstrumentDrawings", Responses: map[string]*response{
+					"400": errorRef("BadRequest"), "404": errorRef("NotFound"), "409": errorRef("Conflict"), "500": errorRef("InternalServerError"),
+				}},
+			},
+		},
+		Components: components{
+			Responses: map[string]*response{
+				"BadRequest":          jsonResponse("#/components/schemas/ErrorResponse"),
+				"NotFound":            jsonResponse("#/components/schemas/ErrorResponse"),
+				"Conflict":            jsonResponse("#/components/schemas/ErrorResponse"),
+				"InternalServerError": jsonResponse("#/components/schemas/ErrorResponse"),
+			},
+			Schemas: map[string]*schema{
+				"ErrorResponse": {Type: "object", Required: []string{"error"}, Properties: map[string]*schema{"error": {Type: "string"}}},
+			},
+		},
+	}
+}
+
+func jsonResponse(ref string) *response {
+	return &response{Content: map[string]mediaType{"application/json": {Schema: &schema{Ref: ref}}}}
+}
+
 func TestNormalizeLineEndings(t *testing.T) {
 	if got := string(normalizeLineEndings([]byte("a\r\nb\n"))); got != "a\nb\n" {
 		t.Fatalf("unexpected normalized content %q", got)

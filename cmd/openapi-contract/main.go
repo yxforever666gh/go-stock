@@ -26,7 +26,8 @@ type document struct {
 }
 
 type components struct {
-	Schemas map[string]*schema `yaml:"schemas"`
+	Responses map[string]*response `yaml:"responses"`
+	Schemas   map[string]*schema   `yaml:"schemas"`
 }
 
 type pathItem struct {
@@ -44,7 +45,18 @@ func (p pathItem) operations() map[string]*operation {
 }
 
 type operation struct {
-	OperationID string `yaml:"operationId"`
+	OperationID string               `yaml:"operationId"`
+	Responses   map[string]*response `yaml:"responses"`
+}
+
+type response struct {
+	Ref         string               `yaml:"$ref"`
+	Description string               `yaml:"description"`
+	Content     map[string]mediaType `yaml:"content"`
+}
+
+type mediaType struct {
+	Schema *schema `yaml:"schema"`
 }
 
 type schema struct {
@@ -71,7 +83,7 @@ func main() {
 	var write bool
 	flag.StringVar(&specPath, "spec", "api/openapi.yaml", "OpenAPI source file")
 	flag.StringVar(&outputPath, "output", "frontend/src/services/api-types.generated.ts", "generated TypeScript output")
-	flag.StringVar(&goFiles, "go-files", "web_api.go,web_api_system.go,web_api_settings.go,web_api_groups.go,web_api_stocks.go,web_api_funds.go,web_api_market.go,web_api_market_evidence.go,web_api_instruments.go,web_api_research.go,web_api_research2.go", "comma-separated Go HTTP route files")
+	flag.StringVar(&goFiles, "go-files", "web_api.go,web_api_system.go,web_api_settings.go,web_api_groups.go,web_api_stocks.go,web_api_funds.go,web_api_market.go,web_api_market_evidence.go,web_api_instruments.go,web_api_charts.go,web_api_research.go,web_api_research2.go", "comma-separated Go HTTP route files")
 	flag.BoolVar(&write, "write", false, "write generated output instead of checking it")
 	flag.Parse()
 
@@ -221,7 +233,94 @@ func validateDocument(spec *document) error {
 			return err
 		}
 	}
+	return validateInstrumentChartErrorResponses(spec)
+}
+
+var instrumentChartErrorResponses = map[string][]string{
+	"getInstrumentChart":       {"400"},
+	"getInstrumentDrawings":    {"400", "500"},
+	"putInstrumentDrawings":    {"400", "409", "500"},
+	"deleteInstrumentDrawings": {"400", "404", "409", "500"},
+}
+
+func validateInstrumentChartErrorResponses(spec *document) error {
+	if spec == nil {
+		return errors.New("OpenAPI document is unavailable")
+	}
+	if err := validateErrorResponseShape(spec.Components.Schemas["ErrorResponse"]); err != nil {
+		return fmt.Errorf("components.schemas.ErrorResponse: %w", err)
+	}
+	operations := make(map[string]*operation)
+	for _, item := range spec.Paths {
+		for _, op := range item.operations() {
+			if op != nil {
+				operations[op.OperationID] = op
+			}
+		}
+	}
+	for operationID, statuses := range instrumentChartErrorResponses {
+		op := operations[operationID]
+		if op == nil {
+			return fmt.Errorf("instrument chart contract is missing operation %q", operationID)
+		}
+		for _, status := range statuses {
+			item := op.Responses[status]
+			if item == nil {
+				return fmt.Errorf("operation %s is missing %s ErrorResponse", operationID, status)
+			}
+			ref, err := responseJSONSchemaRef(spec, item, map[string]bool{})
+			if err != nil {
+				return fmt.Errorf("operation %s response %s: %w", operationID, status, err)
+			}
+			if ref != "#/components/schemas/ErrorResponse" {
+				return fmt.Errorf("operation %s response %s uses %q; expected #/components/schemas/ErrorResponse", operationID, status, ref)
+			}
+		}
+	}
 	return nil
+}
+
+func validateErrorResponseShape(item *schema) error {
+	if item == nil || item.Type != "object" {
+		return errors.New("must be an object")
+	}
+	errorProperty := item.Properties["error"]
+	if errorProperty == nil || errorProperty.Type != "string" {
+		return errors.New("must contain an error string property")
+	}
+	for _, name := range item.Required {
+		if name == "error" {
+			return nil
+		}
+	}
+	return errors.New("error string property must be required")
+}
+
+func responseJSONSchemaRef(spec *document, item *response, visiting map[string]bool) (string, error) {
+	if item == nil {
+		return "", errors.New("response is empty")
+	}
+	if item.Ref != "" {
+		const prefix = "#/components/responses/"
+		if !strings.HasPrefix(item.Ref, prefix) {
+			return "", fmt.Errorf("unsupported response reference %q", item.Ref)
+		}
+		name := strings.TrimPrefix(item.Ref, prefix)
+		if name == "" || spec.Components.Responses[name] == nil {
+			return "", fmt.Errorf("response reference does not resolve: %q", item.Ref)
+		}
+		if visiting[name] {
+			return "", fmt.Errorf("cyclic response reference %q", item.Ref)
+		}
+		visiting[name] = true
+		defer delete(visiting, name)
+		return responseJSONSchemaRef(spec, spec.Components.Responses[name], visiting)
+	}
+	media, ok := item.Content["application/json"]
+	if !ok || media.Schema == nil {
+		return "", errors.New("application/json schema is missing")
+	}
+	return media.Schema.Ref, nil
 }
 
 func validateSchemaRefs(spec *document, item *schema, location string) error {

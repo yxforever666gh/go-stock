@@ -46,18 +46,23 @@ func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string
 		}
 		rows = append(rows, cached...)
 	}
-	rows = dedupeChartMinuteBars(rows)
+	// The professional chart cache is scoped explicitly to stock/1m/none.
+	// Reading it here lets ResearchTradeChart share the unified rendering data
+	// without ever accepting qfq/hfq observations for real executions or PnL.
+	if instrument, instrumentErr := ParseInstrumentID(code, "stock", ""); instrumentErr == nil && provider.minuteDB != nil && provider.minuteDB.Migrator().HasTable(&marketChartBarRow{}) {
+		common, commonErr := loadChartBarsFromCache(provider.minuteDB, ChartRequest{Instrument: instrument, Period: ChartPeriod1Minute,
+			Adjustment: ChartAdjustmentNone, From: start, To: end})
+		if commonErr != nil {
+			return research.ChartProviderSnapshot{}, commonErr
+		}
+		for _, bar := range common.Bars {
+			rows = append(rows, minuteBar{TradeTime: bar.At, Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close,
+				Volume: bar.Volume, Amount: bar.Amount, Source: bar.Source})
+		}
+	}
+	rows, rejected := dedupeProvenResearchChartBars(rows)
 	result := research.ChartProviderSnapshot{Bars: make([]research.ChartMinuteBar, 0, len(rows)), ProviderErrors: []research.ChartProviderError{}}
-	rejected := 0
 	for _, row := range rows {
-		if !minuteBarSourceProvesUnadjusted(row.Source) {
-			rejected++
-			continue
-		}
-		if row.Open <= 0 || row.High <= 0 || row.Low <= 0 || row.Close <= 0 || row.High < row.Low {
-			rejected++
-			continue
-		}
 		result.Bars = append(result.Bars, research.ChartMinuteBar{At: row.TradeTime, Open: row.Open, High: row.High,
 			Low: row.Low, Close: row.Close, Volume: row.Volume, Amount: row.Amount, Source: strings.TrimSpace(row.Source)})
 	}
@@ -72,12 +77,33 @@ func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string
 	return result, nil
 }
 
+func dedupeProvenResearchChartBars(rows []minuteBar) ([]minuteBar, int) {
+	sort.SliceStable(rows, func(i, j int) bool { return rows[i].TradeTime.Before(rows[j].TradeTime) })
+	result := make([]minuteBar, 0, len(rows))
+	seen := make(map[int64]struct{}, len(rows))
+	rejected := 0
+	for _, row := range rows {
+		if !minuteBarSourceProvesUnadjusted(row.Source) || row.Open <= 0 || row.High <= 0 || row.Low <= 0 || row.Close <= 0 || row.High < row.Low {
+			rejected++
+			continue
+		}
+		key := normalizeMinuteTime(row.TradeTime).UnixMilli()
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, row)
+	}
+	return result, rejected
+}
+
 func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string, start, end time.Time, sessionDates []string) (research.ChartProviderSnapshot, error) {
 	keys, err := chartMinuteCacheKeys(code)
 	if err != nil {
 		return research.ChartProviderSnapshot{}, err
 	}
 	canonical := keys[0]
+	instrument, instrumentErr := ParseInstrumentID(code, "stock", "")
 	errorsOut := make([]research.ChartProviderError, 0)
 
 	for _, date := range sessionDates {
@@ -126,6 +152,18 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 					errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name, Message: sanitizeChartError(upsertErr)})
 				} else {
 					accepted = len(proven)
+					if instrumentErr == nil && provider.minuteDB != nil && provider.minuteDB.Migrator().HasTable(&marketChartBarRow{}) {
+						commonBars := make([]ChartBar, 0, len(proven))
+						for _, bar := range proven {
+							commonBars = append(commonBars, ChartBar{At: bar.TradeTime, Open: bar.Open, High: bar.High, Low: bar.Low,
+								Close: bar.Close, Volume: bar.Volume, Amount: bar.Amount, Source: bar.Source})
+						}
+						cacheRequest := ChartRequest{Instrument: instrument, Period: ChartPeriod1Minute, Adjustment: ChartAdjustmentNone,
+							From: winStart, To: winEnd}
+						if commonErr := upsertChartBarsToCache(provider.minuteDB, cacheRequest, commonBars, time.Now().In(cnLocation())); commonErr != nil {
+							errorsOut = append(errorsOut, research.ChartProviderError{Provider: "chart_cache", Message: sanitizeChartError(commonErr)})
+						}
+					}
 				}
 			}
 			if fetchErr != nil {

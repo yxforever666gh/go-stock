@@ -34,6 +34,35 @@ func TestResearchChartProviderLoadCachedRejectsAdjustedBars(t *testing.T) {
 	}
 }
 
+func TestResearchChartProviderReadsOnlyUnifiedStockOneMinuteNoneScope(t *testing.T) {
+	initMinuteCacheTestDB(t, "chart-provider-unified-cache.db")
+	start := time.Date(2026, 8, 19, 9, 30, 0, 0, cnLocation())
+	instrument, err := ParseInstrumentID("sh601899", "stock", "SH")
+	if err != nil {
+		t.Fatal(err)
+	}
+	none := ChartRequest{Instrument: instrument, Period: ChartPeriod1Minute, Adjustment: ChartAdjustmentNone, From: start, To: start.Add(time.Minute)}
+	qfq := none
+	qfq.Adjustment = ChartAdjustmentQFQ
+	if err := upsertChartBarsToCache(db.MinuteDao, none, []ChartBar{{At: start, Open: 10, High: 10.2, Low: 9.9, Close: 10.1, Source: "test:unadjusted"}}, start); err != nil {
+		t.Fatal(err)
+	}
+	if err := upsertChartBarsToCache(db.MinuteDao, qfq, []ChartBar{{At: start, Open: 99, High: 100, Low: 98, Close: 99, Source: "test:qfq"}}, start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertMinuteBarsToCache("601899.SH", []minuteBar{{TradeTime: start, Open: 88, High: 89, Low: 87, Close: 88, Source: "akshare:sina:adjustment=qfq"}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	provider := NewResearchChartProvider(nil)
+	snapshot, err := provider.LoadCached(context.Background(), "sh601899", start, start.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Bars) != 1 || snapshot.Bars[0].Close != 10.1 || len(snapshot.ProviderErrors) != 1 {
+		t.Fatalf("research chart cache crossed adjustment scope: %+v", snapshot.Bars)
+	}
+}
+
 func TestChartProviderNormalizesCodesAndSanitizesErrors(t *testing.T) {
 	keys, err := chartMinuteCacheKeys("sh601899")
 	if err != nil || len(keys) == 0 || keys[0] != "601899.SH" {

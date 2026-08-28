@@ -7,6 +7,7 @@ export const API_PATHS = {
   connectEventsWebSocket: "/api/v1/events/ws",
   createGroup: "/api/v1/groups",
   deleteGroup: "/api/v1/groups/{id}",
+  deleteInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
   exportConfig: "/api/v1/exports/config",
   followFund: "/api/v1/watchlist/funds",
   followStock: "/api/v1/watchlist/stocks",
@@ -18,6 +19,8 @@ export const API_PATHS = {
   getIndustryRank: "/api/v1/market/industries/rank",
   getIndustryResearchReports: "/api/v1/market/industries/{code}/research-reports",
   getInstrumentAuction: "/api/v1/instruments/{code}/auction",
+  getInstrumentChart: "/api/v1/instruments/{code}/chart",
+  getInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
   getInvestmentCalendar: "/api/v1/market/calendars/investment",
   getLiveness: "/livez",
   getLongTigerRank: "/api/v1/market/long-tiger",
@@ -61,6 +64,7 @@ export const API_PATHS = {
   listStockNotices: "/api/v1/market/stocks/notices",
   listStockResearchReports: "/api/v1/market/stocks/research-reports",
   listTelegraphs: "/api/v1/market/telegraphs",
+  putInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
   queryStocks: "/api/v1/stocks/query",
   refreshRecommendationChart: "/api/v1/research/recommendations/{id}/chart/refresh",
   refreshTelegraphs: "/api/v1/market/telegraphs/refresh",
@@ -199,6 +203,63 @@ export type AuctionSnapshot = {
   time: string
   unmatchedSide?: string
   unmatchedVolume?: number | null
+}
+
+export type ChartBar = {
+  amount: number
+  close: number
+  high: number
+  low: number
+  open: number
+  source?: string
+  time: string
+  volume: number
+}
+
+export type ChartData = {
+  adjustment: "none" | "qfq" | "hfq"
+  bars: Array<ChartBar>
+  instrument: InstrumentID
+  missingIntervals: Array<ChartMissingInterval>
+  period: "1m" | "5m" | "15m" | "30m" | "60m" | "day" | "week" | "month" | "quarter" | "year"
+  rangeFrom: string
+  rangeTo: string
+  timezone: string
+}
+
+export type ChartDrawing = {
+  createdAt?: string
+  deletedAt?: string | null
+  id: string
+  points: Array<ChartDrawingPoint>
+  style?: JsonObject
+  type: "measure" | "trend_line" | "ray" | "horizontal_line" | "wave" | "fibonacci_retracement"
+  updatedAt?: string
+}
+
+export type ChartDrawingDocument = {
+  adjustment: "none" | "qfq" | "hfq"
+  deletedAt?: string | null
+  drawings: Array<ChartDrawing>
+  instrument: InstrumentID
+  period: "1m" | "5m" | "15m" | "30m" | "60m" | "day" | "week" | "month" | "quarter" | "year"
+  revision: number
+  updatedAt: string
+}
+
+export type ChartDrawingPoint = {
+  time: string
+  value: number
+}
+
+export type ChartEnvelope = DataEnvelope & {
+  data: ChartData
+}
+
+export type ChartMissingInterval = {
+  from: string
+  reason: string
+  to: string
 }
 
 export type ChartProviderError = {
@@ -432,6 +493,15 @@ export type Position = {
   status?: string
   stockCode?: string
   stockName?: string
+}
+
+export type PutChartDrawingsRequest = {
+  adjustment: "none" | "qfq" | "hfq"
+  assetType: "stock" | "index" | "etf"
+  drawings: Array<ChartDrawing>
+  expectedRevision: number
+  market: "SH" | "SZ"
+  period: "1m" | "5m" | "15m" | "30m" | "60m" | "day" | "week" | "month" | "quarter" | "year"
 }
 
 export type ReadinessStatus = {

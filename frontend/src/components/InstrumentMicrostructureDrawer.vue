@@ -3,15 +3,19 @@ import {computed, ref, watch} from 'vue'
 import EvidenceStatusBar from './EvidenceStatusBar.vue'
 import {markEnvelopeStale, parseDataEnvelope} from '../services/data-envelope.js'
 import {GetInstrumentAuction, GetInstrumentTrades} from '../services/market-api.js'
+import {GetInstrumentChart} from '../services/instruments-api.js'
+import {chartModelFromEnvelope} from '../charting/chart-contract.js'
 import {auctionSummaryFrom, dateValue, firstValue, formatOptionalMetric, numberValue, rowsFrom} from '../market-tabs/market-data.js'
 import {shanghaiDate} from '../market-tabs/market-session.js'
 import {hasUsableEnvelopeData} from '../composables/useMarketDataResource.js'
+import MarketChartCanvas from './chart/MarketChartCanvas.vue'
 
 const props = defineProps({
   show: {type: Boolean, default: false},
   code: {type: String, default: ''},
   name: {type: String, default: ''},
   assetType: {type: String, default: 'stock'},
+  market: {type: String, default: ''},
   date: {type: String, default: ''},
   defaultTab: {type: String, default: 'auction'},
 })
@@ -20,22 +24,33 @@ const emit = defineEmits(['update:show'])
 const visible = computed({get: () => props.show, set: value => emit('update:show', value)})
 const activeTab = ref(props.defaultTab)
 const auctionEnvelope = ref(emptyAuctionEnvelope())
+const intradayEnvelope = ref(emptyIntradayEnvelope())
 const tradesEnvelope = ref(emptyTradesEnvelope())
 const auctionLoading = ref(false)
+const intradayLoading = ref(false)
 const tradesLoading = ref(false)
 const auctionError = ref('')
+const intradayError = ref('')
 const tradesError = ref('')
 const tradeRows = ref([])
 const nextCursor = ref('')
 let auctionSucceeded = false
+let intradaySucceeded = false
 let tradesSucceeded = false
 let requestVersion = 0
 
 const requestDate = computed(() => props.date || shanghaiDate())
-const instrumentIdentity = computed(() => [props.code.trim(), props.assetType, requestDate.value].join('|'))
+const instrumentIdentity = computed(() => [props.code.trim(), props.assetType, props.market, requestDate.value].join('|'))
 const auctionRows = computed(() => rowsFrom(auctionEnvelope.value.data))
 const auctionSummary = computed(() => auctionSummaryFrom(auctionEnvelope.value.data))
 const auctionData = computed(() => auctionEnvelope.value.data && !Array.isArray(auctionEnvelope.value.data) ? auctionEnvelope.value.data : {})
+const intradayModel = computed(() => ({
+  ...chartModelFromEnvelope(intradayEnvelope.value, {assetType: props.assetType, market: props.market, code: props.code}),
+  name: props.name,
+  period: '1m',
+  adjustment: 'none',
+}))
+const intradayConfig = {viewMode: 'line', mainIndicators: [], subIndicator: 'VOL', initialVisibleBars: 300}
 
 function formatOptionalNumber(row, keys) {
   return formatOptionalMetric(row, keys)
@@ -49,17 +64,25 @@ function emptyTradesEnvelope() {
   return parseDataEnvelope({data: {items: []}, status: 'unavailable'})
 }
 
+function emptyIntradayEnvelope() {
+  return parseDataEnvelope({data: {bars: [], missingIntervals: []}, status: 'unavailable'})
+}
+
 function resetInstrumentState() {
   requestVersion += 1
   auctionEnvelope.value = emptyAuctionEnvelope()
+  intradayEnvelope.value = emptyIntradayEnvelope()
   tradesEnvelope.value = emptyTradesEnvelope()
   auctionLoading.value = false
+  intradayLoading.value = false
   tradesLoading.value = false
   auctionError.value = ''
+  intradayError.value = ''
   tradesError.value = ''
   tradeRows.value = []
   nextCursor.value = ''
   auctionSucceeded = false
+  intradaySucceeded = false
   tradesSucceeded = false
 }
 
@@ -140,9 +163,45 @@ async function loadTrades({append = false} = {}) {
   }
 }
 
+async function loadIntraday() {
+  if (!props.code) return
+  const version = ++requestVersion
+  intradayLoading.value = true
+  try {
+    const result = await GetInstrumentChart(props.code, {
+      assetType: props.assetType,
+      market: props.market,
+      period: '1m',
+      adjustment: 'none',
+      from: `${requestDate.value}T09:30:00+08:00`,
+      to: `${requestDate.value}T15:00:00+08:00`,
+      limit: 5000,
+    })
+    if (version !== requestVersion) return
+    if (hasUsableEnvelopeData(result)) {
+      intradayEnvelope.value = result
+      intradayError.value = ''
+      intradaySucceeded = true
+    } else if (intradaySucceeded) {
+      intradayEnvelope.value = markEnvelopeStale(intradayEnvelope.value, result.errors?.[0] || `数据状态：${result.status}`)
+    } else {
+      intradayEnvelope.value = result
+    }
+  } catch (reason) {
+    if (version !== requestVersion) return
+    intradayError.value = reason?.message || String(reason)
+    intradayEnvelope.value = intradaySucceeded
+      ? markEnvelopeStale(intradayEnvelope.value, reason)
+      : {...markEnvelopeStale({data: {bars: [], missingIntervals: []}}, reason), status: 'unavailable', stale: false}
+  } finally {
+    if (version === requestVersion) intradayLoading.value = false
+  }
+}
+
 function loadActiveTab() {
   if (!visible.value) return
   if (activeTab.value === 'auction') void loadAuction()
+  else if (activeTab.value === 'intraday') void loadIntraday()
   else void loadTrades()
 }
 
@@ -160,7 +219,7 @@ watch([visible, activeTab], () => {
 
 <template>
   <n-drawer v-model:show="visible" :width="900" placement="right">
-    <n-drawer-content :title="`${name || code} · 集合竞价与逐笔成交`" closable>
+    <n-drawer-content :title="`${name || code} · 竞价、分时与逐笔成交`" closable>
       <n-tabs v-model:value="activeTab" type="line">
         <n-tab-pane name="auction" tab="集合竞价">
           <EvidenceStatusBar :envelope="auctionEnvelope" :error="auctionError" :loading="auctionLoading" @refresh="loadAuction"/>
@@ -174,6 +233,18 @@ watch([visible, activeTab], () => {
           </n-grid>
           <n-data-table :columns="auctionColumns" :data="auctionRows" :loading="auctionLoading && !auctionRows.length" :max-height="600"/>
           <n-empty v-if="!auctionLoading && !auctionRows.length" description="暂无集合竞价明细"/>
+        </n-tab-pane>
+        <n-tab-pane name="intraday" tab="分时成交">
+          <EvidenceStatusBar :envelope="intradayEnvelope" :error="intradayError" :loading="intradayLoading" @refresh="loadIntraday"/>
+          <n-spin :show="intradayLoading && !intradayModel.bars.length" description="正在读取分时成交">
+            <MarketChartCanvas
+                v-if="intradayModel.bars.length"
+                :model="intradayModel"
+                :config="intradayConfig"
+                :height="560"
+            />
+            <n-empty v-else-if="!intradayLoading" description="暂无分时成交数据"/>
+          </n-spin>
         </n-tab-pane>
         <n-tab-pane name="trades" tab="逐笔成交">
           <EvidenceStatusBar :envelope="tradesEnvelope" :error="tradesError" :loading="tradesLoading" @refresh="() => loadTrades()"/>

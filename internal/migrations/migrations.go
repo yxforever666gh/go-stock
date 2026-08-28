@@ -221,6 +221,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV15Definition,
 		apply:       applyResearchEvidenceSchema,
 	},
+	{
+		id: 16, name: "chart_drawing_documents",
+		description: "App 2.1.0 adds isolated current chart-drawing documents and immutable revision history without rewriting any research, account or trading data.",
+		definition:  mainMigrationV16Definition,
+		apply:       applyChartDrawingSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -783,6 +789,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 15 {
 		if err := verifyMainSchema15Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 16 {
+		if err := verifyMainSchema16Runtime(database); err != nil {
 			return result, err
 		}
 	}

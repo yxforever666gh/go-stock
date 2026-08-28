@@ -60,10 +60,10 @@ test('uses the explicit final auction snapshot before summaries and row fallback
   assert.deepEqual(auctionSummaryFrom({snapshots: [{time: '09:25:00'}]}), {time: '09:25:00'})
 })
 
-test('microstructure state is keyed by code, asset type and date and resets both resources', () => {
-  assert.match(drawerSource, /instrumentIdentity[\s\S]{0,180}props\.code\.trim\(\)[\s\S]{0,80}props\.assetType[\s\S]{0,80}requestDate\.value/)
+test('microstructure state is keyed by code, asset type, market and date and resets all three resources', () => {
+  assert.match(drawerSource, /instrumentIdentity[\s\S]{0,220}props\.code\.trim\(\)[\s\S]{0,80}props\.assetType[\s\S]{0,80}props\.market[\s\S]{0,80}requestDate\.value/)
   assert.match(drawerSource, /watch\(instrumentIdentity,[\s\S]{0,100}resetInstrumentState\(\)/)
-  for (const reset of ['auctionEnvelope', 'tradesEnvelope', 'tradeRows', 'nextCursor', 'auctionSucceeded', 'tradesSucceeded']) {
+  for (const reset of ['auctionEnvelope', 'intradayEnvelope', 'tradesEnvelope', 'tradeRows', 'nextCursor', 'auctionSucceeded', 'intradaySucceeded', 'tradesSucceeded']) {
     assert.match(drawerSource, new RegExp(`${reset}\\.value =|${reset} = false`))
   }
 })

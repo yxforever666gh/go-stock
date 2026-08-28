@@ -31,7 +31,7 @@ function getAreaName(code) {
 </script>
 
 <template>
-  <n-tabs type="segment" animated>
+  <n-tabs type="segment" animated display-directive="if">
     <n-tab-pane name="全球指数" tab="全球指数">
       <n-grid :cols="5" :y-gap="0">
         <n-gi v-for="(val, key) in globalStockIndexes" :key="key">
@@ -65,25 +65,25 @@ function getAreaName(code) {
       </n-grid>
     </n-tab-pane>
     <n-tab-pane name="上证指数" tab="上证指数">
-      <KLineChart code="sh000001" :chart-height="panelHeight" stockName="上证指数" :k-days="20" :dark-theme="true" />
+      <KLineChart code="sh000001" asset-type="index" market="SH" :chart-height="panelHeight" stockName="上证指数" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
     <n-tab-pane name="深证成指" tab="深证成指">
-      <KLineChart code="sz399001" :chart-height="panelHeight" stockName="深证成指" :k-days="20" :dark-theme="true" />
+      <KLineChart code="sz399001" asset-type="index" market="SZ" :chart-height="panelHeight" stockName="深证成指" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
     <n-tab-pane name="创业板指" tab="创业板指">
-      <KLineChart code="sz399006" :chart-height="panelHeight" stockName="创业板指" :k-days="20" :dark-theme="true" />
+      <KLineChart code="sz399006" asset-type="index" market="SZ" :chart-height="panelHeight" stockName="创业板指" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
     <n-tab-pane name="恒生指数" tab="恒生指数">
-      <KLineChart code="hkHSI" :chart-height="panelHeight" stockName="恒生指数" :k-days="20" :dark-theme="true" />
+      <KLineChart code="hkHSI" asset-type="index" market="HK" :chart-height="panelHeight" stockName="恒生指数" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
     <n-tab-pane name="纳斯达克" tab="纳斯达克">
-      <KLineChart code="us.IXIC" :chart-height="panelHeight" stockName="纳斯达克" :k-days="20" :dark-theme="true" />
+      <KLineChart code="us.IXIC" asset-type="index" market="US" :chart-height="panelHeight" stockName="纳斯达克" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
     <n-tab-pane name="道琼斯" tab="道琼斯">
-      <KLineChart code="us.DJI" :chart-height="panelHeight" stockName="道琼斯" :k-days="20" :dark-theme="true" />
+      <KLineChart code="us.DJI" asset-type="index" market="US" :chart-height="panelHeight" stockName="道琼斯" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
     <n-tab-pane name="标普500" tab="标普500">
-      <KLineChart code="us.INX" :chart-height="panelHeight" stockName="标普500" :k-days="20" :dark-theme="true" />
+      <KLineChart code="us.INX" asset-type="index" market="US" :chart-height="panelHeight" stockName="标普500" :k-days="20" :dark-theme="true" />
     </n-tab-pane>
   </n-tabs>
 </template>
