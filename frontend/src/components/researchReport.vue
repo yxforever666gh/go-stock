@@ -1,10 +1,15 @@
 <script setup>
 import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NTag, useMessage} from 'naive-ui'
-import {formatInteger, formatNumber} from '../utils/number-format'
+import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
-import {GetAIAnalysisReport, ListAIAnalysisReports, StartAIAnalysis} from '../services/research-api'
+import {
+  GetAIAnalysisReport,
+  GetAICapitalDeploymentStatus,
+  ListAIAnalysisReports,
+  ListAIBuyOpportunities,
+} from '../services/research-api'
 import {CreateKnowledgeFromResearch, CreateKnowledgeMemoryCandidate} from '../services/knowledge-api'
 
 const message = useMessage()
@@ -13,15 +18,13 @@ const rows = ref([])
 const detailVisible = ref(false)
 const detail = ref(null)
 const detailRunID = ref('')
-const starting = ref(false)
+const deploymentStatus = ref(null)
+const opportunities = ref([])
 const savingKnowledgeDraft = ref(false)
 const creatingMemoryCandidate = ref(false)
-let waitingForManualRun = false
-let manualBaselineRunID = ''
 let pollTimer = null
 
 const hasRunningReport = computed(() => rows.value.some(row => row.status === 'running'))
-const analysisBusy = computed(() => starting.value || hasRunningReport.value)
 
 const statusLabels = {
   running: '分析中', success: '已推荐', no_recommendation: '空仓', failed: '失败',
@@ -53,6 +56,18 @@ function summarySourceStatus(row) {
   const total = Number(row?.sourceCount || 0)
   const failed = Number(row?.failedSourceCount || 0)
   return `${formatInteger(total)} 个来源，${formatInteger(failed)} 个失败`
+}
+
+function runOrigin(row) {
+	const source = String(row?.triggerSource || '').trim()
+	if (!source) return '历史定时运行'
+	const labels = {sell: '卖出触发', startup_recovery: '启动恢复', capital_gap: '资金缺口'}
+	return source.split(',').map(item => labels[item.trim()] || item.trim()).filter(Boolean).join(' / ')
+}
+
+function decisionSummary(row) {
+  if (row?.buyNowCount == null && row?.waitCount == null && row?.rejectCount == null) return '历史无结构化候选'
+  return `立即 ${formatInteger(row?.buyNowCount)} / 等待 ${formatInteger(row?.waitCount)} / 放弃 ${formatInteger(row?.rejectCount)}`
 }
 
 function sourceRows(value) {
@@ -118,12 +133,23 @@ const sourceColumns = [
   {title: '失败原因', key: 'error', minWidth: 220, ellipsis: {tooltip: true}, render: row => row.error || '--'},
 ]
 
+const decisionLabels = {buy_now: '立即买入', wait: '等待', reject: '放弃'}
+const decisionTypes = {buy_now: 'success', wait: 'warning', reject: 'default'}
+const opportunityColumns = [
+  {title: '决策', key: 'action', width: 105, render: row => h(NTag, {type: decisionTypes[row.action] || 'default', bordered: false}, {default: () => decisionLabels[row.action] || row.action})},
+  {title: '股票', key: 'stockCode', width: 160, render: row => `${row.stockName || '--'} (${row.stockCode || '--'})`},
+  {title: '价格区间', key: 'priceLow', width: 155, render: row => row.priceLow || row.priceHigh ? `${formatPrice(row.priceLow)} - ${formatPrice(row.priceHigh)}` : '--'},
+  {title: '理由', key: 'aiSummary', minWidth: 260, ellipsis: {tooltip: true}, render: row => row.timingReason || row.aiSummary || '--'},
+  {title: '风险', key: 'mainRisk', minWidth: 220, ellipsis: {tooltip: true}, render: row => row.mainRisk || '--'},
+]
+
 const columns = [
-  {title: '计划时间', key: 'scheduledFor', width: 170, render: row => dateTime(row.scheduledFor)},
+  {title: '触发来源', key: 'triggerSource', width: 150, render: row => runOrigin(row)},
+  {title: '触发原因', key: 'triggerReason', minWidth: 180, ellipsis: {tooltip: true}, render: row => row.triggerReason || '--'},
   {title: '完成时间', key: 'completedAt', width: 170, render: row => dateTime(row.completedAt)},
   {title: 'Provider / 模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
   {title: '状态', key: 'status', width: 130, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
-  {title: '推荐数', key: 'recommendationCount', width: 90, render: row => formatInteger(row.recommendationCount)},
+  {title: '候选决策', key: 'buyNowCount', width: 215, render: row => decisionSummary(row)},
   {title: '来源状态', key: 'sourceCount', minWidth: 150, render: row => summarySourceStatus(row)},
   {title: '空仓/失败原因', key: 'failureReason', minWidth: 210, ellipsis: {tooltip: true}, render: row => row.failureReason || '--'},
   {title: '操作', key: 'actions', width: 110, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => '查看报告'})},
@@ -138,7 +164,7 @@ function stopPolling() {
 
 function schedulePolling() {
   stopPolling()
-  if (!hasRunningReport.value && !waitingForManualRun) return
+  if (!hasRunningReport.value) return
   pollTimer = setTimeout(() => refresh(true), 2000)
 }
 
@@ -146,14 +172,13 @@ async function refresh(silent = false) {
   if (loading.value) return
   loading.value = true
   try {
-    rows.value = await ListAIAnalysisReports(100, 0) || []
-		const newest = rows.value[0]
-		const manualRunObserved = waitingForManualRun && newest && newest.runId !== manualBaselineRunID
-		if (manualRunObserved && newest.status !== 'running') {
-			waitingForManualRun = false
-			starting.value = false
-			message.success('AI 分析报告已生成')
-		}
+		const [reportsResult, statusResult] = await Promise.allSettled([
+			ListAIAnalysisReports(100, 0),
+			GetAICapitalDeploymentStatus(),
+		])
+		if (reportsResult.status === 'rejected') throw reportsResult.reason
+		rows.value = reportsResult.value || []
+		if (statusResult.status === 'fulfilled') deploymentStatus.value = statusResult.value || null
 		if (detailVisible.value && detailRunID.value && (!detail.value || detail.value.status === 'running')) {
 			await refreshDetail(true)
 		}
@@ -165,25 +190,10 @@ async function refresh(silent = false) {
   }
 }
 
-async function startAnalysis() {
-	if (analysisBusy.value) return
-	manualBaselineRunID = rows.value[0]?.runId || ''
-	starting.value = true
-	waitingForManualRun = true
-	try {
-		await StartAIAnalysis()
-		message.success('AI 分析已开始')
-		await refresh(true)
-	} catch (error) {
-		waitingForManualRun = false
-		starting.value = false
-		message.error(error?.message || String(error))
-	}
-}
-
 async function showDetail(row) {
   detailVisible.value = true
   detail.value = null
+	opportunities.value = []
 	detailRunID.value = row.runId
 	await refreshDetail(false)
 }
@@ -191,7 +201,16 @@ async function showDetail(row) {
 async function refreshDetail(silent = false) {
   if (!detailRunID.value) return
   try {
-    detail.value = await GetAIAnalysisReport(detailRunID.value)
+		const [reportResult, opportunitiesResult] = await Promise.allSettled([
+			GetAIAnalysisReport(detailRunID.value),
+			ListAIBuyOpportunities(200, 0),
+		])
+		if (reportResult.status === 'rejected') throw reportResult.reason
+		detail.value = reportResult.value
+		const allOpportunities = opportunitiesResult.status === 'fulfilled' ? opportunitiesResult.value : []
+		opportunities.value = Array.isArray(reportResult.value?.opportunities)
+			? reportResult.value.opportunities
+			: (allOpportunities || []).filter(item => item.analysisRunId === detailRunID.value)
   } catch (error) {
     if (!silent) message.error(error?.message || String(error))
   }
@@ -240,12 +259,12 @@ onBeforeUnmount(stopPolling)
 <template>
   <n-space vertical>
     <n-flex justify="space-between" align="center">
-			<n-button type="primary" :disabled="analysisBusy" :loading="analysisBusy" @click="startAnalysis">
-				{{ analysisBusy ? 'AI 分析中…' : '开始 AI 分析' }}
-			</n-button>
+			<n-alert v-if="deploymentStatus" :type="deploymentStatus.enabled ? 'info' : 'warning'" :show-icon="false" style="flex: 1">
+				资金补位{{ deploymentStatus.enabled ? '已启用' : '已停用' }} · 现金 {{ formatMoney(deploymentStatus.cash) }} · 保留 {{ formatMoney(deploymentStatus.reserveTarget) }} · 可部署 {{ formatMoney(deploymentStatus.deployableCash) }} · 资金利用率 {{ formatPercent(deploymentStatus.capitalUtilization) }} · 待处理事件 {{ formatInteger(deploymentStatus.pendingEventCount) }} · 观察候选 {{ formatInteger(deploymentStatus.watchingCandidateCount) }} · 下次分析 {{ dateTime(deploymentStatus.nextEligibleAt) }} · {{ deploymentStatus.reason || '等待事件' }}
+			</n-alert>
 			<n-button :loading="loading" @click="refresh(false)">刷新</n-button>
     </n-flex>
-    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1300" :row-key="row => row.runId"/>
+    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1600" :row-key="row => row.runId"/>
   </n-space>
 
   <n-modal v-model:show="detailVisible">
@@ -259,6 +278,9 @@ onBeforeUnmount(stopPolling)
                   <n-descriptions-item label="运行状态">{{ statusLabels[detail.status] || detail.status }}</n-descriptions-item>
                   <n-descriptions-item label="模型">{{ detail.providerName }} / {{ detail.modelName }}</n-descriptions-item>
                   <n-descriptions-item label="来源">{{ sourceSummary(detail.sourceStatusJson) }}</n-descriptions-item>
+							<n-descriptions-item label="触发来源">{{ runOrigin(detail) }}</n-descriptions-item>
+							<n-descriptions-item label="触发原因">{{ detail.triggerReason || '--' }}</n-descriptions-item>
+							<n-descriptions-item label="候选决策">{{ decisionSummary(detail) }}</n-descriptions-item>
                 </n-descriptions>
                 <n-flex justify="end" style="margin-top: 10px">
                   <n-button secondary type="warning" :loading="creatingMemoryCandidate" @click="createMemoryCandidate">生成记忆候选</n-button>
@@ -266,6 +288,9 @@ onBeforeUnmount(stopPolling)
                 </n-flex>
                 <n-divider title-placement="left">完整决策报告</n-divider>
                 <AppMarkdownPreview :model-value="detail.finalReport || detail.failureReason || '暂无报告'"/>
+				<n-divider title-placement="left">立即买入 / 等待 / 放弃候选</n-divider>
+				<n-empty v-if="!opportunities.length" description="本轮没有结构化候选；历史分析可能不包含此数据"/>
+				<n-data-table v-else :columns="opportunityColumns" :data="opportunities" :scroll-x="1000" size="small" :row-key="row => row.opportunityId"/>
                 <n-collapse>
                   <n-collapse-item title="大盘层" name="market"><AppMarkdownPreview :model-value="detail.marketReport || '无'"/></n-collapse-item>
                   <n-collapse-item title="板块层" name="sector"><AppMarkdownPreview :model-value="detail.sectorReport || '无'"/></n-collapse-item>

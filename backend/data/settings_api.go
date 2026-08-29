@@ -33,6 +33,9 @@ var strictAnalysisTimeRegexp = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
 const defaultAIAnalysisTimes = "09:30,11:30,14:30"
 const defaultAIReviewStartTime = "09:50"
 const defaultAIReviewIntervalMinutes = 15
+const defaultAITargetCapitalUtilization = 0.90
+const defaultAIMaxImmediateBuysPerRun = 2
+const defaultAIReanalysisIntervalMinutes = 30
 
 var minuteProviderIDs = []string{"tencent", "sina", "akshare", "private"}
 
@@ -57,11 +60,9 @@ func UpdateConfig(s *SettingConfig) string {
 	if s == nil || s.Settings == nil {
 		return "保存失败: 配置为空"
 	}
-	if s.AIAnalysisAutoEnabled != nil {
-		s.AIAnalysisEnabled = *s.AIAnalysisAutoEnabled
-	} else if s.LegacyAIAnalysisEnable != nil {
-		s.AIAnalysisEnabled = *s.LegacyAIAnalysisEnable
-	}
+	// The fixed-time analysis scheduler is retired in App 2.7.0. Never let an
+	// older settings client turn its compatibility column back on.
+	s.AIAnalysisEnabled = false
 	providerOrder, err := NormalizeMinuteProviderOrder(s.MinuteProviderOrder, s.MinuteProviderMode)
 	if err != nil {
 		return "保存失败: " + err.Error()
@@ -87,14 +88,17 @@ func UpdateConfig(s *SettingConfig) string {
 		}
 	}
 
-	normalizedAnalysisTimes, err := NormalizeAIAnalysisTimes(s.AIAnalysisTimes)
+	targetUtilization, maxImmediateBuys, reanalysisMinutes, err := NormalizeAICapitalDeploymentSettings(
+		s.AITargetCapitalUtilization,
+		s.AIMaxImmediateBuysPerRun,
+		s.AIReanalysisIntervalMinutes,
+	)
 	if err != nil {
 		return "保存失败: " + err.Error()
 	}
-	if s.AIAnalysisEnabled && len(normalizedAnalysisTimes) == 0 {
-		return "保存失败: AI 分析启用时请至少填写一个分析时间，例如 09:30,11:30,14:30"
-	}
-	s.AIAnalysisTimes = strings.Join(normalizedAnalysisTimes, ",")
+	s.AITargetCapitalUtilization = targetUtilization
+	s.AIMaxImmediateBuysPerRun = maxImmediateBuys
+	s.AIReanalysisIntervalMinutes = reanalysisMinutes
 	reviewStart, reviewInterval, err := NormalizeAIReviewSchedule(s.AIReviewStartTime, s.AIReviewIntervalMinutes)
 	if err != nil {
 		return "保存失败: " + err.Error()
@@ -151,7 +155,11 @@ func UpdateConfig(s *SettingConfig) string {
 		"force_no_proxy_for_fetch":         s.ForceNoProxyForFetch,
 		"experimental_evidence_enabled":    s.ExperimentalEvidenceEnabled,
 		"qgqp_b_id":                        s.QgqpBId,
-		"ai_analysis_enabled":              s.AIAnalysisEnabled,
+		"ai_analysis_enabled":              false,
+		"ai_capital_deployment_enabled":    s.AICapitalDeploymentEnabled,
+		"ai_target_capital_utilization":    s.AITargetCapitalUtilization,
+		"ai_max_immediate_buys_per_run":    s.AIMaxImmediateBuysPerRun,
+		"ai_reanalysis_interval_minutes":   s.AIReanalysisIntervalMinutes,
 		"research2_auto_enabled":           s.Research2AutoEnabled,
 		"research2_email_enabled":          s.Research2EmailEnabled,
 		"research2_email_to":               s.Research2EmailTo,
@@ -161,7 +169,6 @@ func UpdateConfig(s *SettingConfig) string {
 		"research2_email_smtp_user":        s.Research2EmailSMTPUser,
 		"research2_email_smtp_pass":        s.Research2EmailSMTPPass,
 		"ai_analysis_config_id":            s.AIAnalysisConfigID,
-		"ai_analysis_times":                s.AIAnalysisTimes,
 		"ai_review_start_time":             s.AIReviewStartTime,
 		"ai_review_interval_minutes":       s.AIReviewIntervalMinutes,
 		"minute_provider_mode":             s.MinuteProviderMode,
@@ -363,11 +370,15 @@ func applySettingDefaults(settings *Settings) {
 	if settings.ID == 0 {
 		settings.ForceNoProxyForFetch = true
 		settings.Research2AutoEnabled = true
+		settings.AICapitalDeploymentEnabled = true
+		settings.AITargetCapitalUtilization = defaultAITargetCapitalUtilization
+		settings.AIMaxImmediateBuysPerRun = defaultAIMaxImmediateBuysPerRun
+		settings.AIReanalysisIntervalMinutes = defaultAIReanalysisIntervalMinutes
 	}
 	if strings.TrimSpace(settings.AIAnalysisTimes) == "" {
 		settings.AIAnalysisTimes = defaultAIAnalysisTimes
-		settings.AIAnalysisEnabled = true
 	}
+	settings.AIAnalysisEnabled = false
 	if strings.TrimSpace(settings.AIReviewStartTime) == "" {
 		settings.AIReviewStartTime = defaultAIReviewStartTime
 	}
@@ -494,6 +505,31 @@ func NormalizeAIReviewSchedule(start string, interval int) (string, int, error) 
 	return start, interval, nil
 }
 
+// NormalizeAICapitalDeploymentSettings applies first-run defaults while
+// keeping user overrides inside the strategy's safety limits. Lower target
+// utilization is allowed because it only increases the retained cash buffer.
+func NormalizeAICapitalDeploymentSettings(targetUtilization float64, maxImmediateBuys, reanalysisMinutes int) (float64, int, int, error) {
+	if targetUtilization == 0 {
+		targetUtilization = defaultAITargetCapitalUtilization
+	}
+	if targetUtilization <= 0 || targetUtilization > defaultAITargetCapitalUtilization {
+		return 0, 0, 0, errors.New("目标资金利用率必须大于 0 且不超过 90%")
+	}
+	if maxImmediateBuys == 0 {
+		maxImmediateBuys = defaultAIMaxImmediateBuysPerRun
+	}
+	if maxImmediateBuys < 1 || maxImmediateBuys > defaultAIMaxImmediateBuysPerRun {
+		return 0, 0, 0, errors.New("单轮立即买入数量必须在 1 至 2 只之间")
+	}
+	if reanalysisMinutes == 0 {
+		reanalysisMinutes = defaultAIReanalysisIntervalMinutes
+	}
+	if reanalysisMinutes < 5 || reanalysisMinutes > 120 {
+		return 0, 0, 0, errors.New("资金补位重分析间隔必须在 5 至 120 分钟之间")
+	}
+	return targetUtilization, maxImmediateBuys, reanalysisMinutes, nil
+}
+
 func NormalizeMinuteProviderOrder(input []string, legacyMode string) ([]string, error) {
 	if len(input) == 0 {
 		if normalizeMinuteProviderMode(legacyMode) == "private" {
@@ -550,7 +586,7 @@ func applySettingConfigView(config *SettingConfig) {
 	}
 	order, _ := NormalizeMinuteProviderOrder(splitProviderOrder(config.Settings.MinuteProviderOrder), config.Settings.MinuteProviderMode)
 	config.MinuteProviderOrder = order
-	autoEnabled := config.Settings.AIAnalysisEnabled
+	autoEnabled := false
 	config.AIAnalysisAutoEnabled = &autoEnabled
 	config.LegacyAIAnalysisEnable = nil
 }

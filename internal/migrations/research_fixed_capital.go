@@ -196,7 +196,7 @@ func restoreFixedCapitalHistoricalBuy(tx *gorm.DB) error {
 	if linkedRecommendations != 0 {
 		return errors.New("approved historical analysis run already has unrelated recommendations")
 	}
-	quantity, cost, err := research.SizeBuy(fixedCapitalStockCode, fixedCapitalMarketPrice, research.InitialCash)
+	quantity, cost, err := sizeFixedCapitalHistoricalBuy(fixedCapitalStockCode, fixedCapitalMarketPrice, research.InitialCash)
 	if err != nil {
 		return err
 	}
@@ -288,6 +288,39 @@ func restoreFixedCapitalHistoricalBuy(tx *gorm.DB) error {
 		return err
 	}
 	return verifyFixedCapitalHistoricalBuy(tx)
+}
+
+// sizeFixedCapitalHistoricalBuy freezes the sizing behavior used by the
+// published App 1.7.7 correction. Runtime SizeBuy intentionally gained a
+// 50,000-yuan per-order cap in App 2.7.0 and must not change old migration
+// output.
+func sizeFixedCapitalHistoricalBuy(code string, marketPrice, availableCash float64) (int64, research.CostBreakdown, error) {
+	lot, err := research.LotSize(code)
+	if err != nil {
+		return 0, research.CostBreakdown{}, err
+	}
+	if availableCash <= 0 || marketPrice <= 0 {
+		return 0, research.CostBreakdown{}, research.ErrInsufficientCash
+	}
+	const historicalTargetCashPerTrade = 50000.0
+	quantity := lot
+	cost := research.CalculateBuyCost(marketPrice, quantity)
+	for -cost.NetCashFlow <= historicalTargetCashPerTrade {
+		quantity += lot
+		cost = research.CalculateBuyCost(marketPrice, quantity)
+	}
+	if -cost.NetCashFlow <= availableCash+1e-8 {
+		return quantity, cost, nil
+	}
+	maxQuantity := int64(math.Floor(availableCash/(marketPrice*(1+research.SlippageRate))/float64(lot))) * lot
+	for maxQuantity >= lot {
+		cost = research.CalculateBuyCost(marketPrice, maxQuantity)
+		if -cost.NetCashFlow <= availableCash+1e-8 {
+			return maxQuantity, cost, nil
+		}
+		maxQuantity -= lot
+	}
+	return 0, research.CostBreakdown{}, research.ErrMinimumOrder
 }
 
 func fixedCapitalNextCheckAt(tx *gorm.DB) time.Time {

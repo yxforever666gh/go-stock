@@ -25,6 +25,7 @@ export const API_PATHS = {
   getAccountPerformance: "/api/v1/research/account/performance",
   getAnalysisRun: "/api/v1/research/analysis-runs/{id}",
   getCLSCalendar: "/api/v1/market/calendars/cls",
+  getCapitalDeploymentStatus: "/api/v1/research/capital-deployment/status",
   getGlobalIndexes: "/api/v1/market/indexes/global",
   getIndustryMoneyRank: "/api/v1/market/industries/money-rank",
   getIndustryRank: "/api/v1/market/industries/rank",
@@ -71,6 +72,7 @@ export const API_PATHS = {
   listAIConfigs: "/api/v1/ai/configs",
   listAccountCashFlows: "/api/v1/research/account/cash-flows",
   listAnalysisRuns: "/api/v1/research/analysis-runs",
+  listBuyOpportunities: "/api/v1/research/buy-opportunities",
   listFollowedETFs: "/api/v1/watchlist/etfs",
   listFollowedFunds: "/api/v1/watchlist/funds",
   listFollowedStocks: "/api/v1/watchlist/stocks",
@@ -100,7 +102,6 @@ export const API_PATHS = {
   searchFunds: "/api/v1/funds/search",
   searchStockMaster: "/api/v1/stocks/search",
   shutdownSystem: "/api/v1/system/shutdown",
-  startAnalysisRun: "/api/v1/research/analysis-runs",
   testAIConfig: "/api/v1/ai/configs/test",
   testResearch2Email: "/api/v1/research2/email/test",
   unfollowETF: "/api/v1/watchlist/etfs/{code}",
@@ -177,16 +178,27 @@ export type AccountPerformancePoint = {
 }
 
 export type AnalysisRun = {
+  buyNowCount?: number
   completedAt?: string
   evidenceProfileVersion?: string
   evidenceSetId?: string
   failureReason?: string
   finalReport: string
+  fundingAvailableSlots?: number
+  fundingCapitalBuffer?: number
+  fundingCash?: number
+  fundingDeployableCash?: number
+  fundingNetAssetValue?: number
+  fundingReservedCash?: number
+  leaseExpiresAt?: string
+  leaseOwner?: string
   marketReport?: string
   modelAttemptLogJson?: string
   modelName?: string
+  opportunities?: Array<BuyOpportunity>
   providerName?: string
   recommendationCount: number
+  rejectCount?: number
   runId: string
   scheduledFor?: string
   sectorReport?: string
@@ -195,20 +207,30 @@ export type AnalysisRun = {
   status: string
   stockReport?: string
   strategyVersion?: string
+  triggerId?: string
+  triggerIdsJson?: string
+  triggerReason?: string
+  triggerSource?: string
+  waitCount?: number
 }
 
 export type AnalysisRunSummary = {
+  buyNowCount?: number
   completedAt?: string
   failedSourceCount: number
   failureReason?: string
   modelName?: string
   providerName?: string
   recommendationCount: number
+  rejectCount?: number
   runId: string
   scheduledFor: string
   sourceCount: number
   startedAt: string
   status: string
+  triggerReason?: string
+  triggerSource?: string
+  waitCount?: number
 }
 
 export type AuctionData = {
@@ -232,6 +254,47 @@ export type AuctionSnapshot = {
   time: string
   unmatchedSide?: string
   unmatchedVolume?: number | null
+}
+
+export type BuyOpportunity = {
+  action: "buy_now" | "wait" | "reject"
+  aiSummary?: string
+  analysisRunId: string
+  createdAt: string
+  expiresAt?: string
+  mainRisk?: string
+  opportunityId: string
+  priceHigh?: number
+  priceLow?: number
+  quoteAt?: string
+  quotePrice?: number
+  recommendationId?: string
+  source?: string
+  sourceRefs?: string
+  status: string
+  stockCode: string
+  stockName: string
+  supersededAt?: string
+  timingReason?: string
+  updatedAt?: string
+  validationReason?: string
+}
+
+export type CapitalDeploymentStatus = {
+  availableSlots: number
+  capitalUtilization: number
+  cash: number
+  deployableCash: number
+  enabled: boolean
+  lastTriggeredAt?: string
+  netAssetValue: number
+  nextEligibleAt?: string
+  pendingEventCount: number
+  reason: string
+  reserveTarget: number
+  reservedCash: number
+  state: string
+  watchingCandidateCount: number
 }
 
 export type ChartBar = {
@@ -840,6 +903,7 @@ export type Recommendation = {
   netPnl?: number
   netYieldRate?: number
   nextCheckAt?: string
+  opportunityId?: string
   quantity?: number
   recommendationId: string
   reservedCash?: number

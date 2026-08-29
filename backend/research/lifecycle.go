@@ -89,6 +89,10 @@ func (s *Service) SetSellReviewSchedule(schedule SellReviewSchedule) {
 	s.reviewSchedule = schedule
 }
 
+func (s *Service) SetCapitalDeploymentPolicy(targetUtilization float64, maxImmediate int) {
+	s.repository.SetCapitalDeploymentPolicy(targetUtilization, maxImmediate)
+}
+
 func (s *Service) firstSellCheck(ctx context.Context, entryAt time.Time) (time.Time, error) {
 	return FirstSellCheckWithSchedule(ctx, s.calendar, entryAt, s.reviewSchedule)
 }
@@ -164,7 +168,7 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 	if err != nil {
 		return err
 	}
-	if capacity.UnreservedCash <= 0 {
+	if capacity.DeployableCash < TargetCashPerTrade-1e-8 {
 		return ErrInsufficientCash
 	}
 	var signalQuote *Quote
@@ -177,14 +181,14 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 		if !ok || quoteCode != recommendation.StockCode || !sameStockName(candidate.Name, recommendation.StockName) {
 			return errors.New("buy quote does not match recommendation")
 		}
-		_, cost, sizeErr := SizeBuy(recommendation.StockCode, candidate.Price, capacity.UnreservedCash)
+		_, cost, sizeErr := SizeBuy(recommendation.StockCode, candidate.Price, capacity.DeployableCash)
 		if sizeErr != nil {
 			return sizeErr
 		}
 		recommendation.ReservedCash = -cost.NetCashFlow
 		signalQuote = &candidate
 	} else {
-		recommendation.ReservedCash = math.Min(TargetCashPerTrade, capacity.UnreservedCash)
+		recommendation.ReservedCash = math.Min(TargetCashPerTrade, capacity.DeployableCash)
 	}
 	initialDecision := &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
 		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入"}
@@ -517,7 +521,7 @@ func (s *Service) trySell(ctx context.Context, recommendation *Recommendation, n
 	if err := s.repository.Sell(ctx, recommendation.RecommendationID, quote); err != nil {
 		return err
 	}
-	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "模拟卖出", DecidedAt: now, Reason: "按最新可交易行情成交", QuotePrice: quote.Price, QuoteAt: &quote.At})
+	return nil
 }
 
 func (s *Service) retrySell(ctx context.Context, recommendation *Recommendation, now time.Time) error {

@@ -65,8 +65,28 @@ func (a *App) registerRealtimeRuntime(config *models.SettingConfig) {
 	a.registerCronTask("MonitorStockPrices", fmt.Sprintf("@every %ds", interval), func() {
 		MonitorStockPrices(a)
 	})
-	if marketNewsPollingEnabled(config) {
-		a.registerNewsPollingCrons(interval)
+	a.reloadMarketNewsPolling(config, false)
+}
+
+func (a *App) reloadMarketNewsPolling(config *models.SettingConfig, immediate bool) {
+	for _, key := range []string{"GetNewTelegraph", "newSinaNews", "tradingViewNews"} {
+		if entryID, exists := a.getCronEntry(key); exists {
+			a.cron.Remove(entryID)
+			a.deleteCronEntry(key)
+		}
+	}
+	if !marketNewsPollingEnabled(config) {
+		return
+	}
+	interval := config.RefreshInterval
+	if interval <= 0 {
+		interval = 1
+	}
+	a.registerNewsPollingCrons(interval)
+	if immediate {
+		a.goTask(func(context.Context) { a.services.Market.TelegraphList(30) })
+		a.goTask(func(context.Context) { a.services.Market.GetSinaNews(30) })
+		a.goTask(func(context.Context) { a.services.Market.TradingViewNews() })
 	}
 }
 
@@ -96,13 +116,7 @@ func marketNewsPollingEnabled(config *models.SettingConfig) bool {
 	if config.EnableNews {
 		return true
 	}
-	if config.AIAnalysisAutoEnabled != nil {
-		return *config.AIAnalysisAutoEnabled
-	}
-	if config.LegacyAIAnalysisEnable != nil {
-		return *config.LegacyAIAnalysisEnable
-	}
-	return config.AIAnalysisEnabled
+	return config.AICapitalDeploymentEnabled
 }
 
 func marketNewsPollingInterval(configuredSeconds int64) time.Duration {
@@ -153,7 +167,7 @@ func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 }
 
 func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
-	a.reloadAIAnalysisCron(config)
+	a.reloadAIAnalysisCron(config, true)
 	a.reloadResearch2Cron(config)
 	a.registerThemeLifecycleCron()
 }

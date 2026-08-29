@@ -41,9 +41,11 @@ const formValue = ref({
     level: '1min',
   },
   openAI: {aiConfigs: []},
-  aiAnalysis: {
-    autoEnabled: true,
-    times: '09:30,11:30,14:30',
+  capitalDeployment: {
+    enabled: true,
+    targetCapitalUtilization: 90,
+    maxImmediateBuysPerRun: 2,
+    reanalysisIntervalMinutes: 30,
     reviewStartTime: '09:50',
     reviewIntervalMinutes: 15,
   },
@@ -151,9 +153,11 @@ function applyConfigToForm(config) {
     level: config?.privateMinuteLevel || '1min',
   }
   formValue.value.openAI.aiConfigs = aiConfigs
-  formValue.value.aiAnalysis = {
-    autoEnabled: config?.aiAnalysisAutoEnabled ?? config?.aiAnalysisEnabled ?? true,
-    times: config?.aiAnalysisTimes || '09:30,11:30,14:30',
+  formValue.value.capitalDeployment = {
+    enabled: config?.aiCapitalDeploymentEnabled !== false,
+    targetCapitalUtilization: Math.round((Number.isFinite(config?.aiTargetCapitalUtilization) ? config.aiTargetCapitalUtilization : 0.9) * 100),
+    maxImmediateBuysPerRun: Number.isFinite(config?.aiMaxImmediateBuysPerRun) ? config.aiMaxImmediateBuysPerRun : 2,
+    reanalysisIntervalMinutes: Number.isFinite(config?.aiReanalysisIntervalMinutes) ? config.aiReanalysisIntervalMinutes : 30,
     reviewStartTime: config?.aiReviewStartTime || '09:50',
     reviewIntervalMinutes: config?.aiReviewIntervalMinutes || 15,
   }
@@ -280,11 +284,13 @@ function buildConfigPayload() {
     privateMinuteProxyMode: formValue.value.privateMinute.proxyMode,
     privateMinuteLevel: formValue.value.privateMinute.level,
     aiConfigs: formValue.value.openAI.aiConfigs,
-    aiAnalysisAutoEnabled: formValue.value.aiAnalysis.autoEnabled,
+    aiCapitalDeploymentEnabled: formValue.value.capitalDeployment.enabled,
+    aiTargetCapitalUtilization: formValue.value.capitalDeployment.targetCapitalUtilization / 100,
+    aiMaxImmediateBuysPerRun: formValue.value.capitalDeployment.maxImmediateBuysPerRun,
+    aiReanalysisIntervalMinutes: formValue.value.capitalDeployment.reanalysisIntervalMinutes,
     aiAnalysisConfigId: primaryAiConfigId(),
-    aiAnalysisTimes: formValue.value.aiAnalysis.times,
-    aiReviewStartTime: formValue.value.aiAnalysis.reviewStartTime,
-    aiReviewIntervalMinutes: formValue.value.aiAnalysis.reviewIntervalMinutes,
+    aiReviewStartTime: formValue.value.capitalDeployment.reviewStartTime,
+    aiReviewIntervalMinutes: formValue.value.capitalDeployment.reviewIntervalMinutes,
     experimentalEvidenceEnabled: formValue.value.experimentalEvidenceEnabled === true,
     research2AutoEnabled: formValue.value.research2AutoEnabled,
     research2EmailEnabled: formValue.value.research2Email.enabled,
@@ -484,7 +490,7 @@ onBeforeUnmount(() => message.destroyAll())
           </n-grid>
         </n-card>
 
-        <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => 'AI 分析设置')" size="small">
+        <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => settingsScope === 'research1' ? '资金补位策略' : 'AI 分析设置')" size="small">
           <n-grid :cols="24" :x-gap="24">
             <n-form-item-gi v-if="settingsScope === 'research2'" :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
               <n-switch v-model:value="formValue.research2AutoEnabled" @update:value="handleImmediateFieldChange"/>
@@ -495,25 +501,37 @@ onBeforeUnmount(() => message.destroyAll())
               <n-text depth="3" style="margin-left: 12px">默认关闭；开启后两套研究会接入实验市场证据并可能改变研究结果，市场行情页面不受影响。</n-text>
             </n-form-item-gi>
             <template v-if="settingsScope === 'research1'">
-              <n-form-item-gi :span="6" label="自动分析：" path="aiAnalysis.autoEnabled">
-                <n-switch v-model:value="formValue.aiAnalysis.autoEnabled" @update:value="handleImmediateFieldChange"/>
+              <n-form-item-gi :span="6" label="资金补位：" path="capitalDeployment.enabled">
+                <n-switch v-model:value="formValue.capitalDeployment.enabled" @update:value="handleImmediateFieldChange"/>
               </n-form-item-gi>
-              <n-form-item-gi :span="18" label="自动分析时间：" path="aiAnalysis.times">
-                <n-input v-model:value="formValue.aiAnalysis.times" placeholder="09:30,11:30,14:30" @blur="handleTextFieldBlur"/>
+              <n-form-item-gi :span="6" label="目标资金利用率：" path="capitalDeployment.targetCapitalUtilization">
+                <n-input-number v-model:value="formValue.capitalDeployment.targetCapitalUtilization" :min="50" :max="90" :step="1" @update:value="handleImmediateFieldChange">
+                  <template #suffix>%</template>
+                </n-input-number>
               </n-form-item-gi>
-              <n-form-item-gi :span="8" label="持仓复查开始：" path="aiAnalysis.reviewStartTime">
-                <n-input v-model:value="formValue.aiAnalysis.reviewStartTime" placeholder="09:50" @blur="handleTextFieldBlur"/>
+              <n-form-item-gi :span="6" label="单轮立即买入上限：" path="capitalDeployment.maxImmediateBuysPerRun">
+                <n-input-number v-model:value="formValue.capitalDeployment.maxImmediateBuysPerRun" :min="1" :max="2" @update:value="handleImmediateFieldChange">
+                  <template #suffix>只</template>
+                </n-input-number>
               </n-form-item-gi>
-              <n-form-item-gi :span="8" label="持仓复查间隔：" path="aiAnalysis.reviewIntervalMinutes">
-                <n-input-number v-model:value="formValue.aiAnalysis.reviewIntervalMinutes" :min="5" :max="120"
+              <n-form-item-gi :span="6" label="资金缺口重分析：" path="capitalDeployment.reanalysisIntervalMinutes">
+                <n-input-number v-model:value="formValue.capitalDeployment.reanalysisIntervalMinutes" :min="5" :max="120"
                                 @update:value="handleImmediateFieldChange">
+                  <template #suffix>分钟</template>
+                </n-input-number>
+              </n-form-item-gi>
+              <n-form-item-gi :span="8" label="持仓复查开始：" path="capitalDeployment.reviewStartTime">
+                <n-input v-model:value="formValue.capitalDeployment.reviewStartTime" placeholder="09:50" @blur="handleTextFieldBlur"/>
+              </n-form-item-gi>
+              <n-form-item-gi :span="8" label="持仓复查间隔：" path="capitalDeployment.reviewIntervalMinutes">
+                <n-input-number v-model:value="formValue.capitalDeployment.reviewIntervalMinutes" :min="5" :max="120" @update:value="handleImmediateFieldChange">
                   <template #suffix>分钟</template>
                 </n-input-number>
               </n-form-item-gi>
             </template>
             <n-gi :span="24">
               <n-alert v-if="settingsScope === 'research1'" type="info" :show-icon="false">
-                “自动分析”只控制定时触发；关闭后，研究中心的手动分析仍使用下方同一组模型。错过的最近自动分析节点会在开盘时补跑；自动分析或持仓复查失败后每 5 分钟重试至当日收盘。持仓首轮从开始时间触发，之后每只股票按本轮完成时间独立计算复查间隔。
+                卖出或启动发现至少 5 万元可部署资金时自动触发完整分析；每轮最多立即买入 {{ formValue.capitalDeployment.maxImmediateBuysPerRun }} 只，仍有资金缺口会在 {{ formValue.capitalDeployment.reanalysisIntervalMinutes }} 分钟后重新分析，14:25 后不再启动新分析。资金保留额为净资产的 10% 且不少于 5 万元。持仓仍按每只股票本轮完成时间独立计算复查间隔。
               </n-alert>
               <AiConfigSettings
                   :form-value="formValue"

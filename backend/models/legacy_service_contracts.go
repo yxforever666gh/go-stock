@@ -13,59 +13,63 @@ import (
 // adapters for the type definition.
 type Settings struct {
 	gorm.Model
-	TushareToken                string `json:"tushareToken"`
-	LocalPushEnable             bool   `json:"localPushEnable"`
-	DingPushEnable              bool   `json:"dingPushEnable"`
-	DingRobot                   string `json:"dingRobot"`
-	UpdateBasicInfoOnStart      bool   `json:"updateBasicInfoOnStart"`
-	RefreshInterval             int64  `json:"refreshInterval"`
-	OpenAiEnable                bool   `json:"-"`
-	Prompt                      string `json:"-"`
-	CheckUpdate                 bool   `json:"checkUpdate"`
-	QuestionTemplate            string `json:"-"`
-	CrawlTimeOut                int64  `json:"crawlTimeOut"`
-	KDays                       int64  `json:"kDays"`
-	EnableDanmu                 bool   `json:"enableDanmu"`
-	BrowserPath                 string `json:"browserPath"`
-	EnableNews                  bool   `json:"enableNews"`
-	DarkTheme                   bool   `json:"darkTheme"`
-	BrowserPoolSize             int    `json:"browserPoolSize"`
-	EnableFund                  bool   `json:"enableFund"`
-	EnablePushNews              bool   `json:"enablePushNews"`
-	EnableOnlyPushRedNews       bool   `json:"enableOnlyPushRedNews"`
-	HttpProxy                   string `json:"httpProxy"`
-	HttpProxyEnabled            bool   `json:"httpProxyEnabled"`
-	ForceNoProxyForFetch        bool   `json:"forceNoProxyForFetch" gorm:"default:true"`
-	QgqpBId                     string `json:"qgqpBId" gorm:"column:qgqp_b_id"`
-	AIAnalysisEnabled           bool   `json:"-" gorm:"default:true"`
-	Research2AutoEnabled        bool   `json:"research2AutoEnabled" gorm:"default:true"`
-	Research2EmailEnabled       bool   `json:"research2EmailEnabled"`
-	Research2EmailTo            string `json:"research2EmailTo" gorm:"type:text"`
-	Research2EmailFrom          string `json:"research2EmailFrom"`
-	Research2EmailSMTPHost      string `json:"research2EmailSmtpHost"`
-	Research2EmailSMTPPort      int    `json:"research2EmailSmtpPort"`
-	Research2EmailSMTPUser      string `json:"research2EmailSmtpUsername"`
-	Research2EmailSMTPPass      string `json:"research2EmailSmtpPassword"`
-	AIAnalysisConfigID          uint   `json:"aiAnalysisConfigId"`
-	AIAnalysisTimes             string `json:"aiAnalysisTimes" gorm:"default:'09:30,11:30,14:30'"`
-	AIReviewStartTime           string `json:"aiReviewStartTime" gorm:"default:'09:50'"`
-	AIReviewIntervalMinutes     int    `json:"aiReviewIntervalMinutes" gorm:"default:15"`
-	MinuteProviderMode          string `json:"minuteProviderMode" gorm:"default:'public'"`
-	MinuteProviderOrder         string `json:"-" gorm:"default:'tencent,sina,akshare,private'"`
-	MinuteLongHistoryHint       bool   `json:"minuteLongHistoryHintEnabled" gorm:"column:minute_long_history_hint_enabled;default:true"`
-	PrivateMinuteEnabled        bool   `json:"privateMinuteEnabled"`
-	PrivateMinuteBaseURL        string `json:"privateMinuteBaseUrl"`
-	PrivateMinuteAPIKey         string `json:"privateMinuteApiKey"`
-	PrivateMinuteTimeoutSec     int    `json:"privateMinuteTimeoutSec"`
-	PrivateMinuteMinInterval    int    `json:"privateMinuteMinIntervalMs"`
-	PrivateMinuteProxyMode      string `json:"privateMinuteProxyMode" gorm:"default:'disable'"`
-	PrivateMinuteLevel          string `json:"privateMinuteLevel" gorm:"default:'1min'"`
-	AkshareEnabled              bool   `json:"akshareEnabled" gorm:"default:true"`
-	SinaMinuteEnabled           bool   `json:"sinaMinuteEnabled" gorm:"default:true"`
-	TencentMinuteEnabled        bool   `json:"tencentMinuteEnabled" gorm:"default:true"`
-	EastmoneyMinuteEnabled      bool   `json:"eastmoneyMinuteEnabled" gorm:"default:true"`
-	AkshareMinuteSourceMode     string `json:"akshareMinuteSourceMode" gorm:"default:'auto'"`
-	ExperimentalEvidenceEnabled bool   `json:"experimentalEvidenceEnabled" gorm:"column:experimental_evidence_enabled;default:false"`
+	TushareToken                string  `json:"tushareToken"`
+	LocalPushEnable             bool    `json:"localPushEnable"`
+	DingPushEnable              bool    `json:"dingPushEnable"`
+	DingRobot                   string  `json:"dingRobot"`
+	UpdateBasicInfoOnStart      bool    `json:"updateBasicInfoOnStart"`
+	RefreshInterval             int64   `json:"refreshInterval"`
+	OpenAiEnable                bool    `json:"-"`
+	Prompt                      string  `json:"-"`
+	CheckUpdate                 bool    `json:"checkUpdate"`
+	QuestionTemplate            string  `json:"-"`
+	CrawlTimeOut                int64   `json:"crawlTimeOut"`
+	KDays                       int64   `json:"kDays"`
+	EnableDanmu                 bool    `json:"enableDanmu"`
+	BrowserPath                 string  `json:"browserPath"`
+	EnableNews                  bool    `json:"enableNews"`
+	DarkTheme                   bool    `json:"darkTheme"`
+	BrowserPoolSize             int     `json:"browserPoolSize"`
+	EnableFund                  bool    `json:"enableFund"`
+	EnablePushNews              bool    `json:"enablePushNews"`
+	EnableOnlyPushRedNews       bool    `json:"enableOnlyPushRedNews"`
+	HttpProxy                   string  `json:"httpProxy"`
+	HttpProxyEnabled            bool    `json:"httpProxyEnabled"`
+	ForceNoProxyForFetch        bool    `json:"forceNoProxyForFetch" gorm:"default:true"`
+	QgqpBId                     string  `json:"qgqpBId" gorm:"column:qgqp_b_id"`
+	AIAnalysisEnabled           bool    `json:"-" gorm:"default:true"`
+	AICapitalDeploymentEnabled  bool    `json:"aiCapitalDeploymentEnabled" gorm:"default:true"`
+	AITargetCapitalUtilization  float64 `json:"aiTargetCapitalUtilization" gorm:"default:0.9"`
+	AIMaxImmediateBuysPerRun    int     `json:"aiMaxImmediateBuysPerRun" gorm:"default:2"`
+	AIReanalysisIntervalMinutes int     `json:"aiReanalysisIntervalMinutes" gorm:"default:30"`
+	Research2AutoEnabled        bool    `json:"research2AutoEnabled" gorm:"default:true"`
+	Research2EmailEnabled       bool    `json:"research2EmailEnabled"`
+	Research2EmailTo            string  `json:"research2EmailTo" gorm:"type:text"`
+	Research2EmailFrom          string  `json:"research2EmailFrom"`
+	Research2EmailSMTPHost      string  `json:"research2EmailSmtpHost"`
+	Research2EmailSMTPPort      int     `json:"research2EmailSmtpPort"`
+	Research2EmailSMTPUser      string  `json:"research2EmailSmtpUsername"`
+	Research2EmailSMTPPass      string  `json:"research2EmailSmtpPassword"`
+	AIAnalysisConfigID          uint    `json:"aiAnalysisConfigId"`
+	AIAnalysisTimes             string  `json:"aiAnalysisTimes" gorm:"default:'09:30,11:30,14:30'"`
+	AIReviewStartTime           string  `json:"aiReviewStartTime" gorm:"default:'09:50'"`
+	AIReviewIntervalMinutes     int     `json:"aiReviewIntervalMinutes" gorm:"default:15"`
+	MinuteProviderMode          string  `json:"minuteProviderMode" gorm:"default:'public'"`
+	MinuteProviderOrder         string  `json:"-" gorm:"default:'tencent,sina,akshare,private'"`
+	MinuteLongHistoryHint       bool    `json:"minuteLongHistoryHintEnabled" gorm:"column:minute_long_history_hint_enabled;default:true"`
+	PrivateMinuteEnabled        bool    `json:"privateMinuteEnabled"`
+	PrivateMinuteBaseURL        string  `json:"privateMinuteBaseUrl"`
+	PrivateMinuteAPIKey         string  `json:"privateMinuteApiKey"`
+	PrivateMinuteTimeoutSec     int     `json:"privateMinuteTimeoutSec"`
+	PrivateMinuteMinInterval    int     `json:"privateMinuteMinIntervalMs"`
+	PrivateMinuteProxyMode      string  `json:"privateMinuteProxyMode" gorm:"default:'disable'"`
+	PrivateMinuteLevel          string  `json:"privateMinuteLevel" gorm:"default:'1min'"`
+	AkshareEnabled              bool    `json:"akshareEnabled" gorm:"default:true"`
+	SinaMinuteEnabled           bool    `json:"sinaMinuteEnabled" gorm:"default:true"`
+	TencentMinuteEnabled        bool    `json:"tencentMinuteEnabled" gorm:"default:true"`
+	EastmoneyMinuteEnabled      bool    `json:"eastmoneyMinuteEnabled" gorm:"default:true"`
+	AkshareMinuteSourceMode     string  `json:"akshareMinuteSourceMode" gorm:"default:'auto'"`
+	ExperimentalEvidenceEnabled bool    `json:"experimentalEvidenceEnabled" gorm:"column:experimental_evidence_enabled;default:false"`
 }
 
 func (Settings) TableName() string { return "settings" }

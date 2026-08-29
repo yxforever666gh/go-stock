@@ -103,12 +103,12 @@ func (s *Service) ApplyHistoricalPostSellBuyCorrection(ctx context.Context, requ
 			(!strings.Contains(failure.Reason, "minimum order unit") && !strings.Contains(failure.Reason, "最小")) {
 			return errors.New("original missed-cash event is not the expected minimum-order failure")
 		}
-		capacity, err := recommendationCapacity(tx)
+		capacity, err := recommendationCapacity(tx, 0.90)
 		if err != nil {
 			return err
 		}
 		entry := Quote{Code: "sz300308", Name: "中际旭创", Market: "SZ", Price: 941.41, At: historicalPostSellBuyQuoteAt}
-		quantity, cost, err := SizeBuy(entry.Code, entry.Price, capacity.UnreservedCash)
+		quantity, cost, err := sizeBuyLegacyTarget(entry.Code, entry.Price, capacity.UnreservedCash)
 		if err != nil {
 			return err
 		}

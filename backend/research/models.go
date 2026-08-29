@@ -16,28 +16,44 @@ const (
 )
 
 type AnalysisRun struct {
-	ID                     uint       `json:"id" gorm:"primaryKey"`
-	RunID                  string     `json:"runId" gorm:"size:36;uniqueIndex;not null"`
-	ScheduledFor           time.Time  `json:"scheduledFor" gorm:"index"`
-	StartedAt              time.Time  `json:"startedAt" gorm:"index"`
-	CompletedAt            *time.Time `json:"completedAt"`
-	Status                 string     `json:"status" gorm:"size:32;index;not null"`
-	AIConfigID             uint       `json:"aiConfigId"`
-	ProviderName           string     `json:"providerName" gorm:"size:128"`
-	ModelName              string     `json:"modelName" gorm:"size:128"`
-	MarketReport           string     `json:"marketReport" gorm:"type:text"`
-	SectorReport           string     `json:"sectorReport" gorm:"type:text"`
-	StockReport            string     `json:"stockReport" gorm:"type:text"`
-	FinalReport            string     `json:"finalReport" gorm:"type:text"`
-	SourceStatusJSON       string     `json:"sourceStatusJson" gorm:"type:text"`
-	ModelAttemptLogJSON    string     `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
-	StrategyVersion        string     `json:"strategyVersion,omitempty" gorm:"column:strategy_version;size:64"`
-	EvidenceProfileVersion string     `json:"evidenceProfileVersion,omitempty" gorm:"column:evidence_profile_version;size:64"`
-	EvidenceSetID          string     `json:"evidenceSetId,omitempty" gorm:"column:evidence_set_id;size:36;index"`
-	FailureReason          string     `json:"failureReason" gorm:"type:text"`
-	RecommendationCount    int        `json:"recommendationCount"`
-	CreatedAt              time.Time  `json:"createdAt"`
-	UpdatedAt              time.Time  `json:"updatedAt"`
+	ID                     uint             `json:"id" gorm:"primaryKey"`
+	RunID                  string           `json:"runId" gorm:"size:36;uniqueIndex;not null"`
+	ScheduledFor           time.Time        `json:"scheduledFor" gorm:"index"`
+	StartedAt              time.Time        `json:"startedAt" gorm:"index"`
+	CompletedAt            *time.Time       `json:"completedAt"`
+	Status                 string           `json:"status" gorm:"size:32;index;not null"`
+	AIConfigID             uint             `json:"aiConfigId"`
+	ProviderName           string           `json:"providerName" gorm:"size:128"`
+	ModelName              string           `json:"modelName" gorm:"size:128"`
+	MarketReport           string           `json:"marketReport" gorm:"type:text"`
+	SectorReport           string           `json:"sectorReport" gorm:"type:text"`
+	StockReport            string           `json:"stockReport" gorm:"type:text"`
+	FinalReport            string           `json:"finalReport" gorm:"type:text"`
+	SourceStatusJSON       string           `json:"sourceStatusJson" gorm:"type:text"`
+	ModelAttemptLogJSON    string           `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
+	StrategyVersion        string           `json:"strategyVersion,omitempty" gorm:"column:strategy_version;size:64"`
+	EvidenceProfileVersion string           `json:"evidenceProfileVersion,omitempty" gorm:"column:evidence_profile_version;size:64"`
+	EvidenceSetID          string           `json:"evidenceSetId,omitempty" gorm:"column:evidence_set_id;size:36;index"`
+	FailureReason          string           `json:"failureReason" gorm:"type:text"`
+	RecommendationCount    int              `json:"recommendationCount"`
+	TriggerID              string           `json:"triggerId,omitempty" gorm:"size:36;index"`
+	TriggerIDsJSON         string           `json:"triggerIdsJson,omitempty" gorm:"type:text;not null;default:'[]'"`
+	TriggerSource          string           `json:"triggerSource,omitempty" gorm:"size:32;index"`
+	TriggerReason          string           `json:"triggerReason,omitempty" gorm:"type:text"`
+	FundingCash            float64          `json:"fundingCash"`
+	FundingReservedCash    float64          `json:"fundingReservedCash"`
+	FundingNetAssetValue   float64          `json:"fundingNetAssetValue"`
+	FundingCapitalBuffer   float64          `json:"fundingCapitalBuffer"`
+	FundingDeployableCash  float64          `json:"fundingDeployableCash"`
+	FundingAvailableSlots  int              `json:"fundingAvailableSlots"`
+	LeaseOwner             string           `json:"leaseOwner,omitempty" gorm:"size:128;index"`
+	LeaseExpiresAt         *time.Time       `json:"leaseExpiresAt,omitempty" gorm:"index"`
+	BuyNowCount            int              `json:"buyNowCount"`
+	WaitCount              int              `json:"waitCount"`
+	RejectCount            int              `json:"rejectCount"`
+	Opportunities          []BuyOpportunity `json:"opportunities,omitempty" gorm:"-"`
+	CreatedAt              time.Time        `json:"createdAt"`
+	UpdatedAt              time.Time        `json:"updatedAt"`
 }
 
 // ModelAttemptRecord is the persisted, sanitized state of one provider call.
@@ -120,12 +136,18 @@ type AnalysisRunSummary struct {
 	FailureReason       string     `json:"failureReason"`
 	SourceCount         int        `json:"sourceCount"`
 	FailedSourceCount   int        `json:"failedSourceCount"`
+	TriggerSource       string     `json:"triggerSource,omitempty"`
+	TriggerReason       string     `json:"triggerReason,omitempty"`
+	BuyNowCount         int        `json:"buyNowCount"`
+	WaitCount           int        `json:"waitCount"`
+	RejectCount         int        `json:"rejectCount"`
 }
 
 type Recommendation struct {
 	ID                  uint       `json:"id" gorm:"primaryKey"`
 	RecommendationID    string     `json:"recommendationId" gorm:"size:36;uniqueIndex;not null"`
 	AnalysisRunID       string     `json:"analysisRunId" gorm:"size:36;index;not null"`
+	OpportunityID       string     `json:"opportunityId,omitempty" gorm:"size:36;index"`
 	StockCode           string     `json:"stockCode" gorm:"size:16;index;not null"`
 	StockName           string     `json:"stockName" gorm:"size:64;not null"`
 	SignalAt            time.Time  `json:"signalAt" gorm:"index;not null"`
@@ -159,6 +181,78 @@ type Recommendation struct {
 }
 
 func (Recommendation) TableName() string { return "research_v160_recommendations" }
+
+const (
+	TriggerSourceSell       = "sell"
+	TriggerSourceStartup    = "startup_recovery"
+	TriggerSourceCapitalGap = "capital_gap"
+
+	TriggerStatusQueued    = "queued"
+	TriggerStatusRunning   = "running"
+	TriggerStatusCompleted = "completed"
+	TriggerStatusFailed    = "failed"
+
+	OpportunityActionBuyNow = "buy_now"
+	OpportunityActionWait   = "wait"
+	OpportunityActionReject = "reject"
+)
+
+// AnalysisTrigger is a durable request for a complete research run. Sell
+// triggers use CoalesceUntil to provide the two-minute aggregation window.
+// AvailableAt is independently used for business retries and technical
+// backoff, so waiting decisions never become five-minute lightweight checks.
+type AnalysisTrigger struct {
+	ID                     uint       `json:"id" gorm:"primaryKey"`
+	TriggerID              string     `json:"triggerId" gorm:"size:36;uniqueIndex;not null"`
+	Source                 string     `json:"source" gorm:"size:32;index;uniqueIndex:idx_v270_trigger_source_key,priority:1;not null"`
+	SourceKey              string     `json:"sourceKey" gorm:"size:160;uniqueIndex:idx_v270_trigger_source_key,priority:2;not null"`
+	Reason                 string     `json:"reason" gorm:"type:text"`
+	SourceRecommendationID string     `json:"sourceRecommendationId,omitempty" gorm:"size:36;index"`
+	SourceTradeID          string     `json:"sourceTradeId,omitempty" gorm:"size:36;index"`
+	Status                 string     `json:"status" gorm:"size:16;index;not null"`
+	AvailableAt            time.Time  `json:"availableAt" gorm:"index;not null"`
+	CoalesceUntil          time.Time  `json:"coalesceUntil" gorm:"index;not null"`
+	ClaimedAt              *time.Time `json:"claimedAt,omitempty"`
+	LeaseExpiresAt         *time.Time `json:"leaseExpiresAt,omitempty" gorm:"index"`
+	LeaseOwner             string     `json:"leaseOwner,omitempty" gorm:"size:128;index"`
+	AttemptCount           int        `json:"attemptCount" gorm:"not null;default:0"`
+	AnalysisRunID          string     `json:"analysisRunId,omitempty" gorm:"size:36;index"`
+	LastError              string     `json:"lastError,omitempty" gorm:"type:text"`
+	CompletedAt            *time.Time `json:"completedAt,omitempty"`
+	CreatedAt              time.Time  `json:"createdAt" gorm:"index"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
+}
+
+func (AnalysisTrigger) TableName() string { return "research_v270_analysis_triggers" }
+
+// BuyOpportunity stores every final AI decision. Only buy_now may be linked
+// to a formal Recommendation; wait/reject never reserve cash or affect P&L.
+type BuyOpportunity struct {
+	ID               uint       `json:"id" gorm:"primaryKey"`
+	OpportunityID    string     `json:"opportunityId" gorm:"size:36;uniqueIndex;not null"`
+	AnalysisRunID    string     `json:"analysisRunId" gorm:"size:36;index;not null"`
+	RecommendationID string     `json:"recommendationId,omitempty" gorm:"size:36;index"`
+	Action           string     `json:"action" gorm:"size:16;index;not null"`
+	StockCode        string     `json:"stockCode" gorm:"size:16;index;not null"`
+	StockName        string     `json:"stockName" gorm:"size:64;not null"`
+	PriceLow         float64    `json:"priceLow"`
+	PriceHigh        float64    `json:"priceHigh"`
+	QuotePrice       float64    `json:"quotePrice"`
+	QuoteAt          *time.Time `json:"quoteAt,omitempty"`
+	AISummary        string     `json:"aiSummary" gorm:"type:text"`
+	MainRisk         string     `json:"mainRisk" gorm:"type:text"`
+	SourceRefs       string     `json:"sourceRefs" gorm:"type:text"`
+	Source           string     `json:"source" gorm:"size:32"`
+	Status           string     `json:"status" gorm:"size:16;index;not null;default:'active'"`
+	TimingReason     string     `json:"timingReason,omitempty" gorm:"type:text"`
+	ExpiresAt        *time.Time `json:"expiresAt,omitempty" gorm:"index"`
+	SupersededAt     *time.Time `json:"supersededAt,omitempty" gorm:"index"`
+	ValidationReason string     `json:"validationReason,omitempty" gorm:"type:text"`
+	CreatedAt        time.Time  `json:"createdAt" gorm:"index"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+}
+
+func (BuyOpportunity) TableName() string { return "research_v270_buy_opportunities" }
 
 // RecommendationHistoryItem is bounded internal context for soft diversity.
 // It is not exposed by the public API and never blocks a repeated position.

@@ -10,49 +10,50 @@ import (
 	"time"
 
 	"github.com/coocood/freecache"
+	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
 )
 
 // App struct
 type App struct {
-	ctx                context.Context
-	runtime            *runtimeCoordinator
-	cache              *freecache.Cache
-	cron               *cron.Cron
-	cronEntrys         map[string]cron.EntryID
-	cronEntrysMu       sync.RWMutex
-	services           service.AppServices
-	domReadyMu         sync.Mutex
-	domReadyDone       bool
-	schedulerErrorsMu  sync.Mutex
-	schedulerErrors    []error
-	themeRuntimeMu     sync.Mutex
-	themeRuntime       themeLifecycleCollector
-	themeFactory       themeLifecycleFactory
-	themeClock         func() time.Time
-	themeOpenTradeDay  func(time.Time) (bool, error)
-	themeRunMu         sync.Mutex
-	themeErrorsMu      sync.Mutex
-	themeErrors        []error
-	researchRuntimeMu  sync.RWMutex
-	researchRuntime    *data.ResearchRuntime
-	researchFactory    func(int) (*data.ResearchRuntime, error)
-	research2RuntimeMu sync.RWMutex
-	research2Runtime   *data.Research2Runtime
-	research2Factory   func(int) (*data.Research2Runtime, error)
-	aiAnalysisRunMu    sync.Mutex
-	aiAnalysisRunning  bool
-	aiRecoveryRunMu    sync.Mutex
-	aiLifecycleRunMu   sync.Mutex
-	research2RunMu     sync.Mutex
-	research2TradeMu   sync.Mutex
-	research2MetricMu  sync.Mutex
-	research2EmailMu   sync.Mutex
+	ctx                    context.Context
+	runtime                *runtimeCoordinator
+	cache                  *freecache.Cache
+	cron                   *cron.Cron
+	cronEntrys             map[string]cron.EntryID
+	cronEntrysMu           sync.RWMutex
+	services               service.AppServices
+	domReadyMu             sync.Mutex
+	domReadyDone           bool
+	schedulerErrorsMu      sync.Mutex
+	schedulerErrors        []error
+	themeRuntimeMu         sync.Mutex
+	themeRuntime           themeLifecycleCollector
+	themeFactory           themeLifecycleFactory
+	themeClock             func() time.Time
+	themeOpenTradeDay      func(time.Time) (bool, error)
+	themeRunMu             sync.Mutex
+	themeErrorsMu          sync.Mutex
+	themeErrors            []error
+	researchRuntimeMu      sync.RWMutex
+	researchRuntime        *data.ResearchRuntime
+	researchFactory        func(int) (*data.ResearchRuntime, error)
+	research2RuntimeMu     sync.RWMutex
+	research2Runtime       *data.Research2Runtime
+	research2Factory       func(int) (*data.Research2Runtime, error)
+	aiAnalysisRunMu        sync.Mutex
+	aiAnalysisRunning      bool
+	aiDeploymentRunMu      sync.Mutex
+	aiDeploymentLeaseOwner string
+	aiLifecycleRunMu       sync.Mutex
+	research2RunMu         sync.Mutex
+	research2TradeMu       sync.Mutex
+	research2MetricMu      sync.Mutex
+	research2EmailMu       sync.Mutex
 }
 
-const aiAnalysisEntryPrefix = "AIAnalysisCustom_"
 const aiLifecycleEntryKey = "AIAnalysisLifecycleDue"
-const aiRecoveryEntryKey = "AIAnalysisRecoveryDue"
+const aiDeploymentEntryKey = "AICapitalDeploymentDue"
 const research2AnalysisEntryKey = "Research2Analysis0950"
 const research2TradingEntryKey = "Research2TradingMinute"
 const research2MetricsEntryKey = "Research2Metrics1505"
@@ -74,16 +75,17 @@ func NewAppWithServices(services service.AppServices) *App {
 	c := cron.New(cron.WithSeconds())
 	runtime := newRuntimeCoordinator(context.Background())
 	return &App{
-		ctx:               runtime.Context(),
-		runtime:           runtime,
-		cache:             cache,
-		cron:              c,
-		cronEntrys:        make(map[string]cron.EntryID),
-		services:          services,
-		themeClock:        time.Now,
-		themeOpenTradeDay: data.IsCNOpenTradeDayStrict,
-		researchFactory:   data.NewResearchRuntime,
-		research2Factory:  data.NewResearch2Runtime,
+		ctx:                    runtime.Context(),
+		runtime:                runtime,
+		cache:                  cache,
+		cron:                   c,
+		cronEntrys:             make(map[string]cron.EntryID),
+		services:               services,
+		themeClock:             time.Now,
+		themeOpenTradeDay:      data.IsCNOpenTradeDayStrict,
+		researchFactory:        data.NewResearchRuntime,
+		research2Factory:       data.NewResearch2Runtime,
+		aiDeploymentLeaseOwner: "go-stock-" + uuid.NewString(),
 	}
 }
 

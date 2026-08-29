@@ -1,25 +1,29 @@
 import { API_PATHS } from './api-types.generated'
 import type {
-  AcceptedResponse,
   AccountCashFlow,
   AccountOverview,
   AccountPerformance,
   AnalysisRun,
   AnalysisRunSummary,
+  BuyOpportunity,
+  CapitalDeploymentStatus,
   Recommendation,
   RecommendationChart,
   RecommendationDetail,
 } from './api-types.generated'
 import { requestJSON, withPath, withQuery } from './http-client'
 
-export const StartAIAnalysis = async (): Promise<boolean> =>
-  (await requestJSON<AcceptedResponse>(API_PATHS.startAnalysisRun, { method: 'POST' }))?.accepted ?? false
-
 export const ListAIAnalysisReports = (limit?: number, offset?: number): Promise<AnalysisRunSummary[]> =>
   requestJSON(withQuery(API_PATHS.listAnalysisRuns, { limit, offset }))
 
 export const GetAIAnalysisReport = (id: string): Promise<AnalysisRun> =>
   requestJSON(withPath(API_PATHS.getAnalysisRun, { id }))
+
+export const GetAICapitalDeploymentStatus = (): Promise<CapitalDeploymentStatus> =>
+  requestJSON(API_PATHS.getCapitalDeploymentStatus)
+
+export const ListAIBuyOpportunities = (limit?: number, offset?: number): Promise<BuyOpportunity[]> =>
+  requestJSON(withQuery(API_PATHS.listBuyOpportunities, { limit, offset }))
 
 export const ListAIRecommendations = (limit?: number, offset?: number): Promise<Recommendation[]> =>
   requestJSON(withQuery(API_PATHS.listRecommendations, { limit, offset }))

@@ -843,6 +843,15 @@ func NewResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Re
 			return nil, scheduleErr
 		}
 		service.SetSellReviewSchedule(schedule)
+		target, maxImmediate, _, policyErr := NormalizeAICapitalDeploymentSettings(
+			setting.AITargetCapitalUtilization,
+			setting.AIMaxImmediateBuysPerRun,
+			setting.AIReanalysisIntervalMinutes,
+		)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		service.SetCapitalDeploymentPolicy(target, maxImmediate)
 	}
 	service.SetRecommendationChartProvider(NewResearchChartProviderWithStorage(quoteProvider, minuteDB))
 	var collector research.SourceCollector = NewResearchSourceCollectorWithProviders(news, stocks)

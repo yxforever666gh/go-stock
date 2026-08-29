@@ -48,3 +48,27 @@ func TestNormalizeAIReviewSchedule(t *testing.T) {
 		t.Fatal("interval below 5 minutes must be rejected")
 	}
 }
+
+func TestNormalizeAICapitalDeploymentSettings(t *testing.T) {
+	target, buys, minutes, err := NormalizeAICapitalDeploymentSettings(0, 0, 0)
+	if err != nil || target != 0.90 || buys != 2 || minutes != 30 {
+		t.Fatalf("defaults=(%.2f,%d,%d) err=%v", target, buys, minutes, err)
+	}
+	target, buys, minutes, err = NormalizeAICapitalDeploymentSettings(0.80, 1, 60)
+	if err != nil || target != 0.80 || buys != 1 || minutes != 60 {
+		t.Fatalf("safe overrides=(%.2f,%d,%d) err=%v", target, buys, minutes, err)
+	}
+	for _, test := range []struct {
+		target  float64
+		buys    int
+		minutes int
+	}{
+		{target: 0.91, buys: 2, minutes: 30},
+		{target: 0.90, buys: 3, minutes: 30},
+		{target: 0.90, buys: 2, minutes: 4},
+	} {
+		if _, _, _, err = NormalizeAICapitalDeploymentSettings(test.target, test.buys, test.minutes); err == nil {
+			t.Fatalf("unsafe settings unexpectedly accepted: %+v", test)
+		}
+	}
+}

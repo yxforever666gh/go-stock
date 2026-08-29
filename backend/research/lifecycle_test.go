@@ -133,7 +133,7 @@ func researchTestRepo(t *testing.T) *Repository {
 		t.Fatal(err)
 	}
 	sqlDB.SetMaxOpenConns(1)
-	if err = db.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{}, &SimulatedAccount{}, &SimulatedTrade{}, &Position{}); err != nil {
+	if err = db.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{}, &SimulatedAccount{}, &SimulatedTrade{}, &Position{}, &AnalysisTrigger{}, &BuyOpportunity{}); err != nil {
 		t.Fatal(err)
 	}
 	repo := NewRepository(db)
@@ -201,7 +201,7 @@ func TestConcurrentRecommendationAdmissionNeverExceedsCash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if accepted != 10 || rejected != 10 || capacity.PendingBuys != 10 || capacity.ReservedCash != 500000 || capacity.ExposureCount != 10 {
+	if accepted != 9 || rejected != 11 || capacity.PendingBuys != 9 || capacity.ReservedCash != 450000 || capacity.ExposureCount != 9 || capacity.DeployableCash != 0 {
 		t.Fatalf("accepted=%d rejected=%d capacity=%+v", accepted, rejected, capacity)
 	}
 }
@@ -346,7 +346,7 @@ func TestEnqueueRecommendationBuysImmediatelyAndAnchorsNextTradingDay0950(t *tes
 	}
 }
 
-func TestEnqueueRecommendationReservesAndBuysOneHighPriceLot(t *testing.T) {
+func TestEnqueueRecommendationRejectsOneLotAbovePerTradeCap(t *testing.T) {
 	repo := researchTestRepo(t)
 	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 154814.32202159002).Error; err != nil {
 		t.Fatal(err)
@@ -356,16 +356,8 @@ func TestEnqueueRecommendationReservesAndBuysOneHighPriceLot(t *testing.T) {
 	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, weekdayTradingCalendar{})
 	service.now = func() time.Time { return now }
 	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: quote.Code, StockName: quote.Name, SignalAt: now}
-	if err := service.EnqueueRecommendation(context.Background(), &rec, nil, quote); err != nil {
-		t.Fatal(err)
-	}
-	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
-	var trade SimulatedTrade
-	if err := repo.DB().Where("recommendation_id = ? AND side = ?", rec.RecommendationID, "buy").First(&trade).Error; err != nil {
-		t.Fatal(err)
-	}
-	if stored.Status != "active" || stored.Quantity != 100 || stored.ReservedCash != 0 || math.Abs(-trade.NetCashFlow-94264.35389371) > 1e-6 {
-		t.Fatalf("stored=%+v", stored)
+	if err := service.EnqueueRecommendation(context.Background(), &rec, nil, quote); !errors.Is(err, ErrMinimumOrder) {
+		t.Fatalf("err=%v, want ErrMinimumOrder", err)
 	}
 }
 
@@ -400,7 +392,7 @@ func TestAfterCloseBuyQueuesForNextOpenAndFailsOnlyOnce(t *testing.T) {
 
 func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	repo := researchTestRepo(t)
-	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 110000.0).Error; err != nil {
+	if err := repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 210000.0).Error; err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
@@ -414,12 +406,16 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	for index, code := range []string{"sh600000", "sz000001", "sh600001", "sh600002"} {
 		rec := Recommendation{RecommendationID: newID(), AnalysisRunID: runID, StockCode: code, StockName: []string{"甲", "乙", "丙", "丁"}[index], SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
 		if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
+			if index == 3 && errors.Is(err, ErrInsufficientCash) {
+				statuses = append(statuses, "rejected_cash")
+				continue
+			}
 			t.Fatal(err)
 		}
 		stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
 		statuses = append(statuses, stored.Status)
 	}
-	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "active" || statuses[3] != "missed_cash" {
+	if statuses[0] != "active" || statuses[1] != "active" || statuses[2] != "active" || statuses[3] != "rejected_cash" {
 		t.Fatalf("statuses=%v", statuses)
 	}
 }

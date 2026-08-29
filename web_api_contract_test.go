@@ -47,7 +47,9 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		{http.MethodGet, "/api/v1/watchlist/etfs"},
 		{http.MethodPost, "/api/v1/watchlist/etfs"},
 		{http.MethodDelete, "/api/v1/watchlist/etfs/510300"},
-		{http.MethodPost, "/api/v1/research/analysis-runs"},
+		{http.MethodGet, "/api/v1/research/analysis-runs"},
+		{http.MethodGet, "/api/v1/research/capital-deployment/status"},
+		{http.MethodGet, "/api/v1/research/buy-opportunities"},
 		{http.MethodGet, "/api/v1/research/recommendations/example"},
 		{http.MethodPost, "/api/v1/exports/config"},
 	}
@@ -84,6 +86,16 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		if recorder.Code != http.StatusNotFound {
 			t.Errorf("%s %s status = %d, want 404", item.method, item.path, recorder.Code)
 		}
+	}
+}
+
+func TestManualResearchAnalysisRouteRemoved(t *testing.T) {
+	mux := testWebV1Mux()
+	req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:34115/api/v1/research/analysis-runs", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST /api/v1/research/analysis-runs status = %d, want 405", recorder.Code)
 	}
 }
 

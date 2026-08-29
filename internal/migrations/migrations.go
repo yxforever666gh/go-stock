@@ -251,6 +251,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV20Definition,
 		apply:       applyFundETFSchema,
 	},
+	{
+		id: 21, name: "event_driven_capital_deployment",
+		description: "App 2.7.0 replaces fixed-time research with durable event-driven capital deployment, structured buy opportunities and database leases without rewriting historical research, recommendation, account or trading rows.",
+		definition:  mainMigrationV21Definition,
+		apply:       applyEventDrivenCapitalDeploymentSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -838,6 +844,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 20 {
 		if err := verifyMainSchema20Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 21 {
+		if err := verifyMainSchema21Runtime(database); err != nil {
 			return result, err
 		}
 	}

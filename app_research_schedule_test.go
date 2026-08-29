@@ -8,63 +8,47 @@ import (
 	"go-stock/backend/research"
 )
 
-func TestLatestConfiguredAnalysisSlotUsesOnlyMostRecentNode(t *testing.T) {
+func TestNextCapitalDeploymentWindow(t *testing.T) {
 	service := research.NewService(nil, nil, nil, research.WeekdayCalendar{})
-	now := time.Date(2026, 8, 17, 14, 40, 0, 0, time.FixedZone("test", 8*60*60))
-	slot, err := latestConfiguredAnalysisSlot(context.Background(), service, now, []string{"09:55", "14:30"})
-	if err != nil {
-		t.Fatal(err)
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	tests := []struct {
+		name      string
+		requested time.Time
+		want      string
+	}{
+		{name: "pre open", requested: time.Date(2026, 8, 17, 8, 20, 0, 0, location), want: "2026-08-17 09:35"},
+		{name: "morning", requested: time.Date(2026, 8, 17, 10, 20, 0, 0, location), want: "2026-08-17 10:20"},
+		{name: "lunch", requested: time.Date(2026, 8, 17, 12, 20, 0, 0, location), want: "2026-08-17 13:00"},
+		{name: "afternoon", requested: time.Date(2026, 8, 17, 14, 20, 0, 0, location), want: "2026-08-17 14:20"},
+		{name: "one second after cutoff", requested: time.Date(2026, 8, 17, 14, 25, 1, 0, location), want: "2026-08-18 09:35"},
+		{name: "after cutoff", requested: time.Date(2026, 8, 17, 14, 26, 0, 0, location), want: "2026-08-18 09:35"},
+		{name: "weekend", requested: time.Date(2026, 8, 22, 10, 0, 0, 0, location), want: "2026-08-24 09:35"},
 	}
-	if got := slot.Format("2006-01-02 15:04"); got != "2026-08-17 14:30" {
-		t.Fatalf("slot=%s", got)
-	}
-
-	beforeFirst := time.Date(2026, 8, 17, 9, 40, 0, 0, now.Location())
-	slot, err = latestConfiguredAnalysisSlot(context.Background(), service, beforeFirst, []string{"09:55", "14:30"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := slot.Format("2006-01-02 15:04"); got != "2026-08-14 14:30" {
-		t.Fatalf("previous trading slot=%s", got)
-	}
-}
-
-func TestScheduledAnalysisRecoveryDue(t *testing.T) {
-	now := time.Date(2026, 8, 17, 10, 10, 0, 0, time.FixedZone("test", 8*60*60))
-	if !scheduledAnalysisRecoveryDue(now, research.AnalysisRun{}, false) {
-		t.Fatal("a genuinely missed slot must run immediately")
-	}
-	completed := now.Add(-scheduledAnalysisRetryInterval)
-	failed := research.AnalysisRun{Status: "failed", StartedAt: now.Add(-10 * time.Minute), CompletedAt: &completed}
-	if !scheduledAnalysisRecoveryDue(now, failed, true) {
-		t.Fatal("failed slot must retry after five minutes")
-	}
-	almost := now.Add(-scheduledAnalysisRetryInterval + time.Second)
-	failed.CompletedAt = &almost
-	if scheduledAnalysisRecoveryDue(now, failed, true) {
-		t.Fatal("failed slot retried before five minutes")
-	}
-	previousDay := failed
-	previousDay.StartedAt = previousDay.StartedAt.AddDate(0, 0, -1)
-	previousDay.CompletedAt = &completed
-	if scheduledAnalysisRecoveryDue(now, previousDay, true) {
-		t.Fatal("failed slot rolled into another trading day")
-	}
-	for _, status := range []string{"running", "success", "no_recommendation", "skipped_cash"} {
-		terminal := research.AnalysisRun{Status: status, StartedAt: now, CompletedAt: &completed}
-		if scheduledAnalysisRecoveryDue(now, terminal, true) {
-			t.Fatalf("status %s unexpectedly retried", status)
-		}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := nextCapitalDeploymentWindow(context.Background(), service, test.requested)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if formatted := got.Format("2006-01-02 15:04"); formatted != test.want {
+				t.Fatalf("window=%s want=%s", formatted, test.want)
+			}
+		})
 	}
 }
 
-func TestScheduledAnalysisSlotIsExactAndManualTimestampDiffers(t *testing.T) {
-	now := time.Date(2026, 8, 17, 14, 30, 17, 123, time.FixedZone("test", 8*60*60))
-	slot := scheduledAnalysisSlot(now, "14:30")
-	if slot.Second() != 0 || slot.Nanosecond() != 0 || slot.Format("2006-01-02 15:04") != "2026-08-17 14:30" {
-		t.Fatalf("slot=%s", slot.Format(time.RFC3339Nano))
+func TestCapitalDeploymentWindowCutoff(t *testing.T) {
+	location := time.FixedZone("Asia/Shanghai", 8*60*60)
+	if !research.IsCapitalDeploymentAnalysisWindow(time.Date(2026, 8, 17, 11, 30, 0, 0, location)) {
+		t.Fatal("11:30:00 must still allow a new claim")
 	}
-	if slot.Equal(now) {
-		t.Fatal("manual invocation timestamp must not equal the exact scheduled slot")
+	if research.IsCapitalDeploymentAnalysisWindow(time.Date(2026, 8, 17, 11, 30, 1, 0, location)) {
+		t.Fatal("the lunch break must defer a new claim")
+	}
+	if !research.IsCapitalDeploymentAnalysisWindow(time.Date(2026, 8, 17, 14, 25, 0, 0, location)) {
+		t.Fatal("14:25 must still allow a new claim")
+	}
+	if research.IsCapitalDeploymentAnalysisWindow(time.Date(2026, 8, 17, 14, 25, 1, 0, location)) {
+		t.Fatal("after 14:25 must defer to the next trading day")
 	}
 }

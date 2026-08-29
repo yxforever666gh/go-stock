@@ -14,8 +14,14 @@ import (
 )
 
 const (
-	researchSnapshotEntryKey       = "ResearchAccountDailyCloseSnapshot"
-	scheduledAnalysisRetryInterval = 5 * time.Minute
+	researchSnapshotEntryKey         = "ResearchAccountDailyCloseSnapshot"
+	capitalDeploymentLeaseDuration   = 10 * time.Minute
+	capitalDeploymentHeartbeat       = time.Minute
+	capitalDeploymentStartHour       = 9
+	capitalDeploymentStartMinute     = 35
+	capitalDeploymentCutoffHour      = 14
+	capitalDeploymentCutoffMinute    = 25
+	defaultCapitalReanalysisInterval = 30 * time.Minute
 )
 
 func (a *App) replaceResearchRuntime(configID int) error {
@@ -49,71 +55,73 @@ func (a *App) getResearchRuntime() (*data.ResearchRuntime, error) {
 	return a.researchRuntime, nil
 }
 
-func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig) {
-	// Daily valuation snapshots belong to the simulated portfolio, not to the
-	// model switch. Register them even when AI analysis is disabled.
+func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig, startup bool) {
+	// Account valuation and position lifecycle work are independent from the
+	// capital-deployment switch and must survive model/configuration changes.
 	a.ensureResearchAccountCrons()
 	for key, entryID := range a.snapshotCronEntries() {
-		if strings.HasPrefix(key, aiAnalysisEntryPrefix) || key == aiLifecycleEntryKey || key == aiRecoveryEntryKey {
+		if key == aiLifecycleEntryKey || key == aiDeploymentEntryKey {
 			a.cron.Remove(entryID)
 			a.deleteCronEntry(key)
 		}
 	}
-	// The lifecycle scanner also performs one-shot pending buys and retries a
-	// previously approved sell. Those transitions must continue even when new
-	// AI analysis is disabled or no model is currently callable.
+	if setting == nil || setting.Settings == nil {
+		if err := a.replaceResearchRuntime(0); err != nil {
+			a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", err)
+			return
+		}
+		a.registerResearchLifecycleScanner()
+		return
+	}
+	target, maxImmediate, _, policyErr := data.NormalizeAICapitalDeploymentSettings(
+		setting.AITargetCapitalUtilization,
+		setting.AIMaxImmediateBuysPerRun,
+		setting.AIReanalysisIntervalMinutes,
+	)
+	if policyErr != nil {
+		a.recordSchedulerRegistrationError("AICapitalDeploymentPolicy", "@every 1m", policyErr)
+		target, maxImmediate = 0.90, 2
+	}
+	selected, err := data.ResolveAIAnalysisConfig(setting)
+	if err != nil {
+		if replaceErr := a.replaceResearchRuntime(0); replaceErr != nil {
+			a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", replaceErr)
+			return
+		}
+		logger.SugaredLogger.Infof("资金补位尚无可用模型，事件会持久化等待配置恢复: %v", err)
+	} else {
+		if err := a.replaceResearchRuntime(int(selected.ID)); err != nil {
+			a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", err)
+			return
+		}
+	}
+	runtime, runtimeErr := a.getResearchRuntime()
+	if runtimeErr != nil {
+		a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", runtimeErr)
+		return
+	}
+	runtime.Service.SetCapitalDeploymentPolicy(target, maxImmediate)
+	a.registerResearchLifecycleScanner()
+	deploymentID, deploymentErr := a.cron.AddFunc("@every 1m", func() { a.processCapitalDeployment(false) })
+	if deploymentErr != nil {
+		a.recordSchedulerRegistrationError(aiDeploymentEntryKey, "@every 1m", deploymentErr)
+		return
+	}
+	a.setCronEntry(aiDeploymentEntryKey, deploymentID)
+	a.goTask(func(context.Context) { a.processCapitalDeployment(startup) })
+	logger.SugaredLogger.Infof("资金补位事件调度器已加载 enabled=%t；持仓生命周期继续每分钟扫描", setting.AICapitalDeploymentEnabled)
+}
+
+func (a *App) registerResearchLifecycleScanner() {
 	entryID, lifecycleErr := a.cron.AddFunc("@every 1m", func() { a.processDueAILifecycle() })
 	if lifecycleErr != nil {
 		a.recordSchedulerRegistrationError(aiLifecycleEntryKey, "@every 1m", lifecycleErr)
 		return
 	}
 	a.setCronEntry(aiLifecycleEntryKey, entryID)
+	// Run after the selected model runtime is installed so overdue per-stock
+	// reviews are recovered immediately without racing a config-0 runtime.
 	a.goTask(func(context.Context) { a.processDueAILifecycle() })
-	if setting == nil || setting.Settings == nil {
-		return
-	}
-	selected, err := data.ResolveAIAnalysisConfig(setting)
-	if err != nil {
-		if replaceErr := a.replaceResearchRuntime(0); replaceErr != nil {
-			a.recordSchedulerRegistrationError("AIAnalysisRuntime", setting.AIAnalysisTimes, replaceErr)
-			return
-		}
-		logger.SugaredLogger.Infof("AI 分析没有已启用模型，定时任务不注册: %v", err)
-		return
-	}
-	if err := a.replaceResearchRuntime(int(selected.ID)); err != nil {
-		a.recordSchedulerRegistrationError("AIAnalysisRuntime", setting.AIAnalysisTimes, err)
-		return
-	}
-	if !setting.AIAnalysisEnabled {
-		logger.SugaredLogger.Info("AI 新推荐定时任务已关闭；手动分析、持仓生命周期与账户任务继续运行")
-		return
-	}
-	times, err := data.NormalizeAIAnalysisTimes(setting.AIAnalysisTimes)
-	if err != nil {
-		a.recordSchedulerRegistrationError("AIAnalysis", setting.AIAnalysisTimes, err)
-		return
-	}
-	for index, hhmm := range times {
-		spec := buildSummaryCronSpec(hhmm)
-		entryID, addErr := a.cron.AddFunc(spec, func() {
-			now := research.ShanghaiTime(time.Now())
-			a.runScheduledAIAnalysis(scheduledAnalysisSlot(now, hhmm))
-		})
-		if addErr != nil {
-			a.recordSchedulerRegistrationError("AIAnalysis:"+hhmm, spec, addErr)
-			continue
-		}
-		a.setCronEntry(fmt.Sprintf("%s%d", aiAnalysisEntryPrefix, index), entryID)
-	}
-	recoveryID, recoveryErr := a.cron.AddFunc("@every 1m", func() { a.processScheduledAIAnalysisRecovery() })
-	if recoveryErr != nil {
-		a.recordSchedulerRegistrationError(aiRecoveryEntryKey, "@every 1m", recoveryErr)
-		return
-	}
-	a.setCronEntry(aiRecoveryEntryKey, recoveryID)
-	a.goTask(func(context.Context) { a.processScheduledAIAnalysisRecovery() })
-	logger.SugaredLogger.Infof("AI 分析定时任务生效: %v，生命周期每分钟扫描待买入和独立持仓复查时间", times)
 }
 
 func (a *App) ensureResearchAccountCrons() {
@@ -150,90 +158,12 @@ func (a *App) processScheduledResearchSnapshot() {
 	}
 }
 
-func (a *App) runScheduledAIAnalysis(scheduledFor time.Time) {
-	if err := a.startAIAnalysis(research.AnalysisModeScheduled, scheduledFor); err != nil {
-		logger.SugaredLogger.Errorf("AI 分析启动失败: %v", err)
-	}
-}
-
-func (a *App) startAIAnalysis(origin string, scheduledFor time.Time) error {
-	a.aiAnalysisRunMu.Lock()
-	defer a.aiAnalysisRunMu.Unlock()
-	if a.aiAnalysisRunning {
-		return errors.New("已有 running 状态的 AI 分析，本次运行被拒绝")
-	}
-	runtime, err := a.getResearchRuntime()
-	if err != nil {
-		return fmt.Errorf("AI 分析运行时不可用: %w", err)
-	}
-	running, err := runtime.Repository.HasRunningAnalysis(a.taskContext())
-	if err != nil {
-		return fmt.Errorf("检查运行中分析失败: %w", err)
-	}
-	if running {
-		return errors.New("已有 running 状态的 AI 分析，本次运行被拒绝")
-	}
-	setting := a.services.Config.GetConfig()
-	if setting == nil || setting.Settings == nil {
-		return errors.New("AI 分析设置不存在")
-	}
-	if origin == research.AnalysisModeScheduled && !setting.AIAnalysisEnabled {
-		return errors.New("AI 自动分析当前未启用")
-	}
-	selected, err := data.ResolveAIAnalysisConfig(setting)
-	if err != nil {
-		return fmt.Errorf("AI 分析配置不可用: %w", err)
-	}
-	now := time.Now()
-	if scheduledFor.IsZero() {
-		scheduledFor = now
-	}
-	a.aiAnalysisRunning = true
-	a.goTask(func(ctx context.Context) {
-		defer func() {
-			a.aiAnalysisRunMu.Lock()
-			a.aiAnalysisRunning = false
-			a.aiAnalysisRunMu.Unlock()
-		}()
-		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{ScheduledFor: scheduledFor, AIConfigID: selected.ID,
-			ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName, Mode: origin})
-		if runErr != nil {
-			if errors.Is(runErr, research.ErrScheduledAnalysisSkipped) {
-				logger.SugaredLogger.Infof("AI 自动分析已由交易时段门禁跳过: %v", runErr)
-				return
-			}
-			logger.SugaredLogger.Errorf("AI 分析失败 origin=%s run=%s: %v", origin, run.RunID, runErr)
-			return
-		}
-		logger.SugaredLogger.Infof("AI 分析完成 origin=%s run=%s status=%s recommendations=%d", origin, run.RunID, run.Status, run.RecommendationCount)
-	})
-	return nil
-}
-
-// StartAIAnalysis starts one formal research run in the background. The UI
-// follows the persisted running report and only enables the button again after
-// that report reaches a terminal status.
-func (a *App) startManualAIAnalysis() (bool, error) {
-	if err := a.startAIAnalysis(research.AnalysisModeManual, time.Time{}); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func scheduledAnalysisSlot(day time.Time, hhmm string) time.Time {
-	parsed, err := time.Parse("15:04", strings.TrimSpace(hhmm))
-	if err != nil {
-		return time.Time{}
-	}
-	local := research.ShanghaiTime(day)
-	year, month, date := local.Date()
-	return time.Date(year, month, date, parsed.Hour(), parsed.Minute(), 0, 0, local.Location())
-}
-
-func latestConfiguredAnalysisSlot(ctx context.Context, service *research.Service, now time.Time, times []string) (time.Time, error) {
-	local := research.ShanghaiTime(now)
+// nextCapitalDeploymentWindow normalizes a requested instant to a valid
+// Shanghai-market start time. Conclusions are never queued overnight.
+func nextCapitalDeploymentWindow(ctx context.Context, service *research.Service, requested time.Time) (time.Time, error) {
+	local := research.ShanghaiTime(requested)
 	for scanned := 0; scanned < 740; scanned++ {
-		day := local.AddDate(0, 0, -scanned)
+		day := local.AddDate(0, 0, scanned)
 		trading, err := service.IsTradingDay(ctx, day)
 		if err != nil {
 			return time.Time{}, err
@@ -241,81 +171,184 @@ func latestConfiguredAnalysisSlot(ctx context.Context, service *research.Service
 		if !trading {
 			continue
 		}
-		for index := len(times) - 1; index >= 0; index-- {
-			candidate := scheduledAnalysisSlot(day, times[index])
-			if !candidate.IsZero() && !candidate.After(local) {
-				return candidate, nil
-			}
+		year, month, date := day.Date()
+		morning := time.Date(year, month, date, capitalDeploymentStartHour, capitalDeploymentStartMinute, 0, 0, day.Location())
+		afternoon := time.Date(year, month, date, 13, 0, 0, 0, day.Location())
+		morningClose := time.Date(year, month, date, 11, 30, 0, 0, day.Location())
+		cutoff := time.Date(year, month, date, capitalDeploymentCutoffHour, capitalDeploymentCutoffMinute, 0, 0, day.Location())
+		if scanned > 0 || local.Before(morning) {
+			return morning, nil
+		}
+		if !local.After(morningClose) {
+			return local, nil
+		}
+		if local.Before(afternoon) {
+			return afternoon, nil
+		}
+		if !local.After(cutoff) {
+			return local, nil
 		}
 	}
-	return time.Time{}, errors.New("最近交易日内没有可恢复的 AI 分析节点")
+	return time.Time{}, errors.New("未来交易日内没有可用的资金补位窗口")
 }
 
-func sameShanghaiTradingDate(left, right time.Time) bool {
-	return research.ShanghaiTime(left).Format("2006-01-02") == research.ShanghaiTime(right).Format("2006-01-02")
+func triggerIdentity(source string, now time.Time, suffix string) string {
+	local := research.ShanghaiTime(now)
+	return fmt.Sprintf("%s:%s:%s", source, local.Format("20060102-1504"), strings.TrimSpace(suffix))
 }
 
-func scheduledAnalysisRecoveryDue(now time.Time, latest research.AnalysisRun, exists bool) bool {
-	if !exists {
-		return true
-	}
-	if latest.Status != "failed" || latest.CompletedAt == nil {
-		return false
-	}
-	// A failed task never rolls into another trading day. A genuinely missed
-	// slot has no row and is handled by the branch above.
-	if !sameShanghaiTradingDate(latest.StartedAt, now) {
-		return false
-	}
-	return !now.Before(latest.CompletedAt.Add(scheduledAnalysisRetryInterval))
-}
-
-func (a *App) processScheduledAIAnalysisRecovery() {
-	if !a.aiRecoveryRunMu.TryLock() {
+func (a *App) processCapitalDeployment(startup bool) {
+	if !a.aiDeploymentRunMu.TryLock() {
 		return
 	}
-	defer a.aiRecoveryRunMu.Unlock()
-	setting := a.services.Config.GetConfig()
-	if setting == nil || setting.Settings == nil || !setting.AIAnalysisEnabled {
-		return
-	}
-	times, err := data.NormalizeAIAnalysisTimes(setting.AIAnalysisTimes)
-	if err != nil || len(times) == 0 {
-		return
-	}
+	defer a.aiDeploymentRunMu.Unlock()
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析恢复运行时不可用: %v", err)
+		logger.SugaredLogger.Errorf("资金补位运行时不可用: %v", err)
 		return
 	}
-	ctx := a.taskContext()
-	now := time.Now()
+	ctx, now := a.taskContext(), time.Now()
+	if recovered, recoverErr := runtime.Service.RecoverExpiredAnalysisLeases(ctx, now); recoverErr != nil {
+		logger.SugaredLogger.Errorf("资金补位恢复过期租约失败: %v", recoverErr)
+		return
+	} else if recovered > 0 {
+		logger.SugaredLogger.Infof("资金补位已恢复过期租约: %d", recovered)
+	}
+	setting := a.services.Config.GetConfig()
+	if setting == nil || setting.Settings == nil || !setting.AICapitalDeploymentEnabled {
+		return
+	}
+	target, maxImmediate, reanalysisMinutes, err := data.NormalizeAICapitalDeploymentSettings(
+		setting.AITargetCapitalUtilization,
+		setting.AIMaxImmediateBuysPerRun,
+		setting.AIReanalysisIntervalMinutes,
+	)
+	if err != nil {
+		logger.SugaredLogger.Errorf("资金补位策略无效: %v", err)
+		return
+	}
+	runtime.Service.SetCapitalDeploymentPolicy(target, maxImmediate)
+	status, err := runtime.Service.CapitalDeploymentStatus(ctx, now)
+	if err != nil {
+		logger.SugaredLogger.Errorf("资金补位状态检查失败: %v", err)
+		return
+	}
+	if status.DeployableCash >= research.TargetCashPerTrade && status.PendingTriggerCount+status.RunningTriggerCount == 0 {
+		availableAt, windowErr := nextCapitalDeploymentWindow(ctx, runtime.Service, now)
+		if windowErr != nil {
+			logger.SugaredLogger.Errorf("资金补位定位下一交易窗口失败: %v", windowErr)
+			return
+		}
+		source, reason, suffix := research.TriggerSourceCapitalGap, "检测到可部署资金达到新仓门槛", "gap"
+		if startup {
+			source, reason, suffix = research.TriggerSourceStartup, "程序启动恢复时检测到资金缺口", a.aiDeploymentLeaseOwner
+		}
+		if _, enqueueErr := runtime.Service.EnqueueCapitalGapTrigger(ctx, source, triggerIdentity(source, now, suffix), reason, availableAt); enqueueErr != nil {
+			logger.SugaredLogger.Errorf("资金补位事件持久化失败: %v", enqueueErr)
+			return
+		}
+	}
 	trading, err := runtime.Service.IsTradingDay(ctx, now)
 	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析恢复检查交易日失败: %v", err)
+		logger.SugaredLogger.Errorf("资金补位交易日检查失败: %v", err)
 		return
 	}
-	if !trading || !research.IsTradingSession(now) {
+	if !trading || !research.IsCapitalDeploymentAnalysisWindow(now) {
 		return
 	}
-	slot, err := latestConfiguredAnalysisSlot(ctx, runtime.Service, now, times)
+	selected, err := data.ResolveAIAnalysisConfig(setting)
 	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析恢复定位最近节点失败: %v", err)
+		logger.SugaredLogger.Infof("资金补位事件等待可用模型: %v", err)
 		return
 	}
-	latest, exists, err := runtime.Repository.LatestAnalysisForScheduledSlot(ctx, slot)
+	claim, claimed, err := runtime.Service.ClaimAnalysisTriggerBatch(ctx, now, a.aiDeploymentLeaseOwner, capitalDeploymentLeaseDuration)
 	if err != nil {
-		logger.SugaredLogger.Errorf("AI 分析恢复读取节点状态失败 slot=%s: %v", slot.Format(time.RFC3339), err)
+		logger.SugaredLogger.Errorf("资金补位事件认领失败: %v", err)
 		return
 	}
-	if !scheduledAnalysisRecoveryDue(now, latest, exists) {
+	if claimed {
+		a.startClaimedCapitalDeployment(runtime, selected, claim, time.Duration(reanalysisMinutes)*time.Minute)
+	}
+}
+
+func (a *App) startClaimedCapitalDeployment(runtime *data.ResearchRuntime, selected *models.AIConfig, claim research.AnalysisTriggerClaim, reanalysisInterval time.Duration) {
+	a.aiAnalysisRunMu.Lock()
+	if a.aiAnalysisRunning {
+		a.aiAnalysisRunMu.Unlock()
+		_ = runtime.Service.FailAnalysisTriggerBatch(a.taskContext(), claim.Run.RunID, a.aiDeploymentLeaseOwner, time.Now(), errors.New("当前进程已有资金补位分析"))
 		return
 	}
-	if err := a.startAIAnalysis(research.AnalysisModeScheduled, slot); err != nil {
-		logger.SugaredLogger.Infof("AI 分析恢复等待下次扫描 slot=%s: %v", slot.Format(time.RFC3339), err)
-		return
-	}
-	logger.SugaredLogger.Infof("AI 分析恢复已启动 slot=%s retry=%t", slot.Format(time.RFC3339), exists)
+	a.aiAnalysisRunning = true
+	a.aiAnalysisRunMu.Unlock()
+	leaseDone := make(chan struct{})
+	a.goTask(func(ctx context.Context) {
+		ticker := time.NewTicker(capitalDeploymentHeartbeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-leaseDone:
+				return
+			case renewedAt := <-ticker.C:
+				if err := runtime.Service.RenewAnalysisTriggerLease(ctx, claim.Run.RunID, a.aiDeploymentLeaseOwner, renewedAt, capitalDeploymentLeaseDuration); err != nil {
+					logger.SugaredLogger.Errorf("资金补位租约续期失败 run=%s: %v", claim.Run.RunID, err)
+					return
+				}
+			}
+		}
+	})
+	a.goTask(func(ctx context.Context) {
+		defer close(leaseDone)
+		defer func() {
+			a.aiAnalysisRunMu.Lock()
+			a.aiAnalysisRunning = false
+			a.aiAnalysisRunMu.Unlock()
+		}()
+		triggerIDs := make([]string, 0, len(claim.Triggers))
+		triggerReasons := make([]string, 0, len(claim.Triggers))
+		for _, trigger := range claim.Triggers {
+			triggerIDs = append(triggerIDs, trigger.TriggerID)
+			if trigger.Reason != "" {
+				triggerReasons = append(triggerReasons, trigger.Reason)
+			}
+		}
+		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{
+			ScheduledFor: claim.Run.ScheduledFor, AIConfigID: selected.ID, ProviderName: data.DisplayAIProviderName(selected),
+			ModelName: selected.ModelName, Mode: research.AnalysisModeEvent, ReservedRunID: claim.Run.RunID,
+			LeaseOwner: a.aiDeploymentLeaseOwner, TriggerIDs: triggerIDs, TriggerReasons: triggerReasons, TriggerSource: claim.Run.TriggerSource,
+			ReanalysisInterval: reanalysisInterval,
+		})
+		completedAt := time.Now()
+		if runErr != nil {
+			if err := runtime.Service.FailAnalysisTriggerBatch(ctx, claim.Run.RunID, a.aiDeploymentLeaseOwner, completedAt, runErr); err != nil {
+				logger.SugaredLogger.Errorf("资金补位技术失败回退失败 run=%s: %v", claim.Run.RunID, err)
+			}
+			logger.SugaredLogger.Errorf("资金补位分析失败 run=%s: %v", claim.Run.RunID, runErr)
+			return
+		}
+		if err := runtime.Service.CompleteAnalysisTriggerBatch(ctx, claim.Run.RunID, a.aiDeploymentLeaseOwner, completedAt); err != nil {
+			logger.SugaredLogger.Errorf("资金补位事件完成确认失败 run=%s: %v", claim.Run.RunID, err)
+			return
+		}
+		if reanalysisInterval <= 0 {
+			reanalysisInterval = defaultCapitalReanalysisInterval
+		}
+		status, statusErr := runtime.Service.CapitalDeploymentStatus(ctx, completedAt)
+		if statusErr == nil && status.DeployableCash >= research.TargetCashPerTrade {
+			requested := completedAt.Add(reanalysisInterval)
+			availableAt, windowErr := nextCapitalDeploymentWindow(ctx, runtime.Service, requested)
+			if windowErr == nil {
+				_, enqueueErr := runtime.Service.EnqueueCapitalGapTrigger(ctx, research.TriggerSourceCapitalGap,
+					triggerIdentity(research.TriggerSourceCapitalGap, completedAt, "followup-"+claim.Run.RunID),
+					"上一轮完成后仍有可部署资金，重新执行完整分析", availableAt)
+				if enqueueErr != nil {
+					logger.SugaredLogger.Errorf("资金补位下一轮事件写入失败 run=%s: %v", claim.Run.RunID, enqueueErr)
+				}
+			}
+		}
+		logger.SugaredLogger.Infof("资金补位分析完成 run=%s status=%s buy_now=%d wait=%d reject=%d", run.RunID, run.Status, run.BuyNowCount, run.WaitCount, run.RejectCount)
+	})
 }
 
 func (a *App) processDueAILifecycle() {
@@ -348,6 +381,119 @@ func normalizedPage(limit, offset int) (int, int) {
 		offset = 0
 	}
 	return limit, offset
+}
+
+type capitalDeploymentStatusResponse struct {
+	Enabled                bool       `json:"enabled"`
+	State                  string     `json:"state"`
+	Cash                   float64    `json:"cash"`
+	ReservedCash           float64    `json:"reservedCash"`
+	NetAssetValue          float64    `json:"netAssetValue"`
+	ReserveTarget          float64    `json:"reserveTarget"`
+	DeployableCash         float64    `json:"deployableCash"`
+	CapitalUtilization     float64    `json:"capitalUtilization"`
+	AvailableSlots         int        `json:"availableSlots"`
+	PendingEventCount      int64      `json:"pendingEventCount"`
+	WatchingCandidateCount int        `json:"watchingCandidateCount"`
+	LastTriggeredAt        *time.Time `json:"lastTriggeredAt"`
+	NextEligibleAt         *time.Time `json:"nextEligibleAt"`
+	Reason                 string     `json:"reason"`
+}
+
+func (a *App) getAICapitalDeploymentStatusContext(ctx context.Context) (capitalDeploymentStatusResponse, error) {
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		return capitalDeploymentStatusResponse{}, err
+	}
+	setting := a.services.Config.GetConfig()
+	enabled := setting != nil && setting.Settings != nil && setting.AICapitalDeploymentEnabled
+	if enabled {
+		target, maxImmediate, _, policyErr := data.NormalizeAICapitalDeploymentSettings(
+			setting.AITargetCapitalUtilization,
+			setting.AIMaxImmediateBuysPerRun,
+			setting.AIReanalysisIntervalMinutes,
+		)
+		if policyErr != nil {
+			return capitalDeploymentStatusResponse{}, policyErr
+		}
+		runtime.Service.SetCapitalDeploymentPolicy(target, maxImmediate)
+	}
+	now := time.Now()
+	status, err := runtime.Service.CapitalDeploymentStatus(ctx, now)
+	if err != nil {
+		return capitalDeploymentStatusResponse{}, err
+	}
+	response := capitalDeploymentStatusResponse{
+		Enabled: enabled, Cash: status.Cash, ReservedCash: status.ReservedCash, NetAssetValue: status.NetAssetValue,
+		ReserveTarget: status.CapitalBuffer, DeployableCash: status.DeployableCash, CapitalUtilization: status.CapitalUtilization,
+		AvailableSlots: status.AvailableSlots, PendingEventCount: status.PendingTriggerCount + status.RunningTriggerCount,
+		NextEligibleAt: status.NextAnalysisAt, Reason: status.Reason,
+	}
+	opportunities, opportunityErr := runtime.Repository.ListBuyOpportunities(ctx, 200, 0)
+	if opportunityErr != nil {
+		return capitalDeploymentStatusResponse{}, opportunityErr
+	}
+	for _, opportunity := range opportunities {
+		if opportunity.Action == research.OpportunityActionWait && opportunity.Status == "active" &&
+			(opportunity.ExpiresAt == nil || opportunity.ExpiresAt.After(now)) {
+			response.WatchingCandidateCount++
+		}
+	}
+	runs, runsErr := runtime.Repository.ListAnalysis(ctx, 50, 0)
+	if runsErr != nil {
+		return capitalDeploymentStatusResponse{}, runsErr
+	}
+	for _, run := range runs {
+		if strings.TrimSpace(run.TriggerSource) != "" {
+			startedAt := run.StartedAt
+			response.LastTriggeredAt = &startedAt
+			break
+		}
+	}
+	if enabled && status.RunningTriggerCount == 0 && status.PendingTriggerCount > 0 {
+		requested := now
+		if status.NextAnalysisAt != nil && status.NextAnalysisAt.After(requested) {
+			requested = *status.NextAnalysisAt
+		}
+		if next, windowErr := nextCapitalDeploymentWindow(ctx, runtime.Service, requested); windowErr == nil {
+			response.NextEligibleAt = &next
+		}
+	}
+	switch {
+	case !enabled:
+		response.State, response.Reason = "disabled", "资金补位策略已关闭"
+	case status.RunningTriggerCount > 0:
+		response.State = "running"
+	case status.DeployableCash < research.TargetCashPerTrade:
+		response.State = "insufficient_cash"
+	case response.NextEligibleAt != nil && response.NextEligibleAt.After(now):
+		response.State = "waiting"
+	case status.PendingTriggerCount > 0 && research.IsCapitalDeploymentAnalysisWindow(now):
+		response.State = "ready"
+	case !research.IsCapitalDeploymentAnalysisWindow(now):
+		response.State = "outside_window"
+		if next, windowErr := nextCapitalDeploymentWindow(ctx, runtime.Service, now); windowErr == nil {
+			response.NextEligibleAt = &next
+			response.Reason = "等待下一个交易日资金补位窗口"
+		}
+	default:
+		response.State = "idle"
+	}
+	if enabled {
+		if _, configErr := data.ResolveAIAnalysisConfig(setting); configErr != nil {
+			response.State, response.Reason = "waiting_model", "资金补位事件已保留，等待可用 AI 模型"
+		}
+	}
+	return response, nil
+}
+
+func (a *App) listAIBuyOpportunitiesContext(ctx context.Context, limit, offset int) ([]research.BuyOpportunity, error) {
+	runtime, err := a.getResearchRuntime()
+	if err != nil {
+		return nil, err
+	}
+	limit, offset = normalizedPage(limit, offset)
+	return runtime.Repository.ListBuyOpportunities(ctx, limit, offset)
 }
 
 func (a *App) listAIAnalysisReports(ctx context.Context, limit, offset int) ([]research.AnalysisRunSummary, error) {

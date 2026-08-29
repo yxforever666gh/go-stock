@@ -6,13 +6,19 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
-type Repository struct{ db *gorm.DB }
+type Repository struct {
+	db                       *gorm.DB
+	policyMu                 sync.RWMutex
+	targetCapitalUtilization float64
+	maxImmediateBuys         int
+}
 
 // lockAccountForWrite turns SQLite's deferred transaction into a write
 // transaction before any capacity or cash reads. SQLite ignores SELECT FOR
@@ -60,15 +66,40 @@ func transactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation
 // deliberately no position-count or same-stock limit; queued buys only reserve
 // cash so concurrent recommendations cannot collectively overspend.
 type RecommendationCapacity struct {
-	OpenPositions  int64
-	PendingBuys    int64
-	ExposureCount  int64
-	Cash           float64
-	ReservedCash   float64
-	UnreservedCash float64
+	OpenPositions      int64
+	PendingBuys        int64
+	ExposureCount      int64
+	Cash               float64
+	ReservedCash       float64
+	UnreservedCash     float64
+	NetAssetValue      float64 `json:"netAssetValue"`
+	CapitalBuffer      float64 `json:"capitalBuffer"`
+	DeployableCash     float64 `json:"deployableCash"`
+	AvailableSlots     int     `json:"availableSlots"`
+	CapitalUtilization float64 `json:"capitalUtilization"`
 }
 
-func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
+func NewRepository(database *gorm.DB) *Repository {
+	return &Repository{db: database, targetCapitalUtilization: 0.90, maxImmediateBuys: 2}
+}
+
+func (r *Repository) SetCapitalDeploymentPolicy(targetUtilization float64, maxImmediate int) {
+	if targetUtilization <= 0 || targetUtilization >= 1 {
+		targetUtilization = 0.90
+	}
+	if maxImmediate <= 0 {
+		maxImmediate = 2
+	}
+	r.policyMu.Lock()
+	r.targetCapitalUtilization, r.maxImmediateBuys = targetUtilization, maxImmediate
+	r.policyMu.Unlock()
+}
+
+func (r *Repository) capitalDeploymentPolicy() (float64, int) {
+	r.policyMu.RLock()
+	defer r.policyMu.RUnlock()
+	return r.targetCapitalUtilization, r.maxImmediateBuys
+}
 
 func (r *Repository) DB() *gorm.DB { return r.db }
 
@@ -85,10 +116,25 @@ func (r *Repository) HasOpenPosition(ctx context.Context) (bool, error) {
 
 func (r *Repository) HasBlockingExposure(ctx context.Context) (bool, error) {
 	capacity, err := r.RecommendationCapacity(ctx)
-	return capacity.UnreservedCash <= 1e-7, err
+	return capacity.DeployableCash < TargetCashPerTrade-1e-7, err
 }
 
-func recommendationCapacity(tx *gorm.DB) (RecommendationCapacity, error) {
+func (r *Repository) HasStockExposure(ctx context.Context, code string) (bool, error) {
+	code, ok := NormalizeMainlandCode(code)
+	if !ok {
+		return false, nil
+	}
+	var positions int64
+	if err := r.db.WithContext(ctx).Model(&Position{}).Where("stock_code = ? AND status = ?", code, "open").Count(&positions).Error; err != nil {
+		return false, err
+	}
+	var pending int64
+	err := r.db.WithContext(ctx).Model(&Recommendation{}).
+		Where("stock_code = ? AND status IN ?", code, []string{"buy_pending", "pending"}).Count(&pending).Error
+	return positions+pending > 0, err
+}
+
+func recommendationCapacity(tx *gorm.DB, targetUtilization float64) (RecommendationCapacity, error) {
 	var result RecommendationCapacity
 	if err := tx.Model(&Position{}).Where("status = ?", "open").Count(&result.OpenPositions).Error; err != nil {
 		return result, err
@@ -107,11 +153,38 @@ func recommendationCapacity(tx *gorm.DB) (RecommendationCapacity, error) {
 		return result, err
 	}
 	result.UnreservedCash = math.Max(0, result.Cash-result.ReservedCash)
+	var positions []Position
+	if err := tx.Where("status = ?", "open").Find(&positions).Error; err != nil {
+		return result, err
+	}
+	positionValue := 0.0
+	for _, position := range positions {
+		price := position.CurrentPrice
+		if price <= 0 {
+			price = position.EntryPrice
+		}
+		if price > 0 && position.Quantity > 0 {
+			positionValue += CalculateSellCost(price, position.Quantity).NetCashFlow
+		}
+	}
+	result.NetAssetValue = math.Max(0, result.Cash+positionValue)
+	bufferRate := 1 - targetUtilization
+	if bufferRate <= 0 || bufferRate >= 1 {
+		bufferRate = 0.10
+	}
+	result.CapitalBuffer = math.Max(TargetCashPerTrade, result.NetAssetValue*bufferRate)
+	result.DeployableCash = math.Max(0, result.Cash-result.ReservedCash-result.CapitalBuffer)
+	result.AvailableSlots = int(math.Floor((result.DeployableCash + 1e-8) / TargetCashPerTrade))
+	if result.NetAssetValue > 0 {
+		deployed := math.Max(0, result.NetAssetValue-result.Cash+result.ReservedCash)
+		result.CapitalUtilization = math.Min(1, deployed/result.NetAssetValue)
+	}
 	return result, nil
 }
 
 func (r *Repository) RecommendationCapacity(ctx context.Context) (RecommendationCapacity, error) {
-	return recommendationCapacity(r.db.WithContext(ctx))
+	target, _ := r.capitalDeploymentPolicy()
+	return recommendationCapacity(r.db.WithContext(ctx), target)
 }
 
 func (r *Repository) HasRunningAnalysis(ctx context.Context) (bool, error) {
@@ -148,10 +221,53 @@ func (r *Repository) UpdateAnalysisAttemptLog(ctx context.Context, runID, value 
 		Update("model_attempt_log_json", value).Error
 }
 
+func (r *Repository) CreateBuyOpportunity(ctx context.Context, opportunity *BuyOpportunity) error {
+	if opportunity.OpportunityID == "" {
+		opportunity.OpportunityID = newID()
+	}
+	if opportunity.Status == "" {
+		opportunity.Status = "active"
+	}
+	return r.db.WithContext(ctx).Create(opportunity).Error
+}
+
+func (r *Repository) UpdateBuyOpportunity(ctx context.Context, opportunityID string, updates map[string]any) error {
+	return r.db.WithContext(ctx).Model(&BuyOpportunity{}).Where("opportunity_id = ?", opportunityID).Updates(updates).Error
+}
+
+func (r *Repository) BuyOpportunitiesForRun(ctx context.Context, runID string) ([]BuyOpportunity, error) {
+	var result []BuyOpportunity
+	err := r.db.WithContext(ctx).Where("analysis_run_id = ?", runID).Order("id ASC").Find(&result).Error
+	return result, err
+}
+
+func (r *Repository) ListBuyOpportunities(ctx context.Context, limit, offset int) ([]BuyOpportunity, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	var result []BuyOpportunity
+	err := r.db.WithContext(ctx).Order("created_at DESC, id DESC").Limit(limit).Offset(offset).Find(&result).Error
+	return result, err
+}
+
 func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(recommendation).Error; err != nil {
 			return err
+		}
+		if recommendation.OpportunityID != "" {
+			linked := tx.Model(&BuyOpportunity{}).
+				Where("opportunity_id = ? AND analysis_run_id = ?", recommendation.OpportunityID, recommendation.AnalysisRunID).
+				Updates(map[string]any{"recommendation_id": recommendation.RecommendationID, "status": "linked"})
+			if linked.Error != nil {
+				return linked.Error
+			}
+			if linked.RowsAffected != 1 {
+				return errors.New("buy opportunity is unavailable for recommendation")
+			}
 		}
 		if len(initialMessages) > 0 {
 			return tx.Create(&initialMessages).Error
@@ -168,15 +284,39 @@ func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, rec
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
-		capacity, err := recommendationCapacity(tx)
+		target, _ := r.capitalDeploymentPolicy()
+		capacity, err := recommendationCapacity(tx, target)
 		if err != nil {
 			return err
 		}
-		if recommendation.ReservedCash <= 0 || recommendation.ReservedCash > capacity.UnreservedCash+1e-8 {
+		if recommendation.ReservedCash <= 0 || recommendation.ReservedCash > TargetCashPerTrade+1e-8 || recommendation.ReservedCash > capacity.DeployableCash+1e-8 {
 			return ErrInsufficientCash
+		}
+		var duplicate int64
+		if err := tx.Model(&Position{}).Where("stock_code = ? AND status = ?", recommendation.StockCode, "open").Count(&duplicate).Error; err != nil {
+			return err
+		}
+		if duplicate == 0 {
+			if err := tx.Model(&Recommendation{}).Where("stock_code = ? AND status IN ?", recommendation.StockCode, []string{"buy_pending", "pending"}).Count(&duplicate).Error; err != nil {
+				return err
+			}
+		}
+		if duplicate > 0 {
+			return ErrDuplicateStockExposure
 		}
 		if err := tx.Create(recommendation).Error; err != nil {
 			return err
+		}
+		if recommendation.OpportunityID != "" {
+			linked := tx.Model(&BuyOpportunity{}).
+				Where("opportunity_id = ? AND analysis_run_id = ?", recommendation.OpportunityID, recommendation.AnalysisRunID).
+				Updates(map[string]any{"recommendation_id": recommendation.RecommendationID, "status": "linked"})
+			if linked.Error != nil {
+				return linked.Error
+			}
+			if linked.RowsAffected != 1 {
+				return errors.New("buy opportunity is unavailable for recommendation")
+			}
 		}
 		if len(initialMessages) > 0 {
 			if err := tx.Create(&initialMessages).Error; err != nil {
@@ -294,8 +434,14 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 			Select("COALESCE(SUM(reserved_cash), 0)").Scan(&reservedOthers).Error; err != nil {
 			return err
 		}
-		availableCash := math.Max(0, account.Cash-reservedOthers)
-		quantity, cost, err := SizeBuy(recommendation.StockCode, quote.Price, availableCash)
+		target, _ := r.capitalDeploymentPolicy()
+		capacity, err := recommendationCapacity(tx, target)
+		if err != nil {
+			return err
+		}
+		availableCash := math.Max(0, account.Cash-reservedOthers-capacity.CapitalBuffer)
+		budget := math.Min(TargetCashPerTrade, recommendation.ReservedCash)
+		quantity, cost, err := sizeBuyWithinCashCap(recommendation.StockCode, quote.Price, availableCash, budget)
 		if err != nil {
 			return err
 		}
@@ -382,8 +528,19 @@ func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendation
 
 func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Quote) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		_, err := sellInTransaction(tx, recommendationID, quote)
-		return err
+		trade, err := sellInTransaction(tx, recommendationID, quote)
+		if err != nil {
+			return err
+		}
+		if err := tx.Create(&DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
+			DecisionType: "模拟卖出", DecidedAt: quote.At, Reason: "按最新可交易行情成交",
+			QuotePrice: quote.Price, QuoteAt: &quote.At}).Error; err != nil {
+			return err
+		}
+		trigger := AnalysisTrigger{TriggerID: newID(), Source: TriggerSourceSell, SourceKey: trade.TradeID,
+			SourceRecommendationID: recommendationID, SourceTradeID: trade.TradeID,
+			Reason: "模拟卖出释放资金", Status: TriggerStatusQueued, AvailableAt: quote.At, CoalesceUntil: quote.At.Add(sellTriggerCoalesce)}
+		return enqueueTriggerInTransaction(tx, &trigger)
 	})
 }
 
@@ -436,7 +593,7 @@ func sellInTransaction(tx *gorm.DB, recommendationID string, quote Quote) (Simul
 func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {
 	var runs []AnalysisRun
 	err := r.db.WithContext(ctx).
-		Select("run_id", "scheduled_for", "started_at", "completed_at", "status", "provider_name", "model_name", "recommendation_count", "failure_reason", "source_status_json").
+		Select("run_id", "scheduled_for", "started_at", "completed_at", "status", "provider_name", "model_name", "recommendation_count", "failure_reason", "source_status_json", "trigger_source", "trigger_reason", "buy_now_count", "wait_count", "reject_count").
 		Order("started_at DESC, id DESC").Limit(limit).Offset(offset).Find(&runs).Error
 	if err != nil {
 		return nil, err
@@ -458,6 +615,8 @@ func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]Ana
 			Status: run.Status, ProviderName: run.ProviderName, ModelName: run.ModelName,
 			RecommendationCount: run.RecommendationCount, FailureReason: run.FailureReason,
 			SourceCount: len(sources), FailedSourceCount: failed,
+			TriggerSource: run.TriggerSource, TriggerReason: run.TriggerReason,
+			BuyNowCount: run.BuyNowCount, WaitCount: run.WaitCount, RejectCount: run.RejectCount,
 		})
 	}
 	return result, nil
@@ -465,8 +624,21 @@ func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]Ana
 
 func (r *Repository) Analysis(ctx context.Context, runID string) (AnalysisRun, error) {
 	var result AnalysisRun
-	err := r.db.WithContext(ctx).Where("run_id = ?", runID).First(&result).Error
-	return result, err
+	if err := r.db.WithContext(ctx).Where("run_id = ?", runID).First(&result).Error; err != nil {
+		return result, err
+	}
+	// Schema-20 databases and deliberately minimal compatibility fixtures do not
+	// have the 2.7 opportunity table yet. The analysis report itself must remain
+	// readable while the startup migrator is preparing the schema-21 upgrade.
+	if !r.db.WithContext(ctx).Migrator().HasTable(&BuyOpportunity{}) {
+		return result, nil
+	}
+	opportunities, err := r.BuyOpportunitiesForRun(ctx, runID)
+	if err != nil {
+		return result, err
+	}
+	result.Opportunities = opportunities
+	return result, nil
 }
 
 func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int) ([]Recommendation, error) {

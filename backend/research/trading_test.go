@@ -15,20 +15,20 @@ func (weekdayTradingCalendar) IsTradingDay(_ context.Context, value time.Time) (
 	return weekday != time.Saturday && weekday != time.Sunday, nil
 }
 
-func TestSizeBuyTargetsFirstCashOutflowAboveFiftyThousand(t *testing.T) {
+func TestSizeBuyCapsCashOutflowAtFiftyThousand(t *testing.T) {
 	quantity, cost, err := SizeBuy("sh600000", 10, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if quantity != 5000 || quantity%100 != 0 {
+	if quantity != 4900 || quantity%100 != 0 {
 		t.Fatalf("quantity=%d", quantity)
 	}
-	if -cost.NetCashFlow <= TargetCashPerTrade {
-		t.Fatalf("cash outflow %.2f did not strictly exceed target", -cost.NetCashFlow)
+	if -cost.NetCashFlow > TargetCashPerTrade {
+		t.Fatalf("cash outflow %.2f exceeded cap", -cost.NetCashFlow)
 	}
-	previous := CalculateBuyCost(10, quantity-100)
-	if -previous.NetCashFlow > TargetCashPerTrade {
-		t.Fatalf("previous lot cash outflow %.2f already exceeded target", -previous.NetCashFlow)
+	next := CalculateBuyCost(10, quantity+100)
+	if -next.NetCashFlow <= TargetCashPerTrade {
+		t.Fatalf("next lot cash outflow %.2f still fits cap", -next.NetCashFlow)
 	}
 	if cost.Commission < MinimumCommission || cost.TransferFee <= 0 || cost.SlippageAmount <= 0 {
 		t.Fatalf("cost=%+v", cost)
@@ -38,7 +38,7 @@ func TestSizeBuyTargetsFirstCashOutflowAboveFiftyThousand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if starQuantity != 1000 || starQuantity%200 != 0 || -starCost.NetCashFlow <= TargetCashPerTrade {
+	if starQuantity != 800 || starQuantity%200 != 0 || -starCost.NetCashFlow > TargetCashPerTrade {
 		t.Fatalf("STAR quantity=%d cost=%+v", starQuantity, starCost)
 	}
 	if _, _, err := SizeBuy("bj430001", 10, 100000); err == nil {
@@ -46,9 +46,9 @@ func TestSizeBuyTargetsFirstCashOutflowAboveFiftyThousand(t *testing.T) {
 	}
 }
 
-func TestSizeBuyUsesOneHighPriceLotOrLargestAffordableFallback(t *testing.T) {
+func TestSizeBuyRejectsOneHighPriceLotOrUsesLargestAffordableFallback(t *testing.T) {
 	quantity, cost, err := SizeBuy("sz300308", 941.41, 154814.32202159002)
-	if err != nil || quantity != 100 || math.Abs(-cost.NetCashFlow-94264.35389371) > 1e-6 {
+	if !errors.Is(err, ErrMinimumOrder) || quantity != 0 {
 		t.Fatalf("high-price lot quantity=%d cost=%+v err=%v", quantity, cost, err)
 	}
 

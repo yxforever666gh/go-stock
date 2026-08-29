@@ -41,7 +41,7 @@ func fundingTestService(t *testing.T, startAfter string) (*Service, *gorm.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := database.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{},
+	if err := database.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &LifecycleMessage{}, &DecisionEvent{}, &LifecycleObservation{}, &AnalysisTrigger{}, &BuyOpportunity{},
 		&SimulatedAccount{}, &SimulatedTrade{}, &Position{}, &AccountCashFlow{}, &FundingPlan{}, &AccountValuationSnapshot{}); err != nil {
 		t.Fatal(err)
 	}

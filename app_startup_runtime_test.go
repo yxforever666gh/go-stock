@@ -12,18 +12,35 @@ import (
 )
 
 func TestMarketNewsPollingSupportsResearchAndHasSafeMinimumInterval(t *testing.T) {
-	disabled := false
-	if marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{}, AIAnalysisAutoEnabled: &disabled}) {
+	if marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{}}) {
 		t.Fatal("market news polling should be disabled when both news and research are disabled")
 	}
-	if !marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{AIAnalysisEnabled: true}}) {
-		t.Fatal("AI research must keep market news polling enabled")
+	if !marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{AICapitalDeploymentEnabled: true}}) {
+		t.Fatal("capital deployment research must keep market news polling enabled")
 	}
 	if got := marketNewsPollingInterval(1); got != marketNewsPollingMinimumInterval {
 		t.Fatalf("short polling interval=%s want=%s", got, marketNewsPollingMinimumInterval)
 	}
 	if got := marketNewsPollingInterval(600); got != 610*time.Second {
 		t.Fatalf("configured polling interval=%s want=610s", got)
+	}
+}
+
+func TestMarketNewsPollingReloadFollowsCapitalDeploymentSwitch(t *testing.T) {
+	app := NewAppWithServices(service.AppServices{})
+	enabled := &models.SettingConfig{Settings: &models.Settings{AICapitalDeploymentEnabled: true, RefreshInterval: 1}}
+	app.reloadMarketNewsPolling(enabled, false)
+	for _, key := range []string{"GetNewTelegraph", "newSinaNews", "tradingViewNews"} {
+		if _, exists := app.getCronEntry(key); !exists {
+			t.Fatalf("enabled capital deployment did not register %s", key)
+		}
+	}
+	disabled := &models.SettingConfig{Settings: &models.Settings{}}
+	app.reloadMarketNewsPolling(disabled, false)
+	for _, key := range []string{"GetNewTelegraph", "newSinaNews", "tradingViewNews"} {
+		if _, exists := app.getCronEntry(key); exists {
+			t.Fatalf("disabled news and capital deployment retained %s", key)
+		}
 	}
 }
 

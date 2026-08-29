@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.6.0
+  version: 2.7.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -397,9 +397,6 @@ paths:
       operationId: listAnalysisRuns
       responses:
         "200": {description: Analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AnalysisRunSummary"}}}}}
-    post:
-      operationId: startAnalysisRun
-      responses: {"202": {description: Analysis accepted, content: {application/json: {schema: {$ref: "#/components/schemas/AcceptedResponse"}}}}, "409": {description: Analysis already running, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}}
   /api/v1/research/analysis-runs/{id}:
     get:
       operationId: getAnalysisRun
@@ -428,6 +425,18 @@ paths:
       operationId: listRecommendations
       responses:
         "200": {description: Recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Recommendation"}}}}}
+  /api/v1/research/capital-deployment/status:
+    get:
+      operationId: getCapitalDeploymentStatus
+      description: Returns the current event-driven capital deployment capacity and next eligible analysis time.
+      responses:
+        "200": {description: Capital deployment status, content: {application/json: {schema: {$ref: "#/components/schemas/CapitalDeploymentStatus"}}}}
+  /api/v1/research/buy-opportunities:
+    get:
+      operationId: listBuyOpportunities
+      description: Lists structured buy-now, wait, and reject decisions produced by event-driven analysis runs.
+      responses:
+        "200": {description: Buy opportunities, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/BuyOpportunity"}}}}}
   /api/v1/research/recommendations/{id}:
     get:
       operationId: getRecommendation
@@ -1472,6 +1481,24 @@ components:
         evidenceSetId: {type: string}
         failureReason: {type: string}
         recommendationCount: {type: integer}
+        triggerId: {type: string}
+        triggerIdsJson: {type: string}
+        triggerSource: {type: string, description: Trigger source; absent on legacy scheduled runs.}
+        triggerReason: {type: string}
+        fundingCash: {type: number}
+        fundingReservedCash: {type: number}
+        fundingNetAssetValue: {type: number}
+        fundingCapitalBuffer: {type: number}
+        fundingDeployableCash: {type: number}
+        fundingAvailableSlots: {type: integer}
+        leaseOwner: {type: string}
+        leaseExpiresAt: {type: string, format: date-time}
+        buyNowCount: {type: integer}
+        waitCount: {type: integer}
+        rejectCount: {type: integer}
+        opportunities:
+          type: array
+          items: {$ref: "#/components/schemas/BuyOpportunity"}
     AnalysisRunSummary:
       type: object
       required: [runId, scheduledFor, startedAt, status, recommendationCount, sourceCount, failedSourceCount]
@@ -1487,11 +1514,60 @@ components:
         failureReason: {type: string}
         sourceCount: {type: integer}
         failedSourceCount: {type: integer}
+        triggerSource: {type: string, description: Trigger source; absent on legacy scheduled runs.}
+        triggerReason: {type: string}
+        buyNowCount: {type: integer}
+        waitCount: {type: integer}
+        rejectCount: {type: integer}
+    CapitalDeploymentStatus:
+      type: object
+      required: [enabled, state, cash, reservedCash, netAssetValue, reserveTarget, deployableCash, capitalUtilization, availableSlots, pendingEventCount, watchingCandidateCount, reason]
+      properties:
+        enabled: {type: boolean}
+        state: {type: string}
+        cash: {type: number}
+        reservedCash: {type: number}
+        netAssetValue: {type: number}
+        reserveTarget: {type: number}
+        deployableCash: {type: number}
+        capitalUtilization: {type: number}
+        availableSlots: {type: integer}
+        pendingEventCount: {type: integer}
+        watchingCandidateCount: {type: integer}
+        lastTriggeredAt: {type: string, format: date-time}
+        nextEligibleAt: {type: string, format: date-time}
+        reason: {type: string}
+    BuyOpportunity:
+      type: object
+      required: [opportunityId, analysisRunId, action, stockCode, stockName, status, createdAt]
+      properties:
+        opportunityId: {type: string}
+        analysisRunId: {type: string}
+        recommendationId: {type: string}
+        stockCode: {type: string}
+        stockName: {type: string}
+        action: {type: string, enum: [buy_now, wait, reject]}
+        priceLow: {type: number}
+        priceHigh: {type: number}
+        quotePrice: {type: number}
+        quoteAt: {type: string, format: date-time}
+        aiSummary: {type: string}
+        mainRisk: {type: string}
+        sourceRefs: {type: string}
+        source: {type: string}
+        status: {type: string}
+        timingReason: {type: string}
+        expiresAt: {type: string, format: date-time}
+        supersededAt: {type: string, format: date-time}
+        validationReason: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
     Recommendation:
       type: object
       required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, status]
       properties:
         recommendationId: {type: string}
+        opportunityId: {type: string}
         analysisRunId: {type: string}
         stockCode: {type: string}
         stockName: {type: string}

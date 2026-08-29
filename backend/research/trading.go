@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrInsufficientCash = errors.New("insufficient cash")
-	ErrMinimumOrder     = errors.New("insufficient cash for minimum order unit")
+	ErrInsufficientCash       = errors.New("insufficient cash")
+	ErrMinimumOrder           = errors.New("insufficient cash for minimum order unit")
+	ErrDuplicateStockExposure = errors.New("stock already has an open or pending exposure")
 )
 
 const (
@@ -109,6 +110,13 @@ func CalculateSellCost(marketPrice float64, quantity int64) CostBreakdown {
 }
 
 func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakdown, error) {
+	return sizeBuyWithinCashCap(code, marketPrice, availableCash, TargetCashPerTrade)
+}
+
+// sizeBuyLegacyTarget is intentionally limited to frozen historical repair
+// commands whose published output used the pre-2.7 "first lot above 50k"
+// sizing rule. Live recommendations must always use SizeBuy.
+func sizeBuyLegacyTarget(code string, marketPrice, availableCash float64) (int64, CostBreakdown, error) {
 	lot, err := LotSize(code)
 	if err != nil {
 		return 0, CostBreakdown{}, err
@@ -116,7 +124,6 @@ func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakd
 	if availableCash <= 0 || marketPrice <= 0 {
 		return 0, CostBreakdown{}, ErrInsufficientCash
 	}
-
 	quantity := lot
 	cost := CalculateBuyCost(marketPrice, quantity)
 	for -cost.NetCashFlow <= TargetCashPerTrade {
@@ -126,7 +133,6 @@ func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakd
 	if -cost.NetCashFlow <= availableCash+1e-8 {
 		return quantity, cost, nil
 	}
-
 	maxQuantity := int64(math.Floor(availableCash/(marketPrice*(1+SlippageRate))/float64(lot))) * lot
 	for maxQuantity >= lot {
 		cost = CalculateBuyCost(marketPrice, maxQuantity)

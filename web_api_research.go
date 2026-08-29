@@ -14,17 +14,18 @@ func registerResearchRoutes(mux *http.ServeMux, app *App) {
 		items, err := app.listAIAnalysisReports(r.Context(), limit, offset)
 		writeResearchResult(w, items, err)
 	})
-	mux.HandleFunc("POST /api/v1/research/analysis-runs", func(w http.ResponseWriter, _ *http.Request) {
-		ok, err := app.startManualAIAnalysis()
-		if err != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
-			return
-		}
-		writeJSON(w, http.StatusAccepted, acceptedResponse{Accepted: ok})
-	})
 	mux.HandleFunc("GET /api/v1/research/analysis-runs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		item, err := app.getAIAnalysisReport(r.Context(), r.PathValue("id"))
 		writeResearchResult(w, item, err)
+	})
+	mux.HandleFunc("GET /api/v1/research/capital-deployment/status", func(w http.ResponseWriter, r *http.Request) {
+		item, err := app.getAICapitalDeploymentStatusContext(r.Context())
+		writeResearchResult(w, item, err)
+	})
+	mux.HandleFunc("GET /api/v1/research/buy-opportunities", func(w http.ResponseWriter, r *http.Request) {
+		limit, offset := webPage(r)
+		items, err := app.listAIBuyOpportunitiesContext(r.Context(), limit, offset)
+		writeResearchResult(w, items, err)
 	})
 	mux.HandleFunc("GET /api/v1/research/recommendations", func(w http.ResponseWriter, r *http.Request) {
 		limit, offset := webPage(r)
