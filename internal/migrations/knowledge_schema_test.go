@@ -218,7 +218,7 @@ func TestSchema18To19KnowledgeMigrationPreservesResearchAccountingAndTrading(t *
 	if err := database.Model(&research2.Account{}).Where("id = ?", 1).Update("cash", 9988.75).Error; err != nil {
 		t.Fatal(err)
 	}
-	r2Recommendation := research2.Recommendation{RecommendationID: "schema19-r2-rec", AnalysisRunID: "schema19-r2-run", Rank: 1, StockCode: "sz000001", StockName: "平安银行", SignalAt: now, Status: "closed", TargetBuyAt: now, NetPnL: 21.75, CreatedAt: now, UpdatedAt: now}
+	r2Recommendation := research2.Recommendation{RecommendationID: "schema19-r2-rec", AnalysisRunID: "schema19-r2-run", StockCode: "sz000001", StockName: "平安银行", SignalAt: now, Status: "closed", TargetBuyAt: now, NetPnL: 21.75, CreatedAt: now, UpdatedAt: now}
 	if err := database.Create(&r2Recommendation).Error; err != nil {
 		t.Fatal(err)
 	}

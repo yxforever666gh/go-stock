@@ -9,6 +9,7 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/research"
 	"go-stock/backend/research2"
 	"go-stock/internal/service"
 )
@@ -252,6 +253,22 @@ func (a *App) research2Repository() (*research2.Repository, error) {
 	return runtime.Repository, nil
 }
 
+func (a *App) research2Valuation() (*research2.Service, error) {
+	setting := data.GetSettingConfig()
+	configID := 0
+	if setting != nil {
+		configID = int(setting.AIAnalysisConfigID)
+	}
+	runtime, err := a.ensureResearch2Runtime(configID)
+	if err != nil {
+		return nil, err
+	}
+	if runtime.Valuation == nil {
+		return nil, errors.New("research2 valuation service is unavailable")
+	}
+	return runtime.Valuation, nil
+}
+
 func (a *App) listResearch2Runs(ctx context.Context, limit, offset int) ([]research2.AnalysisRunSummary, error) {
 	repository, err := a.research2Repository()
 	if err != nil {
@@ -267,32 +284,39 @@ func (a *App) getResearch2Run(ctx context.Context, id string) (research2.Analysi
 	return repository.GetRun(ctx, id)
 }
 func (a *App) listResearch2Recommendations(ctx context.Context, limit, offset int) ([]research2.Recommendation, error) {
-	repository, err := a.research2Repository()
+	valuation, err := a.research2Valuation()
 	if err != nil {
 		return nil, err
 	}
-	return repository.ListRecommendations(ctx, limit, offset)
+	return valuation.ListRecommendations(ctx, limit, offset)
 }
 func (a *App) getResearch2Recommendation(ctx context.Context, id string) (research2.RecommendationDetail, error) {
-	repository, err := a.research2Repository()
+	valuation, err := a.research2Valuation()
 	if err != nil {
 		return research2.RecommendationDetail{}, err
 	}
-	return repository.GetRecommendation(ctx, id)
+	return valuation.GetRecommendation(ctx, id)
 }
 func (a *App) getResearch2Account(ctx context.Context) (research2.AccountOverview, error) {
-	repository, err := a.research2Repository()
+	valuation, err := a.research2Valuation()
 	if err != nil {
 		return research2.AccountOverview{}, err
 	}
-	return repository.Overview(ctx)
+	return valuation.Overview(ctx)
 }
 func (a *App) getResearch2Performance(ctx context.Context) (research2.Performance, error) {
-	repository, err := a.research2Repository()
+	valuation, err := a.research2Valuation()
 	if err != nil {
 		return research2.Performance{}, err
 	}
-	return repository.Performance(ctx)
+	return valuation.Performance(ctx)
+}
+func (a *App) getResearch2RecommendationChart(ctx context.Context, id string, refresh bool) (research.RecommendationChart, error) {
+	valuation, err := a.research2Valuation()
+	if err != nil {
+		return research.RecommendationChart{}, err
+	}
+	return valuation.RecommendationChart(ctx, id, refresh)
 }
 
 func research2Location() *time.Location {

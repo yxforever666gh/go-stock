@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go-stock/backend/models"
+	"go-stock/backend/research"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -147,7 +148,10 @@ func (r *Repository) RecordEmailAttempt(ctx context.Context, delivery EmailDeliv
 }
 func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int) ([]Recommendation, error) {
 	var items []Recommendation
-	err := r.db.WithContext(ctx).Order("signal_at DESC, rank ASC, id DESC").Limit(limit).Offset(offset).Find(&items).Error
+	err := r.db.WithContext(ctx).Order("signal_at DESC, final_score DESC, stock_code ASC, id DESC").Limit(limit).Offset(offset).Find(&items).Error
+	for index := range items {
+		enrichLiveRecommendation(&items[index])
+	}
 	return items, err
 }
 func (r *Repository) GetRecommendation(ctx context.Context, id string) (RecommendationDetail, error) {
@@ -159,6 +163,7 @@ func (r *Repository) GetRecommendation(ctx context.Context, id string) (Recommen
 		return result, err
 	}
 	err := r.db.WithContext(ctx).Where("recommendation_id = ?", id).Order("traded_at ASC").Find(&result.Trades).Error
+	enrichLiveRecommendation(&result.Recommendation)
 	return result, err
 }
 
@@ -170,7 +175,7 @@ func (r *Repository) DueRecommendations(ctx context.Context, now time.Time, stat
 	} else {
 		query = query.Where("target_sell_at IS NOT NULL AND target_sell_at <= ?", now)
 	}
-	err := query.Order("analysis_run_id ASC, rank ASC").Find(&items).Error
+	err := query.Order("analysis_run_id ASC, final_score DESC, stock_code ASC, id ASC").Find(&items).Error
 	return items, err
 }
 
@@ -186,7 +191,8 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 		}
 		result := tx.Model(&Recommendation{}).Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").Updates(map[string]any{
 			"status": "active", "buy_at": trade.TradedAt, "buy_market_price": trade.MarketPrice, "buy_price": trade.ExecutionPrice,
-			"quantity": trade.Quantity, "buy_fees": trade.Commission + trade.TransferFee, "target_sell_at": sellAt, "failure_reason": "",
+			"quantity": trade.Quantity, "buy_fees": trade.Commission + trade.TransferFee, "current_price": trade.MarketPrice,
+			"current_price_at": trade.TradedAt, "target_sell_at": sellAt, "failure_reason": "",
 		})
 		if result.Error != nil {
 			return result.Error
@@ -217,7 +223,7 @@ func (r *Repository) RecordSell(ctx context.Context, recommendationID string, tr
 		if buyCost > 0 {
 			netRate = netPnL / buyCost
 		}
-		result := tx.Model(&item).Updates(map[string]any{"status": "closed", "sell_at": trade.TradedAt, "sell_market_price": trade.MarketPrice, "sell_price": trade.ExecutionPrice, "sell_fees": trade.Commission + trade.StampDuty + trade.TransferFee, "net_pn_l": netPnL, "net_yield_rate": netRate, "failure_reason": ""})
+		result := tx.Model(&item).Updates(map[string]any{"status": "closed", "sell_at": trade.TradedAt, "sell_market_price": trade.MarketPrice, "sell_price": trade.ExecutionPrice, "sell_fees": trade.Commission + trade.StampDuty + trade.TransferFee, "current_price": trade.MarketPrice, "current_price_at": trade.TradedAt, "net_pn_l": netPnL, "net_yield_rate": netRate, "failure_reason": ""})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -241,6 +247,21 @@ func (r *Repository) ActiveAndPending(ctx context.Context) ([]Recommendation, er
 	return items, err
 }
 
+func (r *Repository) ActiveRecommendations(ctx context.Context) ([]Recommendation, error) {
+	var items []Recommendation
+	err := r.db.WithContext(ctx).Where("status IN ?", []string{"active", "sell_pending"}).Order("stock_code ASC, id ASC").Find(&items).Error
+	return items, err
+}
+
+func (r *Repository) UpdateCurrentQuote(ctx context.Context, recommendationID string, price float64, at time.Time) error {
+	if price <= 0 {
+		return errors.New("research2 current quote price must be positive")
+	}
+	return r.db.WithContext(ctx).Model(&Recommendation{}).
+		Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"active", "sell_pending"}).
+		Updates(map[string]any{"current_price": price, "current_price_at": at}).Error
+}
+
 func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
 	var account Account
 	if err := r.db.WithContext(ctx).First(&account, 1).Error; err != nil {
@@ -256,10 +277,14 @@ func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
 	}
 	positionValue := 0.0
 	for _, item := range active {
-		positionValue += item.BuyPrice * float64(item.Quantity)
+		positionValue += livePositionValue(item)
 	}
 	nav := account.Cash + positionValue
-	return AccountOverview{InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: positionValue, NetAssetValue: nav, NetProfit: nav - account.InitialCash, ReturnRate: (nav - account.InitialCash) / account.InitialCash, OpenPositions: int64(len(active)), PendingBuys: pending, LastValuedAt: time.Now()}, nil
+	returnRate := 0.0
+	if account.InitialCash > 0 {
+		returnRate = (nav - account.InitialCash) / account.InitialCash
+	}
+	return AccountOverview{InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: positionValue, NetAssetValue: nav, NetProfit: nav - account.InitialCash, ReturnRate: returnRate, OpenPositions: int64(len(active)), PendingBuys: pending, LastValuedAt: time.Now()}, nil
 }
 
 func (r *Repository) SaveSnapshot(ctx context.Context, kind string, at time.Time) (AccountSnapshot, error) {
@@ -300,6 +325,7 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	if err = r.db.WithContext(ctx).Order("valued_at ASC").Limit(500).Find(&result.Curve).Error; err != nil {
 		return result, err
 	}
+	result.Curve = append(result.Curve, AccountSnapshot{ValuedAt: overview.LastValuedAt, TradingDate: overview.LastValuedAt.In(shanghai()).Format("2006-01-02"), SnapshotType: "current", Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate})
 	peak, maxDrawdown := 0.0, 0.0
 	for _, point := range result.Curve {
 		if point.NetAssetValue > peak {
@@ -316,6 +342,41 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 		result.MaxDrawdown = &maxDrawdown
 	}
 	return result, nil
+}
+
+func enrichLiveRecommendation(item *Recommendation) {
+	if item == nil || (item.Status != "active" && item.Status != "sell_pending") || item.Quantity <= 0 {
+		return
+	}
+	price := livePrice(*item)
+	if price <= 0 {
+		return
+	}
+	item.CurrentPrice = price
+	buyCost := item.BuyPrice*float64(item.Quantity) + item.BuyFees
+	item.NetPnL = research.CalculateSellCost(price, item.Quantity).NetCashFlow - buyCost
+	item.NetYieldRate = 0
+	if buyCost > 0 {
+		item.NetYieldRate = item.NetPnL / buyCost
+	}
+}
+
+func livePositionValue(item Recommendation) float64 {
+	price := livePrice(item)
+	if price <= 0 || item.Quantity <= 0 {
+		return 0
+	}
+	return research.CalculateSellCost(price, item.Quantity).NetCashFlow
+}
+
+func livePrice(item Recommendation) float64 {
+	if item.CurrentPrice > 0 {
+		return item.CurrentPrice
+	}
+	if item.BuyMarketPrice > 0 {
+		return item.BuyMarketPrice
+	}
+	return item.BuyPrice
 }
 
 func (r *Repository) UnfinalizedMetrics(ctx context.Context) ([]Recommendation, error) {

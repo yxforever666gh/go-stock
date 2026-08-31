@@ -227,7 +227,7 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 		t.Fatal(err)
 	}
 	sellAt := now.AddDate(0, 0, 1)
-	rec2 := research2.Recommendation{RecommendationID: "schema15-r2-rec", AnalysisRunID: run2.RunID, Rank: 1, StockCode: "sz000001", StockName: "平安银行", SignalAt: completed, FinalScore: 60, ReferencePrice: 10, BuyLower: 9.8, BuyUpper: 10.2, Status: "holding", TargetBuyAt: completed, BuyAt: &completed, BuyPrice: 10.01, Quantity: 100, BuyFees: 5.01, TargetSellAt: &sellAt}
+	rec2 := research2.Recommendation{RecommendationID: "schema15-r2-rec", AnalysisRunID: run2.RunID, StockCode: "sz000001", StockName: "平安银行", SignalAt: completed, FinalScore: 60, ReferencePrice: 10, BuyLower: 9.8, BuyUpper: 10.2, Status: "holding", TargetBuyAt: completed, BuyAt: &completed, BuyPrice: 10.01, Quantity: 100, BuyFees: 5.01, TargetSellAt: &sellAt}
 	if err := mainDB.Create(&rec2).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -276,10 +276,10 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 21 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 22 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
-	if len(mainStatus.Records) < 7 || mainStatus.Records[len(mainStatus.Records)-7].ID != 15 || mainStatus.Records[len(mainStatus.Records)-6].ID != 16 || mainStatus.Records[len(mainStatus.Records)-5].ID != 17 || mainStatus.Records[len(mainStatus.Records)-4].ID != 18 || mainStatus.Records[len(mainStatus.Records)-3].ID != 19 || mainStatus.Records[len(mainStatus.Records)-2].ID != 20 || mainStatus.Records[len(mainStatus.Records)-1].ID != 21 {
-		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 21: %+v", mainStatus.Records)
+	if len(mainStatus.Records) < 8 || mainStatus.Records[len(mainStatus.Records)-8].ID != 15 || mainStatus.Records[len(mainStatus.Records)-7].ID != 16 || mainStatus.Records[len(mainStatus.Records)-6].ID != 17 || mainStatus.Records[len(mainStatus.Records)-5].ID != 18 || mainStatus.Records[len(mainStatus.Records)-4].ID != 19 || mainStatus.Records[len(mainStatus.Records)-3].ID != 20 || mainStatus.Records[len(mainStatus.Records)-2].ID != 21 || mainStatus.Records[len(mainStatus.Records)-1].ID != 22 {
+		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 22: %+v", mainStatus.Records)
 	}
 }

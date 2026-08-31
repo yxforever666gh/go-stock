@@ -7,6 +7,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -43,6 +44,29 @@ type ChartProviderSnapshot struct {
 type RecommendationChartProvider interface {
 	LoadCached(context.Context, string, time.Time, time.Time) (ChartProviderSnapshot, error)
 	Refresh(context.Context, string, time.Time, time.Time, []string) (ChartProviderSnapshot, error)
+}
+
+// RecommendationChartEngine owns the shared recommendation-chart behavior and
+// refresh de-duplication. Both research centers adapt their own recommendation
+// records into RecommendationDetail and use this engine, so minute coverage,
+// trade markers and cost-aware returns cannot drift between the two pages.
+type RecommendationChartEngine struct {
+	provider   RecommendationChartProvider
+	calendar   TradingCalendar
+	now        func() time.Time
+	mu         sync.Mutex
+	refreshing map[string]struct{}
+}
+
+func NewRecommendationChartEngine(provider RecommendationChartProvider, calendar TradingCalendar, clocks ...func() time.Time) *RecommendationChartEngine {
+	if calendar == nil {
+		calendar = WeekdayCalendar{}
+	}
+	now := time.Now
+	if len(clocks) > 0 && clocks[0] != nil {
+		now = clocks[0]
+	}
+	return &RecommendationChartEngine{provider: provider, calendar: calendar, now: now, refreshing: make(map[string]struct{})}
 }
 
 type RecommendationChartSession struct {
@@ -88,24 +112,35 @@ func (s *Service) RecommendationChart(ctx context.Context, recommendationID stri
 		return RecommendationChart{}, errors.New("recommendationId is required")
 	}
 	s.chartMu.Lock()
-	provider := s.chartProvider
+	engine := s.chartEngine
 	s.chartMu.Unlock()
-	if provider == nil {
+	if engine == nil {
 		return RecommendationChart{}, ErrChartProviderUnavailable
-	}
-	if refresh {
-		if !s.beginChartRefresh(recommendationID) {
-			return RecommendationChart{}, ErrChartRefreshInProgress
-		}
-		defer s.endChartRefresh(recommendationID)
 	}
 	detail, err := s.repository.Detail(ctx, recommendationID)
 	if err != nil {
 		return RecommendationChart{}, err
 	}
-	now := s.now()
+	return engine.Chart(ctx, detail, refresh)
+}
+
+func (e *RecommendationChartEngine) Chart(ctx context.Context, detail RecommendationDetail, refresh bool) (RecommendationChart, error) {
+	if e == nil || e.provider == nil {
+		return RecommendationChart{}, ErrChartProviderUnavailable
+	}
+	recommendationID := strings.TrimSpace(detail.Recommendation.RecommendationID)
+	if recommendationID == "" {
+		return RecommendationChart{}, errors.New("recommendationId is required")
+	}
+	if refresh {
+		if !e.beginRefresh(recommendationID) {
+			return RecommendationChart{}, ErrChartRefreshInProgress
+		}
+		defer e.endRefresh(recommendationID)
+	}
+	now := e.now()
 	from, to := chartRange(detail, now)
-	sessionDates, err := chartTradingSessions(ctx, s.calendar, from, to, refresh)
+	sessionDates, err := chartTradingSessions(ctx, e.calendar, from, to, refresh)
 	calendarFallback := false
 	if err != nil {
 		if !refresh {
@@ -126,9 +161,9 @@ func (s *Service) RecommendationChart(ctx context.Context, recommendationID stri
 	lookupFrom := from.AddDate(0, 0, -10)
 	var snapshot ChartProviderSnapshot
 	if refresh {
-		snapshot, err = provider.Refresh(ctx, detail.Recommendation.StockCode, lookupFrom, to, sessionDates)
+		snapshot, err = e.provider.Refresh(ctx, detail.Recommendation.StockCode, lookupFrom, to, sessionDates)
 	} else {
-		snapshot, err = provider.LoadCached(ctx, detail.Recommendation.StockCode, lookupFrom, to)
+		snapshot, err = e.provider.LoadCached(ctx, detail.Recommendation.StockCode, lookupFrom, to)
 	}
 	if err != nil {
 		return RecommendationChart{}, err
@@ -140,20 +175,20 @@ func (s *Service) RecommendationChart(ctx context.Context, recommendationID stri
 	return buildRecommendationChart(detail, snapshot, from, to, sessionDates), nil
 }
 
-func (s *Service) beginChartRefresh(id string) bool {
-	s.chartMu.Lock()
-	defer s.chartMu.Unlock()
-	if _, exists := s.chartRefreshing[id]; exists {
+func (e *RecommendationChartEngine) beginRefresh(id string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, exists := e.refreshing[id]; exists {
 		return false
 	}
-	s.chartRefreshing[id] = struct{}{}
+	e.refreshing[id] = struct{}{}
 	return true
 }
 
-func (s *Service) endChartRefresh(id string) {
-	s.chartMu.Lock()
-	delete(s.chartRefreshing, id)
-	s.chartMu.Unlock()
+func (e *RecommendationChartEngine) endRefresh(id string) {
+	e.mu.Lock()
+	delete(e.refreshing, id)
+	e.mu.Unlock()
 }
 
 func chartRange(detail RecommendationDetail, now time.Time) (time.Time, time.Time) {

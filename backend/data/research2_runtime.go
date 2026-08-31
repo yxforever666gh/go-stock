@@ -28,6 +28,7 @@ import (
 
 type Research2Runtime struct {
 	Repository *research2.Repository
+	Valuation  *research2.Service
 	Runner     *research2.Runner
 	Trading    *research2.TradingService
 	Email      *research2.EmailService
@@ -37,7 +38,7 @@ func NewResearch2Runtime(configID int) (*Research2Runtime, error) {
 	return NewResearch2RuntimeWithStorage(configID, db.Dao, db.MinuteDao)
 }
 
-func NewResearch2RuntimeWithStorage(configID int, mainDB, _ *gorm.DB) (*Research2Runtime, error) {
+func NewResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*Research2Runtime, error) {
 	if mainDB == nil {
 		return nil, errors.New("database is not initialized")
 	}
@@ -62,12 +63,14 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, _ *gorm.DB) (*Research
 		collector.themes = newThemeEvidenceReader(mainDB)
 	}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks}
+	valuation := research2.NewService(repository, quoteProvider)
+	valuation.SetRecommendationChartProvider(NewResearchChartProviderWithStorage(quoteProvider, minuteDB), calendar)
 	runner := research2.NewRunner(repository, NewResearchAIClient(configID), collector, calendar)
 	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)))
 	if experimentalEvidence {
 		runner.ConfigureKnowledge(NewKnowledgeService(mainDB))
 	}
-	return &Research2Runtime{Repository: repository, Runner: runner, Trading: research2.NewTradingService(repository, market, calendar), Email: research2.NewEmailService(repository, nil)}, nil
+	return &Research2Runtime{Repository: repository, Valuation: valuation, Runner: runner, Trading: research2.NewTradingService(repository, market, calendar), Email: research2.NewEmailService(repository, nil)}, nil
 }
 
 type research2MarketRow struct {

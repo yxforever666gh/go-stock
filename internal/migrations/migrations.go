@@ -257,6 +257,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV21Definition,
 		apply:       applyEventDrivenCapitalDeploymentSchema,
 	},
+	{
+		id: 22, name: "research2_live_valuation",
+		description: "Removes Research Center 2 recommendation ranks and stores the latest valid quote for live position valuation without rewriting realized returns or trading history.",
+		definition:  mainMigrationV22Definition,
+		apply:       applyResearch2LiveValuationSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -849,6 +855,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 21 {
 		if err := verifyMainSchema21Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 22 {
+		if err := verifyMainSchema22Runtime(database); err != nil {
 			return result, err
 		}
 	}

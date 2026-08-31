@@ -47,6 +47,7 @@ export const API_PATHS = {
   getResearch2AnalysisRunAudit: "/api/v1/research2/analysis-runs/{id}/audit",
   getResearch2Performance: "/api/v1/research2/account/performance",
   getResearch2Recommendation: "/api/v1/research2/recommendations/{id}",
+  getResearch2RecommendationChart: "/api/v1/research2/recommendations/{id}/chart",
   getResearchAnalysisRunAudit: "/api/v1/research/analysis-runs/{id}/audit",
   getResearchReplay: "/api/v1/research/replays/{id}",
   getSettings: "/api/v1/settings",
@@ -97,6 +98,7 @@ export const API_PATHS = {
   putInstrumentDrawings: "/api/v1/instruments/{code}/drawings",
   queryStocks: "/api/v1/stocks/query",
   refreshRecommendationChart: "/api/v1/research/recommendations/{id}/chart/refresh",
+  refreshResearch2RecommendationChart: "/api/v1/research2/recommendations/{id}/chart/refresh",
   refreshTelegraphs: "/api/v1/market/telegraphs/refresh",
   removeGroupStock: "/api/v1/groups/{id}/stocks/{code}",
   searchFunds: "/api/v1/funds/search",
@@ -1073,6 +1075,8 @@ export type Research2Recommendation = {
   buyUpper: number
   cancelConditions?: string
   catalystScore?: number
+  currentPrice?: number
+  currentPriceAt?: string
   estimatedLotCost?: number
   failureReason?: string
   finalScore: number
@@ -1089,7 +1093,6 @@ export type Research2Recommendation = {
   oldBackground?: string
   quantData?: string
   quantity: number
-  rank: number
   recommendationId: string
   referencePrice: number
   riskDeduction?: number

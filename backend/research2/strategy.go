@@ -74,7 +74,6 @@ type modelOutput struct {
 }
 
 type modelRecommendation struct {
-	Rank             int      `json:"rank"`
 	Code             string   `json:"code"`
 	Name             string   `json:"name"`
 	MarketScore      float64  `json:"marketScore"`
@@ -387,7 +386,7 @@ func research2KnowledgeQuery(evidencePrompt string) string {
 }
 
 func buildPrompt(evidence Evidence, cutoff time.Time) string {
-	return strings.Join([]string{strategyPrompt, "\n# 本次执行的强制参数", "- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"), "- 09:55冻结核心证据；报告尽量在09:55—10:00送达。", "- 正常买入时刻为当日10:00；报告晚于10:00但仍处于连续竞价时，按报告生成后的首个可成交分钟执行并标记late。", "- 卖出时刻固定为下一交易日10:00。", "- 独立账户初始资金12,000元；实际可买标的按数量等额分配现金，数量向下取整到100股并计入费用。", "- 不得编造核心行情；来源引用必须能在下方证据中找到。", "- recommendations是入库清单：最终分>50必须列入，最终分<=50不得列入；conclusion或reportMarkdown中的空仓、不推荐等文字不能否决入库。", "\n# 输出协议（只输出JSON，不加代码围栏）", `{"tradingDay":true,"conclusion":"...","reportMarkdown":"完整Markdown报告","recommendations":[{"rank":1,"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"buyLower":0,"buyUpper":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["来源名"]}]}`, "\n# 截止前采集的证据", evidence.Prompt}, "\n")
+	return strings.Join([]string{strategyPrompt, "\n# 本次执行的强制参数", "- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"), "- 09:55冻结核心证据；报告尽量在09:55—10:00送达。", "- 正常买入时刻为当日10:00；报告晚于10:00但仍处于连续竞价时，按报告生成后的首个可成交分钟执行并标记late。", "- 卖出时刻固定为下一交易日10:00。", "- 独立账户初始资金12,000元；实际可买标的按数量等额分配现金，数量向下取整到100股并计入费用。", "- 不得编造核心行情；来源引用必须能在下方证据中找到。", "- recommendations是入库清单：最终分>50必须列入，最终分<=50不得列入；conclusion或reportMarkdown中的空仓、不推荐等文字不能否决入库。", "- recommendations无需提供排名；系统按最终分从高到低、股票代码从小到大确定稳定优先级。", "\n# 输出协议（只输出JSON，不加代码围栏）", `{"tradingDay":true,"conclusion":"...","reportMarkdown":"完整Markdown报告","recommendations":[{"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"buyLower":0,"buyUpper":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["来源名"]}]}`, "\n# 截止前采集的证据", evidence.Prompt}, "\n")
 }
 
 func ParseModelOutput(content string) (modelOutput, error) {
@@ -405,9 +404,6 @@ func ParseModelOutput(content string) (modelOutput, error) {
 	decoder := json.NewDecoder(strings.NewReader(content[start : end+1]))
 	if err := decoder.Decode(&output); err != nil {
 		return output, err
-	}
-	if len(output.Recommendations) > 3 {
-		output.Recommendations = output.Recommendations[:3]
 	}
 	return output, nil
 }
@@ -464,16 +460,16 @@ func validateRecommendations(runID string, generated, tradingDay time.Time, cand
 		if evidenceName != "" {
 			stockName = evidenceName
 		}
-		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: runID, Rank: value.Rank, StockCode: code, StockName: stockName, SignalAt: generated, MarketScore: value.MarketScore, SectorScore: value.SectorScore, StockScore: value.StockScore, CatalystScore: value.CatalystScore, RiskDeduction: value.RiskDeduction, FinalScore: value.FinalScore, ReferencePrice: value.ReferencePrice, BuyLower: value.BuyLower, BuyUpper: value.BuyUpper, EstimatedLotCost: roundMoney(lotCost), Summary: value.Summary, QuantData: value.QuantData, FreshCatalyst: value.FreshCatalyst, OldBackground: value.OldBackground, MainRisk: value.MainRisk, CancelConditions: value.CancelConditions, SourceRefs: strings.Join(value.SourceRefs, "\n"), Status: "buy_pending", Late: late, TargetBuyAt: target})
+		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: runID, StockCode: code, StockName: stockName, SignalAt: generated, MarketScore: value.MarketScore, SectorScore: value.SectorScore, StockScore: value.StockScore, CatalystScore: value.CatalystScore, RiskDeduction: value.RiskDeduction, FinalScore: value.FinalScore, ReferencePrice: value.ReferencePrice, BuyLower: value.BuyLower, BuyUpper: value.BuyUpper, EstimatedLotCost: roundMoney(lotCost), Summary: value.Summary, QuantData: value.QuantData, FreshCatalyst: value.FreshCatalyst, OldBackground: value.OldBackground, MainRisk: value.MainRisk, CancelConditions: value.CancelConditions, SourceRefs: strings.Join(value.SourceRefs, "\n"), Status: "buy_pending", Late: late, TargetBuyAt: target})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].Rank == items[j].Rank {
-			return items[i].FinalScore > items[j].FinalScore
+		if items[i].FinalScore == items[j].FinalScore {
+			return items[i].StockCode < items[j].StockCode
 		}
-		return items[i].Rank < items[j].Rank
+		return items[i].FinalScore > items[j].FinalScore
 	})
-	for index := range items {
-		items[index].Rank = index + 1
+	if len(items) > 3 {
+		items = items[:3]
 	}
 	return items, warnings
 }
@@ -683,7 +679,7 @@ func affordableEqualAllocation(items []Recommendation, snapshots map[string]Pric
 		// one-third to one-half (or full) allocation without exceeding cash.
 		drop := failed[0]
 		for _, index := range failed[1:] {
-			if eligible[index].Rank > eligible[drop].Rank {
+			if lowerRecommendationPriority(eligible[index], eligible[drop]) {
 				drop = index
 			}
 		}
@@ -691,6 +687,13 @@ func affordableEqualAllocation(items []Recommendation, snapshots map[string]Pric
 		eligible = append(eligible[:drop], eligible[drop+1:]...)
 	}
 	return eligible, removed
+}
+
+func lowerRecommendationPriority(left, right Recommendation) bool {
+	if left.FinalScore == right.FinalScore {
+		return left.StockCode > right.StockCode
+	}
+	return left.FinalScore < right.FinalScore
 }
 
 func (s *TradingService) FinalizeMetrics(ctx context.Context, now time.Time) error {

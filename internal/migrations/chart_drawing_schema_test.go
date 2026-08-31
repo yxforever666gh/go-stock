@@ -123,7 +123,7 @@ func TestSchema15To17PreservesResearchAccountingAndLeavesMinuteSchema3Unchanged(
 	if err := mainDB.Create(&run2).Error; err != nil {
 		t.Fatal(err)
 	}
-	rec2 := research2.Recommendation{RecommendationID: "schema16-r2-rec", AnalysisRunID: run2.RunID, Rank: 1, StockCode: "sz000001", StockName: "平安银行", SignalAt: now, FinalScore: 61, ReferencePrice: 10, BuyLower: 9.8, BuyUpper: 10.2, Status: "closed", TargetBuyAt: now, BuyAt: &now, BuyPrice: 10.01, Quantity: 100, BuyFees: 5.01, TargetSellAt: &completed, SellAt: &completed, SellPrice: 10.20, SellFees: 5.52, NetPnL: 8.47}
+	rec2 := research2.Recommendation{RecommendationID: "schema16-r2-rec", AnalysisRunID: run2.RunID, StockCode: "sz000001", StockName: "平安银行", SignalAt: now, FinalScore: 61, ReferencePrice: 10, BuyLower: 9.8, BuyUpper: 10.2, Status: "closed", TargetBuyAt: now, BuyAt: &now, BuyPrice: 10.01, Quantity: 100, BuyFees: 5.01, TargetSellAt: &completed, SellAt: &completed, SellPrice: 10.20, SellFees: 5.52, NetPnL: 8.47}
 	if err := mainDB.Create(&rec2).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ VALUES ('stock','sh600000','1m','qfq',1,10,11,9,10.5,'fixture',1)`).Error; err !
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 21 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 22 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
 	var minuteMigrationCountAfter, barCount int64

@@ -230,7 +230,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 func TestRunnerStoresScoreAbove50EvenWhenModelConclusionSaysStayOut(t *testing.T) {
 	repository := research2TestRepository(t)
 	ai := &sequenceAI{responses: []string{
-		`{"tradingDay":true,"conclusion":"空仓，不推荐任何股票","reportMarkdown":"# 结论\n\n空仓，不推荐。","recommendations":[{"rank":1,"code":"sh600000","name":"模型名称","marketScore":10,"sectorScore":10,"stockScore":10,"catalystScore":10,"riskDeduction":0,"finalScore":51,"referencePrice":10,"buyLower":9,"buyUpper":11}]}`,
+		`{"tradingDay":true,"conclusion":"空仓，不推荐任何股票","reportMarkdown":"# 结论\n\n空仓，不推荐。","recommendations":[{"code":"sh600000","name":"模型名称","marketScore":10,"sectorScore":10,"stockScore":10,"catalystScore":10,"riskDeduction":0,"finalScore":51,"referencePrice":10,"buyLower":9,"buyUpper":11}]}`,
 	}}
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
@@ -264,8 +264,8 @@ func TestValidateRecommendationsRejectsStocksOutsideFrozenEvidence(t *testing.T)
 	loc := shanghai()
 	generated := time.Date(2026, 8, 27, 9, 58, 0, 0, loc)
 	values := []modelRecommendation{
-		{Rank: 1, Code: "sh600000", Name: "模型名称", MarketScore: 10, SectorScore: 15, StockScore: 20, CatalystScore: 15, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
-		{Rank: 2, Code: "sz000001", Name: "证据外股票", MarketScore: 10, SectorScore: 15, StockScore: 20, CatalystScore: 15, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
+		{Code: "sh600000", Name: "模型名称", MarketScore: 10, SectorScore: 15, StockScore: 20, CatalystScore: 15, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
+		{Code: "sz000001", Name: "证据外股票", MarketScore: 10, SectorScore: 15, StockScore: 20, CatalystScore: 15, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
 	}
 	items, warnings := validateRecommendations("run", generated, generated, []research.StockCandidate{{Code: "sh600000", Name: "证据名称"}}, values)
 	if len(items) != 1 || items[0].StockCode != "sh600000" || items[0].StockName != "证据名称" {
@@ -273,6 +273,31 @@ func TestValidateRecommendationsRejectsStocksOutsideFrozenEvidence(t *testing.T)
 	}
 	if len(warnings) != 1 {
 		t.Fatalf("expected one evidence warning, got %v", warnings)
+	}
+}
+
+func TestValidateRecommendationsUsesScoreAndCodePriority(t *testing.T) {
+	loc := shanghai()
+	generated := time.Date(2026, 8, 27, 9, 58, 0, 0, loc)
+	values := []modelRecommendation{
+		{Code: "sz000003", FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
+		{Code: "sz000002", FinalScore: 70, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
+		{Code: "sz000001", FinalScore: 70, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
+		{Code: "sh600000", FinalScore: 80, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
+	}
+	items, warnings := validateRecommendations("run", generated, generated, nil, values)
+	if len(warnings) != 4 {
+		// Score components are intentionally omitted in this priority-only test.
+		t.Fatalf("warnings=%v", warnings)
+	}
+	want := []string{"sh600000", "sz000001", "sz000002"}
+	if len(items) != len(want) {
+		t.Fatalf("items=%+v", items)
+	}
+	for index, code := range want {
+		if items[index].StockCode != code {
+			t.Fatalf("priority[%d]=%s want=%s", index, items[index].StockCode, code)
+		}
 	}
 }
 
@@ -306,8 +331,8 @@ func TestTradingServiceBuysThreeRecommendationsAtAboutOneThirdEach(t *testing.T)
 		t.Fatal(err)
 	}
 	items := make([]Recommendation, 0, 3)
-	for index, code := range []string{"sh600000", "sz000001", "sz002594"} {
-		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, Rank: index + 1, StockCode: code, StockName: code, SignalAt: now.Add(-time.Minute), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.Add(-5 * time.Second)})
+	for _, code := range []string{"sh600000", "sz000001", "sz002594"} {
+		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: code, StockName: code, SignalAt: now.Add(-time.Minute), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.Add(-5 * time.Second)})
 	}
 	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
@@ -344,9 +369,9 @@ func TestTradingServiceReallocatesAfterUnaffordableCandidate(t *testing.T) {
 	}
 	prices := map[string]float64{"sh600000": 10, "sz000001": 10, "sz002594": 60}
 	items := make([]Recommendation, 0, 3)
-	for index, code := range []string{"sh600000", "sz000001", "sz002594"} {
+	for _, code := range []string{"sh600000", "sz000001", "sz002594"} {
 		price := prices[code]
-		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, Rank: index + 1, StockCode: code, StockName: code, SignalAt: now.Add(-time.Minute), FinalScore: 60, ReferencePrice: price, BuyLower: price * 0.9, BuyUpper: price * 1.1, Status: "buy_pending", TargetBuyAt: now.Add(-5 * time.Second)})
+		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: code, StockName: code, SignalAt: now.Add(-time.Minute), FinalScore: 60, ReferencePrice: price, BuyLower: price * 0.9, BuyUpper: price * 1.1, Status: "buy_pending", TargetBuyAt: now.Add(-5 * time.Second)})
 	}
 	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
@@ -380,7 +405,7 @@ func TestTradingServiceDoesNotTradeDuringLunch(t *testing.T) {
 	if err := repository.CreateRun(context.Background(), &run); err != nil {
 		t.Fatal(err)
 	}
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, Rank: 1, StockCode: "sh600000", StockName: "test", SignalAt: now.Add(-2 * time.Hour), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.Add(-time.Hour)}
+	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "test", SignalAt: now.Add(-2 * time.Hour), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.Add(-time.Hour)}
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +430,7 @@ func TestSellRetryUsesCurrentQuoteAfterTargetMinute(t *testing.T) {
 	if err := repository.CreateRun(context.Background(), &run); err != nil {
 		t.Fatal(err)
 	}
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, Rank: 1, StockCode: "sh600000", StockName: "test", SignalAt: now.AddDate(0, 0, -1), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.AddDate(0, 0, -1)}
+	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "test", SignalAt: now.AddDate(0, 0, -1), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.AddDate(0, 0, -1)}
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}

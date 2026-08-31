@@ -56,7 +56,7 @@ type Service struct {
 	ai              AIClient
 	quotes          QuoteProvider
 	contextProvider LifecycleContextProvider
-	chartProvider   RecommendationChartProvider
+	chartEngine     *RecommendationChartEngine
 	calendar        TradingCalendar
 	reviewSchedule  SellReviewSchedule
 	now             func() time.Time
@@ -66,7 +66,6 @@ type Service struct {
 	lifecycleMu     sync.Mutex
 	lifecycleActive map[string]struct{}
 	chartMu         sync.Mutex
-	chartRefreshing map[string]struct{}
 }
 
 func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calendar TradingCalendar, providers ...LifecycleContextProvider) *Service {
@@ -82,7 +81,7 @@ func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calen
 	}
 	return &Service{repository: repository, ai: ai, quotes: quotes, contextProvider: provider, calendar: calendar,
 		reviewSchedule: DefaultSellReviewSchedule(), now: time.Now,
-		lifecycleActive: make(map[string]struct{}), chartRefreshing: make(map[string]struct{})}
+		lifecycleActive: make(map[string]struct{})}
 }
 
 func (s *Service) SetSellReviewSchedule(schedule SellReviewSchedule) {
@@ -116,7 +115,7 @@ func (s *Service) IsTradingDay(ctx context.Context, value time.Time) (bool, erro
 // a cached chart read must never trigger an upstream request.
 func (s *Service) SetRecommendationChartProvider(provider RecommendationChartProvider) {
 	s.chartMu.Lock()
-	s.chartProvider = provider
+	s.chartEngine = NewRecommendationChartEngine(provider, s.calendar, func() time.Time { return s.now() })
 	s.chartMu.Unlock()
 }
 

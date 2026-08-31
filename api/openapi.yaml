@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.7.0
+  version: 2.7.1
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -516,6 +516,19 @@ paths:
       operationId: getResearch2Recommendation
       responses:
         "200": {description: Research Center 2 recommendation detail, content: {application/json: {schema: {$ref: "#/components/schemas/Research2RecommendationDetail"}}}}
+  /api/v1/research2/recommendations/{id}/chart:
+    get:
+      operationId: getResearch2RecommendationChart
+      description: Reads the persisted unadjusted minute cache and never calls an upstream provider.
+      responses:
+        "200": {description: Cached Research Center 2 recommendation minute chart, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
+  /api/v1/research2/recommendations/{id}/chart/refresh:
+    post:
+      operationId: refreshResearch2RecommendationChart
+      description: Fills missing minute coverage using only enabled providers, refreshes the quote, and returns the chart data.
+      responses:
+        "200": {description: Refreshed Research Center 2 recommendation minute chart, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
+        "409": {description: The same recommendation is already being refreshed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
   /api/v1/research2/account:
     get:
       operationId: getResearch2Account
@@ -2027,11 +2040,10 @@ components:
             - {type: "null"}
     Research2Recommendation:
       type: object
-      required: [recommendationId, analysisRunId, rank, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]
+      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]
       properties:
         recommendationId: {type: string}
         analysisRunId: {type: string}
-        rank: {type: integer}
         stockCode: {type: string}
         stockName: {type: string}
         signalAt: {type: string, format: date-time}
@@ -2065,6 +2077,8 @@ components:
         sellMarketPrice: {type: number}
         sellPrice: {type: number}
         sellFees: {type: number}
+        currentPrice: {type: number}
+        currentPriceAt: {type: string, format: date-time}
         netPnl: {type: number}
         netYieldRate: {type: number}
         hitFiveBeforeSell: {type: boolean, nullable: true}

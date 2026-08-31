@@ -2,6 +2,7 @@
 import {computed, ref, watch} from 'vue'
 import {useMessage} from 'naive-ui'
 import {GetAIRecommendationChart, RefreshAIRecommendationChart} from '../services/research-api'
+import {GetResearch2RecommendationChart, RefreshResearch2RecommendationChart} from '../services/research2-api'
 import {formatMoney, formatPercent, formatPrice} from '../utils/number-format'
 import {adaptResearchChart, researchChartOverlays} from '../charting/research-chart-adapter.js'
 import {useResearchChartPreferences} from '../composables/useResearchChartPreferences'
@@ -11,6 +12,7 @@ import MarketChartCanvas from './chart/MarketChartCanvas.vue'
 const props = defineProps({
   recommendationId: {type: String, required: true},
   fallbackTrades: {type: Array, default: () => []},
+  scope: {type: String, default: 'research', validator: value => ['research', 'research2'].includes(value)},
 })
 
 const message = useMessage()
@@ -25,8 +27,24 @@ const cacheError = ref('')
 const refreshError = ref('')
 let requestVersion = 0
 
+function getChart() {
+  return props.scope === 'research2'
+    ? GetResearch2RecommendationChart(props.recommendationId)
+    : GetAIRecommendationChart(props.recommendationId)
+}
+
+function refreshChartData() {
+  return props.scope === 'research2'
+    ? RefreshResearch2RecommendationChart(props.recommendationId)
+    : RefreshAIRecommendationChart(props.recommendationId)
+}
+
 const model = computed(() => adaptResearchChart(chartData.value || {}))
-const trades = computed(() => chartData.value?.trades?.length ? chartData.value.trades : props.fallbackTrades)
+const fallbackTrades = computed(() => props.fallbackTrades.map(item => ({
+  ...item,
+  totalFees: item.totalFees ?? Number(item.commission || 0) + Number(item.stampDuty || 0) + Number(item.transferFee || 0),
+})))
+const trades = computed(() => chartData.value?.trades?.length ? chartData.value.trades : fallbackTrades.value)
 const sessions = computed(() => chartData.value?.sessions || [])
 const sessionOptions = computed(() => sessions.value.map(item => ({label: `${item.date}${item.status === 'missing' ? '（缺失）' : ''}`, value: item.date})))
 const hasBuyTrade = computed(() => trades.value.some(item => String(item.side).toLowerCase() === 'buy'))
@@ -57,7 +75,7 @@ async function refreshChart(automatic = false, version = requestVersion) {
   refreshing.value = true
   refreshError.value = ''
   try {
-    const result = await RefreshAIRecommendationChart(props.recommendationId)
+    const result = await refreshChartData()
     if (version !== requestVersion) return
     chartData.value = result
   } catch (reason) {
@@ -77,7 +95,7 @@ async function loadInitial() {
   selectedSession.value = null
   initialLoading.value = true
   try {
-    chartData.value = await GetAIRecommendationChart(props.recommendationId)
+    chartData.value = await getChart()
   } catch (reason) {
     if (version !== requestVersion) return
     cacheError.value = reason?.message || String(reason)
@@ -87,7 +105,7 @@ async function loadInitial() {
   if (version === requestVersion) await refreshChart(true, version)
 }
 
-watch(() => props.recommendationId, () => { void loadInitial() }, {immediate: true})
+watch(() => [props.scope, props.recommendationId], () => { void loadInitial() }, {immediate: true})
 </script>
 
 <template>

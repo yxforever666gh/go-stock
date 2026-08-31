@@ -81,7 +81,6 @@ type Recommendation struct {
 	ID                uint       `json:"id" gorm:"primaryKey"`
 	RecommendationID  string     `json:"recommendationId" gorm:"size:36;uniqueIndex;not null"`
 	AnalysisRunID     string     `json:"analysisRunId" gorm:"size:36;index;not null"`
-	Rank              int        `json:"rank"`
 	StockCode         string     `json:"stockCode" gorm:"size:16;index;not null"`
 	StockName         string     `json:"stockName" gorm:"size:64;not null"`
 	SignalAt          time.Time  `json:"signalAt" gorm:"index;not null"`
@@ -110,6 +109,8 @@ type Recommendation struct {
 	BuyPrice          float64    `json:"buyPrice"`
 	Quantity          int64      `json:"quantity"`
 	BuyFees           float64    `json:"buyFees"`
+	CurrentPrice      float64    `json:"currentPrice,omitempty"`
+	CurrentPriceAt    *time.Time `json:"currentPriceAt,omitempty"`
 	TargetSellAt      *time.Time `json:"targetSellAt" gorm:"index"`
 	SellAt            *time.Time `json:"sellAt" gorm:"index"`
 	SellMarketPrice   float64    `json:"sellMarketPrice"`

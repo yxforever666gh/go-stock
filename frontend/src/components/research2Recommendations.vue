@@ -1,35 +1,122 @@
 <script setup>
 import {h, onMounted, ref} from 'vue'
-import {NButton, NTag, useMessage} from 'naive-ui'
-import {GetResearch2Recommendation, ListResearch2Recommendations} from '../services/research2-api'
+import {NButton, NTag, NText, useMessage} from 'naive-ui'
+import {GetResearch2Account, GetResearch2Recommendation, ListResearch2Recommendations} from '../services/research2-api'
+import {useDraggableDataTableColumns} from '../composables/useDraggableDataTableColumns'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
+import ResearchTradeChart from './ResearchTradeChart.vue'
 import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 
-const message = useMessage(), loading = ref(false), rows = ref([]), detail = ref(null), visible = ref(false)
+const message = useMessage()
+const loading = ref(false)
+const rows = ref([])
+const detail = ref(null)
+const visible = ref(false)
+
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
 const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
-const statusType = status => status === 'closed' ? 'success' : ['missed_cash','missed_untradable','missed_window','cancelled_price'].includes(status) ? 'error' : 'warning'
-async function show(row) { visible.value = true; detail.value = null; try { detail.value = await GetResearch2Recommendation(row.recommendationId) } catch (error) { message.error(error?.message || String(error)) } }
-const columns = [
+const statusType = status => status === 'closed' ? 'success' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
+const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
+const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
+
+async function show(row) {
+  visible.value = true
+  detail.value = null
+  try { detail.value = await GetResearch2Recommendation(row.recommendationId) }
+  catch (error) { message.error(error?.message || String(error)) }
+}
+
+const defaultColumns = [
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
-  {title: '排名', key: 'rank', width: 70},
-  {title: '股票', key: 'stockCode', minWidth: 160, render: row => `${row.stockName}（${row.stockCode}）`},
+  {title: '股票', key: 'stockCode', minWidth: 170, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
   {title: '最终分', key: 'finalScore', width: 90, render: row => formatNumber(row.finalScore, 1)},
   {title: '参考价', key: 'referencePrice', width: 95, render: row => formatPrice(row.referencePrice)},
   {title: '买入区间', key: 'buyLower', width: 150, render: row => `${formatPrice(row.buyLower)}–${formatPrice(row.buyUpper)}`},
-  {title: '目标买入', key: 'targetBuyAt', width: 170, render: row => `${dateTime(row.targetBuyAt)}${row.late ? '（迟到）' : ''}`},
-  {title: '成交数量', key: 'quantity', width: 100, render: row => formatInteger(row.quantity)},
-  {title: '买/卖价', key: 'buyPrice', width: 150, render: row => `${formatPrice(row.buyPrice)} / ${formatPrice(row.sellPrice)}`},
-  {title: '净收益', key: 'netPnl', width: 110, render: row => formatMoney(row.netPnl)},
-  {title: '收益率', key: 'netYieldRate', width: 100, render: row => formatPercent(row.netYieldRate)},
+  {title: '成交数量', key: 'quantity', width: 100, render: row => hasBuy(row) ? formatInteger(row.quantity) : '--'},
+  {title: '买/卖价', key: 'buyPrice', width: 150, render: row => `${hasBuy(row) ? formatPrice(row.buyPrice) : '--'} / ${Number(row.sellPrice || 0) > 0 ? formatPrice(row.sellPrice) : '--'}`},
+  {title: '当前价', key: 'currentPrice', width: 100, render: row => ['active', 'sell_pending'].includes(row.status) && Number(row.currentPrice || 0) > 0 ? formatPrice(row.currentPrice) : '--'},
+  {title: '净收益', key: 'netPnl', width: 110, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netPnl)}, {default: () => formatMoney(row.netPnl)}) : '--'},
+  {title: '收益率', key: 'netYieldRate', width: 100, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate)}, {default: () => formatPercent(row.netYieldRate)}) : '--'},
   {title: '状态', key: 'status', width: 110, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
-  {title: '操作', key: 'action', width: 90, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => show(row)}, {default: () => '详情'})},
 ]
-async function refresh() { loading.value = true; try { rows.value = await ListResearch2Recommendations() } catch (error) { message.error(error?.message || String(error)) } finally { loading.value = false } }
+const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research2-recommendations:column-order:v1')
+
+async function refresh() {
+  loading.value = true
+  try {
+    await GetResearch2Account()
+    rows.value = await ListResearch2Recommendations(200, 0) || []
+  } catch (error) { message.error(error?.message || String(error)) }
+  finally { loading.value = false }
+}
+
 onMounted(refresh)
 </script>
 
 <template>
-  <n-space vertical><n-flex justify="space-between"><n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用。</n-text><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex><n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1660" :row-key="row => row.recommendationId"/></n-space>
-  <n-modal v-model:show="visible"><n-card title="推荐与成交详情" closable style="width:min(1280px,94vw);max-height:94vh" @close="visible=false"><n-scrollbar style="max-height:82vh"><n-spin :show="!detail"><template v-if="detail"><n-descriptions bordered :column="3"><n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item><n-descriptions-item label="评分">{{formatNumber(detail.recommendation.finalScore,1)}}</n-descriptions-item><n-descriptions-item label="状态">{{statusLabels[detail.recommendation.status] || detail.recommendation.status}}</n-descriptions-item><n-descriptions-item label="入选理由" :span="3">{{detail.recommendation.summary}}</n-descriptions-item><n-descriptions-item label="关键量化" :span="3">{{detail.recommendation.quantData}}</n-descriptions-item><n-descriptions-item label="新催化" :span="3">{{detail.recommendation.freshCatalyst || '无可核验新催化'}}</n-descriptions-item><n-descriptions-item label="主要风险" :span="3">{{detail.recommendation.mainRisk}}</n-descriptions-item><n-descriptions-item label="取消条件" :span="3">{{detail.recommendation.cancelConditions}}</n-descriptions-item></n-descriptions><n-divider>完整报告</n-divider><AppMarkdownPreview :model-value="detail.analysis.reportMarkdown || '暂无报告'"/><n-divider>成交记录</n-divider><n-data-table :data="detail.trades || []" :columns="[{title:'方向',key:'side'},{title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},{title:'市场价',key:'marketPrice',render:r=>formatPrice(r.marketPrice)},{title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},{title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},{title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}]"/></template></n-spin></n-scrollbar></n-card></n-modal>
+  <n-space vertical>
+    <n-flex justify="space-between" align="center">
+      <n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用；当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
+      <n-button :loading="loading" @click="refresh">刷新</n-button>
+    </n-flex>
+    <div ref="tableRef">
+      <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1445" :row-key="row => row.recommendationId"/>
+    </div>
+  </n-space>
+
+  <n-modal v-model:show="visible">
+    <n-card class="research-detail-card" title="推荐与成交详情" closable @close="visible=false">
+      <n-scrollbar style="max-height:87vh">
+        <n-spin :show="!detail">
+          <template v-if="detail">
+            <n-descriptions bordered :column="3">
+              <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>
+              <n-descriptions-item label="评分">{{formatNumber(detail.recommendation.finalScore,1)}}</n-descriptions-item>
+              <n-descriptions-item label="状态">{{statusLabels[detail.recommendation.status] || detail.recommendation.status}}</n-descriptions-item>
+              <n-descriptions-item label="入选理由" :span="3">{{detail.recommendation.summary}}</n-descriptions-item>
+              <n-descriptions-item label="关键量化" :span="3">{{detail.recommendation.quantData}}</n-descriptions-item>
+              <n-descriptions-item label="新催化" :span="3">{{detail.recommendation.freshCatalyst || '无可核验新催化'}}</n-descriptions-item>
+              <n-descriptions-item label="主要风险" :span="3">{{detail.recommendation.mainRisk}}</n-descriptions-item>
+              <n-descriptions-item label="取消条件" :span="3">{{detail.recommendation.cancelConditions}}</n-descriptions-item>
+            </n-descriptions>
+            <n-divider title-placement="left">持仓期分钟走势</n-divider>
+            <ResearchTradeChart scope="research2" :recommendation-id="detail.recommendation.recommendationId" :fallback-trades="detail.trades || []"/>
+            <n-divider title-placement="left">完整报告</n-divider>
+            <AppMarkdownPreview :model-value="detail.analysis.reportMarkdown || '暂无报告'"/>
+            <n-divider title-placement="left">成交记录</n-divider>
+            <n-data-table :data="detail.trades || []" :columns="[
+              {title:'方向',key:'side'},
+              {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},
+              {title:'市场价',key:'marketPrice',render:r=>formatPrice(r.marketPrice)},
+              {title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},
+              {title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},
+              {title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}
+            ]"/>
+          </template>
+        </n-spin>
+      </n-scrollbar>
+    </n-card>
+  </n-modal>
 </template>
+
+<style scoped>
+:deep(.draggable-column-title) {
+  display: inline-flex;
+  width: 100%;
+  cursor: grab;
+  user-select: none;
+}
+
+:deep(.draggable-column-title.column-dragging) {
+  opacity: 0.55;
+}
+
+:deep(.draggable-column-title.column-drag-over) {
+  box-shadow: inset 3px 0 0 #18a058;
+}
+
+.research-detail-card {
+  width: min(1600px, 96vw);
+  max-height: 96vh;
+}
+</style>
