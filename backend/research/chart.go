@@ -320,6 +320,7 @@ func buildRecommendationChart(detail RecommendationDetail, snapshot ChartProvide
 		result.RefreshedAt = bars[len(bars)-1].At
 	}
 	result.Sessions, result.MissingSessions = chartSessions(sessionDates, allBars, from, to)
+	applyQuotePreviousClose(result.Sessions, snapshot.Quote)
 	result.Status = chartCoverageStatus(result.Sessions, len(bars))
 
 	if snapshot.Quote != nil && snapshot.Quote.Price > 0 {
@@ -332,6 +333,19 @@ func buildRecommendationChart(detail RecommendationDetail, snapshot ChartProvide
 	}
 	result.CurrentNetPnL, result.CurrentNetYieldRate = chartCurrentReturn(trades, result.CurrentPrice)
 	return result
+}
+
+func applyQuotePreviousClose(sessions []RecommendationChartSession, quote *Quote) {
+	if quote == nil || quote.PreviousClose <= 0 || quote.At.IsZero() {
+		return
+	}
+	quoteDate := ShanghaiTime(quote.At).Format("2006-01-02")
+	for index := range sessions {
+		if sessions[index].Date == quoteDate && sessions[index].PreviousClose <= 0 {
+			sessions[index].PreviousClose = quote.PreviousClose
+			return
+		}
+	}
 }
 
 func validChartBar(bar ChartMinuteBar) bool {
@@ -366,11 +380,8 @@ func chartSessions(dates []string, allBars []ChartMinuteBar, from, to time.Time)
 				status = "partial"
 			}
 		}
-		if previousClose <= 0 && status == "complete" {
-			status = "partial"
-		}
 		result = append(result, RecommendationChartSession{Date: date, PreviousClose: previousClose, Status: status})
-		if status != "complete" {
+		if status == "missing" {
 			missing = append(missing, date)
 		}
 		if len(rows) > 0 {

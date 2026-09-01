@@ -31,11 +31,9 @@ const defaultColumns = [
   {title: '股票', key: 'stockCode', minWidth: 170, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
   {title: '最终分', key: 'finalScore', width: 90, render: row => formatNumber(row.finalScore, 1)},
   {title: '参考价', key: 'referencePrice', width: 95, render: row => formatPrice(row.referencePrice)},
-  {title: '买入区间', key: 'buyLower', width: 150, render: row => `${formatPrice(row.buyLower)}–${formatPrice(row.buyUpper)}`},
   {title: '成交数量', key: 'quantity', width: 100, render: row => hasBuy(row) ? formatInteger(row.quantity) : '--'},
   {title: '买/卖价', key: 'buyPrice', width: 150, render: row => `${hasBuy(row) ? formatPrice(row.buyPrice) : '--'} / ${Number(row.sellPrice || 0) > 0 ? formatPrice(row.sellPrice) : '--'}`},
   {title: '当前价', key: 'currentPrice', width: 100, render: row => ['active', 'sell_pending'].includes(row.status) && Number(row.currentPrice || 0) > 0 ? formatPrice(row.currentPrice) : '--'},
-  {title: '净收益', key: 'netPnl', width: 110, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netPnl)}, {default: () => formatMoney(row.netPnl)}) : '--'},
   {title: '收益率', key: 'netYieldRate', width: 100, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate)}, {default: () => formatPercent(row.netYieldRate)}) : '--'},
   {title: '状态', key: 'status', width: 110, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
 ]
@@ -60,7 +58,7 @@ onMounted(refresh)
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">
-      <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1445" :row-key="row => row.recommendationId"/>
+      <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1185" :row-key="row => row.recommendationId"/>
     </div>
   </n-space>
 

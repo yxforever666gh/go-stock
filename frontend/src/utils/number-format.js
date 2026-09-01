@@ -38,3 +38,7 @@ export function formatPercent(value) {
   const number = finite(value) * 100
   return `${number >= 0 ? '+' : '-'}${formatNumber(Math.abs(number), 2)}%`
 }
+
+export function formatDrawdown(value) {
+  return formatPercent(-Math.abs(finite(value)))
+}

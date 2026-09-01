@@ -182,8 +182,59 @@ func TestChartSessionsReportsInternalMinuteGapAsPartial(t *testing.T) {
 		{At: time.Date(2026, 8, 19, 10, 30, 0, 0, shanghaiLocation), Open: 10, High: 10, Low: 10, Close: 10},
 	}
 	sessions, missing := chartSessions([]string{day}, bars, bars[0].At, to)
-	if len(sessions) != 1 || sessions[0].Status != "partial" || len(missing) != 1 || missing[0] != day {
+	if len(sessions) != 1 || sessions[0].Status != "partial" || len(missing) != 0 {
 		t.Fatalf("sessions=%+v missing=%v", sessions, missing)
+	}
+}
+
+func TestChartSessionsDoesNotTreatMissingPreviousCloseAsMissingMinutes(t *testing.T) {
+	day := "2026-09-01"
+	from := time.Date(2026, 9, 1, 9, 30, 0, 0, shanghaiLocation)
+	to := time.Date(2026, 9, 1, 11, 19, 0, 0, shanghaiLocation)
+	bars := make([]ChartMinuteBar, 0, 106)
+	for at := from; !at.After(time.Date(2026, 9, 1, 11, 15, 0, 0, shanghaiLocation)); at = at.Add(time.Minute) {
+		bars = append(bars, ChartMinuteBar{At: at, Open: 10, High: 10, Low: 10, Close: 10})
+	}
+
+	sessions, missing := chartSessions([]string{day}, bars, from, to)
+	if len(sessions) != 1 || sessions[0].Status != "complete" || sessions[0].PreviousClose != 0 || len(missing) != 0 {
+		t.Fatalf("sessions=%+v missing=%v", sessions, missing)
+	}
+}
+
+func TestChartSessionsKeepsPartialAndMissingDatesDistinct(t *testing.T) {
+	from := time.Date(2026, 8, 31, 9, 30, 0, 0, shanghaiLocation)
+	to := time.Date(2026, 9, 1, 11, 0, 0, 0, shanghaiLocation)
+	bars := []ChartMinuteBar{
+		{At: from, Open: 10, High: 10, Low: 10, Close: 10},
+		{At: from.Add(30 * time.Minute), Open: 10, High: 10, Low: 10, Close: 10},
+	}
+
+	sessions, missing := chartSessions([]string{"2026-08-31", "2026-09-01"}, bars, from, to)
+	if len(sessions) != 2 || sessions[0].Status != "partial" || sessions[1].Status != "missing" {
+		t.Fatalf("sessions=%+v", sessions)
+	}
+	if len(missing) != 1 || missing[0] != "2026-09-01" {
+		t.Fatalf("missing=%v", missing)
+	}
+}
+
+func TestBuildRecommendationChartUsesCurrentQuotePreviousClose(t *testing.T) {
+	from := time.Date(2026, 9, 1, 9, 30, 0, 0, shanghaiLocation)
+	to := from.Add(time.Minute)
+	quoteAt := time.Date(2026, 9, 1, 11, 15, 0, 0, shanghaiLocation)
+	detail := RecommendationDetail{Recommendation: Recommendation{RecommendationID: "chart-quote", StockCode: "sh600551", StockName: "时代出版"}}
+	snapshot := ChartProviderSnapshot{
+		Bars: []ChartMinuteBar{
+			{At: from, Open: 8.8, High: 8.8, Low: 8.8, Close: 8.8},
+			{At: to, Open: 8.8, High: 8.9, Low: 8.8, Close: 8.9},
+		},
+		Quote: &Quote{At: quoteAt, Price: 9.08, PreviousClose: 8.25},
+	}
+
+	chart := buildRecommendationChart(detail, snapshot, from, to, []string{"2026-09-01"})
+	if len(chart.Sessions) != 1 || chart.Sessions[0].PreviousClose != 8.25 {
+		t.Fatalf("sessions=%+v", chart.Sessions)
 	}
 }
 

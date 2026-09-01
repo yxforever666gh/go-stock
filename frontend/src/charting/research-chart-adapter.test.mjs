@@ -25,3 +25,32 @@ test('research adapter preserves real bars, source errors, PnL and missing sessi
   assert.ok(overlays.mainMarkLines.some(item => item.name === '买入均价'))
   assert.match(overlays.tooltipLines(model.bars[0]).join(' '), /预估净收益/)
 })
+
+test('partial session is not expanded into a false full-day missing interval', () => {
+  const current = {
+    stockCode: '600551', stockName: '时代出版', status: 'partial',
+    rangeFrom: '2026-09-01T09:30:00+08:00', rangeTo: '2026-09-01T11:19:00+08:00',
+    missingSessions: ['2026-09-01'],
+    sessions: [{date: '2026-09-01', previousClose: 0, status: 'partial'}],
+    bars: [{at: '2026-09-01T11:15:00+08:00', open: 9, close: 9.08, low: 9, high: 9.08, source: 'tencent'}],
+  }
+
+  const model = adaptResearchChart(current)
+  assert.equal(model.missingIntervals.length, 0)
+  assert.match(researchChartOverlays(model).tooltipLines(model.bars[0])[0], /涨跌幅：--/)
+})
+
+test('missing current session interval is clamped to the chart range', () => {
+  const current = {
+    stockCode: '600551', status: 'empty',
+    rangeFrom: '2026-09-01T09:30:00+08:00', rangeTo: '2026-09-01T11:19:00+08:00',
+    missingSessions: ['2026-09-01'],
+    sessions: [{date: '2026-09-01', previousClose: 8.25, status: 'missing'}],
+    bars: [],
+  }
+
+  const model = adaptResearchChart(current)
+  assert.equal(model.missingIntervals.length, 1)
+  assert.equal(model.missingIntervals[0].from, '2026-09-01T01:30:00.000Z')
+  assert.equal(model.missingIntervals[0].to, '2026-09-01T03:19:00.000Z')
+})

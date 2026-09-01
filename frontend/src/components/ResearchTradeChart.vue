@@ -46,6 +46,10 @@ const fallbackTrades = computed(() => props.fallbackTrades.map(item => ({
 })))
 const trades = computed(() => chartData.value?.trades?.length ? chartData.value.trades : fallbackTrades.value)
 const sessions = computed(() => chartData.value?.sessions || [])
+const missingSessions = computed(() => {
+  if (sessions.value.length) return sessions.value.filter(item => item.status === 'missing').map(item => item.date)
+  return chartData.value?.missingSessions || []
+})
 const sessionOptions = computed(() => sessions.value.map(item => ({label: `${item.date}${item.status === 'missing' ? '（缺失）' : ''}`, value: item.date})))
 const hasBuyTrade = computed(() => trades.value.some(item => String(item.side).toLowerCase() === 'buy'))
 const isPartial = computed(() => chartData.value?.status === 'partial')
@@ -135,10 +139,10 @@ watch(() => [props.scope, props.recommendationId], () => { void loadInitial() },
     </n-flex>
 
     <n-alert v-if="isPartial" type="warning" :bordered="false" class="chart-alert">
-      分钟数据不完整，图中仅展示已取得的真实数据；缺失交易日：{{ chartData.missingSessions?.join('、') || '部分时段' }}。
+      分钟数据不完整，图中仅展示已取得的真实数据；缺失交易日：{{ missingSessions.join('、') || '部分时段' }}。
     </n-alert>
     <n-alert v-else-if="isEmpty && !initialLoading && !refreshing" type="info" :bordered="false" class="chart-alert">
-      暂无可展示的分钟数据{{ chartData?.missingSessions?.length ? `；缺失交易日：${chartData.missingSessions.join('、')}` : '' }}。
+      暂无可展示的分钟数据{{ missingSessions.length ? `；缺失交易日：${missingSessions.join('、')}` : '' }}。
     </n-alert>
     <n-alert v-if="refreshError || (cacheError && !chartData)" type="error" :bordered="false" class="chart-alert">
       {{ refreshError || cacheError }}。{{ chartData ? '已保留上次缓存图表。' : '' }}

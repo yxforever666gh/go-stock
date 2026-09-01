@@ -8,7 +8,7 @@ import {
   ListAIRecommendations,
   ListAISimulatedAccountCashFlows,
 } from '../services/research-api'
-import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
+import {formatDrawdown, formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 import {
   formatHoldingMinutes,
   normalizeAccountOverview,
@@ -41,6 +41,7 @@ function rowNetYield(row) { return positionFor(row)?.netYieldRate ?? row.netYiel
 function optionalMoney(value) { return value === null || value === undefined ? '--' : formatMoney(value) }
 function optionalPercent(value) { return value === null || value === undefined ? '--' : formatPercent(value) }
 function optionalUnsignedPercent(value) { return value === null || value === undefined ? '--' : `${formatNumber(Math.abs(Number(value)) * 100, 2)}%` }
+function optionalDrawdown(value) { return value === null || value === undefined ? '--' : formatDrawdown(value) }
 function optionalNumber(value, digits = 2) { return value === null || value === undefined ? '--' : formatNumber(value, digits) }
 
 const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
@@ -146,7 +147,7 @@ onMounted(refresh)
         <div class="strategy-metric"><span>平均盈利率</span><strong>{{ optionalPercent(performanceMetrics.averageGainRate) }}</strong></div>
         <div class="strategy-metric"><span>平均亏损率</span><strong>{{ optionalPercent(performanceMetrics.averageLossRate) }}</strong></div>
         <div class="strategy-metric"><span>盈亏比</span><strong>{{ optionalNumber(performanceMetrics.payoffRatio) }}</strong></div>
-        <div class="strategy-metric"><span>最大回撤</span><strong>{{ optionalUnsignedPercent(performanceMetrics.maxDrawdown) }}</strong></div>
+        <div class="strategy-metric"><span>最大回撤</span><strong>{{ optionalDrawdown(performanceMetrics.maxDrawdown) }}</strong></div>
         <div class="strategy-metric"><span>总费用</span><strong>{{ optionalMoney(performanceMetrics.totalFees) }}</strong></div>
         <div class="strategy-metric"><span>换手率</span><strong>{{ optionalUnsignedPercent(performanceMetrics.turnoverRate) }}</strong></div>
         <div class="strategy-metric"><span>资金利用率</span><strong>{{ optionalUnsignedPercent(performanceMetrics.capitalUtilization) }}</strong></div>

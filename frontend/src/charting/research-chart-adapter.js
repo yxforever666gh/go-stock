@@ -22,13 +22,25 @@ function dateTime(value) {
 
 function missingSessionIntervals(chartData) {
   const sessions = chartData?.sessions || []
-  const explicit = new Set(chartData?.missingSessions || [])
-  sessions.filter(item => item.status === 'missing').forEach(item => explicit.add(item.date))
-  return [...explicit].map(date => ({
-    from: `${date}T09:30:00+08:00`,
-    to: `${date}T15:00:00+08:00`,
-    reason: '交易日分钟数据缺失',
+  const sessionsByDate = new Map(sessions.map(item => [item.date, item]))
+  const explicit = new Set((chartData?.missingSessions || []).filter(date => {
+    const session = sessionsByDate.get(date)
+    return !session || session.status === 'missing'
   }))
+  sessions.filter(item => item.status === 'missing').forEach(item => explicit.add(item.date))
+  const rangeFrom = chartData?.rangeFrom ? new Date(chartData.rangeFrom) : null
+  const rangeTo = chartData?.rangeTo ? new Date(chartData.rangeTo) : null
+  return [...explicit].map(date => {
+    const sessionFrom = new Date(`${date}T09:30:00+08:00`)
+    const sessionTo = new Date(`${date}T15:00:00+08:00`)
+    const from = rangeFrom && !Number.isNaN(rangeFrom.getTime()) && rangeFrom > sessionFrom ? rangeFrom : sessionFrom
+    const to = rangeTo && !Number.isNaN(rangeTo.getTime()) && rangeTo < sessionTo ? rangeTo : sessionTo
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      reason: '交易日分钟数据缺失',
+    }
+  }).filter(item => new Date(item.from) <= new Date(item.to))
 }
 
 export function adaptResearchChart(chartData = {}) {
@@ -111,14 +123,16 @@ export function researchChartOverlays(model, trades = [], {showPriceLines = fals
     mainMarkLines: lines,
     tooltipLines(bar) {
       const previousClose = finite(sessions.find(item => item.date === bar.time.slice(0, 10))?.previousClose)
-      const change = previousClose > 0 ? (bar.close - previousClose) / previousClose : 0
+      const change = previousClose > 0 ? (bar.close - previousClose) / previousClose : null
       const raw = bar.raw || {}
       const barTime = new Date(bar.time).getTime()
       const profitAvailable = raw.netPnl !== null && raw.netPnl !== undefined && trades.some(item => {
         return String(item.side).toLowerCase() === 'buy' && new Date(item.tradedAt).getTime() <= barTime + 60000
       })
       return [
-        `涨跌幅：<span style="color:${change >= 0 ? '#d03050' : '#18a058'}">${formatPercent(change)}</span>`,
+        change === null
+          ? '涨跌幅：--'
+          : `涨跌幅：<span style="color:${change >= 0 ? '#d03050' : '#18a058'}">${formatPercent(change)}</span>`,
         profitAvailable
           ? `预估净收益：<span style="color:${finite(raw.netPnl) >= 0 ? '#d03050' : '#18a058'}">${escapeHTML(formatMoney(raw.netPnl))}（${escapeHTML(formatPercent(raw.netYieldRate))}）</span>`
           : '预估净收益：--',

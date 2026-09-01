@@ -2,9 +2,9 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 2.7.1
+## 当前版本：App 2.7.2
 
-Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本让研究中心2推荐记录支持实时估值、可拖动表头与持仓期分钟K线。
+Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本修复研究图表分钟数据误报，并优化研究中心2的推荐与收益展示。
 
 [Releases](https://github.com/yxforever666gh/go-stock/releases) | [发布说明](./RELEASE_NOTES.md)
 
