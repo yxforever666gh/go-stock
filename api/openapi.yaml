@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.7.2
+  version: 2.7.3
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -1788,13 +1788,16 @@ components:
         metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}
     Research2AnalysisRun:
       type: object
-      required: [runId, tradingDate, scheduledFor, startedAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
+      required: [runId, tradingDate, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
       properties:
         runId: {type: string}
         tradingDate: {type: string, format: date}
         scheduledFor: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
+        evidenceWindowStartAt: {type: string, format: date-time, nullable: true}
         evidenceCutoffAt: {type: string, format: date-time}
+        evidenceCoveragePct: {type: number, minimum: 0, maximum: 100, nullable: true}
+        degraded: {type: boolean, nullable: true}
         generatedAt: {type: string, format: date-time}
         status: {type: string, enum: [running, success, no_recommendation, failed, skipped_non_trading_day, missed_window]}
         providerName: {type: string}
@@ -1814,12 +1817,16 @@ components:
         emailLastError: {type: string}
     Research2AnalysisRunSummary:
       type: object
-      required: [runId, tradingDate, scheduledFor, evidenceCutoffAt, status, recommendationCount, onTime]
+      required: [runId, tradingDate, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, recommendationCount, onTime]
       properties:
         runId: {type: string}
         tradingDate: {type: string, format: date}
         scheduledFor: {type: string, format: date-time}
+        startedAt: {type: string, format: date-time}
+        evidenceWindowStartAt: {type: string, format: date-time, nullable: true}
         evidenceCutoffAt: {type: string, format: date-time}
+        evidenceCoveragePct: {type: number, minimum: 0, maximum: 100, nullable: true}
+        degraded: {type: boolean, nullable: true}
         generatedAt: {type: string, format: date-time}
         status: {type: string}
         providerName: {type: string}
@@ -2054,8 +2061,8 @@ components:
         riskDeduction: {type: number}
         finalScore: {type: number}
         referencePrice: {type: number}
-        buyLower: {type: number}
-        buyUpper: {type: number}
+        buyLower: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 writes 0 and does not use it for execution."}
+        buyUpper: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 writes 0 and does not use it for execution."}
         estimatedLotCost: {type: number}
         summary: {type: string}
         quantData: {type: string}
@@ -2102,6 +2109,8 @@ components:
         transferFee: {type: number}
         slippageAmount: {type: number}
         netCashFlow: {type: number}
+        priceSource: {type: string, description: "Provider or cache used to obtain the execution market price."}
+        executionMode: {type: string, enum: [live_after_signal, recovered_target_minute]}
     Research2RecommendationDetail:
       type: object
       required: [recommendation, analysis, trades]

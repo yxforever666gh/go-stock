@@ -1006,13 +1006,16 @@ export type Research2AccountSnapshot = {
 }
 
 export type Research2AnalysisRun = {
+  degraded?: boolean | null
   emailAttemptCount?: number
   emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
   emailLastError?: string
   emailSentAt?: string | null
+  evidenceCoveragePct?: number | null
   evidenceCutoffAt: string
   evidenceProfileVersion?: string
   evidenceSetId?: string
+  evidenceWindowStartAt: string | null
   failureReason?: string
   generatedAt?: string
   modelAttemptLogJson: string
@@ -1031,13 +1034,16 @@ export type Research2AnalysisRun = {
 }
 
 export type Research2AnalysisRunSummary = {
+  degraded?: boolean | null
   emailAttemptCount?: number
   emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
   emailLastError?: string
   emailSentAt?: string | null
+  evidenceCoveragePct?: number | null
   evidenceCutoffAt: string
   evidenceProfileVersion?: string
   evidenceSetId?: string
+  evidenceWindowStartAt: string | null
   failureReason?: string
   generatedAt?: string
   modelName?: string
@@ -1046,6 +1052,7 @@ export type Research2AnalysisRunSummary = {
   recommendationCount: number
   runId: string
   scheduledFor: string
+  startedAt: string
   status: string
   strategyVersion?: string
   tradingDate: string
@@ -1120,9 +1127,11 @@ export type Research2RecommendationDetail = {
 
 export type Research2Trade = {
   commission: number
+  executionMode?: "live_after_signal" | "recovered_target_minute"
   executionPrice: number
   marketPrice: number
   netCashFlow: number
+  priceSource?: string
   quantity: number
   recommendationId: string
   side: "buy" | "sell"

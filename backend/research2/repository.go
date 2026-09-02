@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"strings"
 	"time"
 
 	"go-stock/backend/models"
@@ -16,6 +17,45 @@ import (
 
 type Repository struct{ db *gorm.DB }
 
+// SQLite ignores SELECT FOR UPDATE. Acquire the single-writer lock explicitly
+// before reading the research2 cash balance so concurrent schedulers cannot
+// race the read/modify/write transaction.
+func lockResearch2AccountForWrite(tx *gorm.DB) error {
+	result := tx.Exec("UPDATE research2_accounts SET cash = cash WHERE id = ?", 1)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return errors.New("research2 account is unavailable")
+	}
+	return nil
+}
+
+func isResearch2SQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
+}
+
+func research2TransactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation func(*gorm.DB) error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = database.WithContext(ctx).Transaction(operation)
+		if !isResearch2SQLiteBusy(err) {
+			return err
+		}
+		delay := time.Duration(20*(1<<attempt)) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return err
+}
+
 func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
 func (r *Repository) DB() *gorm.DB                { return r.db }
 
@@ -24,10 +64,17 @@ func (r *Repository) EnsureAccount(ctx context.Context) error {
 }
 
 func (r *Repository) CreateRun(ctx context.Context, run *AnalysisRun) error {
-	return r.db.WithContext(ctx).Create(run).Error
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Create(run).Error
+	})
 }
 func (r *Repository) SaveRun(ctx context.Context, run *AnalysisRun) error {
-	return r.db.WithContext(ctx).Save(run).Error
+	if run == nil {
+		return errors.New("research2 analysis run is required")
+	}
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Save(run).Error
+	})
 }
 func (r *Repository) RunForDate(ctx context.Context, tradingDate string) (AnalysisRun, bool, error) {
 	var item AnalysisRun
@@ -41,7 +88,36 @@ func (r *Repository) CreateRecommendations(ctx context.Context, items []Recommen
 	if len(items) == 0 {
 		return nil
 	}
-	return r.db.WithContext(ctx).Create(&items).Error
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		rows := append([]Recommendation(nil), items...)
+		for index := range rows {
+			rows[index].ID = 0
+		}
+		return tx.Create(&rows).Error
+	})
+
+}
+
+// FinalizeRun publishes a completed analysis and its executable recommendations
+// in one transaction. A trading poll can therefore never observe recommendations
+// belonging to a run that is still running or failed to persist.
+func (r *Repository) FinalizeRun(ctx context.Context, run *AnalysisRun, items []Recommendation) error {
+	if run == nil {
+		return errors.New("research2 analysis run is required")
+	}
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.Save(run).Error; err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		rows := append([]Recommendation(nil), items...)
+		for index := range rows {
+			rows[index].ID = 0
+		}
+		return tx.Create(&rows).Error
+	})
 }
 func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {
 	var rows []AnalysisRun
@@ -56,7 +132,7 @@ func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]Analysi
 	items := make([]AnalysisRunSummary, 0, len(rows))
 	for _, row := range rows {
 		delivery := deliveries[row.RunID]
-		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, ScheduledFor: row.ScheduledFor, EvidenceCutoffAt: row.EvidenceCutoffAt, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError})
+		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError})
 	}
 	return items, nil
 }
@@ -169,20 +245,38 @@ func (r *Repository) GetRecommendation(ctx context.Context, id string) (Recommen
 
 func (r *Repository) DueRecommendations(ctx context.Context, now time.Time, statuses []string) ([]Recommendation, error) {
 	var items []Recommendation
-	query := r.db.WithContext(ctx).Where("status IN ?", statuses)
+	query := r.db.WithContext(ctx).
+		Model(&Recommendation{}).
+		Select("research2_recommendations.*").
+		Joins("JOIN research2_analysis_runs ON research2_analysis_runs.run_id = research2_recommendations.analysis_run_id AND research2_analysis_runs.status = ?", "success").
+		Where("research2_recommendations.status IN ?", statuses)
 	if len(statuses) == 1 && statuses[0] == "buy_pending" {
-		query = query.Where("target_buy_at <= ?", now)
+		query = query.Where("research2_recommendations.target_buy_at <= ?", now)
 	} else {
-		query = query.Where("target_sell_at IS NOT NULL AND target_sell_at <= ?", now)
+		query = query.Where("research2_recommendations.target_sell_at IS NOT NULL AND research2_recommendations.target_sell_at <= ?", now)
 	}
-	err := query.Order("analysis_run_id ASC, final_score DESC, stock_code ASC, id ASC").Find(&items).Error
+	err := query.Order("research2_recommendations.analysis_run_id ASC, research2_recommendations.final_score DESC, research2_recommendations.stock_code ASC, research2_recommendations.id ASC").Find(&items).Error
 	return items, err
 }
 
+func (r *Repository) DeferDueBuys(ctx context.Context, dueBefore, target time.Time) error {
+	if !target.After(dueBefore) {
+		return errors.New("research2 deferred buy target must be after the current due time")
+	}
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&Recommendation{}).
+			Where("status = ? AND target_buy_at <= ?", "buy_pending", dueBefore).
+			Update("target_buy_at", target).Error
+	})
+}
+
 func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, trade Trade, sellAt time.Time) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := lockResearch2AccountForWrite(tx); err != nil {
+			return err
+		}
 		var account Account
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, 1).Error; err != nil {
+		if err := tx.First(&account, 1).Error; err != nil {
 			return err
 		}
 		cost := -trade.NetCashFlow
@@ -208,13 +302,16 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 }
 
 func (r *Repository) RecordSell(ctx context.Context, recommendationID string, trade Trade) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := lockResearch2AccountForWrite(tx); err != nil {
+			return err
+		}
 		var item Recommendation
 		if err := tx.Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"active", "sell_pending"}).First(&item).Error; err != nil {
 			return err
 		}
 		var account Account
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&account, 1).Error; err != nil {
+		if err := tx.First(&account, 1).Error; err != nil {
 			return err
 		}
 		buyCost := item.BuyPrice*float64(item.Quantity) + item.BuyFees
@@ -238,7 +335,9 @@ func (r *Repository) RecordSell(ctx context.Context, recommendationID string, tr
 }
 
 func (r *Repository) MarkStatus(ctx context.Context, id, status, reason string) error {
-	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(map[string]any{"status": status, "failure_reason": reason}).Error
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(map[string]any{"status": status, "failure_reason": reason}).Error
+	})
 }
 
 func (r *Repository) ActiveAndPending(ctx context.Context) ([]Recommendation, error) {
@@ -257,9 +356,11 @@ func (r *Repository) UpdateCurrentQuote(ctx context.Context, recommendationID st
 	if price <= 0 {
 		return errors.New("research2 current quote price must be positive")
 	}
-	return r.db.WithContext(ctx).Model(&Recommendation{}).
-		Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"active", "sell_pending"}).
-		Updates(map[string]any{"current_price": price, "current_price_at": at}).Error
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&Recommendation{}).
+			Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"active", "sell_pending"}).
+			Updates(map[string]any{"current_price": price, "current_price_at": at}).Error
+	})
 }
 
 func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
@@ -293,7 +394,10 @@ func (r *Repository) SaveSnapshot(ctx context.Context, kind string, at time.Time
 		return AccountSnapshot{}, err
 	}
 	item := AccountSnapshot{SnapshotID: uuid.NewString(), ValuedAt: at, TradingDate: at.In(shanghai()).Format("2006-01-02"), SnapshotType: kind, Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate}
-	err = r.db.WithContext(ctx).Create(&item).Error
+	err = research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		item.ID = 0
+		return tx.Create(&item).Error
+	})
 	return item, err
 }
 

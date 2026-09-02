@@ -164,10 +164,11 @@ func reportEmailContent(run AnalysisRun) (string, string) {
 	subject := fmt.Sprintf("[go-stock][研究中心2] %s %s", run.TradingDate, suffix)
 	body := strings.TrimSpace(run.ReportMarkdown)
 	if run.Status == "missed_window" || body == "" {
-		tradeDeadline := time.Date(run.ScheduledFor.Year(), run.ScheduledFor.Month(), run.ScheduledFor.Day(), 15, 0, 0, 0, shanghai())
-		body = fmt.Sprintf("研究中心2分析结果\n\n交易日：%s\n计划开始：%s\n证据截止：%s\n交易窗口截止：%s\n状态：%s\n说明：%s",
+		startDeadline := time.Date(run.ScheduledFor.Year(), run.ScheduledFor.Month(), run.ScheduledFor.Day(), 11, 25, 59, 0, shanghai())
+		modelDeadline := time.Date(run.ScheduledFor.Year(), run.ScheduledFor.Month(), run.ScheduledFor.Day(), 11, 30, 0, 0, shanghai())
+		body = fmt.Sprintf("研究中心2分析结果\n\n交易日：%s\n计划开始：%s\n证据截止：%s\n任务启动窗口截止：%s\n模型结果硬截止：%s\n状态：%s\n说明：%s",
 			run.TradingDate, run.ScheduledFor.In(shanghai()).Format("2006-01-02 15:04:05"),
-			run.EvidenceCutoffAt.In(shanghai()).Format("2006-01-02 15:04:05"), tradeDeadline.Format("2006-01-02 15:04:05"),
+			run.EvidenceCutoffAt.In(shanghai()).Format("2006-01-02 15:04:05"), startDeadline.Format("2006-01-02 15:04:05"), modelDeadline.Format("2006-01-02 15:04:05"),
 			run.Status, strings.TrimSpace(run.FailureReason))
 	}
 	return subject, body

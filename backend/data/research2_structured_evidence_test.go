@@ -1,0 +1,280 @@
+package data
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strings"
+	"testing"
+	"time"
+
+	"go-stock/backend/marketdata"
+	"go-stock/backend/research"
+)
+
+type research2StructuredSourceFixture struct {
+	cutoff     time.Time
+	candidates []research.StockCandidate
+}
+
+func (f *research2StructuredSourceFixture) CollectMarket(context.Context, time.Time) ([]research.SourceDocument, error) {
+	available := f.cutoff
+	return []research.SourceDocument{{SourceName: "空市场响应", Category: "market", CollectedAt: f.cutoff.Add(time.Second), AvailableAt: &available,
+		Content: `{"code":0,"data":{"total":0,"items":[]}}`}}, nil
+}
+
+func (f *research2StructuredSourceFixture) CollectSectors(context.Context, time.Time) ([]research.SourceDocument, error) {
+	available := f.cutoff.Add(time.Second)
+	return []research.SourceDocument{{SourceName: "无法证明时间的板块资料", Category: "sector", CollectedAt: available, AvailableAt: &available,
+		Content: `{"items":[{"name":"未来内容但没有时间"}]}`}}, nil
+}
+
+func (f *research2StructuredSourceFixture) CollectStocks(_ context.Context, _ time.Time, candidates []research.StockCandidate) ([]research.SourceDocument, error) {
+	f.candidates = append([]research.StockCandidate(nil), candidates...)
+	available := f.cutoff.Add(2 * time.Second)
+	documents := make([]research.SourceDocument, 0, len(candidates))
+	for _, candidate := range candidates {
+		content := fmt.Sprintf(`[{"title":"截止前公告-%s","publishedAt":"%s"},{"title":"截止后公告-%s","publishedAt":"%s"}]`,
+			candidate.Code, f.cutoff.Add(-time.Hour).Format(time.RFC3339), candidate.Code, f.cutoff.Add(time.Hour).Format(time.RFC3339))
+		documents = append(documents, research.SourceDocument{SourceName: "公告 " + candidate.Code, Category: "stock", CollectedAt: available,
+			AvailableAt: &available, SourceRef: "https://example.invalid/" + candidate.Code, Content: content})
+	}
+	return documents, nil
+}
+
+type research2MinuteFixture struct{ count int }
+
+func (f research2MinuteFixture) Window(_ context.Context, code string, start, end time.Time) ([]minuteBar, string, error) {
+	result := make([]minuteBar, 0, f.count)
+	for index := 0; index < f.count; index++ {
+		at := start.Add(time.Duration(index) * time.Minute)
+		if !at.Before(end) {
+			break
+		}
+		price := 10 + float64(index)*0.1
+		result = append(result, minuteBar{TradeTime: at, Open: price, High: price + 0.05, Low: price - 0.05, Close: price + 0.02,
+			Volume: 100 + float64(index)*10, Amount: (100 + float64(index)*10) * (price + 0.02), Source: "tencent"})
+	}
+	return result, "tencent", nil
+}
+
+func research2StructuredRows(cutoff time.Time, count int) []research2MarketRow {
+	rows := make([]research2MarketRow, 0, count)
+	for index := 0; index < count; index++ {
+		price := 10 + float64(index)/10
+		preClose := price / 1.05
+		rows = append(rows, research2MarketRow{Code: fmt.Sprintf("60%04d", index+1), Name: fmt.Sprintf("样本%d", index+1), Price: price,
+			ChangeRate: 5 - float64(index)/100, ChangeValid: true, Volume: 100000, Amount: 10000000, Turnover: 3, High: price + 0.5, Low: preClose - 0.2, Open: preClose + 0.1,
+			PreClose: preClose, ListingDate: 20200101, Timestamp: cutoff.Add(-30 * time.Second).Unix()})
+	}
+	return rows
+}
+
+func research2StructuredEnvelope[T any](cutoff time.Time, data T) marketdata.DataEnvelope[T] {
+	available := cutoff
+	return marketdata.DataEnvelope[T]{Data: data, Source: "fixture", AsOf: cutoff, FetchedAt: cutoff.Add(time.Second), Status: marketdata.StatusOK,
+		Sources: []marketdata.SourceState{{Provider: "fixture", Status: marketdata.StatusOK, AsOf: cutoff, AvailableAt: &available, SourceRef: "fixture"}}}
+}
+
+func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []research2MarketRow, reported, minuteCount int) *Research2EvidenceCollector {
+	t.Helper()
+	sources := &research2StructuredSourceFixture{cutoff: cutoff}
+	return &Research2EvidenceCollector{
+		sources: sources, stocks: &StockDataApi{}, minuteWindows: research2MinuteFixture{count: minuteCount},
+		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV3,
+		now: func() time.Time { return cutoff.Add(5 * time.Second) },
+		fetchSnapshot: func(context.Context, time.Time) (research2FullMarketSnapshot, error) {
+			return research2FullMarketSnapshot{Rows: rows, Reported: reported, SourceID: "fixture-market", SourceName: "测试全市场",
+				SourceRef: "fixture-market", AsOf: cutoff.Add(-30 * time.Second), CollectedAt: cutoff.Add(time.Second)}, nil
+		},
+		collectBreadth: func(context.Context) marketdata.DataEnvelope[BreadthData] {
+			return research2StructuredEnvelope(cutoff, BreadthData{Total: reported, Advances: reported})
+		},
+		collectFlows: func(_ context.Context, request marketdata.ProviderRequest) marketdata.DataEnvelope[[]FundFlowRow] {
+			return research2StructuredEnvelope(cutoff, []FundFlowRow{{Code: request.Scope + "-1", Name: request.Scope, NetAmount: 100}})
+		},
+	}
+}
+
+func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 10, 14, 0, 0, shanghaiDataLocation())
+	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 20), 20, 5)
+	evidence, err := collector.Collect(context.Background(), cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidence.WindowStartAt.Equal(cutoff.Add(-5 * time.Minute)) {
+		t.Fatalf("window start=%s want %s", evidence.WindowStartAt, cutoff.Add(-5*time.Minute))
+	}
+	if evidence.CoveragePct != 100 || len(evidence.Candidates) != 12 || len(evidence.CandidateReferencePrices) != 12 {
+		t.Fatalf("unexpected core evidence: coverage=%v candidates=%d prices=%d", evidence.CoveragePct, len(evidence.Candidates), len(evidence.CandidateReferencePrices))
+	}
+	var compact research2CompactSnapshot
+	if err := json.Unmarshal([]byte(evidence.Prompt), &compact); err != nil {
+		t.Fatalf("compact prompt is not JSON: %v", err)
+	}
+	if len(compact.Candidates) != 12 {
+		t.Fatalf("compact prompt lost candidates: %d", len(compact.Candidates))
+	}
+	for _, candidate := range compact.Candidates {
+		if !candidate.CoreEligible || candidate.MinuteBarCount != 5 || candidate.Metrics.VWAP == nil || candidate.Metrics.ReturnPct == nil {
+			t.Fatalf("candidate metrics incomplete: %+v", candidate)
+		}
+		if len(candidate.SourceIDs) < 3 {
+			t.Fatalf("candidate lacks associated auxiliary source IDs: %+v", candidate)
+		}
+	}
+	if strings.Contains(evidence.Prompt, "截止后公告") || strings.Contains(evidence.Prompt, `"rows":[{"f2"`) {
+		t.Fatal("compact prompt leaked future or full raw evidence")
+	}
+	if !strings.Contains(evidence.Prompt, "截止前公告") {
+		t.Fatal("compact prompt omitted bounded pre-cutoff catalyst summary")
+	}
+	foundArchived := false
+	for _, document := range evidence.Documents {
+		if strings.HasPrefix(document.SourceName, "公告 ") && strings.Contains(document.Content, "截止前公告") {
+			foundArchived = true
+			if strings.Contains(document.Content, "截止后公告") {
+				t.Fatal("after-cutoff news remained in archived scoring document")
+			}
+		}
+	}
+	if !foundArchived {
+		t.Fatal("full evidence archive omitted filtered stock documents")
+	}
+}
+
+func TestResearch2StructuredEvidenceRejectsCoverageBelow95Percent(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
+	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 94), 100, 5)
+	evidence, err := collector.Collect(context.Background(), cutoff)
+	if err == nil || !strings.Contains(err.Error(), "低于95") {
+		t.Fatalf("94%% coverage accepted: evidence=%+v err=%v", evidence, err)
+	}
+	if evidence.CoveragePct != 94 || len(evidence.Documents) != 1 {
+		t.Fatalf("failed coverage did not retain auditable snapshot: %+v", evidence)
+	}
+}
+
+func TestResearch2StructuredEvidenceExcludesCandidateWithFewerThanFourBars(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
+	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 1), 1, 3)
+	evidence, err := collector.Collect(context.Background(), cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evidence.Candidates) != 0 || len(evidence.CandidateReferencePrices) != 0 || !evidence.Degraded {
+		t.Fatalf("candidate without four bars remained recommendable: %+v", evidence)
+	}
+	var compact research2CompactSnapshot
+	if err := json.Unmarshal([]byte(evidence.Prompt), &compact); err != nil || len(compact.Candidates) != 1 || compact.Candidates[0].CoreEligible {
+		t.Fatalf("ineligible candidate was not retained for audit: compact=%+v err=%v", compact, err)
+	}
+}
+
+func TestResearch2DocumentStatusDistinguishesNestedEmptyAndAfterCutoff(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
+	available, after := cutoff, cutoff.Add(time.Second)
+	empty := research.SourceDocument{Content: `{"code":0,"data":{"result":{"items":[]}}}`, AvailableAt: &available}
+	late := research.SourceDocument{Content: `[{"name":"value"}]`, AvailableAt: &after}
+	failed := research.SourceDocument{Content: `{"error":true}`, Error: "provider failed", AvailableAt: &available}
+	if status := research2DocumentStatus(empty, cutoff, true); status != marketdata.StatusEmpty {
+		t.Fatalf("nested empty status=%s", status)
+	}
+	if status := research2DocumentStatus(late, cutoff, true); status != marketdata.StatusAfterCutoff {
+		t.Fatalf("after-cutoff status=%s", status)
+	}
+	if status := research2DocumentStatus(failed, cutoff, true); status != marketdata.StatusFailed {
+		t.Fatalf("failed status=%s", status)
+	}
+}
+
+func TestSanitizeResearch2MinuteBarsUsesFiveClosedBuckets(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 10, 14, 23, 0, shanghaiDataLocation())
+	end := cutoff.Truncate(time.Minute)
+	start := end.Add(-5 * time.Minute)
+	bars := make([]minuteBar, 0, 7)
+	for index := -1; index <= 5; index++ {
+		at := start.Add(time.Duration(index) * time.Minute)
+		bars = append(bars, minuteBar{TradeTime: at, Open: 10, High: 10.1, Low: 9.9, Close: 10, Volume: 100})
+	}
+	clean := sanitizeResearch2MinuteBars(bars, "fixture", start, end)
+	if len(clean) != 5 || !clean[0].TradeTime.Equal(start) || !clean[4].TradeTime.Equal(end.Add(-time.Minute)) {
+		t.Fatalf("closed window mismatch: %+v", clean)
+	}
+	for _, bar := range clean {
+		if !bar.TradeTime.Before(end) {
+			t.Fatalf("cutoff bucket leaked into evidence: %s", bar.TradeTime)
+		}
+	}
+}
+
+func TestResearch2VWAPNormalizesLotVolumeAndRejectsImplausibleRatio(t *testing.T) {
+	bars := []minuteBar{
+		{Open: 10, High: 10.2, Low: 9.9, Close: 10.1, Volume: 100, Amount: 101000},
+		{Open: 10.1, High: 10.3, Low: 10, Close: 10.2, Volume: 100, Amount: 102000},
+	}
+	metrics := calculateResearch2CompactMetrics(research2MarketRow{}, bars)
+	if metrics.VWAP == nil || math.Abs(*metrics.VWAP-10.15) > 0.001 || metrics.VWAPMethod != "amount_divided_by_lot_volume_times_100" {
+		t.Fatalf("lot-volume VWAP not normalized: %+v", metrics)
+	}
+	for index := range bars {
+		bars[index].Amount = 1
+	}
+	metrics = calculateResearch2CompactMetrics(research2MarketRow{}, bars)
+	if metrics.VWAP == nil || *metrics.VWAP < 9.9 || *metrics.VWAP > 10.3 || metrics.VWAPMethod != "volume_weighted_minute_close_proxy" {
+		t.Fatalf("implausible amount ratio was trusted: %+v", metrics)
+	}
+}
+
+func TestFilterResearch2JSONDoesNotLaunderUntimestampedSibling(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 10, 14, 0, 0, shanghaiDataLocation())
+	payload := map[string]any{
+		"currentUntimestamped": float64(999),
+		"history":              []any{map[string]any{"publishedAt": cutoff.Add(-time.Hour).Format(time.RFC3339), "title": "old"}},
+	}
+	filtered, _, proved, keep := filterResearch2JSONAtCutoff(payload, cutoff)
+	result, ok := filtered.(map[string]any)
+	if !ok || !proved || !keep {
+		t.Fatalf("timestamped history was unexpectedly discarded: %#v", filtered)
+	}
+	if _, exists := result["currentUntimestamped"]; exists {
+		t.Fatalf("old nested timestamp laundered an unproven sibling: %#v", result)
+	}
+	if _, exists := result["history"]; !exists {
+		t.Fatalf("pre-cutoff history missing: %#v", result)
+	}
+}
+
+func TestResearch2RowsAtOrBeforeRequiresTimestampAndValidPrice(t *testing.T) {
+	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
+	rows := []research2MarketRow{
+		{Code: "600001", Price: 10, Timestamp: cutoff.Add(-time.Second).Unix()},
+		{Code: "600002", Price: 10},
+		{Code: "600003", Price: 0, Timestamp: cutoff.Add(-time.Second).Unix()},
+		{Code: "600004", Price: 10, Timestamp: cutoff.Add(time.Second).Unix()},
+	}
+	filtered := research2RowsAtOrBefore(rows, cutoff)
+	if len(filtered) != 1 || filtered[0].Code != "600001" {
+		t.Fatalf("unverifiable rows counted toward coverage: %+v", filtered)
+	}
+}
+
+type blockingResearch2MinuteProvider struct{}
+
+func (blockingResearch2MinuteProvider) Window(ctx context.Context, _ string, _, _ time.Time) ([]minuteBar, string, error) {
+	<-ctx.Done()
+	return nil, "blocking", ctx.Err()
+}
+
+func TestCollectResearch2CandidateWindowsHonorsContext(t *testing.T) {
+	start := time.Date(2026, 9, 3, 9, 45, 0, 0, shanghaiDataLocation())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	result := collectResearch2CandidateWindows(ctx, blockingResearch2MinuteProvider{}, []research.StockCandidate{{Code: "sh600001"}},
+		[]research2MarketRow{{Code: "600001", Price: 10}}, start, start.Add(5*time.Minute))
+	if len(result) != 1 || result[0].Error == nil {
+		t.Fatalf("blocked provider did not return deadline evidence: %+v", result)
+	}
+}

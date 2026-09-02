@@ -161,7 +161,7 @@ func TestReportEmailContentForAllEligibleResults(t *testing.T) {
 	}{
 		{status: "success", subjectPart: "分析报告（2只）", bodyPart: "# 研究中心2报告"},
 		{status: "no_recommendation", subjectPart: "无推荐", bodyPart: "# 研究中心2报告"},
-		{status: "missed_window", subjectPart: "错过交易窗口", bodyPart: "交易窗口截止：2026-08-27 15:00:00"},
+		{status: "missed_window", subjectPart: "错过交易窗口", bodyPart: "任务启动窗口截止：2026-08-27 11:25:59"},
 	} {
 		t.Run(testCase.status, func(t *testing.T) {
 			subject, body := reportEmailContent(eligibleRun(testCase.status))

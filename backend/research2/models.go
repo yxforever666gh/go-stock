@@ -13,7 +13,10 @@ type AnalysisRun struct {
 	TradingDate            string     `json:"tradingDate" gorm:"size:10;uniqueIndex;not null"`
 	ScheduledFor           time.Time  `json:"scheduledFor" gorm:"index;not null"`
 	StartedAt              time.Time  `json:"startedAt" gorm:"index;not null"`
+	EvidenceWindowStartAt  *time.Time `json:"evidenceWindowStartAt" gorm:"column:evidence_window_start_at;index"`
 	EvidenceCutoffAt       time.Time  `json:"evidenceCutoffAt"`
+	EvidenceCoveragePct    *float64   `json:"evidenceCoveragePct,omitempty" gorm:"column:evidence_coverage_pct"`
+	Degraded               *bool      `json:"degraded,omitempty" gorm:"column:degraded"`
 	GeneratedAt            *time.Time `json:"generatedAt" gorm:"index"`
 	Status                 string     `json:"status" gorm:"size:32;index;not null"`
 	ProviderName           string     `json:"providerName" gorm:"size:128"`
@@ -41,7 +44,11 @@ type AnalysisRunSummary struct {
 	RunID                  string     `json:"runId"`
 	TradingDate            string     `json:"tradingDate"`
 	ScheduledFor           time.Time  `json:"scheduledFor"`
+	StartedAt              time.Time  `json:"startedAt"`
+	EvidenceWindowStartAt  *time.Time `json:"evidenceWindowStartAt"`
 	EvidenceCutoffAt       time.Time  `json:"evidenceCutoffAt"`
+	EvidenceCoveragePct    *float64   `json:"evidenceCoveragePct,omitempty"`
+	Degraded               *bool      `json:"degraded,omitempty"`
 	GeneratedAt            *time.Time `json:"generatedAt"`
 	Status                 string     `json:"status"`
 	ProviderName           string     `json:"providerName"`
@@ -143,6 +150,8 @@ type Trade struct {
 	TransferFee      float64   `json:"transferFee"`
 	SlippageAmount   float64   `json:"slippageAmount"`
 	NetCashFlow      float64   `json:"netCashFlow"`
+	PriceSource      string    `json:"priceSource,omitempty" gorm:"column:price_source;size:64"`
+	ExecutionMode    string    `json:"executionMode,omitempty" gorm:"column:execution_mode;size:32"`
 	CreatedAt        time.Time `json:"createdAt"`
 }
 

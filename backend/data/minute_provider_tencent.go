@@ -1,6 +1,7 @@
 package data
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -49,19 +50,30 @@ func tencentMinuteFetchMinInterval() time.Duration {
 }
 
 func waitForTencentMinuteFetchWindow() {
+	_ = waitForTencentMinuteFetchWindowContext(context.Background())
+}
+
+func waitForTencentMinuteFetchWindowContext(ctx context.Context) error {
 	interval := tencentMinuteFetchMinInterval()
 	if interval <= 0 {
-		return
+		return nil
 	}
 	tencentMinuteFetchMu.Lock()
 	defer tencentMinuteFetchMu.Unlock()
 	if !tencentMinuteLastFetch.IsZero() {
 		elapsed := time.Since(tencentMinuteLastFetch)
 		if elapsed < interval {
-			time.Sleep(interval - elapsed)
+			timer := time.NewTimer(interval - elapsed)
+			defer timer.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-timer.C:
+			}
 		}
 	}
 	tencentMinuteLastFetch = time.Now()
+	return nil
 }
 
 func tencentMinuteCircuitCheck() error {
@@ -187,6 +199,13 @@ func tencentMinuteRecentWindow(end time.Time) bool {
 }
 
 func fetchMinuteBarsWithTencent(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+	return fetchMinuteBarsWithTencentContext(context.Background(), tsCode, start, end)
+}
+
+func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if !start.Before(end) {
 		return []minuteBar{}, "tencent", nil
 	}
@@ -220,18 +239,26 @@ func fetchMinuteBarsWithTencent(tsCode string, start, end time.Time) ([]minuteBa
 
 	url := fmt.Sprintf("%s?param=%s,m1,,,%d", strings.TrimRight(tencentMinuteMKLineURL, "/"), symbol, datalen)
 
-	waitForTencentMinuteFetchWindow()
+	if err := waitForTencentMinuteFetchWindowContext(ctx); err != nil {
+		return []minuteBar{}, "tencent", err
+	}
 	client := newTencentMinuteClient()
 
 	var body []byte
 	var lastErr error
 	for attempt := 1; attempt <= 2; attempt++ {
-		resp, reqErr := client.R().Get(url)
+		resp, reqErr := client.R().SetContext(ctx).Get(url)
 		if reqErr != nil {
 			lastErr = reqErr
 			tencentMinuteCircuitRecordFailure(reqErr)
 			if attempt < 2 {
-				time.Sleep(time.Duration(attempt) * 900 * time.Millisecond)
+				timer := time.NewTimer(time.Duration(attempt) * 900 * time.Millisecond)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return []minuteBar{}, "tencent", ctx.Err()
+				case <-timer.C:
+				}
 			}
 			continue
 		}

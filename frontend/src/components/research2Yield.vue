@@ -13,6 +13,9 @@ const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const yieldClass = value => value === null || value === undefined ? '' : Number(value) >= 0 ? 'yield-positive' : 'yield-negative'
 const yesNo = value => value === null || value === undefined ? '--' : value ? '是' : '否'
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
+const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
+const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
+const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? (analysis.failureReason || '辅助证据不完整，详见报告与证据审计') : '无'
 const assessment = computed(() => !performance.value?.closedTrades ? '暂无已平仓样本' : performance.value.closedTrades < 30 ? '样本不足，仅供观察' : '已有阶段性样本')
 const columns = [
   {title: '股票', key: 'stockCode', minWidth: 160, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
@@ -59,6 +62,13 @@ onMounted(refresh)
               <n-descriptions-item label="最终分">{{formatNumber(detail.recommendation.finalScore, 1)}}</n-descriptions-item>
               <n-descriptions-item label="状态">{{detail.recommendation.status}}</n-descriptions-item>
               <n-descriptions-item label="信号时间">{{dateTime(detail.recommendation.signalAt)}}</n-descriptions-item>
+              <n-descriptions-item label="计划分析">{{dateTime(detail.analysis.scheduledFor)}}</n-descriptions-item>
+              <n-descriptions-item label="实际启动">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>
+              <n-descriptions-item label="证据窗口">{{dateTime(detail.analysis.evidenceWindowStartAt)}} — {{dateTime(detail.analysis.evidenceCutoffAt)}}</n-descriptions-item>
+              <n-descriptions-item label="报告生成">{{dateTime(detail.analysis.generatedAt)}}</n-descriptions-item>
+              <n-descriptions-item label="目标 / 实际买入">{{dateTime(detail.recommendation.targetBuyAt)}} / {{dateTime(detail.recommendation.buyAt)}}</n-descriptions-item>
+              <n-descriptions-item label="目标 / 实际卖出">{{dateTime(detail.recommendation.targetSellAt)}} / {{dateTime(detail.recommendation.sellAt)}}</n-descriptions-item>
+              <n-descriptions-item label="证据降级" :span="3">{{degradedReason(detail.analysis)}}</n-descriptions-item>
             </n-descriptions>
             <n-divider title-placement="left">持仓期分钟走势</n-divider>
             <ResearchTradeChart scope="research2" :recommendation-id="detail.recommendation.recommendationId" :fallback-trades="detail.trades || []"/>
@@ -69,6 +79,8 @@ onMounted(refresh)
               {title:'方向',key:'side'},
               {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},
               {title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},
+              {title:'价格来源',key:'priceSource',render:r=>r.priceSource || '--'},
+              {title:'执行模式',key:'executionMode',render:r=>executionMode(r)},
               {title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},
               {title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}
             ]"/>

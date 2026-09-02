@@ -93,7 +93,10 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 
 func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 	local := now.In(research2Location())
-	if local.Hour() < 9 || (local.Hour() == 9 && local.Minute() < 50) || local.Hour() >= 15 {
+	// Let the runner persist an explicit missed_window record when the service
+	// comes back after the morning analysis window. Returning here would make a
+	// missed day indistinguishable from a scheduler that never ran.
+	if local.Hour() < 9 || (local.Hour() == 9 && local.Minute() < 50) {
 		return
 	}
 	runtime, err := a.ensureResearch2Runtime(configID)

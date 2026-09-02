@@ -263,6 +263,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV22Definition,
 		apply:       applyResearch2LiveValuationSchema,
 	},
+	{
+		id: 23, name: "research2_trailing5_evidence_and_execution",
+		description: "Adds Research Center 2 trailing-five-minute evidence quality and execution provenance without rewriting schema 22 analysis, trade, account or return history.",
+		definition:  mainMigrationV23Definition,
+		apply:       applyResearch2Trailing5Schema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -860,6 +866,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 22 {
 		if err := verifyMainSchema22Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 23 {
+		if err := verifyMainSchema23Runtime(database); err != nil {
 			return result, err
 		}
 	}

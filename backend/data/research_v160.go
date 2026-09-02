@@ -572,15 +572,13 @@ func (collector *ResearchSourceCollector) CollectSectors(ctx context.Context, no
 }
 
 func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now time.Time, candidates []research.StockCandidate) ([]research.SourceDocument, error) {
-	documents := make([]research.SourceDocument, 0, len(candidates)*9)
-	var mutex sync.Mutex
-	var wait sync.WaitGroup
+	type candidateDocuments struct{ documents []research.SourceDocument }
+	results := make(chan candidateDocuments, len(candidates))
 	for _, candidate := range candidates {
 		candidate := candidate
-		wait.Add(1)
 		go func() {
-			defer wait.Done()
 			if ctx.Err() != nil {
+				results <- candidateDocuments{}
 				return
 			}
 			code := candidate.Code
@@ -610,19 +608,19 @@ func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now
 			for _, item := range items {
 				local = append(local, executeResearchSourceJob(item.name, "stock", collector.collectedAt, item.run))
 			}
-			mutex.Lock()
-			documents = append(documents, local...)
-			mutex.Unlock()
+			results <- candidateDocuments{documents: local}
 		}()
 	}
-	done := make(chan struct{})
-	go func() { wait.Wait(); close(done) }()
-	select {
-	case <-ctx.Done():
-		return documents, ctx.Err()
-	case <-done:
-		return documents, nil
+	documents := make([]research.SourceDocument, 0, len(candidates)*9)
+	for range candidates {
+		select {
+		case result := <-results:
+			documents = append(documents, result.documents...)
+		case <-ctx.Done():
+			return documents, ctx.Err()
+		}
 	}
+	return documents, nil
 }
 
 func (collector *ResearchSourceCollector) stockRelatedNews(now time.Time, candidate research.StockCandidate) any {
@@ -661,23 +659,42 @@ func (collector *ResearchSourceCollector) cachedNewsWindow(now time.Time) (NewsW
 }
 
 func runResearchSourceJobs(ctx context.Context, category string, clock func() time.Time, jobs []researchSourceJob) ([]research.SourceDocument, error) {
-	documents := make([]research.SourceDocument, len(jobs))
-	var wait sync.WaitGroup
+	type indexedDocument struct {
+		index    int
+		document research.SourceDocument
+	}
+	results := make(chan indexedDocument, len(jobs))
 	for index := range jobs {
 		index := index
-		wait.Add(1)
 		go func() {
-			defer wait.Done()
 			if ctx.Err() != nil {
 				available := researchSourceNow(clock)
-				documents[index] = research.SourceDocument{SourceName: jobs[index].name, Category: category, CollectedAt: available, AvailableAt: &available, Error: ctx.Err().Error()}
+				results <- indexedDocument{index: index, document: research.SourceDocument{SourceName: jobs[index].name, Category: category, CollectedAt: available, AvailableAt: &available, Error: ctx.Err().Error()}}
 				return
 			}
-			documents[index] = executeResearchSourceJob(jobs[index].name, category, clock, jobs[index].run)
+			results <- indexedDocument{index: index, document: executeResearchSourceJob(jobs[index].name, category, clock, jobs[index].run)}
 		}()
 	}
-	wait.Wait()
-	return documents, ctx.Err()
+	documents := make([]research.SourceDocument, len(jobs))
+	for range jobs {
+		select {
+		case result := <-results:
+			documents[result.index] = result.document
+		case <-ctx.Done():
+			return compactResearchSourceDocuments(documents), ctx.Err()
+		}
+	}
+	return documents, nil
+}
+
+func compactResearchSourceDocuments(documents []research.SourceDocument) []research.SourceDocument {
+	result := make([]research.SourceDocument, 0, len(documents))
+	for _, document := range documents {
+		if document.SourceName != "" || document.Error != "" || document.Content != "" {
+			result = append(result, document)
+		}
+	}
+	return result
 }
 
 func executeResearchSourceJob(name, category string, clock func() time.Time, run func() any) (document research.SourceDocument) {

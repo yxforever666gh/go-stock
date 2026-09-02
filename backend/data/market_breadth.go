@@ -39,6 +39,10 @@ type breadthObservation struct {
 	changePct float64
 	high      float64
 	low       float64
+	open      float64
+	previous  float64
+	volume    float64
+	amount    float64
 	currentOK bool
 	changeOK  bool
 	highOK    bool
@@ -661,6 +665,9 @@ func breadthObservationFromTencent(info models.StockInfo) (breadthObservation, b
 	previous, previousErr := strconv.ParseFloat(strings.TrimSpace(info.PreClose), 64)
 	high, highErr := strconv.ParseFloat(strings.TrimSpace(info.High), 64)
 	low, lowErr := strconv.ParseFloat(strings.TrimSpace(info.Low), 64)
+	open, openErr := strconv.ParseFloat(strings.TrimSpace(info.Open), 64)
+	volume, volumeErr := strconv.ParseFloat(strings.TrimSpace(info.Volume), 64)
+	amount, amountErr := strconv.ParseFloat(strings.TrimSpace(info.Amount), 64)
 	observation := breadthObservation{key: code, code: code, name: info.Name}
 	if currentErr == nil && current >= 0 {
 		observation.current, observation.currentOK = current, current > 0
@@ -670,6 +677,18 @@ func breadthObservationFromTencent(info models.StockInfo) (breadthObservation, b
 	}
 	if lowErr == nil && low > 0 {
 		observation.low, observation.lowOK = low, true
+	}
+	if openErr == nil && open > 0 {
+		observation.open = open
+	}
+	if previousErr == nil && previous > 0 {
+		observation.previous = previous
+	}
+	if volumeErr == nil && volume > 0 {
+		observation.volume = volume
+	}
+	if amountErr == nil && amount > 0 {
+		observation.amount = amount
 	}
 	if currentErr == nil && previousErr == nil && current > 0 && previous > 0 {
 		observation.changePct = (current - previous) / previous * 100

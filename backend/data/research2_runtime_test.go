@@ -136,3 +136,22 @@ func TestListedForResearch2SessionsRequiresTenOpenDays(t *testing.T) {
 		t.Fatal("a stock with fewer than ten sessions must be excluded")
 	}
 }
+
+func TestLoadResearch2CachedMinuteBarsUsesOnlyUnadjustedCache(t *testing.T) {
+	initMinuteCacheTestDB(t, "research2-sell-replay.db")
+	target := time.Date(2026, 9, 4, 10, 0, 0, 0, shanghaiDataLocation())
+	rows := []minuteBar{
+		{TradeTime: target, Open: 10, High: 10.2, Low: 9.9, Close: 10.1, Volume: 100, Source: "tencent"},
+		{TradeTime: target.Add(time.Minute), Open: 88, High: 89, Low: 87, Close: 88, Volume: 100, Source: "akshare:adjustment=qfq"},
+	}
+	if _, err := upsertMinuteBarsToCache("600001.SH", rows, ""); err != nil {
+		t.Fatal(err)
+	}
+	bars, err := loadResearch2CachedMinuteBars(context.Background(), NewResearchChartProvider(nil), "sh600001", target.Add(-time.Minute), target.Add(2*time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bars) != 1 || !bars[0].TradeTime.Equal(target) || bars[0].Close != 10.1 || bars[0].Source != "tencent" {
+		t.Fatalf("sell replay cache was not adjustment-safe: %+v", bars)
+	}
+}

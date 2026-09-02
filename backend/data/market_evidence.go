@@ -178,6 +178,16 @@ func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceServ
 	return service
 }
 
+// NewMarketEvidenceServiceWithStorage is the storage-aware constructor used by
+// isolated runtimes.  Keeping both databases injectable is important for the
+// Tencent breadth fallback: it builds its universe from the main stock master
+// while its tick/minute fallbacks use the minute database.
+func NewMarketEvidenceServiceWithStorage(mainDB, minuteDB *gorm.DB) *MarketEvidenceService {
+	service := NewMarketEvidenceServiceWithMinuteDB(minuteDB)
+	service.mainDB = mainDB
+	return service
+}
+
 func (s *MarketEvidenceService) Breadth(ctx context.Context) marketdata.DataEnvelope[BreadthData] {
 	return s.collectBreadth(ctx)
 }

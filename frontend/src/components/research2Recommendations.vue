@@ -18,6 +18,9 @@ const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pendin
 const statusType = status => status === 'closed' ? 'success' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
+const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
+const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
+const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? (analysis.failureReason || '辅助证据不完整，详见报告与证据审计') : '无'
 
 async function show(row) {
   visible.value = true
@@ -71,6 +74,13 @@ onMounted(refresh)
               <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>
               <n-descriptions-item label="评分">{{formatNumber(detail.recommendation.finalScore,1)}}</n-descriptions-item>
               <n-descriptions-item label="状态">{{statusLabels[detail.recommendation.status] || detail.recommendation.status}}</n-descriptions-item>
+              <n-descriptions-item label="计划分析">{{dateTime(detail.analysis.scheduledFor)}}</n-descriptions-item>
+              <n-descriptions-item label="实际启动">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>
+              <n-descriptions-item label="证据窗口">{{dateTime(detail.analysis.evidenceWindowStartAt)}} — {{dateTime(detail.analysis.evidenceCutoffAt)}}</n-descriptions-item>
+              <n-descriptions-item label="报告生成">{{dateTime(detail.analysis.generatedAt)}}</n-descriptions-item>
+              <n-descriptions-item label="目标 / 实际买入">{{dateTime(detail.recommendation.targetBuyAt)}} / {{dateTime(detail.recommendation.buyAt)}}</n-descriptions-item>
+              <n-descriptions-item label="目标 / 实际卖出">{{dateTime(detail.recommendation.targetSellAt)}} / {{dateTime(detail.recommendation.sellAt)}}</n-descriptions-item>
+              <n-descriptions-item label="证据降级" :span="3">{{degradedReason(detail.analysis)}}</n-descriptions-item>
               <n-descriptions-item label="入选理由" :span="3">{{detail.recommendation.summary}}</n-descriptions-item>
               <n-descriptions-item label="关键量化" :span="3">{{detail.recommendation.quantData}}</n-descriptions-item>
               <n-descriptions-item label="新催化" :span="3">{{detail.recommendation.freshCatalyst || '无可核验新催化'}}</n-descriptions-item>
@@ -87,6 +97,8 @@ onMounted(refresh)
               {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},
               {title:'市场价',key:'marketPrice',render:r=>formatPrice(r.marketPrice)},
               {title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},
+              {title:'价格来源',key:'priceSource',render:r=>r.priceSource || '--'},
+              {title:'执行模式',key:'executionMode',render:r=>executionMode(r)},
               {title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},
               {title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}
             ]"/>
