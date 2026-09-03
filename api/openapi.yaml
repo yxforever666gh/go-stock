@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.7.7
+  version: 2.7.8
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -2073,7 +2073,7 @@ components:
         mainRisk: {type: string}
         cancelConditions: {type: string}
         sourceRefs: {type: string}
-        status: {type: string, enum: [buy_pending, active, sell_pending, closed, missed_cash, missed_untradable, missed_window, cancelled_price]}
+        status: {type: string, enum: [buy_pending, active, sell_pending, closed, analysis_only, missed_cash, missed_untradable, missed_window, cancelled_price]}
         late: {type: boolean}
         targetBuyAt: {type: string, format: date-time}
         buyAt: {type: string, format: date-time}

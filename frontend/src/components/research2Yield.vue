@@ -16,6 +16,7 @@ const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') :
 const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? (analysis.failureReason || '辅助证据不完整，详见报告与证据审计') : '无'
+const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
 const assessment = computed(() => !performance.value?.closedTrades ? '暂无已平仓样本' : performance.value.closedTrades < 30 ? '样本不足，仅供观察' : '已有阶段性样本')
 const columns = [
   {title: '股票', key: 'stockCode', minWidth: 160, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
@@ -60,7 +61,7 @@ onMounted(refresh)
               <n-descriptions-item label="净收益"><n-text class="yield-table-value" :type="colorType(detail.recommendation.netPnl)" strong>{{formatMoney(detail.recommendation.netPnl)}}</n-text></n-descriptions-item>
               <n-descriptions-item label="净收益率"><n-text class="yield-table-value" :type="colorType(detail.recommendation.netYieldRate)" strong>{{rate(detail.recommendation.netYieldRate)}}</n-text></n-descriptions-item>
               <n-descriptions-item label="最终分">{{formatNumber(detail.recommendation.finalScore, 1)}}</n-descriptions-item>
-              <n-descriptions-item label="状态">{{detail.recommendation.status}}</n-descriptions-item>
+              <n-descriptions-item label="状态">{{statusLabels[detail.recommendation.status] || detail.recommendation.status}}</n-descriptions-item>
               <n-descriptions-item label="信号时间">{{dateTime(detail.recommendation.signalAt)}}</n-descriptions-item>
               <n-descriptions-item label="计划分析">{{dateTime(detail.analysis.scheduledFor)}}</n-descriptions-item>
               <n-descriptions-item label="实际启动">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>

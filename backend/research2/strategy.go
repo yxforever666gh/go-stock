@@ -23,6 +23,8 @@ import (
 //go:embed prompts/overnight_strength.md
 var strategyPrompt string
 
+var ErrOutsideMorningStartWindow = errors.New("research2 analysis start is outside the morning window")
+
 type Evidence struct {
 	Prompt                   string
 	SourceStatusJSON         string
@@ -168,13 +170,15 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	local := scheduledFor.In(shanghai())
 	tradingDate := local.Format("2006-01-02")
 	now := r.now().In(shanghai())
+	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 50, 0, 0, shanghai())
+	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 30, 0, 0, shanghai())
+	if now.Before(startWindow) || !now.Before(lastStartExclusive) {
+		return AnalysisRun{}, ErrOutsideMorningStartWindow
+	}
 	cutoff := now
 	windowStart := cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
-	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 35, 0, 0, shanghai())
-	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 26, 0, 0, shanghai())
-	allowRetry := !now.Before(startWindow) && now.Before(lastStartExclusive)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v5", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
-	selected, created, err := r.repository.CreateRunAttempt(ctx, &run, allowRetry)
+	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v6", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	selected, created, err := r.repository.CreateRunAttempt(ctx, &run, true)
 	if err != nil {
 		return run, err
 	}
@@ -221,10 +225,6 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	if !tradeDay {
 		run.ReportMarkdown = "今日不是A股正常交易日，不执行选股。"
 		return finishFailure("skipped_non_trading_day", "今日不是A股正常交易日，不执行选股。", nil)
-	}
-	if now.Before(startWindow) || !now.Before(lastStartExclusive) {
-		run.ReportMarkdown = renderRunStatusReport(run, "任务实际启动时间不在09:35—11:25允许窗口内，今日不执行分析。")
-		return finishFailure("missed_window", "任务实际启动时间不在09:35—11:25允许窗口内，今日不执行分析。", nil)
 	}
 	var evidence Evidence
 	if collector, ok := r.collector.(RunEvidenceCollector); ok {
@@ -273,13 +273,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		}
 	}
 	attempts := make(map[string]research.ModelAttemptRecord)
-	modelDeadline := time.Date(local.Year(), local.Month(), local.Day(), 11, 30, 0, 0, shanghai())
-	modelBudget := modelDeadline.Sub(r.now().In(shanghai()))
-	if modelBudget <= 0 {
-		return finishFailure("failed", "已超过11:30模型结果硬截止时间，不创建推荐。", nil)
-	}
-	modelCtx, cancelModel := context.WithTimeout(ctx, modelBudget)
-	defer cancelModel()
+	modelCtx := ctx
 	prompt := buildPrompt(evidence, cutoff)
 	var result research.CompletionResult
 	var output modelOutput
@@ -290,7 +284,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			phase += "_repair"
 		}
 		if r.audit != nil {
-			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v5"})
+			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v6"})
 			err = prepareErr
 			if err != nil {
 				return finishFailure("failed", "准备研究审计载荷失败: "+err.Error(), err)
@@ -320,7 +314,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			}
 			sort.Slice(attemptValues, func(i, j int) bool { return attemptValues[i].StartedAt.Before(attemptValues[j].StartedAt) })
 			auditCtx, cancelAudit := context.WithTimeout(context.WithoutCancel(modelCtx), 15*time.Second)
-			auditErr := r.recordResearch2Attempts(auditCtx, run.RunID, phase, structureAttempt, cutoff, prompt, evidence, modelDeadline, attemptValues, result, structureAttempt > 1, err)
+			auditErr := r.recordResearch2Attempts(auditCtx, run.RunID, phase, structureAttempt, cutoff, prompt, evidence, attemptValues, result, structureAttempt > 1, err)
 			cancelAudit()
 			if auditErr != nil {
 				return finishFailure("failed", "保存研究审计载荷失败: "+auditErr.Error(), auditErr)
@@ -359,21 +353,17 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	// the authoritative server-side signal timestamp.
 	items, validationMessages := validateRecommendationsWithEvidence(run.RunID, cutoff, local, cutoff, evidence.Candidates, evidence.Documents, evidence.CandidateReferencePrices, output.Recommendations)
 	generated := r.now().In(shanghai())
-	if !generated.Before(modelDeadline) {
-		return finishFailure("failed", "模型结果在11:30硬截止时间后才完成结构化校验，不创建推荐。", nil)
-	}
 	run.GeneratedAt = &generated
 	run.OnTime = !generated.After(time.Date(local.Year(), local.Month(), local.Day(), 10, 0, 0, 0, shanghai()))
 	for index := range items {
-		target, late, tradable := buyTarget(generated, local)
-		if !tradable {
-			items = nil
-			validationMessages = append(validationMessages, "报告生成时已无当日可成交窗口")
-			break
-		}
+		target, late, status := recommendationExecution(generated, local)
 		items[index].SignalAt = generated
 		items[index].Late = late
 		items[index].TargetBuyAt = target
+		items[index].Status = status
+		if status == "analysis_only" {
+			items[index].FailureReason = "报告在当日连续竞价结束后完成，仅保存分析，不进入模拟交易"
+		}
 	}
 	run.ReportMarkdown = renderAnalysisReport(run, evidence, output, items, validationMessages)
 	if len(items) == 0 {
@@ -411,7 +401,7 @@ func research2AuditEvidence(evidence Evidence) map[string]any {
 	}
 }
 
-func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase string, callSequence int, cutoff time.Time, prompt string, evidence Evidence, modelDeadline time.Time, attempts []research.ModelAttemptRecord, result research.CompletionResult, repaired bool, callErr error) error {
+func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase string, callSequence int, cutoff time.Time, prompt string, evidence Evidence, attempts []research.ModelAttemptRecord, result research.CompletionResult, repaired bool, callErr error) error {
 	if r == nil || r.audit == nil {
 		return nil
 	}
@@ -419,7 +409,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 		prepared, err := r.audit.Prepare(ctx, researchaudit.CallInput{
 			OwnerType: researchaudit.OwnerResearch2, OwnerID: runID, Phase: phase, CallSequence: callSequence, Attempt: 1,
 			CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{},
-			ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v5",
+			ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v6",
 		})
 		if err != nil {
 			return err
@@ -435,9 +425,8 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 			OwnerType: researchaudit.OwnerResearch2, OwnerID: runID, Phase: phase, CallSequence: callSequence, Attempt: index + 1,
 			ProviderName: attempt.ProviderName, ModelName: attempt.ModelName, CutoffAt: &cutoff, Prompt: prompt,
 			Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{
-				"modelDeadline": modelDeadline,
-				"attempt":       attempt,
-			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v5",
+				"attempt": attempt,
+			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v6",
 		})
 		if err != nil {
 			return err
@@ -487,11 +476,11 @@ func buildPrompt(evidence Evidence, cutoff time.Time) string {
 	return strings.Join([]string{
 		strategyPrompt,
 		"\n# 本次执行参数",
-		"- 策略版本：research2-trailing5-v5",
+		"- 策略版本：research2-trailing5-v6",
 		"- 核心证据窗口：[" + windowStart.Format("2006-01-02 15:04:05") + ", " + cutoff.Format("2006-01-02 15:04:05") + "] Asia/Shanghai",
 		"- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
-		"- 模型结果最晚必须在当日11:30完成校验；是否晚于10:00只用于统计。",
-		"- 程序将在报告校验完成后获取第一笔有效行情买入；卖出目标固定为下一交易日10:00。",
+		"- 上午启动后允许跨越午盘继续完成；完成时间只用于统计，不得导致推荐失败。",
+		"- 程序将在报告校验完成后获取第一笔有效行情买入；15:00后完成的推荐仅保存分析，不交易；已买入标的卖出目标固定为下一交易日10:00。",
 		"- 独立账户初始资金12,000元；最多选择3只，一手100股含费用成本不得超过账户资金。",
 		"- 不得访问外部地址、推算缺失值或编造行情；只能使用下方注入的结构化证据。",
 		"- sourceRefs只能填写证据sources中存在且适用于该股票的sourceId，不得填写来源名称或URL。",
@@ -591,16 +580,11 @@ func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cu
 			warnings = append(warnings, code+"一手含费成本超过12000元")
 			continue
 		}
-		target, late, tradable := buyTarget(generated, tradingDay)
-		if !tradable {
-			warnings = append(warnings, code+"报告生成时已无当日可成交窗口")
-			continue
-		}
 		stockName := strings.TrimSpace(value.Name)
 		if evidenceName != "" {
 			stockName = evidenceName
 		}
-		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: runID, StockCode: code, StockName: stockName, SignalAt: generated, MarketScore: value.MarketScore, SectorScore: value.SectorScore, StockScore: value.StockScore, CatalystScore: value.CatalystScore, RiskDeduction: value.RiskDeduction, FinalScore: calculated, ReferencePrice: referencePrice, BuyLower: 0, BuyUpper: 0, EstimatedLotCost: roundMoney(lotCost), Summary: value.Summary, QuantData: value.QuantData, FreshCatalyst: value.FreshCatalyst, OldBackground: value.OldBackground, MainRisk: value.MainRisk, CancelConditions: value.CancelConditions, SourceRefs: strings.Join(value.SourceRefs, "\n"), Status: "buy_pending", Late: late, TargetBuyAt: target})
+		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: runID, StockCode: code, StockName: stockName, SignalAt: generated, MarketScore: value.MarketScore, SectorScore: value.SectorScore, StockScore: value.StockScore, CatalystScore: value.CatalystScore, RiskDeduction: value.RiskDeduction, FinalScore: calculated, ReferencePrice: referencePrice, BuyLower: 0, BuyUpper: 0, EstimatedLotCost: roundMoney(lotCost), Summary: value.Summary, QuantData: value.QuantData, FreshCatalyst: value.FreshCatalyst, OldBackground: value.OldBackground, MainRisk: value.MainRisk, CancelConditions: value.CancelConditions, SourceRefs: strings.Join(value.SourceRefs, "\n"), Status: "buy_pending", TargetBuyAt: generated})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].FinalScore == items[j].FinalScore {
@@ -789,24 +773,6 @@ func sourceDocumentAppliesToStock(document research.SourceDocument, code string,
 	return false
 }
 
-func renderRunStatusReport(run AnalysisRun, message string) string {
-	windowStart := run.StartedAt.Add(-5 * time.Minute)
-	if run.EvidenceWindowStartAt != nil {
-		windowStart = run.EvidenceWindowStartAt.In(shanghai())
-	}
-	return strings.Join([]string{
-		"# 研究中心2 隔日强势筛选",
-		"",
-		"- 策略版本：" + run.StrategyVersion,
-		fmt.Sprintf("- 当日尝试：第%d次", normalizedAttemptNo(run.AttemptNo)),
-		"- 计划时间：" + formatResearch2Time(run.ScheduledFor),
-		"- 实际启动：" + formatResearch2Time(run.StartedAt),
-		"- 证据窗口：" + formatResearch2Time(windowStart) + " 至 " + formatResearch2Time(run.EvidenceCutoffAt),
-		"",
-		message,
-	}, "\n")
-}
-
 func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput, items []Recommendation, warnings []string) string {
 	generated := run.StartedAt
 	if run.GeneratedAt != nil {
@@ -832,7 +798,7 @@ func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput
 	lines := []string{
 		"# 研究中心2 隔日强势筛选",
 		"",
-		"## 可执行结论",
+		"## 分析结论",
 		"",
 		"- 交易日：是",
 		fmt.Sprintf("- 推荐数量：%d", len(items)),
@@ -853,12 +819,16 @@ func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput
 	}
 	if len(items) > 0 {
 		lines = append(lines,
-			"", "## 可执行标的", "",
-			"| 代码 | 名称 | 最终分 | 参考价 | 100股预计成本 | 市场/板块/个股/催化 | 风险扣分 | 目标买入 |",
+			"", "## 入选标的", "",
+			"| 代码 | 名称 | 最终分 | 参考价 | 100股预计成本 | 市场/板块/个股/催化 | 风险扣分 | 执行安排 |",
 			"|---|---|---:|---:|---:|---|---:|---|",
 		)
 		for _, item := range items {
-			lines = append(lines, fmt.Sprintf("| %s | %s | %.2f | %.3f | %.2f | %.1f / %.1f / %.1f / %.1f | %.1f | %s |", item.StockCode, escapeMarkdownCell(item.StockName), item.FinalScore, item.ReferencePrice, item.EstimatedLotCost, item.MarketScore, item.SectorScore, item.StockScore, item.CatalystScore, item.RiskDeduction, formatResearch2Time(item.TargetBuyAt)))
+			execution := formatResearch2Time(item.TargetBuyAt)
+			if item.Status == "analysis_only" {
+				execution = "仅分析，不交易"
+			}
+			lines = append(lines, fmt.Sprintf("| %s | %s | %.2f | %.3f | %.2f | %.1f / %.1f / %.1f / %.1f | %.1f | %s |", item.StockCode, escapeMarkdownCell(item.StockName), item.FinalScore, item.ReferencePrice, item.EstimatedLotCost, item.MarketScore, item.SectorScore, item.StockScore, item.CatalystScore, item.RiskDeduction, execution))
 		}
 		for _, item := range items {
 			lines = append(lines,
@@ -904,22 +874,22 @@ func defaultReportText(value string) string {
 	return "无"
 }
 
-func buyTarget(generated, tradingDay time.Time) (time.Time, bool, bool) {
+func recommendationExecution(generated, tradingDay time.Time) (time.Time, bool, string) {
 	local := generated.In(shanghai())
 	ten := time.Date(tradingDay.Year(), tradingDay.Month(), tradingDay.Day(), 10, 0, 0, 0, shanghai())
 	closeTime := time.Date(tradingDay.Year(), tradingDay.Month(), tradingDay.Day(), 15, 0, 0, 0, shanghai())
 	if !local.After(ten) {
-		return ten, false, true
+		return ten, false, "buy_pending"
 	}
 	if !local.Before(closeTime) {
-		return time.Time{}, true, false
+		return local, true, "analysis_only"
 	}
 	lunchStart := time.Date(tradingDay.Year(), tradingDay.Month(), tradingDay.Day(), 11, 30, 0, 0, shanghai())
 	lunchEnd := time.Date(tradingDay.Year(), tradingDay.Month(), tradingDay.Day(), 13, 0, 0, 0, shanghai())
 	if !local.Before(lunchStart) && local.Before(lunchEnd) {
-		return lunchEnd, true, true
+		return lunchEnd, true, "buy_pending"
 	}
-	return local, true, true
+	return local, true, "buy_pending"
 }
 
 func defaultJSON(value, fallback string) string {
@@ -979,10 +949,17 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 	if err != nil || len(items) == 0 {
 		return err
 	}
-	if atOrAfterClose(now) {
-		for _, item := range items {
-			_ = s.repository.MarkStatus(ctx, item.RecommendationID, "missed_window", "当日连续竞价已结束")
+	activeDay := now.In(shanghai()).Format("2006-01-02")
+	eligible := make([]Recommendation, 0, len(items))
+	for _, item := range items {
+		if atOrAfterClose(now) || item.SignalAt.In(shanghai()).Format("2006-01-02") != activeDay {
+			_ = s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "当日未取得有效买入行情，仅保存分析，不进入模拟交易")
+			continue
 		}
+		eligible = append(eligible, item)
+	}
+	items = eligible
+	if len(items) == 0 {
 		return nil
 	}
 	byRun := map[string][]Recommendation{}

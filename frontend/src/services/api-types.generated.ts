@@ -1112,7 +1112,7 @@ export type Research2Recommendation = {
   sellPrice?: number
   signalAt: string
   sourceRefs?: string
-  status: "buy_pending" | "active" | "sell_pending" | "closed" | "missed_cash" | "missed_untradable" | "missed_window" | "cancelled_price"
+  status: "buy_pending" | "active" | "sell_pending" | "closed" | "analysis_only" | "missed_cash" | "missed_untradable" | "missed_window" | "cancelled_price"
   stockCode: string
   stockName: string
   stockScore?: number

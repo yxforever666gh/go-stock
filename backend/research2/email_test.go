@@ -161,7 +161,7 @@ func TestReportEmailContentForAllEligibleResults(t *testing.T) {
 	}{
 		{status: "success", subjectPart: "分析报告（2只）", bodyPart: "# 研究中心2报告"},
 		{status: "no_recommendation", subjectPart: "无推荐", bodyPart: "# 研究中心2报告"},
-		{status: "missed_window", subjectPart: "错过交易窗口", bodyPart: "任务启动窗口截止：2026-08-27 11:25:59"},
+		{status: "missed_window", subjectPart: "错过交易窗口", bodyPart: "# 研究中心2报告"},
 	} {
 		t.Run(testCase.status, func(t *testing.T) {
 			subject, body := reportEmailContent(eligibleRun(testCase.status))
@@ -169,6 +169,20 @@ func TestReportEmailContentForAllEligibleResults(t *testing.T) {
 				t.Fatalf("subject=%q body=%q", subject, body)
 			}
 		})
+	}
+}
+
+func TestReportEmailFallbackHasNoCompletionDeadline(t *testing.T) {
+	run := eligibleRun("success")
+	run.ReportMarkdown = ""
+	_, body := reportEmailContent(run)
+	if strings.Contains(body, "11:25") || strings.Contains(body, "11:30") || strings.Contains(body, "硬截止") {
+		t.Fatalf("fallback email still exposes removed deadlines: %q", body)
+	}
+	for _, expected := range []string{"实际启动：", "证据截止：", "报告生成："} {
+		if !strings.Contains(body, expected) {
+			t.Fatalf("fallback email missing %q: %q", expected, body)
+		}
 	}
 }
 

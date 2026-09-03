@@ -14,8 +14,8 @@ const detail = ref(null)
 const visible = ref(false)
 
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
-const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
-const statusType = status => status === 'closed' ? 'success' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
+const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
+const statusType = status => status === 'closed' ? 'success' : status === 'analysis_only' ? 'default' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
 const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
@@ -56,6 +56,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
+    <n-alert type="info" :bordered="false">“仅分析”推荐保留评分与研究依据，但不会进入模拟买卖或收益统计。</n-alert>
     <n-flex justify="space-between" align="center">
       <n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用；当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
@@ -70,6 +71,7 @@ onMounted(refresh)
       <n-scrollbar style="max-height:87vh">
         <n-spin :show="!detail">
           <template v-if="detail">
+            <n-alert v-if="detail.recommendation.status === 'analysis_only'" type="info" :bordered="false" style="margin-bottom:12px">该推荐仅用于研究复盘，不会创建模拟成交或计入策略收益。</n-alert>
             <n-descriptions bordered :column="3">
               <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>
               <n-descriptions-item label="评分">{{formatNumber(detail.recommendation.finalScore,1)}}</n-descriptions-item>

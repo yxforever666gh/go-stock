@@ -93,18 +93,15 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 
 func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 	local := now.In(research2Location())
-	// Let the runner persist an explicit missed_window record when the service
-	// comes back after the morning analysis window. Returning here would make a
-	// missed day indistinguishable from a scheduler that never ran.
-	if local.Hour() < 9 || (local.Hour() == 9 && local.Minute() < 50) {
+	if !withinResearch2RecoveryWindow(local) {
 		return
 	}
 	tradeDay, err := data.ResearchTradingCalendar{}.IsTradingDay(a.ctx, local)
 	if err != nil || !tradeDay {
 		return
 	}
-	// Runner atomically decides whether this is attempt 1, an eligible attempt
-	// 2 after failure, or a no-op returning the latest terminal run.
+	// Runner atomically decides whether this is attempt 1, an eligible retry,
+	// or a no-op returning the latest terminal run.
 	scheduled := time.Date(local.Year(), local.Month(), local.Day(), 9, 50, 0, 0, research2Location())
 	a.runResearch2Analysis(scheduled)
 	a.processResearch2Trades(local)
@@ -126,6 +123,9 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 	}
 	run, err := runtime.Runner.Run(a.ctx, scheduledFor)
 	if err != nil {
+		if errors.Is(err, research2.ErrOutsideMorningStartWindow) {
+			return
+		}
 		logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
 		return
 	}
@@ -138,6 +138,12 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 		}
 	}
 	go a.processResearch2Emails()
+}
+
+func withinResearch2RecoveryWindow(value time.Time) bool {
+	local := value.In(research2Location())
+	minutes := local.Hour()*60 + local.Minute()
+	return minutes >= 9*60+50 && minutes < 11*60+30
 }
 
 func research2EmailConfig(setting *models.SettingConfig) research2.EmailConfig {

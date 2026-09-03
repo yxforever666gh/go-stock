@@ -860,13 +860,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collector is unavailable")
 	}
 	startedAt = startedAt.In(shanghaiDataLocation())
-	deadline := time.Date(startedAt.Year(), startedAt.Month(), startedAt.Day(), 11, 30, 0, 0, startedAt.Location())
-	remaining := deadline.Sub(c.research2Now())
-	if remaining <= 0 {
-		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collection deadline 11:30 has passed")
-	}
-	collectionCtx, cancelCollection := context.WithTimeout(ctx, remaining)
-	defer cancelCollection()
+	collectionCtx := ctx
 	fetch := c.fetchSnapshot
 	if fetch == nil {
 		fetch = c.fetchResearch2FullMarketSnapshot

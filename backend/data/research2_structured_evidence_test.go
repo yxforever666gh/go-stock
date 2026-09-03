@@ -154,6 +154,19 @@ func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testin
 	}
 }
 
+func TestResearch2StructuredEvidenceMayFinishAfterMorningWindow(t *testing.T) {
+	startedAt := time.Date(2026, 9, 3, 11, 29, 0, 0, shanghaiDataLocation())
+	collector := newResearch2StructuredCollector(t, startedAt, research2StructuredRows(startedAt, 20), 20, 5)
+	collector.now = func() time.Time { return time.Date(2026, 9, 3, 11, 31, 0, 0, shanghaiDataLocation()) }
+	evidence, err := collector.Collect(context.Background(), startedAt)
+	if err != nil {
+		t.Fatalf("morning-started collection was rejected after 11:30: %v", err)
+	}
+	if evidence.CoveragePct != 100 || len(evidence.Candidates) != 12 {
+		t.Fatalf("unexpected cross-noon evidence: coverage=%v candidates=%d", evidence.CoveragePct, len(evidence.Candidates))
+	}
+}
+
 func TestResearch2StructuredEvidenceRejectsCoverageBelow95Percent(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, cutoff, research2InvalidatePrices(research2StructuredRows(cutoff, 100), 6), 100, 5)
