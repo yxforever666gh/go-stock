@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.7.3
+  version: 2.7.4
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -1788,10 +1788,11 @@ components:
         metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}
     Research2AnalysisRun:
       type: object
-      required: [runId, tradingDate, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
+      required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
       properties:
         runId: {type: string}
         tradingDate: {type: string, format: date}
+        attemptNo: {type: integer, minimum: 1}
         scheduledFor: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         evidenceWindowStartAt: {type: string, format: date-time, nullable: true}
@@ -1817,10 +1818,11 @@ components:
         emailLastError: {type: string}
     Research2AnalysisRunSummary:
       type: object
-      required: [runId, tradingDate, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, recommendationCount, onTime]
+      required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, recommendationCount, onTime]
       properties:
         runId: {type: string}
         tradingDate: {type: string, format: date}
+        attemptNo: {type: integer, minimum: 1}
         scheduledFor: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         evidenceWindowStartAt: {type: string, format: date-time, nullable: true}
@@ -2061,8 +2063,8 @@ components:
         riskDeduction: {type: number}
         finalScore: {type: number}
         referencePrice: {type: number}
-        buyLower: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 writes 0 and does not use it for execution."}
-        buyUpper: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 writes 0 and does not use it for execution."}
+        buyLower: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 and later write 0 and do not use it for execution."}
+        buyUpper: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 and later write 0 and do not use it for execution."}
         estimatedLotCost: {type: number}
         summary: {type: string}
         quantData: {type: string}

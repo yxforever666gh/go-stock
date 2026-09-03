@@ -1006,6 +1006,7 @@ export type Research2AccountSnapshot = {
 }
 
 export type Research2AnalysisRun = {
+  attemptNo: number
   degraded?: boolean | null
   emailAttemptCount?: number
   emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
@@ -1034,6 +1035,7 @@ export type Research2AnalysisRun = {
 }
 
 export type Research2AnalysisRunSummary = {
+  attemptNo: number
   degraded?: boolean | null
   emailAttemptCount?: number
   emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"

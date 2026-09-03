@@ -26,7 +26,7 @@ func TestBackupMainBeforePendingMigrationSnapshotsExistingDatabase(t *testing.T)
 	if err := migrations.MigrateMain(database); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Where("id = ?", 23).Delete(&migrations.MigrationRecord{}).Error; err != nil {
+	if err := database.Where("id = ?", 24).Delete(&migrations.MigrationRecord{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	destination, err := backupMainBeforePendingMigration(database, filepath.Join(directory, "backups"))
@@ -49,7 +49,7 @@ func TestBackupMainBeforePendingMigrationSnapshotsExistingDatabase(t *testing.T)
 	}
 	t.Cleanup(func() { _ = backupSQL.Close() })
 	var recordCount int64
-	if err := backup.Model(&migrations.MigrationRecord{}).Count(&recordCount).Error; err != nil || recordCount != 22 {
+	if err := backup.Model(&migrations.MigrationRecord{}).Count(&recordCount).Error; err != nil || recordCount != 23 {
 		t.Fatalf("backup migration records=%d err=%v", recordCount, err)
 	}
 	if err := migrations.MigrateMain(database); err != nil {

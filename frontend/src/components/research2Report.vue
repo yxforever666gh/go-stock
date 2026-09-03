@@ -17,6 +17,7 @@ const type = status => status === 'success' ? 'success' : status === 'failed' ? 
 async function show(row) { visible.value = true; detail.value = null; try { detail.value = await GetResearch2Run(row.runId) } catch (error) { message.error(error?.message || String(error)) } }
 const columns = [
   {title: '交易日', key: 'tradingDate', width: 110},
+  {title: '批次', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
   {title: '计划时间', key: 'scheduledFor', width: 170, render: row => dateTime(row.scheduledFor)},
   {title: '实际启动', key: 'startedAt', width: 170, render: row => dateTime(row.startedAt)},
   {title: '窗口开始', key: 'evidenceWindowStartAt', width: 170, render: row => dateTime(row.evidenceWindowStartAt)},
@@ -40,7 +41,7 @@ onMounted(refresh)
   <n-space vertical>
     <n-alert type="info" :bordered="false">自动任务计划 09:50 启动；以实际启动前5个已闭合交易分钟为证据窗口，报告校验完成后再获取可成交行情。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
-    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2130" :row-key="row => row.runId"/>
+    <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
   </n-space>
   <n-modal v-model:show="visible">
     <n-card title="隔夜强势分析报告" closable style="width:min(1380px,96vw);max-height:94vh" @close="visible=false">
@@ -50,6 +51,7 @@ onMounted(refresh)
             <ResearchAuditPanel owner-type="research2" :owner-id="String(detail.runId)" :active="visible">
               <template #final-result>
                 <n-descriptions bordered :column="3" style="margin-bottom:12px">
+                  <n-descriptions-item label="分析批次">第{{detail.attemptNo || 1}}次</n-descriptions-item>
                   <n-descriptions-item label="计划时间">{{dateTime(detail.scheduledFor)}}</n-descriptions-item>
                   <n-descriptions-item label="实际启动">{{dateTime(detail.startedAt)}}</n-descriptions-item>
                   <n-descriptions-item label="报告生成">{{dateTime(detail.generatedAt)}}</n-descriptions-item>

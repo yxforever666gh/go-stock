@@ -30,6 +30,7 @@ type Evidence struct {
 	Documents                []research.SourceDocument
 	EvidenceProfileVersion   string
 	EvidenceSetID            string
+	CutoffAt                 time.Time
 	WindowStartAt            time.Time
 	CoveragePct              float64
 	Degraded                 bool
@@ -166,18 +167,21 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	defer r.mu.Unlock()
 	local := scheduledFor.In(shanghai())
 	tradingDate := local.Format("2006-01-02")
-	if existing, ok, err := r.repository.RunForDate(ctx, tradingDate); err != nil {
-		return AnalysisRun{}, err
-	} else if ok {
-		return existing, nil
-	}
 	now := r.now().In(shanghai())
 	cutoff := now
-	windowStart := cutoff.Add(-5 * time.Minute)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v3", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
-	if err := r.repository.CreateRun(ctx, &run); err != nil {
+	windowStart := cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
+	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 35, 0, 0, shanghai())
+	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 26, 0, 0, shanghai())
+	allowRetry := !now.Before(startWindow) && now.Before(lastStartExclusive)
+	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v4", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	selected, created, err := r.repository.CreateRunAttempt(ctx, &run, allowRetry)
+	if err != nil {
 		return run, err
 	}
+	if !created {
+		return selected, nil
+	}
+	run = selected
 	auditStarted := false
 	if r.audit != nil {
 		if err := r.audit.Begin(ctx, researchaudit.OwnerResearch2, run.RunID); err != nil {
@@ -218,8 +222,6 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		run.ReportMarkdown = "今日不是A股正常交易日，不执行选股。"
 		return finishFailure("skipped_non_trading_day", "今日不是A股正常交易日，不执行选股。", nil)
 	}
-	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 35, 0, 0, shanghai())
-	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 26, 0, 0, shanghai())
 	if now.Before(startWindow) || !now.Before(lastStartExclusive) {
 		run.ReportMarkdown = renderRunStatusReport(run, "任务实际启动时间不在09:35—11:25允许窗口内，今日不执行分析。")
 		return finishFailure("missed_window", "任务实际启动时间不在09:35—11:25允许窗口内，今日不执行分析。", nil)
@@ -231,8 +233,19 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		evidence, err = r.collector.Collect(ctx, cutoff)
 	}
 	run.SourceStatusJSON = defaultJSON(evidence.SourceStatusJSON, "[]")
+	if !evidence.CutoffAt.IsZero() {
+		cutoff = evidence.CutoffAt.In(shanghai())
+		run.EvidenceCutoffAt = cutoff
+	} else {
+		evidence.CutoffAt = cutoff
+	}
 	if !evidence.WindowStartAt.IsZero() {
 		windowStart = evidence.WindowStartAt.In(shanghai())
+		evidence.WindowStartAt = windowStart
+		run.EvidenceWindowStartAt = &windowStart
+	} else {
+		windowStart = cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
+		evidence.WindowStartAt = windowStart
 		run.EvidenceWindowStartAt = &windowStart
 	}
 	coverage := evidence.CoveragePct
@@ -241,12 +254,14 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	run.Degraded = &degraded
 	if evidence.EvidenceSetID != "" {
 		run.EvidenceProfileVersion, run.EvidenceSetID = evidence.EvidenceProfileVersion, evidence.EvidenceSetID
-		if saveErr := r.repository.SaveRun(ctx, &run); saveErr != nil {
-			if err == nil {
-				return run, saveErr
-			}
-			err = errors.Join(err, fmt.Errorf("保存证据关联失败: %w", saveErr))
+	}
+	// Persist the collector's authoritative cutoff even when collection failed,
+	// so the failure report and immutable audit point at the same snapshot.
+	if saveErr := r.repository.SaveRun(ctx, &run); saveErr != nil {
+		if err == nil {
+			return run, saveErr
 		}
+		err = errors.Join(err, fmt.Errorf("保存证据关联失败: %w", saveErr))
 	}
 	if err != nil {
 		return finishFailure("failed", "策略证据采集失败: "+err.Error(), err)
@@ -275,7 +290,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			phase += "_repair"
 		}
 		if r.audit != nil {
-			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v3"})
+			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v4"})
 			err = prepareErr
 			if err != nil {
 				return finishFailure("failed", "准备研究审计载荷失败: "+err.Error(), err)
@@ -390,6 +405,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 func research2AuditEvidence(evidence Evidence) map[string]any {
 	return map[string]any{
 		"evidenceSetId": evidence.EvidenceSetID,
+		"cutoffAt":      evidence.CutoffAt,
 		"sourceStatus":  json.RawMessage(defaultJSON(evidence.SourceStatusJSON, "[]")),
 		"documents":     evidence.Documents,
 	}
@@ -403,7 +419,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 		prepared, err := r.audit.Prepare(ctx, researchaudit.CallInput{
 			OwnerType: researchaudit.OwnerResearch2, OwnerID: runID, Phase: phase, CallSequence: callSequence, Attempt: 1,
 			CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{},
-			ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v3",
+			ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v4",
 		})
 		if err != nil {
 			return err
@@ -421,7 +437,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 			Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{
 				"modelDeadline": modelDeadline,
 				"attempt":       attempt,
-			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v3",
+			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v4",
 		})
 		if err != nil {
 			return err
@@ -466,12 +482,12 @@ func research2KnowledgeQuery(evidencePrompt string) string {
 func buildPrompt(evidence Evidence, cutoff time.Time) string {
 	windowStart := evidence.WindowStartAt.In(shanghai())
 	if evidence.WindowStartAt.IsZero() {
-		windowStart = cutoff.Add(-5 * time.Minute)
+		windowStart = cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
 	}
 	return strings.Join([]string{
 		strategyPrompt,
 		"\n# 本次执行参数",
-		"- 策略版本：research2-trailing5-v3",
+		"- 策略版本：research2-trailing5-v4",
 		"- 核心证据窗口：[" + windowStart.Format("2006-01-02 15:04:05") + ", " + cutoff.Format("2006-01-02 15:04:05") + "] Asia/Shanghai",
 		"- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 模型结果最晚必须在当日11:30完成校验；是否晚于10:00只用于统计。",
@@ -782,6 +798,7 @@ func renderRunStatusReport(run AnalysisRun, message string) string {
 		"# 研究中心2 隔日强势筛选",
 		"",
 		"- 策略版本：" + run.StrategyVersion,
+		fmt.Sprintf("- 当日尝试：第%d次", normalizedAttemptNo(run.AttemptNo)),
 		"- 计划时间：" + formatResearch2Time(run.ScheduledFor),
 		"- 实际启动：" + formatResearch2Time(run.StartedAt),
 		"- 证据窗口：" + formatResearch2Time(windowStart) + " 至 " + formatResearch2Time(run.EvidenceCutoffAt),
@@ -820,6 +837,7 @@ func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput
 		"- 交易日：是",
 		fmt.Sprintf("- 推荐数量：%d", len(items)),
 		"- 策略版本：" + run.StrategyVersion,
+		fmt.Sprintf("- 当日尝试：第%d次", normalizedAttemptNo(run.AttemptNo)),
 		"- 计划时间：" + formatResearch2Time(run.ScheduledFor),
 		"- 实际启动：" + formatResearch2Time(run.StartedAt),
 		"- 核心证据窗口：" + formatResearch2Time(windowStart) + " 至 " + formatResearch2Time(run.EvidenceCutoffAt),
@@ -866,6 +884,13 @@ func formatResearch2Time(value time.Time) string {
 		return "--"
 	}
 	return value.In(shanghai()).Format("2006-01-02 15:04:05")
+}
+
+func normalizedAttemptNo(value int) int {
+	if value < 1 {
+		return 1
+	}
+	return value
 }
 
 func escapeMarkdownCell(value string) string {

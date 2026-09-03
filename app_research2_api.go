@@ -99,19 +99,14 @@ func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 	if local.Hour() < 9 || (local.Hour() == 9 && local.Minute() < 50) {
 		return
 	}
-	runtime, err := a.ensureResearch2Runtime(configID)
-	if err != nil {
-		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
-		return
-	}
 	tradeDay, err := data.ResearchTradingCalendar{}.IsTradingDay(a.ctx, local)
 	if err != nil || !tradeDay {
 		return
 	}
-	if _, exists, lookupErr := runtime.Repository.RunForDate(a.ctx, local.Format("2006-01-02")); lookupErr == nil && !exists {
-		scheduled := time.Date(local.Year(), local.Month(), local.Day(), 9, 50, 0, 0, research2Location())
-		a.runResearch2Analysis(scheduled)
-	}
+	// Runner atomically decides whether this is attempt 1, an eligible attempt
+	// 2 after failure, or a no-op returning the latest terminal run.
+	scheduled := time.Date(local.Year(), local.Month(), local.Day(), 9, 50, 0, 0, research2Location())
+	a.runResearch2Analysis(scheduled)
 	a.processResearch2Trades(local)
 }
 

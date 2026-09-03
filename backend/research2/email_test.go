@@ -41,7 +41,7 @@ func validEmailConfig() EmailConfig {
 func eligibleRun(status string) AnalysisRun {
 	loc := shanghai()
 	now := time.Date(2026, 8, 27, 9, 58, 0, 0, loc)
-	return AnalysisRun{RunID: "00000000-0000-0000-0000-000000000001", TradingDate: "2026-08-27", ScheduledFor: now.Add(-8 * time.Minute), EvidenceCutoffAt: now.Add(-3 * time.Minute), GeneratedAt: &now, Status: status, RecommendationCount: 2, ReportMarkdown: "# 研究中心2报告\n\n正文", FailureReason: "报告生成窗口已经结束"}
+	return AnalysisRun{RunID: "00000000-0000-0000-0000-000000000001", TradingDate: "2026-08-27", AttemptNo: 2, ScheduledFor: now.Add(-8 * time.Minute), EvidenceCutoffAt: now.Add(-3 * time.Minute), GeneratedAt: &now, Status: status, RecommendationCount: 2, ReportMarkdown: "# 研究中心2报告\n\n正文", FailureReason: "报告生成窗口已经结束"}
 }
 
 func TestEmailQueueEligibilityAndIdempotence(t *testing.T) {
@@ -165,7 +165,7 @@ func TestReportEmailContentForAllEligibleResults(t *testing.T) {
 	} {
 		t.Run(testCase.status, func(t *testing.T) {
 			subject, body := reportEmailContent(eligibleRun(testCase.status))
-			if !strings.Contains(subject, testCase.subjectPart) || !strings.Contains(body, testCase.bodyPart) {
+			if !strings.Contains(subject, testCase.subjectPart) || !strings.Contains(subject, "第2次尝试") || !strings.Contains(body, "当日尝试：第2次") || !strings.Contains(body, testCase.bodyPart) {
 				t.Fatalf("subject=%q body=%q", subject, body)
 			}
 		})

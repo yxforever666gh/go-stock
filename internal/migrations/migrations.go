@@ -269,6 +269,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV23Definition,
 		apply:       applyResearch2Trailing5Schema,
 	},
+	{
+		id: 24, name: "research2_analysis_attempts",
+		description: "Allows multiple immutable Research Center 2 analysis attempts per trading date while preserving every historical run as attempt 1.",
+		definition:  mainMigrationV24Definition,
+		apply:       applyResearch2AnalysisAttemptSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -871,6 +877,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 23 {
 		if err := verifyMainSchema23Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 24 {
+		if err := verifyMainSchema24Runtime(database); err != nil {
 			return result, err
 		}
 	}

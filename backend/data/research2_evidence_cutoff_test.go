@@ -9,6 +9,7 @@ import (
 
 	"go-stock/backend/marketdata"
 	"go-stock/backend/research"
+	"go-stock/backend/research2"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -106,6 +107,39 @@ func TestResearch2CollectFailureKeepsEvidenceLinkAndFreezesBatch(t *testing.T) {
 	}
 	if batch.Status != marketdata.StatusFrozen || batch.FrozenAt == nil {
 		t.Fatalf("failed collection left batch collecting: %+v", batch)
+	}
+}
+
+func TestResearch2CollectForRunCreatesBatchWithActualCutoff(t *testing.T) {
+	repository := research2EvidenceTestRepository(t)
+	startedAt := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
+	actualCutoff := startedAt.Add(4 * time.Second)
+	collector := &Research2EvidenceCollector{
+		evidence: repository, evidenceProfile: research2EvidenceProfileV4,
+		collectEvidence: func(context.Context, time.Time) (research2.Evidence, error) {
+			return research2.Evidence{CutoffAt: actualCutoff, Documents: []research.SourceDocument{{
+				SourceID: "market", SourceName: "市场快照", Category: "market", AvailableAt: &actualCutoff, CollectedAt: actualCutoff,
+			}}}, errors.New("auxiliary collection failed")
+		},
+	}
+
+	evidence, err := collector.CollectForRun(context.Background(), "run-actual-cutoff", startedAt)
+	if err == nil || !strings.Contains(err.Error(), "auxiliary collection failed") {
+		t.Fatalf("collection failure not retained: %v", err)
+	}
+	batch, err := repository.Batch(context.Background(), evidence.EvidenceSetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !evidence.CutoffAt.Equal(actualCutoff) || !batch.CutoffAt.Equal(actualCutoff) {
+		t.Fatalf("actual cutoff not persisted: evidence=%s batch=%s", evidence.CutoffAt, batch.CutoffAt)
+	}
+	if batch.EvidenceProfileVersion != research2EvidenceProfileV4 || batch.Status != marketdata.StatusFrozen {
+		t.Fatalf("unexpected frozen batch: %+v", batch)
+	}
+	items, err := repository.Items(context.Background(), evidence.EvidenceSetID)
+	if err != nil || len(items) != 1 || items[0].SourceID != "market" {
+		t.Fatalf("failure documents were not archived: items=%+v err=%v", items, err)
 	}
 }
 

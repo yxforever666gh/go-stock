@@ -10,7 +10,8 @@ const (
 type AnalysisRun struct {
 	ID                     uint       `json:"id" gorm:"primaryKey"`
 	RunID                  string     `json:"runId" gorm:"size:36;uniqueIndex;not null"`
-	TradingDate            string     `json:"tradingDate" gorm:"size:10;uniqueIndex;not null"`
+	TradingDate            string     `json:"tradingDate" gorm:"size:10;uniqueIndex:idx_research2_runs_date_attempt,priority:1;not null"`
+	AttemptNo              int        `json:"attemptNo" gorm:"not null;default:1;uniqueIndex:idx_research2_runs_date_attempt,priority:2"`
 	ScheduledFor           time.Time  `json:"scheduledFor" gorm:"index;not null"`
 	StartedAt              time.Time  `json:"startedAt" gorm:"index;not null"`
 	EvidenceWindowStartAt  *time.Time `json:"evidenceWindowStartAt" gorm:"column:evidence_window_start_at;index"`
@@ -43,6 +44,7 @@ func (AnalysisRun) TableName() string { return "research2_analysis_runs" }
 type AnalysisRunSummary struct {
 	RunID                  string     `json:"runId"`
 	TradingDate            string     `json:"tradingDate"`
+	AttemptNo              int        `json:"attemptNo"`
 	ScheduledFor           time.Time  `json:"scheduledFor"`
 	StartedAt              time.Time  `json:"startedAt"`
 	EvidenceWindowStartAt  *time.Time `json:"evidenceWindowStartAt"`

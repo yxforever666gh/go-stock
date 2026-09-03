@@ -28,6 +28,61 @@ func TestResearch2TransactionRetriesSQLiteBusy(t *testing.T) {
 	}
 }
 
+func TestCreateRunAttemptAllowsOnlyOneFailedRunRetry(t *testing.T) {
+	repository := research2TestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
+	newRun := func(id string) *AnalysisRun {
+		return &AnalysisRun{RunID: id, TradingDate: "2026-09-03", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	}
+
+	first, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
+	if err != nil || !created || first.AttemptNo != 1 {
+		t.Fatalf("first=%+v created=%v err=%v", first, created, err)
+	}
+	first.Status = "failed"
+	if err = repository.SaveRun(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+
+	second, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
+	if err != nil || !created || second.AttemptNo != 2 || second.RunID == first.RunID {
+		t.Fatalf("second=%+v created=%v err=%v", second, created, err)
+	}
+	second.Status = "failed"
+	if err = repository.SaveRun(ctx, &second); err != nil {
+		t.Fatal(err)
+	}
+
+	latest, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
+	if err != nil || created || latest.RunID != second.RunID {
+		t.Fatalf("latest=%+v created=%v err=%v", latest, created, err)
+	}
+	lookup, exists, err := repository.RunForDate(ctx, "2026-09-03")
+	if err != nil || !exists || lookup.RunID != second.RunID {
+		t.Fatalf("lookup=%+v exists=%v err=%v", lookup, exists, err)
+	}
+}
+
+func TestCreateRunAttemptDoesNotRetryFailedRunOutsideWindow(t *testing.T) {
+	repository := research2TestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
+	first := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-09-03", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, Status: "failed", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	stored, created, err := repository.CreateRunAttempt(ctx, &first, true)
+	if err != nil || !created {
+		t.Fatalf("stored=%+v created=%v err=%v", stored, created, err)
+	}
+	if err = repository.SaveRun(ctx, &first); err != nil {
+		t.Fatal(err)
+	}
+	candidate := AnalysisRun{RunID: uuid.NewString(), TradingDate: first.TradingDate, ScheduledFor: now, StartedAt: now.Add(2 * time.Hour), EvidenceCutoffAt: now.Add(2 * time.Hour), Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	latest, created, err := repository.CreateRunAttempt(ctx, &candidate, false)
+	if err != nil || created || latest.RunID != first.RunID || latest.AttemptNo != 1 {
+		t.Fatalf("latest=%+v created=%v err=%v", latest, created, err)
+	}
+}
+
 func TestFinalizeRunRollsBackRunWhenRecommendationsFail(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 8, 27, 10, 0, 0, 0, shanghai())

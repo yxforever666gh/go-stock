@@ -161,13 +161,18 @@ func reportEmailContent(run AnalysisRun) (string, string) {
 	} else if run.Status == "missed_window" {
 		suffix = "错过交易窗口"
 	}
-	subject := fmt.Sprintf("[go-stock][研究中心2] %s %s", run.TradingDate, suffix)
+	attemptNo := normalizedAttemptNo(run.AttemptNo)
+	subject := fmt.Sprintf("[go-stock][研究中心2] %s 第%d次尝试 %s", run.TradingDate, attemptNo, suffix)
 	body := strings.TrimSpace(run.ReportMarkdown)
+	attemptLine := fmt.Sprintf("当日尝试：第%d次", attemptNo)
+	if body != "" && !strings.Contains(body, attemptLine) {
+		body = attemptLine + "\n\n" + body
+	}
 	if run.Status == "missed_window" || body == "" {
 		startDeadline := time.Date(run.ScheduledFor.Year(), run.ScheduledFor.Month(), run.ScheduledFor.Day(), 11, 25, 59, 0, shanghai())
 		modelDeadline := time.Date(run.ScheduledFor.Year(), run.ScheduledFor.Month(), run.ScheduledFor.Day(), 11, 30, 0, 0, shanghai())
-		body = fmt.Sprintf("研究中心2分析结果\n\n交易日：%s\n计划开始：%s\n证据截止：%s\n任务启动窗口截止：%s\n模型结果硬截止：%s\n状态：%s\n说明：%s",
-			run.TradingDate, run.ScheduledFor.In(shanghai()).Format("2006-01-02 15:04:05"),
+		body = fmt.Sprintf("研究中心2分析结果\n\n交易日：%s\n当日尝试：第%d次\n计划开始：%s\n证据截止：%s\n任务启动窗口截止：%s\n模型结果硬截止：%s\n状态：%s\n说明：%s",
+			run.TradingDate, attemptNo, run.ScheduledFor.In(shanghai()).Format("2006-01-02 15:04:05"),
 			run.EvidenceCutoffAt.In(shanghai()).Format("2006-01-02 15:04:05"), startDeadline.Format("2006-01-02 15:04:05"), modelDeadline.Format("2006-01-02 15:04:05"),
 			run.Status, strings.TrimSpace(run.FailureReason))
 	}

@@ -21,10 +21,11 @@ import (
 )
 
 const (
-	research2EvidenceProfileV3 = "research2-trailing5-v3"
+	research2EvidenceProfileV4 = "research2-trailing5-v4"
 	research2MinimumCoverage   = 0.95
 	research2MinimumMinuteBars = 4
 	research2QuoteFreshness    = 3 * time.Minute
+	research2QuoteFutureSkew   = 5 * time.Second
 )
 
 type research2FullMarketSnapshot struct {
@@ -853,37 +854,33 @@ func research2ListingDates(ctx context.Context, database *gorm.DB) map[string]in
 	return result
 }
 
-func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, cutoff time.Time) (research2.Evidence, error) {
+func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, startedAt time.Time) (research2.Evidence, error) {
 	if c == nil || c.sources == nil || c.stocks == nil || c.minuteWindows == nil || c.evidence == nil ||
 		(c.market == nil && (c.collectBreadth == nil || c.collectFlows == nil)) {
-		return research2.Evidence{}, errors.New("research2 evidence collector is unavailable")
+		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collector is unavailable")
 	}
-	cutoff = cutoff.In(shanghaiDataLocation())
-	deadline := time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 11, 30, 0, 0, cutoff.Location())
+	startedAt = startedAt.In(shanghaiDataLocation())
+	deadline := time.Date(startedAt.Year(), startedAt.Month(), startedAt.Day(), 11, 30, 0, 0, startedAt.Location())
 	remaining := deadline.Sub(c.research2Now())
 	if remaining <= 0 {
-		return research2.Evidence{}, errors.New("research2 evidence collection deadline 11:30 has passed")
+		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collection deadline 11:30 has passed")
 	}
 	collectionCtx, cancelCollection := context.WithTimeout(ctx, remaining)
 	defer cancelCollection()
-	// Only closed minute buckets are admissible. For 10:14:23 this is
-	// [10:09,10:14), i.e. the five complete buckets 10:09..10:13.
-	windowEnd := cutoff.Truncate(time.Minute)
-	windowStart := windowEnd.Add(-5 * time.Minute)
 	fetch := c.fetchSnapshot
 	if fetch == nil {
 		fetch = c.fetchResearch2FullMarketSnapshot
 	}
 	marketCtx, cancelMarket := context.WithTimeout(collectionCtx, 25*time.Second)
-	marketSnapshot, marketErr := fetch(marketCtx, cutoff)
+	marketSnapshot, marketErr := fetch(marketCtx, startedAt)
 	cancelMarket()
 	if marketErr != nil {
 		document := research.SourceDocument{SourceID: "research2:market:full", SourceName: "全市场候选快照", Category: "market",
 			CollectedAt: c.research2Now(), Error: marketErr.Error()}
-		return research2.Evidence{WindowStartAt: windowStart, Documents: []research.SourceDocument{document}, Degraded: true,
+		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), Documents: []research.SourceDocument{document}, Degraded: true,
 			DegradedReasons: []string{"full_market_unavailable"}}, fmt.Errorf("全市场列表不可用: %w", marketErr)
 	}
-	marketSnapshot.Rows = research2RowsAtOrBefore(marketSnapshot.Rows, cutoff)
+	marketSnapshot.Rows = research2RowsTrustedAtCollection(marketSnapshot.Rows, marketSnapshot.CollectedAt)
 	marketSnapshot.AsOf = research2RowsAsOf(marketSnapshot.Rows)
 	observed := len(marketSnapshot.Rows)
 	coverage := 0.0
@@ -892,10 +889,16 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 	}
 	if coverage < research2MinimumCoverage && marketSnapshot.SourceID != "research2:market:tencent" {
 		fallbackCtx, cancelFallback := context.WithTimeout(collectionCtx, 25*time.Second)
-		fallback, fallbackErr := research2TencentRows(fallbackCtx, c.market)
+		fetchFallback := c.fetchFallback
+		if fetchFallback == nil {
+			fetchFallback = func(ctx context.Context) (research2FullMarketSnapshot, error) {
+				return research2TencentRows(ctx, c.market)
+			}
+		}
+		fallback, fallbackErr := fetchFallback(fallbackCtx)
 		cancelFallback()
 		if fallbackErr == nil {
-			fallback.Rows = research2RowsAtOrBefore(fallback.Rows, cutoff)
+			fallback.Rows = research2RowsTrustedAtCollection(fallback.Rows, fallback.CollectedAt)
 			fallback.AsOf = research2RowsAsOf(fallback.Rows)
 			fallbackObserved := len(fallback.Rows)
 			fallbackCoverage := 0.0
@@ -907,15 +910,18 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 			}
 		}
 	}
-	availableAt := marketSnapshot.AsOf
-	if availableAt.IsZero() || availableAt.After(cutoff) {
+	cutoff := marketSnapshot.AsOf
+	windowEnd := cutoff.Truncate(time.Minute)
+	windowStart := windowEnd.Add(-5 * time.Minute)
+	availableAt := cutoff
+	if availableAt.IsZero() {
 		detail := "全市场快照缺少可验证的截止时点"
 		if marketSnapshot.Reported <= 0 {
 			detail += "，且来源未提供可信总数"
 		}
 		document := research.SourceDocument{SourceID: "research2:market:full", SourceName: marketSnapshot.SourceName, SourceRef: marketSnapshot.SourceRef,
 			Category: "market", CollectedAt: marketSnapshot.CollectedAt, Error: detail}
-		return research2.Evidence{WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: []research.SourceDocument{document},
+		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), CoveragePct: coverage * 100, Documents: []research.SourceDocument{document},
 			Degraded: true, DegradedReasons: []string{"full_market_time_unverifiable"}}, errors.New(detail)
 	}
 	fullMarketPayload, _ := json.Marshal(map[string]any{
@@ -926,7 +932,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		Category: "market", CollectedAt: marketSnapshot.CollectedAt, AvailableAt: &availableAt, Content: string(fullMarketPayload)}
 	if coverage < research2MinimumCoverage {
 		fullMarketDocument.Error = fmt.Sprintf("全市场覆盖率 %.2f%% 低于95%%（%d/%d）", coverage*100, observed, marketSnapshot.Reported)
-		return research2.Evidence{WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: []research.SourceDocument{fullMarketDocument},
+		return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: []research.SourceDocument{fullMarketDocument},
 			Degraded: true, DegradedReasons: []string{"market_coverage_below_95pct"}}, errors.New(fullMarketDocument.Error)
 	}
 
@@ -995,7 +1001,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		select {
 		case result = <-documentResults:
 		case <-collectionCtx.Done():
-			return research2.Evidence{WindowStartAt: windowStart, CoveragePct: coverage * 100, Degraded: true,
+			return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: documents, Degraded: true,
 				DegradedReasons: []string{"evidence_collection_deadline"}}, collectionCtx.Err()
 		}
 		if result.err != nil {
@@ -1015,7 +1021,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		select {
 		case result = <-envelopeResults:
 		case <-collectionCtx.Done():
-			return research2.Evidence{WindowStartAt: windowStart, CoveragePct: coverage * 100, Degraded: true,
+			return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: documents, Degraded: true,
 				DegradedReasons: []string{"market_evidence_deadline"}}, collectionCtx.Err()
 		}
 		switch result.kind {
@@ -1115,20 +1121,21 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}
-	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV3, WindowStartAt: windowStart, CutoffAt: cutoff,
+	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV4, WindowStartAt: windowStart, CutoffAt: cutoff,
 		Market: compactMarket, Candidates: compactCandidates, Sources: compactSources, Degraded: len(degradedReasons) > 0, DegradedReasons: degradedReasons}
 	compactPayload, marshalErr := json.Marshal(compactSnapshot)
 	if marshalErr != nil {
-		return research2.Evidence{}, marshalErr
+		return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: frozenDocuments, Degraded: true,
+			DegradedReasons: append(degradedReasons, "compact_snapshot_marshal_failed")}, marshalErr
 	}
-	compactDocument := research.SourceDocument{SourceID: "research2:compact:v3", SourceName: "研究中心2紧凑结构化快照", Category: "snapshot",
+	compactDocument := research.SourceDocument{SourceID: "research2:compact:v4", SourceName: "研究中心2紧凑结构化快照", Category: "snapshot",
 		CollectedAt: c.research2Now(), AvailableAt: &cutoff, Content: string(compactPayload)}
 	frozenDocuments = append([]research.SourceDocument{compactDocument}, frozenDocuments...)
 	statuses = append([]map[string]any{{"sourceId": compactDocument.SourceID, "sourceName": compactDocument.SourceName, "category": compactDocument.Category,
 		"availableAt": cutoff, "collectedAt": compactDocument.CollectedAt, "status": marketdata.StatusOK}}, statuses...)
 	statusJSON, _ := json.Marshal(statuses)
 	return research2.Evidence{Prompt: string(compactPayload), SourceStatusJSON: string(statusJSON), Candidates: eligibleCandidates,
-		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV3, WindowStartAt: windowStart,
+		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV4, CutoffAt: cutoff, WindowStartAt: windowStart,
 		CoveragePct: compactMarket.CoveragePct, Degraded: compactSnapshot.Degraded, DegradedReasons: degradedReasons,
 		CandidateReferencePrices: referencePrices}, nil
 }
@@ -1140,21 +1147,12 @@ func (c *Research2EvidenceCollector) research2Now() time.Time {
 	return time.Now().In(shanghaiDataLocation())
 }
 
-func (c *Research2EvidenceCollector) fetchResearch2FullMarketSnapshot(ctx context.Context, cutoff time.Time) (research2FullMarketSnapshot, error) {
+func (c *Research2EvidenceCollector) fetchResearch2FullMarketSnapshot(ctx context.Context, _ time.Time) (research2FullMarketSnapshot, error) {
 	rows, reported, err := c.fetchFullMarketWithReported(ctx)
 	if err == nil && len(rows) > 0 {
-		asOf := time.Time{}
-		for _, row := range rows {
-			if row.Timestamp <= 0 {
-				continue
-			}
-			at := time.Unix(row.Timestamp, 0).In(shanghaiDataLocation())
-			if !at.After(cutoff) && at.After(asOf) {
-				asOf = at
-			}
-		}
+		collectedAt := c.research2Now()
 		return research2FullMarketSnapshot{Rows: rows, Reported: reported, SourceID: "research2:market:eastmoney", SourceName: "东方财富全市场快照",
-			SourceRef: "eastmoney:full-market", AsOf: asOf, CollectedAt: c.research2Now()}, nil
+			SourceRef: "eastmoney:full-market", CollectedAt: collectedAt}, nil
 	}
 	fallback, fallbackErr := research2TencentRows(ctx, c.market)
 	if fallbackErr == nil {
@@ -1163,7 +1161,11 @@ func (c *Research2EvidenceCollector) fetchResearch2FullMarketSnapshot(ctx contex
 	return research2FullMarketSnapshot{}, errors.Join(err, fmt.Errorf("tencent fallback: %w", fallbackErr))
 }
 
-func research2RowsAtOrBefore(rows []research2MarketRow, cutoff time.Time) []research2MarketRow {
+func research2RowsTrustedAtCollection(rows []research2MarketRow, collectedAt time.Time) []research2MarketRow {
+	if collectedAt.IsZero() {
+		return nil
+	}
+	latestTrusted := collectedAt.In(shanghaiDataLocation()).Add(research2QuoteFutureSkew)
 	seen := make(map[string]struct{}, len(rows))
 	result := make([]research2MarketRow, 0, len(rows))
 	for _, row := range rows {
@@ -1171,7 +1173,7 @@ func research2RowsAtOrBefore(rows []research2MarketRow, cutoff time.Time) []rese
 		if code == "" || row.Price <= 0 || row.Timestamp <= 0 {
 			continue
 		}
-		if time.Unix(row.Timestamp, 0).In(shanghaiDataLocation()).After(cutoff) {
+		if time.Unix(row.Timestamp, 0).In(shanghaiDataLocation()).After(latestTrusted) {
 			continue
 		}
 		if _, exists := seen[code]; exists {

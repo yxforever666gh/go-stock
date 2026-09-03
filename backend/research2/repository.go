@@ -68,6 +68,48 @@ func (r *Repository) CreateRun(ctx context.Context, run *AnalysisRun) error {
 		return tx.Create(run).Error
 	})
 }
+
+// CreateRunAttempt atomically claims the next analysis attempt for a trading
+// date. The database composite unique key is the final guard against multiple
+// scheduler instances creating the same attempt.
+func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, allowRetry bool) (AnalysisRun, bool, error) {
+	if run == nil {
+		return AnalysisRun{}, false, errors.New("research2 analysis run is required")
+	}
+	var selected AnalysisRun
+	created := false
+	err := research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		selected = AnalysisRun{}
+		created = false
+		var latest AnalysisRun
+		err := tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&latest).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			run.AttemptNo = 1
+		case err != nil:
+			return err
+		case latest.Status != "failed" || latest.AttemptNo >= 2 || !allowRetry:
+			selected = latest
+			return nil
+		default:
+			run.AttemptNo = latest.AttemptNo + 1
+		}
+
+		result := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "trading_date"}, {Name: "attempt_no"}},
+			DoNothing: true,
+		}).Create(run)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 1 {
+			selected, created = *run, true
+			return nil
+		}
+		return tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&selected).Error
+	})
+	return selected, created, err
+}
 func (r *Repository) SaveRun(ctx context.Context, run *AnalysisRun) error {
 	if run == nil {
 		return errors.New("research2 analysis run is required")
@@ -78,7 +120,7 @@ func (r *Repository) SaveRun(ctx context.Context, run *AnalysisRun) error {
 }
 func (r *Repository) RunForDate(ctx context.Context, tradingDate string) (AnalysisRun, bool, error) {
 	var item AnalysisRun
-	err := r.db.WithContext(ctx).Where("trading_date = ?", tradingDate).First(&item).Error
+	err := r.db.WithContext(ctx).Where("trading_date = ?", tradingDate).Order("attempt_no DESC, id DESC").First(&item).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return AnalysisRun{}, false, nil
 	}
@@ -132,7 +174,7 @@ func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]Analysi
 	items := make([]AnalysisRunSummary, 0, len(rows))
 	for _, row := range rows {
 		delivery := deliveries[row.RunID]
-		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError})
+		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, AttemptNo: row.AttemptNo, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError})
 	}
 	return items, nil
 }

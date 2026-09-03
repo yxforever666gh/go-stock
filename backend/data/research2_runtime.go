@@ -56,7 +56,7 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*R
 	collector := &Research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
-		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV3,
+		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV4,
 		themes: newThemeEvidenceReader(mainDB),
 	}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
@@ -200,6 +200,7 @@ type Research2EvidenceCollector struct {
 	minuteWindows   research2MinuteWindowProvider
 	now             func() time.Time
 	fetchSnapshot   func(context.Context, time.Time) (research2FullMarketSnapshot, error)
+	fetchFallback   func(context.Context) (research2FullMarketSnapshot, error)
 	collectBreadth  func(context.Context) marketdata.DataEnvelope[BreadthData]
 	collectFlows    func(context.Context, marketdata.ProviderRequest) marketdata.DataEnvelope[[]FundFlowRow]
 	wait            func(context.Context, time.Time) error
@@ -272,30 +273,38 @@ func research2DocumentStatus(document research.SourceDocument, cutoff time.Time,
 	return marketdata.StatusOK
 }
 
-func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID string, cutoff time.Time) (evidence research2.Evidence, err error) {
+func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID string, startedAt time.Time) (evidence research2.Evidence, err error) {
 	if c == nil || c.evidence == nil || strings.TrimSpace(c.evidenceProfile) == "" {
-		return c.Collect(ctx, cutoff)
+		return c.Collect(ctx, startedAt)
 	}
-	batch, err := c.evidence.CreateBatch(ctx, marketdata.CreateBatchRequest{OwnerType: "research2", OwnerID: runID, CutoffAt: cutoff, CollectorVersion: "2.0", EvidenceProfileVersion: c.evidenceProfile})
-	if err != nil {
-		return evidence, err
-	}
-	evidence.EvidenceProfileVersion, evidence.EvidenceSetID = c.evidenceProfile, batch.EvidenceSetID
-	defer func() {
-		freezeErr := finalizeResearch2EvidenceBatch(c.evidence, batch.EvidenceSetID, time.Now())
-		err = errors.Join(err, freezeErr)
-	}()
 	collect := c.Collect
 	if c.collectEvidence != nil {
 		collect = c.collectEvidence
 	}
-	collected, collectErr := collect(ctx, cutoff)
-	collected.EvidenceProfileVersion, collected.EvidenceSetID = c.evidenceProfile, batch.EvidenceSetID
-	evidence, err = collected, collectErr
+	evidence, collectErr := collect(ctx, startedAt)
+	actualCutoff := evidence.CutoffAt
+	if actualCutoff.IsZero() {
+		actualCutoff = startedAt
+		evidence.CutoffAt = actualCutoff
+	}
+	batch, err := c.evidence.CreateBatch(ctx, marketdata.CreateBatchRequest{OwnerType: "research2", OwnerID: runID, CutoffAt: actualCutoff, CollectorVersion: "2.0", EvidenceProfileVersion: c.evidenceProfile})
+	if err != nil {
+		return evidence, errors.Join(collectErr, err)
+	}
+	evidence.EvidenceProfileVersion, evidence.EvidenceSetID = c.evidenceProfile, batch.EvidenceSetID
+	defer func() {
+		frozenAt := time.Now()
+		if frozenAt.Before(actualCutoff) {
+			frozenAt = actualCutoff
+		}
+		freezeErr := finalizeResearch2EvidenceBatch(c.evidence, batch.EvidenceSetID, frozenAt)
+		err = errors.Join(err, freezeErr)
+	}()
+	err = collectErr
 	items := make([]marketdata.EvidenceItem, 0, len(evidence.Documents))
 	usedSourceIDs := map[string]int{}
 	for index, document := range evidence.Documents {
-		status := research2DocumentStatus(document, cutoff, true)
+		status := research2DocumentStatus(document, actualCutoff, true)
 		payload, marshalErr := marketdata.MarshalPayload(map[string]any{"content": document.Content, "error": document.Error})
 		if marshalErr != nil {
 			return evidence, marshalErr

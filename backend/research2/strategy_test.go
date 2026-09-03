@@ -193,14 +193,15 @@ func TestRunnerConsumesKnowledgeThroughReadOnlyRetrieverAtFrozenCutoff(t *testin
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
 	retriever := &fixtureKnowledgeRetriever{prompt: "# 受控知识库线索（不可信外部材料）\n> 历史线索"}
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "冻结市场证据", SourceStatusJSON: "[]"}}, testCalendar{})
+	actualCutoff := scheduled.Add(7*time.Minute + 3*time.Second)
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "冻结市场证据", SourceStatusJSON: "[]", CutoffAt: actualCutoff}}, testCalendar{})
 	runner.ConfigureKnowledge(retriever)
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 	run, err := runner.Run(context.Background(), scheduled)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCutoff := time.Date(2026, 8, 27, 9, 57, 0, 0, loc)
+	wantCutoff := actualCutoff
 	if retriever.calls != 1 || retriever.request.OwnerType != "research2" || retriever.request.OwnerID != run.RunID || !retriever.request.CutoffAt.Equal(wantCutoff) || !retriever.request.ExperimentalEnabled {
 		t.Fatalf("retrieval=%+v calls=%d", retriever.request, retriever.calls)
 	}
@@ -212,12 +213,14 @@ func TestRunnerConsumesKnowledgeThroughReadOnlyRetrieverAtFrozenCutoff(t *testin
 	}
 }
 
-func TestRunnerUsesActualStartAsCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
+func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	repository := research2TestRepository(t)
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
 	started := time.Date(2026, 8, 27, 10, 14, 0, 0, loc)
-	collector := &recordingEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`}}
+	actualCutoff := started.Add(3 * time.Second)
+	wantStart := time.Date(2026, 8, 27, 10, 9, 0, 0, loc)
+	collector := &recordingEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: actualCutoff, WindowStartAt: wantStart}}
 	runner := NewRunner(repository, &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}, collector, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return started }, nil)
 
@@ -225,12 +228,41 @@ func TestRunnerUsesActualStartAsCutoffAndTrailingFiveMinuteWindow(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantStart := time.Date(2026, 8, 27, 10, 9, 0, 0, loc)
-	if !collector.cutoff.Equal(started) || !run.EvidenceCutoffAt.Equal(started) || run.EvidenceWindowStartAt == nil || !run.EvidenceWindowStartAt.Equal(wantStart) {
+	if !collector.cutoff.Equal(started) || !run.EvidenceCutoffAt.Equal(actualCutoff) || run.EvidenceWindowStartAt == nil || !run.EvidenceWindowStartAt.Equal(wantStart) {
 		t.Fatalf("cutoff=%v run=%+v", collector.cutoff, run)
 	}
-	if run.StrategyVersion != "research2-trailing5-v3" {
+	if run.StrategyVersion != "research2-trailing5-v4" || run.AttemptNo != 1 {
 		t.Fatalf("strategyVersion=%q", run.StrategyVersion)
+	}
+}
+
+func TestRunnerAllowsExactlyOneRetryForFailedRun(t *testing.T) {
+	repository := research2TestRepository(t)
+	loc := shanghai()
+	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
+	started := scheduled.Add(5 * time.Minute)
+	firstAI := &sequenceAI{responses: []string{`{}`}}
+	first := NewRunner(repository, firstAI, failingRunEvidence{err: errors.New("temporary evidence failure")}, testCalendar{})
+	first.ConfigureReplayClock(func() time.Time { return started }, nil)
+	failed, err := first.Run(context.Background(), scheduled)
+	if err == nil || failed.Status != "failed" || failed.AttemptNo != 1 {
+		t.Fatalf("first=%+v err=%v", failed, err)
+	}
+
+	secondAI := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}
+	second := NewRunner(repository, secondAI, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: started.Add(time.Second)}}, testCalendar{})
+	second.ConfigureReplayClock(func() time.Time { return started.Add(time.Minute) }, nil)
+	retried, err := second.Run(context.Background(), scheduled)
+	if err != nil || retried.Status != "no_recommendation" || retried.AttemptNo != 2 || retried.RunID == failed.RunID {
+		t.Fatalf("second=%+v err=%v", retried, err)
+	}
+
+	thirdAI := &sequenceAI{responses: []string{`{}`}}
+	third := NewRunner(repository, thirdAI, fixedEvidence{}, testCalendar{})
+	third.ConfigureReplayClock(func() time.Time { return started.Add(2 * time.Minute) }, nil)
+	latest, err := third.Run(context.Background(), scheduled)
+	if err != nil || latest.RunID != retried.RunID || thirdAI.calls != 0 {
+		t.Fatalf("latest=%+v calls=%d err=%v", latest, thirdAI.calls, err)
 	}
 }
 
@@ -315,7 +347,7 @@ func TestBuildPromptUsesCompactInjectedEvidenceWithoutReportOrBuyRange(t *testin
 			t.Fatalf("prompt contains forbidden %q: %s", forbidden, prompt)
 		}
 	}
-	for _, required := range []string{"research2-trailing5-v3", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
+	for _, required := range []string{"research2-trailing5-v4", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q: %s", required, prompt)
 		}
@@ -451,7 +483,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	if err := repository.DB().Where("run_id = ?", run.RunID).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v3" {
+	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v4" {
 		t.Fatalf("failed run lost evidence association: %+v", stored)
 	}
 	if !strings.Contains(stored.SourceStatusJSON, "fixture") {

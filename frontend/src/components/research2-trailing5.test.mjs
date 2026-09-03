@@ -8,12 +8,13 @@ const yieldView = await readFile(new URL('./research2Yield.vue', import.meta.url
 const settings = await readFile(new URL('./settings.vue', import.meta.url), 'utf8')
 const generated = await readFile(new URL('../services/api-types.generated.ts', import.meta.url), 'utf8')
 
-test('research2 report exposes trailing-five evidence timing and quality', () => {
-  for (const token of ['scheduledFor', 'startedAt', 'evidenceWindowStartAt', 'evidenceCutoffAt', 'generatedAt', 'evidenceCoveragePct', 'degraded']) {
+test('research2 report exposes trailing-five evidence timing, attempt and quality', () => {
+  for (const token of ['attemptNo', 'scheduledFor', 'startedAt', 'evidenceWindowStartAt', 'evidenceCutoffAt', 'generatedAt', 'evidenceCoveragePct', 'degraded']) {
     assert.match(report, new RegExp(token))
     assert.match(generated, new RegExp(token))
   }
   assert.match(report, /实际启动前5个已闭合交易分钟/)
+  assert.match(report, /分析批次/)
   assert.doesNotMatch(report, /09:55 冻结证据/)
   assert.match(settings, /实际启动前5个已闭合交易分钟/)
   assert.doesNotMatch(settings, /09:55 冻结数据/)
