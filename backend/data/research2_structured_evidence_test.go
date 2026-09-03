@@ -60,6 +60,29 @@ func (f research2MinuteFixture) Window(_ context.Context, code string, start, en
 	return result, "tencent", nil
 }
 
+type research2LateAuxiliaryFixture struct {
+	snapshotAt time.Time
+	freezeAt   time.Time
+}
+
+func (f research2LateAuxiliaryFixture) CollectMarket(context.Context, time.Time) ([]research.SourceDocument, error) {
+	collectedAt := f.freezeAt.Add(-time.Second)
+	availableAt := collectedAt
+	return []research.SourceDocument{
+		{SourceID: "research2:test:late-aux", SourceName: "快照后完成的辅助资料", Category: "market", CollectedAt: collectedAt, AvailableAt: &availableAt, Content: `{"items":[{"name":"辅助信息"}]}`},
+		{SourceID: "research2:test:future-event", SourceName: "真正晚于行情锚点的事件", Category: "market", CollectedAt: collectedAt, AvailableAt: &availableAt,
+			Content: fmt.Sprintf(`[{"title":"未来事件","publishedAt":"%s"}]`, f.snapshotAt.Add(time.Second).Format(time.RFC3339))},
+	}, nil
+}
+
+func (research2LateAuxiliaryFixture) CollectSectors(context.Context, time.Time) ([]research.SourceDocument, error) {
+	return nil, nil
+}
+
+func (research2LateAuxiliaryFixture) CollectStocks(context.Context, time.Time, []research.StockCandidate) ([]research.SourceDocument, error) {
+	return nil, nil
+}
+
 func research2StructuredRows(cutoff time.Time, count int) []research2MarketRow {
 	rows := make([]research2MarketRow, 0, count)
 	for index := 0; index < count; index++ {
@@ -91,7 +114,7 @@ func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []rese
 	sources := &research2StructuredSourceFixture{cutoff: cutoff}
 	return &Research2EvidenceCollector{
 		sources: sources, stocks: &StockDataApi{}, minuteWindows: research2MinuteFixture{count: minuteCount},
-		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV5,
+		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV6,
 		now: func() time.Time { return cutoff.Add(5 * time.Second) },
 		fetchSnapshot: func(context.Context, time.Time) (research2FullMarketSnapshot, error) {
 			return research2FullMarketSnapshot{Rows: rows, Reported: reported, SourceID: "fixture-market", SourceName: "测试全市场",
@@ -151,6 +174,89 @@ func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testin
 	}
 	if !foundArchived {
 		t.Fatal("full evidence archive omitted filtered stock documents")
+	}
+}
+
+func TestResearch2StructuredEvidenceUsesLastFiveMorningMinutesDuringLunch(t *testing.T) {
+	startedAt := time.Date(2026, 9, 3, 12, 28, 0, 0, shanghaiDataLocation())
+	snapshotAt := time.Date(2026, 9, 3, 11, 30, 0, 0, shanghaiDataLocation())
+	rows := research2StructuredRows(snapshotAt, 20)
+	collector := newResearch2StructuredCollector(t, snapshotAt, rows, 20, 5)
+	collector.now = func() time.Time { return startedAt.Add(5 * time.Second) }
+	collector.fetchSnapshot = func(context.Context, time.Time) (research2FullMarketSnapshot, error) {
+		return research2FullMarketSnapshot{Rows: rows, Reported: 20, SourceID: "fixture-market", SourceName: "午休全市场",
+			SourceRef: "fixture-market", AsOf: snapshotAt, CollectedAt: startedAt.Add(time.Second)}, nil
+	}
+
+	evidence, err := collector.Collect(context.Background(), startedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantStart := time.Date(2026, 9, 3, 11, 25, 0, 0, shanghaiDataLocation())
+	if !evidence.WindowStartAt.Equal(wantStart) || len(evidence.Candidates) != 12 {
+		t.Fatalf("lunch evidence window/candidates mismatch: start=%s candidates=%d", evidence.WindowStartAt, len(evidence.Candidates))
+	}
+	var compact research2CompactSnapshot
+	if err = json.Unmarshal([]byte(evidence.Prompt), &compact); err != nil {
+		t.Fatal(err)
+	}
+	if len(compact.Candidates) != 12 {
+		t.Fatalf("compact lunch candidates=%d", len(compact.Candidates))
+	}
+	wantEnd := time.Date(2026, 9, 3, 11, 30, 0, 0, shanghaiDataLocation())
+	if !compact.WindowStartAt.Equal(wantStart) || !compact.WindowEndAt.Equal(wantEnd) {
+		t.Fatalf("compact lunch window=%s..%s", compact.WindowStartAt, compact.WindowEndAt)
+	}
+	for _, candidate := range compact.Candidates {
+		if !candidate.CoreEligible || candidate.MinuteBarCount < 4 || candidate.MinuteBarCount > 5 {
+			t.Fatalf("lunch candidate lacks eligible 4/5-minute window: %+v", candidate)
+		}
+	}
+}
+
+func TestResearch2StructuredEvidenceSeparatesFreezeTimeFromSnapshotAsOf(t *testing.T) {
+	snapshotAt := time.Date(2026, 9, 3, 10, 14, 0, 0, shanghaiDataLocation())
+	freezeAt := snapshotAt.Add(5 * time.Second)
+	collector := newResearch2StructuredCollector(t, snapshotAt, research2StructuredRows(snapshotAt, 20), 20, 5)
+	collector.sources = research2LateAuxiliaryFixture{snapshotAt: snapshotAt, freezeAt: freezeAt}
+	collector.now = func() time.Time { return freezeAt }
+
+	evidence, err := collector.Collect(context.Background(), snapshotAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statuses []struct {
+		SourceID string `json:"sourceId"`
+		Status   string `json:"status"`
+	}
+	if err = json.Unmarshal([]byte(evidence.SourceStatusJSON), &statuses); err != nil {
+		t.Fatal(err)
+	}
+	var compact research2CompactSnapshot
+	if err = json.Unmarshal([]byte(evidence.Prompt), &compact); err != nil {
+		t.Fatal(err)
+	}
+	if !compact.CutoffAt.Equal(snapshotAt) || !compact.FreezeAt.Equal(freezeAt) {
+		t.Fatalf("snapshot/freeze anchors collapsed: snapshot=%s freeze=%s", compact.CutoffAt, compact.FreezeAt)
+	}
+	statusByID := make(map[string]string, len(statuses))
+	for _, status := range statuses {
+		statusByID[status.SourceID] = status.Status
+	}
+	if got := statusByID["research2:test:late-aux"]; got == "" || got == marketdata.StatusAfterCutoff || got == marketdata.StatusUnavailable || got == marketdata.StatusFailed {
+		t.Fatalf("late auxiliary collection was not usable before freeze: status=%q statuses=%s", got, evidence.SourceStatusJSON)
+	}
+	for _, document := range evidence.Documents {
+		switch document.SourceID {
+		case "research2:test:late-aux":
+			if !strings.Contains(document.Content, "辅助信息") || document.Error != "" {
+				t.Fatalf("usable post-snapshot auxiliary document was removed: %+v", document)
+			}
+		case "research2:test:future-event":
+			if strings.Contains(document.Content, "未来事件") {
+				t.Fatalf("event after snapshot anchor entered evidence: %+v", document)
+			}
+		}
 	}
 }
 

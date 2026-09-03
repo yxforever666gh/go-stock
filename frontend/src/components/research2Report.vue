@@ -12,7 +12,8 @@ const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') :
 const coverage = value => value !== null && value !== undefined && Number.isFinite(Number(value)) ? `${Number(value).toFixed(1)}%` : '--'
 const qualityLabel = value => value === null || value === undefined ? '未记录' : value ? '降级' : '完整'
 const qualityType = value => value === null || value === undefined ? 'default' : value ? 'warning' : 'success'
-const degradedReason = run => run?.degraded === null || run?.degraded === undefined ? '历史运行未记录证据质量' : run.degraded ? (run.failureReason || '辅助证据不完整，详见报告与证据审计') : '无'
+const degradedReason = run => run?.degraded === null || run?.degraded === undefined ? '历史运行未记录证据质量' : run.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
+const shortFailureReason = value => { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > 160 ? `${text.slice(0, 160)}…（完整信息见审计）` : text || '--' }
 const type = status => status === 'success' ? 'success' : status === 'failed' ? 'error' : status === 'running' ? 'warning' : 'info'
 async function show(row) { visible.value = true; detail.value = null; try { detail.value = await GetResearch2Run(row.runId) } catch (error) { message.error(error?.message || String(error)) } }
 const columns = [
@@ -30,7 +31,7 @@ const columns = [
   {title: '模型', key: 'modelName', minWidth: 180, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
   {title: '推荐数', key: 'recommendationCount', width: 90},
   {title: '邮件', key: 'emailDeliveryStatus', width: 110, render: row => h(NTag, {type: row.emailDeliveryStatus === 'sent' ? 'success' : row.emailDeliveryStatus === 'failed' ? 'error' : 'info', bordered: false}, {default: () => emailLabels[row.emailDeliveryStatus] || '未排队'})},
-  {title: '说明', key: 'failureReason', minWidth: 220, ellipsis: {tooltip: true}, render: row => row.failureReason || '--'},
+  {title: '说明', key: 'failureReason', minWidth: 220, ellipsis: {tooltip: true}, render: row => shortFailureReason(row.failureReason)},
   {title: '操作', key: 'action', width: 90, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => show(row)}, {default: () => '查看'})},
 ]
 async function refresh() { loading.value = true; try { rows.value = await ListResearch2Runs() } catch (error) { message.error(error?.message || String(error)) } finally { loading.value = false } }
@@ -39,7 +40,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:50,13:00)，以实际启动前5个已闭合交易分钟为证据窗口；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析且不计收益。</n-alert>
+    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:50,13:00)，使用最近5个已闭合交易分钟；午休启动固定使用 11:25—11:30。报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析且不计收益。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
   </n-space>

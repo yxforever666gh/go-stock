@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	research2EvidenceProfileV5 = "research2-trailing5-v5"
+	research2EvidenceProfileV6 = "research2-trailing5-v6"
 	research2MinimumCoverage   = 0.95
 	research2MinimumMinuteBars = 4
 	research2QuoteFreshness    = 3 * time.Minute
@@ -199,12 +199,28 @@ type research2CompactCandidate struct {
 type research2CompactSnapshot struct {
 	Version         string                      `json:"version"`
 	WindowStartAt   time.Time                   `json:"windowStartAt"`
+	WindowEndAt     time.Time                   `json:"windowEndAt"`
 	CutoffAt        time.Time                   `json:"cutoffAt"`
+	FreezeAt        time.Time                   `json:"freezeAt"`
 	Market          research2CompactMarket      `json:"market"`
 	Candidates      []research2CompactCandidate `json:"candidates"`
 	Sources         []research2CompactSource    `json:"sources"`
 	Degraded        bool                        `json:"degraded"`
 	DegradedReasons []string                    `json:"degradedReasons,omitempty"`
+}
+
+func research2ClosedWindowEnd(startedAt, snapshotAt time.Time) time.Time {
+	location := shanghaiDataLocation()
+	startedAt = startedAt.In(location)
+	snapshotAt = snapshotAt.In(location)
+	morningClose := time.Date(startedAt.Year(), startedAt.Month(), startedAt.Day(), 11, 30, 0, 0, location)
+	afternoonOpen := time.Date(startedAt.Year(), startedAt.Month(), startedAt.Day(), 13, 0, 0, 0, location)
+	startedDuringLunch := !startedAt.Before(morningClose) && startedAt.Before(afternoonOpen)
+	snapshotDuringLunch := !snapshotAt.Before(morningClose) && snapshotAt.Before(afternoonOpen)
+	if startedDuringLunch || snapshotDuringLunch {
+		return morningClose
+	}
+	return snapshotAt.Truncate(time.Minute)
 }
 
 type research2CandidateWindow struct {
@@ -908,7 +924,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 	}
 	cutoff := marketSnapshot.AsOf
-	windowEnd := cutoff.Truncate(time.Minute)
+	windowEnd := research2ClosedWindowEnd(startedAt, cutoff)
 	windowStart := windowEnd.Add(-5 * time.Minute)
 	availableAt := cutoff
 	if availableAt.IsZero() {
@@ -1021,22 +1037,23 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 			return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: documents, Degraded: true,
 				DegradedReasons: []string{"market_evidence_deadline"}}, collectionCtx.Err()
 		}
+		typedCutoff := c.research2Now()
 		switch result.kind {
 		case "breadth":
 			documents = append(documents, research2EnvelopeDocument("结构化市场宽度", "research2:market:breadth", "market", result.breadth))
-			if !research2EnvelopeUsableAt(result.breadth.Status, result.breadth.AsOf, cutoff) {
+			if !research2EnvelopeUsableAt(result.breadth.Status, result.breadth.AsOf, typedCutoff) {
 				degradedReasons = append(degradedReasons, "typed_breadth_unavailable")
 			}
 		case "sector":
 			documents = append(documents, research2EnvelopeDocument("结构化行业资金流", "research2:sector:fund-flow", "sector", result.flows))
-			if research2EnvelopeUsableAt(result.flows.Status, result.flows.AsOf, cutoff) && len(result.flows.Data) > 0 {
+			if research2EnvelopeUsableAt(result.flows.Status, result.flows.AsOf, typedCutoff) && len(result.flows.Data) > 0 {
 				compactMarket.SectorFlows = append([]FundFlowRow(nil), result.flows.Data...)
 			} else {
 				degradedReasons = append(degradedReasons, "sector_fund_flow_unavailable")
 			}
 		case "concept":
 			documents = append(documents, research2EnvelopeDocument("结构化概念资金流", "research2:concept:fund-flow", "sector", result.flows))
-			if research2EnvelopeUsableAt(result.flows.Status, result.flows.AsOf, cutoff) && len(result.flows.Data) > 0 {
+			if research2EnvelopeUsableAt(result.flows.Status, result.flows.AsOf, typedCutoff) && len(result.flows.Data) > 0 {
 				compactMarket.ConceptFlows = append([]FundFlowRow(nil), result.flows.Data...)
 			} else {
 				degradedReasons = append(degradedReasons, "concept_fund_flow_unavailable")
@@ -1086,6 +1103,10 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 	}
 
+	freezeAt := c.research2Now()
+	if freezeAt.Before(cutoff) {
+		freezeAt = cutoff
+	}
 	frozenDocuments := make([]research.SourceDocument, 0, len(documents)+1)
 	statuses := make([]map[string]any, 0, len(documents)+1)
 	compactSources := make([]research2CompactSource, 0, len(documents))
@@ -1094,8 +1115,8 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		document = stabilizeResearch2Document(document)
 		document.SourceID = uniqueResearchEvidenceSourceID(document, index, usedIDs)
 		document = normalizeResearch2DocumentAvailability(document, cutoff)
-		document = research2DocumentAtCutoff(document, cutoff, true)
-		status := research2DocumentStatus(document, cutoff, true)
+		document = research2DocumentAtCutoff(document, freezeAt, true)
+		status := research2DocumentStatus(document, freezeAt, true)
 		entityID := research2SourceEntity(document)
 		frozenDocuments = append(frozenDocuments, document)
 		compactSources = append(compactSources, research2CompactSource{SourceID: document.SourceID, SourceName: document.SourceName,
@@ -1108,7 +1129,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 			degradedReasons = append(degradedReasons, "source_"+status+":"+document.SourceID)
 		}
 	}
-	degradedReasons = uniqueBreadthStrings(degradedReasons)
+	degradedReasons = summarizeResearch2DegradedReasons(uniqueBreadthStrings(degradedReasons))
 	for candidateIndex := range compactCandidates {
 		entityID := compactCandidates[candidateIndex].EntityID
 		for _, source := range compactSources {
@@ -1118,7 +1139,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}
-	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV5, WindowStartAt: windowStart, CutoffAt: cutoff,
+	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV6, WindowStartAt: windowStart, WindowEndAt: windowEnd, CutoffAt: cutoff, FreezeAt: freezeAt,
 		Market: compactMarket, Candidates: compactCandidates, Sources: compactSources, Degraded: len(degradedReasons) > 0, DegradedReasons: degradedReasons}
 	compactPayload, marshalErr := json.Marshal(compactSnapshot)
 	if marshalErr != nil {
@@ -1126,13 +1147,13 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 			DegradedReasons: append(degradedReasons, "compact_snapshot_marshal_failed")}, marshalErr
 	}
 	compactDocument := research.SourceDocument{SourceID: "research2:compact:v4", SourceName: "研究中心2紧凑结构化快照", Category: "snapshot",
-		CollectedAt: c.research2Now(), AvailableAt: &cutoff, Content: string(compactPayload)}
+		CollectedAt: freezeAt, AvailableAt: &freezeAt, Content: string(compactPayload)}
 	frozenDocuments = append([]research.SourceDocument{compactDocument}, frozenDocuments...)
 	statuses = append([]map[string]any{{"sourceId": compactDocument.SourceID, "sourceName": compactDocument.SourceName, "category": compactDocument.Category,
-		"availableAt": cutoff, "collectedAt": compactDocument.CollectedAt, "status": marketdata.StatusOK}}, statuses...)
+		"availableAt": freezeAt, "collectedAt": compactDocument.CollectedAt, "status": marketdata.StatusOK}}, statuses...)
 	statusJSON, _ := json.Marshal(statuses)
 	return research2.Evidence{Prompt: string(compactPayload), SourceStatusJSON: string(statusJSON), Candidates: eligibleCandidates,
-		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV5, CutoffAt: cutoff, WindowStartAt: windowStart,
+		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV6, CutoffAt: cutoff, FreezeAt: freezeAt, WindowStartAt: windowStart, WindowEndAt: windowEnd,
 		CoveragePct: compactMarket.CoveragePct, Degraded: compactSnapshot.Degraded, DegradedReasons: degradedReasons,
 		CandidateReferencePrices: referencePrices}, nil
 }
@@ -1208,6 +1229,31 @@ func research2RowsAsOf(rows []research2MarketRow) time.Time {
 		}
 	}
 	return newest
+}
+
+func summarizeResearch2DegradedReasons(values []string) []string {
+	result := make([]string, 0, len(values))
+	positions := make(map[string]int)
+	counts := make(map[string]int)
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		key := value
+		if index := strings.IndexByte(value, ':'); index > 0 {
+			key = value[:index]
+		}
+		if position, exists := positions[key]; exists {
+			counts[key]++
+			result[position] = fmt.Sprintf("%s(%d)", key, counts[key])
+			continue
+		}
+		positions[key] = len(result)
+		counts[key] = 1
+		result = append(result, value)
+	}
+	return result
 }
 
 func research2EnvelopeUsableAt(status string, asOf, cutoff time.Time) bool {

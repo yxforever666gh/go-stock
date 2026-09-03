@@ -56,7 +56,7 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*R
 	collector := &Research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
-		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV5,
+		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV6,
 		themes: newThemeEvidenceReader(mainDB),
 	}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
@@ -282,12 +282,16 @@ func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID st
 		collect = c.collectEvidence
 	}
 	evidence, collectErr := collect(ctx, startedAt)
-	actualCutoff := evidence.CutoffAt
-	if actualCutoff.IsZero() {
-		actualCutoff = startedAt
-		evidence.CutoffAt = actualCutoff
+	batchCutoff := evidence.FreezeAt
+	if batchCutoff.IsZero() {
+		batchCutoff = evidence.CutoffAt
 	}
-	request := marketdata.CreateBatchRequest{EvidenceSetID: uuid.NewString(), OwnerType: "research2", OwnerID: runID, CutoffAt: actualCutoff, CollectorVersion: "2.0", EvidenceProfileVersion: c.evidenceProfile}
+	if batchCutoff.IsZero() {
+		batchCutoff = startedAt
+		evidence.CutoffAt = batchCutoff
+	}
+	evidence.FreezeAt = batchCutoff
+	request := marketdata.CreateBatchRequest{EvidenceSetID: uuid.NewString(), OwnerType: "research2", OwnerID: runID, CutoffAt: batchCutoff, CollectorVersion: "2.0", EvidenceProfileVersion: c.evidenceProfile}
 	var batch marketdata.EvidenceBatch
 	err = retryResearch2EvidenceWrite(ctx, func() error {
 		var createErr error
@@ -300,8 +304,8 @@ func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID st
 	evidence.EvidenceProfileVersion, evidence.EvidenceSetID = c.evidenceProfile, batch.EvidenceSetID
 	defer func() {
 		frozenAt := time.Now()
-		if frozenAt.Before(actualCutoff) {
-			frozenAt = actualCutoff
+		if frozenAt.Before(batchCutoff) {
+			frozenAt = batchCutoff
 		}
 		freezeErr := finalizeResearch2EvidenceBatch(c.evidence, batch.EvidenceSetID, frozenAt)
 		err = errors.Join(err, freezeErr)
@@ -310,7 +314,7 @@ func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID st
 	items := make([]marketdata.EvidenceItem, 0, len(evidence.Documents))
 	usedSourceIDs := map[string]int{}
 	for index, document := range evidence.Documents {
-		status := research2DocumentStatus(document, actualCutoff, true)
+		status := research2DocumentStatus(document, batchCutoff, true)
 		payload, marshalErr := marketdata.MarshalPayload(map[string]any{"content": document.Content, "error": document.Error})
 		if marshalErr != nil {
 			return evidence, marshalErr

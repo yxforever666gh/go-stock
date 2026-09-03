@@ -33,7 +33,9 @@ type Evidence struct {
 	EvidenceProfileVersion   string
 	EvidenceSetID            string
 	CutoffAt                 time.Time
+	FreezeAt                 time.Time
 	WindowStartAt            time.Time
+	WindowEndAt              time.Time
 	CoveragePct              float64
 	Degraded                 bool
 	DegradedReasons          []string
@@ -177,7 +179,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	}
 	cutoff := now
 	windowStart := cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v7", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v8", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
 	selected, created, err := r.repository.CreateRunAttempt(ctx, &run, true)
 	if err != nil {
 		return run, err
@@ -255,6 +257,10 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	if evidence.EvidenceSetID != "" {
 		run.EvidenceProfileVersion, run.EvidenceSetID = evidence.EvidenceProfileVersion, evidence.EvidenceSetID
 	}
+	sourceCutoff := evidence.FreezeAt
+	if sourceCutoff.IsZero() {
+		sourceCutoff = cutoff
+	}
 	// Persist the collector's authoritative cutoff even when collection failed,
 	// so the failure report and immutable audit point at the same snapshot.
 	if saveErr := r.repository.SaveRun(ctx, &run); saveErr != nil {
@@ -284,7 +290,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			phase += "_repair"
 		}
 		if r.audit != nil {
-			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v7"})
+			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v8"})
 			err = prepareErr
 			if err != nil {
 				return finishFailure("failed", "准备研究审计载荷失败: "+err.Error(), err)
@@ -326,7 +332,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 		run.ModelName = result.Model
 		output, err = ParseModelOutput(result.Content)
 		if err == nil {
-			sourceValidationMessages = validateModelSourceRefs(output.Recommendations, evidence.Documents, cutoff, evidence.Candidates)
+			sourceValidationMessages = validateModelSourceRefs(output.Recommendations, evidence.Documents, sourceCutoff, evidence.Candidates)
 		}
 		if err == nil && len(sourceValidationMessages) == 0 {
 			break
@@ -351,7 +357,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	}
 	// Complete all source, score, candidate and price validation before taking
 	// the authoritative server-side signal timestamp.
-	items, validationMessages := validateRecommendationsWithEvidence(run.RunID, cutoff, local, cutoff, evidence.Candidates, evidence.Documents, evidence.CandidateReferencePrices, output.Recommendations)
+	items, validationMessages := validateRecommendationsWithEvidence(run.RunID, cutoff, local, sourceCutoff, evidence.Candidates, evidence.Documents, evidence.CandidateReferencePrices, output.Recommendations)
 	generated := r.now().In(shanghai())
 	run.GeneratedAt = &generated
 	run.OnTime = !generated.After(time.Date(local.Year(), local.Month(), local.Day(), 10, 0, 0, 0, shanghai()))
@@ -396,6 +402,8 @@ func research2AuditEvidence(evidence Evidence) map[string]any {
 	return map[string]any{
 		"evidenceSetId": evidence.EvidenceSetID,
 		"cutoffAt":      evidence.CutoffAt,
+		"freezeAt":      evidence.FreezeAt,
+		"windowEndAt":   evidence.WindowEndAt,
 		"sourceStatus":  json.RawMessage(defaultJSON(evidence.SourceStatusJSON, "[]")),
 		"documents":     evidence.Documents,
 	}
@@ -409,7 +417,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 		prepared, err := r.audit.Prepare(ctx, researchaudit.CallInput{
 			OwnerType: researchaudit.OwnerResearch2, OwnerID: runID, Phase: phase, CallSequence: callSequence, Attempt: 1,
 			CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{},
-			ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v7",
+			ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v8",
 		})
 		if err != nil {
 			return err
@@ -426,7 +434,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 			ProviderName: attempt.ProviderName, ModelName: attempt.ModelName, CutoffAt: &cutoff, Prompt: prompt,
 			Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{
 				"attempt": attempt,
-			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v7",
+			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v8",
 		})
 		if err != nil {
 			return err
@@ -473,12 +481,21 @@ func buildPrompt(evidence Evidence, cutoff time.Time) string {
 	if evidence.WindowStartAt.IsZero() {
 		windowStart = cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
 	}
+	windowEnd := evidence.WindowEndAt.In(shanghai())
+	if evidence.WindowEndAt.IsZero() {
+		windowEnd = cutoff
+	}
+	freezeAt := evidence.FreezeAt.In(shanghai())
+	if evidence.FreezeAt.IsZero() {
+		freezeAt = cutoff
+	}
 	return strings.Join([]string{
 		strategyPrompt,
 		"\n# 本次执行参数",
-		"- 策略版本：research2-trailing5-v7",
-		"- 核心证据窗口：[" + windowStart.Format("2006-01-02 15:04:05") + ", " + cutoff.Format("2006-01-02 15:04:05") + "] Asia/Shanghai",
-		"- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
+		"- 策略版本：research2-trailing5-v8",
+		"- 核心证据窗口：[" + windowStart.Format("2006-01-02 15:04:05") + ", " + windowEnd.Format("2006-01-02 15:04:05") + "] Asia/Shanghai",
+		"- 市场快照时点：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
+		"- 证据冻结时间：" + freezeAt.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 13:00前启动的任务允许跨越13:00继续完成；完成时间只用于执行归类，不得导致分析失败。",
 		"- 程序将在报告校验完成后获取第一笔有效行情买入；午休期间完成的报告统一在13:00买入；13:00及以后完成的推荐仅保存分析、不交易；已买入标的卖出目标固定为下一交易日10:00。",
 		"- 独立账户初始资金12,000元；最多选择3只，一手100股含费用成本不得超过账户资金。",
@@ -782,6 +799,10 @@ func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput
 	if run.EvidenceWindowStartAt != nil {
 		windowStart = run.EvidenceWindowStartAt.In(shanghai())
 	}
+	windowEnd := run.EvidenceCutoffAt
+	if !evidence.WindowEndAt.IsZero() {
+		windowEnd = evidence.WindowEndAt.In(shanghai())
+	}
 	timing := "按时（不晚于10:00）"
 	if !run.OnTime {
 		timing = "迟到（允许执行，买入以报告校验完成后行情为准）"
@@ -806,7 +827,8 @@ func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput
 		fmt.Sprintf("- 当日尝试：第%d次", normalizedAttemptNo(run.AttemptNo)),
 		"- 计划时间：" + formatResearch2Time(run.ScheduledFor),
 		"- 实际启动：" + formatResearch2Time(run.StartedAt),
-		"- 核心证据窗口：" + formatResearch2Time(windowStart) + " 至 " + formatResearch2Time(run.EvidenceCutoffAt),
+		"- 核心证据窗口：" + formatResearch2Time(windowStart) + " 至 " + formatResearch2Time(windowEnd),
+		"- 市场快照时点：" + formatResearch2Time(run.EvidenceCutoffAt),
 		"- 报告校验完成：" + formatResearch2Time(generated),
 		"- 送达状态：" + timing,
 		"- 证据质量：" + quality,

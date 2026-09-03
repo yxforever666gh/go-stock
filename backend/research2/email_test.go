@@ -3,6 +3,8 @@ package research2
 import (
 	"context"
 	"errors"
+	"io"
+	"mime/quotedprintable"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +15,7 @@ import (
 type fakeMailer struct {
 	calls    int
 	failures int
+	sendErr  error
 	messages []EmailMessage
 }
 
@@ -20,6 +23,9 @@ func (m *fakeMailer) Send(_ context.Context, _ EmailConfig, message EmailMessage
 	m.calls++
 	m.messages = append(m.messages, message)
 	if m.calls <= m.failures {
+		if m.sendErr != nil {
+			return m.sendErr
+		}
 		return errors.New("smtp temporary failure for sender@example.com using auth-code")
 	}
 	return nil
@@ -188,9 +194,83 @@ func TestReportEmailFallbackHasNoCompletionDeadline(t *testing.T) {
 
 func TestPlainTextMessageUsesUTF8AndStableMessageID(t *testing.T) {
 	encoded := encodePlainTextMessage(EmailMessage{From: "sender@example.com", To: []string{"recipient@example.com"}, Subject: "研究中心2报告", Body: "第一行\n第二行", MessageID: "<stable@example.com>"})
-	for _, expected := range []string{"Content-Type: text/plain; charset=\"UTF-8\"", "Message-ID: <stable@example.com>", "Subject: =?UTF-8?", "第一行\r\n第二行\r\n"} {
+	for _, expected := range []string{"Content-Type: text/plain; charset=\"UTF-8\"", "Content-Transfer-Encoding: quoted-printable", "Message-ID: <stable@example.com>", "Subject: =?UTF-8?"} {
 		if !strings.Contains(encoded, expected) {
 			t.Fatalf("encoded message missing %q:\n%s", expected, encoded)
 		}
 	}
+	if body := decodeQuotedPrintableBody(t, encoded); body != "第一行\r\n第二行" {
+		t.Fatalf("decoded body=%q", body)
+	}
+}
+
+func TestPlainTextMessageFoldsArbitrarilyLongUTF8BodyLines(t *testing.T) {
+	body := "核心结论：继续观察。" + strings.Repeat("这是很长的中文降级说明", 1000)
+	encoded := encodePlainTextMessage(EmailMessage{From: "sender@example.com", To: []string{"recipient@example.com"}, Subject: "长中文报告", Body: body, MessageID: "<long@example.com>"})
+	for lineNo, line := range strings.Split(encoded, "\r\n") {
+		if len([]byte(line)) > 998 {
+			t.Fatalf("physical line %d has %d octets", lineNo+1, len([]byte(line)))
+		}
+	}
+	if decoded := decodeQuotedPrintableBody(t, encoded); decoded != body {
+		t.Fatalf("long UTF-8 body changed after MIME round trip: got=%d want=%d", len(decoded), len(body))
+	}
+}
+
+func TestReportEmailCompactsOnlyDegradedReasonsAndKeepsCoreConclusion(t *testing.T) {
+	run := eligibleRun("success")
+	reasons := make([]string, 0, 12)
+	for index := 1; index <= 12; index++ {
+		reasons = append(reasons, strings.Repeat("降级明细", 40)+string(rune('甲'+index)))
+	}
+	run.ReportMarkdown = "# 核心结论\n\n建议保持空仓。\n\n- 降级原因：" + strings.Join(reasons, "；") + "\n\n## 风险\n核心风险不变。"
+	_, body := reportEmailContent(run)
+	for _, core := range []string{"# 核心结论", "建议保持空仓。", "## 风险", "核心风险不变。", "降级原因摘要", "完整明细见数据库审计"} {
+		if !strings.Contains(body, core) {
+			t.Fatalf("compacted report missing %q:\n%s", core, body)
+		}
+	}
+	if strings.Contains(body, reasons[0]) || strings.Count(body, "  - ") > 9 {
+		t.Fatalf("degraded details were not compacted:\n%s", body)
+	}
+	if run.ReportMarkdown == body {
+		t.Fatal("email body should be a compact copy, not a mutation of persisted report content")
+	}
+}
+
+func TestLineTooLongSMTPErrorDoesNotRetryIdenticalPayload(t *testing.T) {
+	mailer := &fakeMailer{failures: 2, sendErr: errors.New("500 Line too long")}
+	service, repository := emailTestService(t, mailer)
+	now := time.Date(2026, 8, 27, 10, 0, 0, 0, shanghai())
+	service.SetNowForTest(func() time.Time { return now })
+	if _, err := service.Queue(context.Background(), eligibleRun("success"), validEmailConfig()); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ProcessDue(context.Background(), validEmailConfig()); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	if err := service.ProcessDue(context.Background(), validEmailConfig()); err != nil {
+		t.Fatal(err)
+	}
+	var delivery EmailDelivery
+	if err := repository.db.First(&delivery).Error; err != nil {
+		t.Fatal(err)
+	}
+	if mailer.calls != 1 || delivery.AttemptCount != 1 || delivery.Status != EmailStatusFailed || delivery.NextAttemptAt != nil {
+		t.Fatalf("deterministic format error retried: calls=%d delivery=%+v", mailer.calls, delivery)
+	}
+}
+
+func decodeQuotedPrintableBody(t *testing.T, message string) string {
+	t.Helper()
+	parts := strings.SplitN(message, "\r\n\r\n", 2)
+	if len(parts) != 2 {
+		t.Fatalf("message has no header/body separator:\n%s", message)
+	}
+	decoded, err := io.ReadAll(quotedprintable.NewReader(strings.NewReader(parts[1])))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(decoded)
 }
