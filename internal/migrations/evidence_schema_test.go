@@ -3,7 +3,6 @@ package migrations
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"testing"
 	"time"
 
@@ -49,9 +48,11 @@ func stripSchema15ColumnsFromFixture(t *testing.T, database *gorm.DB) {
 		}
 	}
 	columns := map[string][]string{
-		"settings":                    {"experimental_evidence_enabled"},
-		"research_v160_analysis_runs": {"strategy_version", "evidence_profile_version", "evidence_set_id"},
-		"research2_analysis_runs":     {"strategy_version", "evidence_profile_version", "evidence_set_id"},
+		"settings":                             {"experimental_evidence_enabled"},
+		"research_v160_analysis_runs":          {"strategy_version", "evidence_profile_version", "evidence_set_id", "data_profile_version"},
+		"research_v160_lifecycle_observations": {"data_profile_version"},
+		"research_v160_decision_events":        {"decision_policy_version"},
+		"research2_analysis_runs":              {"strategy_version", "evidence_profile_version", "evidence_set_id"},
 	}
 	for table, names := range columns {
 		for _, name := range names {
@@ -88,6 +89,15 @@ func captureResearchHistory(t *testing.T, database *gorm.DB) map[string][]byte {
 	for name, target := range models {
 		if err := database.Order("id ASC").Find(target).Error; err != nil {
 			t.Fatalf("capture %s: %v", name, err)
+		}
+		// Schema 25 intentionally labels otherwise-blank Research Center 1
+		// provenance. Normalize those metadata-only fields so this fixture keeps
+		// checking that the underlying reports and financial history are stable.
+		if runs, ok := target.(*[]research.AnalysisRun); ok {
+			for index := range *runs {
+				(*runs)[index].StrategyVersion = ""
+				(*runs)[index].DataProfileVersion = ""
+			}
 		}
 		encoded, err := json.Marshal(target)
 		if err != nil {
@@ -203,7 +213,7 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 		t.Fatal(err)
 	}
 	run1 := research.AnalysisRun{RunID: "schema15-r1-run", ScheduledFor: now, StartedAt: now, CompletedAt: &completed, Status: "success", ModelAttemptLogJSON: "[]", RecommendationCount: 1}
-	if err := mainDB.Omit("StrategyVersion", "EvidenceProfileVersion", "EvidenceSetID").Create(&run1).Error; err != nil {
+	if err := mainDB.Omit("StrategyVersion", "DataProfileVersion", "EvidenceProfileVersion", "EvidenceSetID").Create(&run1).Error; err != nil {
 		t.Fatal(err)
 	}
 	rec1 := research.Recommendation{RecommendationID: "schema15-r1-rec", AnalysisRunID: run1.RunID, StockCode: "sh600000", StockName: "浦发银行", SignalAt: now, Status: "active"}
@@ -251,15 +261,21 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 		}
 	}
 
-	for _, table := range []string{"research_v160_analysis_runs", "research2_analysis_runs"} {
-		var populated int64
-		query := fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE strategy_version IS NOT NULL OR evidence_profile_version IS NOT NULL OR evidence_set_id IS NOT NULL", quoteSQLiteIdentifier(table))
-		if err := mainDB.Raw(query).Scan(&populated).Error; err != nil {
-			t.Fatal(err)
-		}
-		if populated != 0 {
-			t.Fatalf("schema 15 backfilled %d legacy version links in %s", populated, table)
-		}
+	var research1Legacy, research1EvidenceLinks, research2Populated int64
+	if err := mainDB.Raw(`SELECT COUNT(*) FROM research_v160_analysis_runs
+WHERE strategy_version = ? AND data_profile_version = ?`, legacyUnversioned, legacyUnversioned).Scan(&research1Legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := mainDB.Raw(`SELECT COUNT(*) FROM research_v160_analysis_runs
+WHERE evidence_profile_version IS NOT NULL OR evidence_set_id IS NOT NULL`).Scan(&research1EvidenceLinks).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := mainDB.Raw(`SELECT COUNT(*) FROM research2_analysis_runs
+WHERE strategy_version IS NOT NULL OR evidence_profile_version IS NOT NULL OR evidence_set_id IS NOT NULL`).Scan(&research2Populated).Error; err != nil {
+		t.Fatal(err)
+	}
+	if research1Legacy != 1 || research1EvidenceLinks != 0 || research2Populated != 0 {
+		t.Fatalf("unexpected version metadata: research1Legacy=%d research1EvidenceLinks=%d research2Populated=%d", research1Legacy, research1EvidenceLinks, research2Populated)
 	}
 	var experimentalEnabled int64
 	if err := mainDB.Raw("SELECT COUNT(*) FROM settings WHERE experimental_evidence_enabled <> 0").Scan(&experimentalEnabled).Error; err != nil {
@@ -276,10 +292,10 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 24 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 25 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
-	if len(mainStatus.Records) < 10 || mainStatus.Records[len(mainStatus.Records)-10].ID != 15 || mainStatus.Records[len(mainStatus.Records)-9].ID != 16 || mainStatus.Records[len(mainStatus.Records)-8].ID != 17 || mainStatus.Records[len(mainStatus.Records)-7].ID != 18 || mainStatus.Records[len(mainStatus.Records)-6].ID != 19 || mainStatus.Records[len(mainStatus.Records)-5].ID != 20 || mainStatus.Records[len(mainStatus.Records)-4].ID != 21 || mainStatus.Records[len(mainStatus.Records)-3].ID != 22 || mainStatus.Records[len(mainStatus.Records)-2].ID != 23 || mainStatus.Records[len(mainStatus.Records)-1].ID != 24 {
-		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 24: %+v", mainStatus.Records)
+	if len(mainStatus.Records) < 11 || mainStatus.Records[len(mainStatus.Records)-11].ID != 15 || mainStatus.Records[len(mainStatus.Records)-10].ID != 16 || mainStatus.Records[len(mainStatus.Records)-9].ID != 17 || mainStatus.Records[len(mainStatus.Records)-8].ID != 18 || mainStatus.Records[len(mainStatus.Records)-7].ID != 19 || mainStatus.Records[len(mainStatus.Records)-6].ID != 20 || mainStatus.Records[len(mainStatus.Records)-5].ID != 21 || mainStatus.Records[len(mainStatus.Records)-4].ID != 22 || mainStatus.Records[len(mainStatus.Records)-3].ID != 23 || mainStatus.Records[len(mainStatus.Records)-2].ID != 24 || mainStatus.Records[len(mainStatus.Records)-1].ID != 25 {
+		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 25: %+v", mainStatus.Records)
 	}
 }

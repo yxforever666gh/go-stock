@@ -9,10 +9,13 @@ const (
 	LegacyInitialCash  = 100000.0
 	TargetCashPerTrade = 50000.0
 	// MaxCashPerTrade is retained for frozen migrations and older callers.
-	MaxCashPerTrade        = TargetCashPerTrade
-	TargetContribution     = 500000.0
-	ScheduledDepositAmount = 100000.0
-	ScheduledDepositCount  = 4
+	MaxCashPerTrade              = TargetCashPerTrade
+	TargetContribution           = 500000.0
+	ScheduledDepositAmount       = 100000.0
+	ScheduledDepositCount        = 4
+	CurrentStrategyVersion       = "research1-v3"
+	CurrentDataProfileVersion    = "research1-data-v3"
+	CurrentDecisionPolicyVersion = "research1-lifecycle-v3"
 )
 
 type AnalysisRun struct {
@@ -32,6 +35,7 @@ type AnalysisRun struct {
 	SourceStatusJSON       string           `json:"sourceStatusJson" gorm:"type:text"`
 	ModelAttemptLogJSON    string           `json:"modelAttemptLogJson" gorm:"type:text;not null;default:'[]'"`
 	StrategyVersion        string           `json:"strategyVersion,omitempty" gorm:"column:strategy_version;size:64"`
+	DataProfileVersion     string           `json:"dataProfileVersion,omitempty" gorm:"column:data_profile_version;size:64;not null;default:'legacy-unversioned'"`
 	EvidenceProfileVersion string           `json:"evidenceProfileVersion,omitempty" gorm:"column:evidence_profile_version;size:64"`
 	EvidenceSetID          string           `json:"evidenceSetId,omitempty" gorm:"column:evidence_set_id;size:36;index"`
 	FailureReason          string           `json:"failureReason" gorm:"type:text"`
@@ -126,6 +130,8 @@ func (AnalysisRun) TableName() string { return "research_v160_analysis_runs" }
 // and source documents are only returned by the detail endpoint.
 type AnalysisRunSummary struct {
 	RunID               string     `json:"runId"`
+	StrategyVersion     string     `json:"strategyVersion,omitempty"`
+	DataProfileVersion  string     `json:"dataProfileVersion,omitempty"`
 	ScheduledFor        time.Time  `json:"scheduledFor"`
 	StartedAt           time.Time  `json:"startedAt"`
 	CompletedAt         *time.Time `json:"completedAt"`
@@ -228,28 +234,33 @@ func (AnalysisTrigger) TableName() string { return "research_v270_analysis_trigg
 // BuyOpportunity stores every final AI decision. Only buy_now may be linked
 // to a formal Recommendation; wait/reject never reserve cash or affect P&L.
 type BuyOpportunity struct {
-	ID               uint       `json:"id" gorm:"primaryKey"`
-	OpportunityID    string     `json:"opportunityId" gorm:"size:36;uniqueIndex;not null"`
-	AnalysisRunID    string     `json:"analysisRunId" gorm:"size:36;index;not null"`
-	RecommendationID string     `json:"recommendationId,omitempty" gorm:"size:36;index"`
-	Action           string     `json:"action" gorm:"size:16;index;not null"`
-	StockCode        string     `json:"stockCode" gorm:"size:16;index;not null"`
-	StockName        string     `json:"stockName" gorm:"size:64;not null"`
-	PriceLow         float64    `json:"priceLow"`
-	PriceHigh        float64    `json:"priceHigh"`
-	QuotePrice       float64    `json:"quotePrice"`
-	QuoteAt          *time.Time `json:"quoteAt,omitempty"`
-	AISummary        string     `json:"aiSummary" gorm:"type:text"`
-	MainRisk         string     `json:"mainRisk" gorm:"type:text"`
-	SourceRefs       string     `json:"sourceRefs" gorm:"type:text"`
-	Source           string     `json:"source" gorm:"size:32"`
-	Status           string     `json:"status" gorm:"size:16;index;not null;default:'active'"`
-	TimingReason     string     `json:"timingReason,omitempty" gorm:"type:text"`
-	ExpiresAt        *time.Time `json:"expiresAt,omitempty" gorm:"index"`
-	SupersededAt     *time.Time `json:"supersededAt,omitempty" gorm:"index"`
-	ValidationReason string     `json:"validationReason,omitempty" gorm:"type:text"`
-	CreatedAt        time.Time  `json:"createdAt" gorm:"index"`
-	UpdatedAt        time.Time  `json:"updatedAt"`
+	ID                  uint       `json:"id" gorm:"primaryKey"`
+	OpportunityID       string     `json:"opportunityId" gorm:"size:36;uniqueIndex;not null"`
+	AnalysisRunID       string     `json:"analysisRunId" gorm:"size:36;index;not null"`
+	RecommendationID    string     `json:"recommendationId,omitempty" gorm:"size:36;index"`
+	RequestedAction     string     `json:"requestedAction,omitempty" gorm:"size:16;not null;default:''"`
+	Action              string     `json:"action" gorm:"size:16;index;not null"`
+	StockCode           string     `json:"stockCode" gorm:"size:16;index;not null"`
+	StockName           string     `json:"stockName" gorm:"size:64;not null"`
+	PriceLow            float64    `json:"priceLow"`
+	PriceHigh           float64    `json:"priceHigh"`
+	QuotePrice          float64    `json:"quotePrice"`
+	QuoteAt             *time.Time `json:"quoteAt,omitempty"`
+	DecisionQuoteStatus string     `json:"decisionQuoteStatus,omitempty" gorm:"size:32;not null;default:'legacy-unavailable'"`
+	AISummary           string     `json:"aiSummary" gorm:"type:text"`
+	MainRisk            string     `json:"mainRisk" gorm:"type:text"`
+	SourceRefs          string     `json:"sourceRefs" gorm:"type:text"`
+	Source              string     `json:"source" gorm:"size:32"`
+	Status              string     `json:"status" gorm:"size:16;index;not null;default:'active'"`
+	TimingReason        string     `json:"timingReason,omitempty" gorm:"type:text"`
+	ExpiresAt           *time.Time `json:"expiresAt,omitempty" gorm:"index"`
+	ReanalysisAt        *time.Time `json:"reanalysisAt,omitempty" gorm:"index:idx_v3_opportunities_reanalysis"`
+	SupersededAt        *time.Time `json:"supersededAt,omitempty" gorm:"index"`
+	SupersededByRunID   string     `json:"supersededByRunId,omitempty" gorm:"size:36;index:idx_v3_opportunities_superseding_run"`
+	DataProfileVersion  string     `json:"dataProfileVersion,omitempty" gorm:"size:64;not null;default:'legacy-unversioned'"`
+	ValidationReason    string     `json:"validationReason,omitempty" gorm:"type:text"`
+	CreatedAt           time.Time  `json:"createdAt" gorm:"index"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
 }
 
 func (BuyOpportunity) TableName() string { return "research_v270_buy_opportunities" }
@@ -281,18 +292,19 @@ type LifecycleMessage struct {
 func (LifecycleMessage) TableName() string { return "research_v160_lifecycle_messages" }
 
 type DecisionEvent struct {
-	ID               uint       `json:"id" gorm:"primaryKey"`
-	EventID          string     `json:"eventId" gorm:"size:36;uniqueIndex;not null"`
-	RecommendationID string     `json:"recommendationId" gorm:"size:36;index;not null"`
-	DecisionType     string     `json:"decisionType" gorm:"size:32;index;not null"`
-	DecidedAt        time.Time  `json:"decidedAt" gorm:"index;not null"`
-	AIResponse       string     `json:"aiResponse" gorm:"type:text"`
-	Reason           string     `json:"reason" gorm:"type:text"`
-	QuotePrice       float64    `json:"quotePrice"`
-	QuoteAt          *time.Time `json:"quoteAt"`
-	SourceRefs       string     `json:"sourceRefs" gorm:"type:text"`
-	DataStatus       string     `json:"dataStatus" gorm:"size:32"`
-	CreatedAt        time.Time  `json:"createdAt"`
+	ID                    uint       `json:"id" gorm:"primaryKey"`
+	EventID               string     `json:"eventId" gorm:"size:36;uniqueIndex;not null"`
+	RecommendationID      string     `json:"recommendationId" gorm:"size:36;index;not null"`
+	DecisionType          string     `json:"decisionType" gorm:"size:32;index;not null"`
+	DecidedAt             time.Time  `json:"decidedAt" gorm:"index;not null"`
+	AIResponse            string     `json:"aiResponse" gorm:"type:text"`
+	Reason                string     `json:"reason" gorm:"type:text"`
+	QuotePrice            float64    `json:"quotePrice"`
+	QuoteAt               *time.Time `json:"quoteAt"`
+	SourceRefs            string     `json:"sourceRefs" gorm:"type:text"`
+	DataStatus            string     `json:"dataStatus" gorm:"size:32"`
+	DecisionPolicyVersion string     `json:"decisionPolicyVersion,omitempty" gorm:"size:64;not null;default:'legacy-unversioned'"`
+	CreatedAt             time.Time  `json:"createdAt"`
 }
 
 func (DecisionEvent) TableName() string { return "research_v160_decision_events" }
@@ -315,6 +327,7 @@ type LifecycleObservation struct {
 	CriticalFailure    string    `json:"criticalFailure" gorm:"type:text"`
 	ContentFingerprint string    `json:"contentFingerprint" gorm:"size:64;index"`
 	ModelInvoked       bool      `json:"modelInvoked" gorm:"not null;default:false"`
+	DataProfileVersion string    `json:"dataProfileVersion,omitempty" gorm:"size:64;not null;default:'legacy-unversioned'"`
 	CreatedAt          time.Time `json:"createdAt"`
 }
 
@@ -332,14 +345,15 @@ type LifecycleEvidenceSource struct {
 }
 
 type MinuteWindowSummary struct {
-	Minutes      int     `json:"minutes"`
-	Bars         int     `json:"bars"`
-	ReturnRate   float64 `json:"returnRate"`
-	High         float64 `json:"high"`
-	Low          float64 `json:"low"`
-	Volume       float64 `json:"volume"`
-	Amount       float64 `json:"amount"`
-	AveragePrice float64 `json:"averagePrice"`
+	Minutes            int     `json:"minutes"`
+	Bars               int     `json:"bars"`
+	ReturnRate         float64 `json:"returnRate"`
+	High               float64 `json:"high"`
+	Low                float64 `json:"low"`
+	Volume             float64 `json:"volume"`
+	Amount             float64 `json:"amount"`
+	AveragePrice       float64 `json:"averagePrice"`
+	AveragePriceMethod string  `json:"averagePriceMethod"`
 }
 
 type MinuteEvidenceSummary struct {

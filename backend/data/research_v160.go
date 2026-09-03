@@ -12,7 +12,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
@@ -592,7 +591,7 @@ func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now
 					}
 					return rows
 				}},
-				{"Sina日K " + code, func() any { return collector.stocks.GetKLineData(code, "240", 60) }},
+				{"Sina日K " + code, func() any { return collector.stocks.GetKLineData(code, "240", 61) }},
 				{"Tencent分钟K " + code, func() any {
 					rows, source := collector.stocks.GetStockMinutePriceData(code)
 					return map[string]any{"source": source, "rows": rows}
@@ -712,7 +711,8 @@ func executeResearchSourceJob(name, category string, clock func() time.Time, run
 		document.Error = "来源任务为空"
 		return document
 	}
-	return researchDocument(name, category, researchSourceNow(clock), run())
+	value := run()
+	return researchDocument(name, category, researchSourceNow(clock), value)
 }
 
 func researchSourceNow(clock func() time.Time) time.Time {
@@ -733,9 +733,28 @@ func researchDocument(name, category string, now time.Time, value any) research.
 		document.Error = err.Error()
 		return document
 	}
-	document.Content = truncateResearchSourceJSON(string(data), 16000)
 	document.Error = semanticResearchSourceError(data)
+	if category == "stock" {
+		document.PromptContent = compactResearchPromptValue(name, value)
+		document.Content = document.PromptContent
+		if freshnessErr := validateCompactStockSourceAt(name, document.PromptContent, now); freshnessErr != nil {
+			document.Error = appendSourceDocumentError(document.Error, freshnessErr.Error())
+		}
+	} else {
+		document.Content = truncateResearchSourceJSON(string(data), 16000)
+	}
 	return document
+}
+
+func appendSourceDocumentError(existing, message string) string {
+	existing, message = strings.TrimSpace(existing), strings.TrimSpace(message)
+	if existing == "" {
+		return message
+	}
+	if message == "" {
+		return existing
+	}
+	return existing + "; " + message
 }
 
 func semanticResearchSourceError(data []byte) string {
@@ -811,15 +830,58 @@ func truncateResearchSourceJSON(value string, maxBytes int) string {
 	if len(value) <= maxBytes {
 		return value
 	}
-	const marker = `...<truncated>`
-	end := maxBytes - len(marker)
-	if end < 0 {
-		end = 0
+	var decoded any
+	if json.Unmarshal([]byte(value), &decoded) != nil {
+		encoded, _ := json.Marshal(truncatePromptString(value, maxBytes/2))
+		return string(encoded)
 	}
-	for end > 0 && !utf8.ValidString(value[:end]) {
-		end--
+	for level := 1; level <= 7; level++ {
+		encoded, err := json.Marshal(compactJSONAtLevel(decoded, level))
+		if err == nil && len(encoded) <= maxBytes {
+			return string(encoded)
+		}
 	}
-	return value[:end] + marker
+	return `{"truncated":true}`
+}
+
+func compactJSONAtLevel(value any, level int) any {
+	arrayLimits := []int{0, 30, 20, 10, 5, 3, 1, 0}
+	stringLimits := []int{0, 1000, 600, 300, 160, 80, 40, 0}
+	if level < 1 {
+		level = 1
+	}
+	if level >= len(arrayLimits) {
+		level = len(arrayLimits) - 1
+	}
+	switch typed := value.(type) {
+	case []any:
+		limit := arrayLimits[level]
+		if limit == 0 {
+			return []any{}
+		}
+		if len(typed) > limit {
+			typed = typed[:limit]
+		}
+		result := make([]any, 0, len(typed))
+		for _, child := range typed {
+			result = append(result, compactJSONAtLevel(child, level))
+		}
+		return result
+	case map[string]any:
+		result := make(map[string]any, len(typed))
+		for key, child := range typed {
+			result[key] = compactJSONAtLevel(child, level)
+		}
+		return result
+	case string:
+		limit := stringLimits[level]
+		if limit == 0 {
+			return ""
+		}
+		return truncatePromptString(typed, limit)
+	default:
+		return value
+	}
 }
 
 func shanghaiDataLocation() *time.Location {

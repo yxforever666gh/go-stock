@@ -11,7 +11,22 @@ import (
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+var repositoryWriteGate = func() chan struct{} {
+	gate := make(chan struct{}, 1)
+	gate <- struct{}{}
+	return gate
+}()
+
+var writeRetryDelays = [...]time.Duration{
+	20 * time.Millisecond,
+	40 * time.Millisecond,
+	80 * time.Millisecond,
+	160 * time.Millisecond,
+	320 * time.Millisecond,
+}
 
 type Repository struct {
 	db                       *gorm.DB
@@ -40,25 +55,52 @@ func isSQLiteBusy(err error) bool {
 	if err == nil {
 		return false
 	}
+	var sqliteErr interface{ Code() int }
+	if errors.As(err, &sqliteErr) {
+		code := sqliteErr.Code()
+		return code == sqlite3.SQLITE_BUSY_SNAPSHOT || code&0xff == sqlite3.SQLITE_BUSY || code&0xff == sqlite3.SQLITE_LOCKED
+	}
 	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
+	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "sqlite_locked") ||
+		strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "(517)")
 }
 
 func transactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation func(*gorm.DB) error) error {
-	var err error
-	for attempt := 0; attempt < 5; attempt++ {
-		err = database.WithContext(ctx).Transaction(operation)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-repositoryWriteGate:
+	}
+	defer func() { repositoryWriteGate <- struct{}{} }()
+
+	for attempt := 0; ; attempt++ {
+		err := database.WithContext(ctx).Transaction(operation)
 		if !isSQLiteBusy(err) {
+			if attempt > 0 && database.Logger != nil {
+				if err == nil {
+					database.Logger.Info(ctx, "research repository write recovered after busy retry: retries=%d", attempt)
+				} else {
+					database.Logger.Error(ctx, "research repository write failed after busy retry: retries=%d error=%v", attempt, err)
+				}
+			}
 			return err
 		}
-		delay := time.Duration(20*(1<<attempt)) * time.Millisecond
+		if attempt == len(writeRetryDelays) {
+			if database.Logger != nil {
+				database.Logger.Error(ctx, "research repository write failed after busy retries: retries=%d error=%v", len(writeRetryDelays), err)
+			}
+			return err
+		}
+		if database.Logger != nil {
+			database.Logger.Warn(ctx, "research repository write busy; retrying whole transaction: retry=%d delay=%s error=%v", attempt+1, writeRetryDelays[attempt], err)
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(delay):
+		case <-time.After(writeRetryDelays[attempt]):
 		}
 	}
-	return err
 }
 
 // RecommendationCapacity is the cash-admission snapshot used before an AI run
@@ -105,7 +147,9 @@ func (r *Repository) DB() *gorm.DB { return r.db }
 
 func (r *Repository) EnsureAccount(ctx context.Context) error {
 	account := SimulatedAccount{ID: 1, InitialCash: InitialCash, Cash: InitialCash}
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error
+	})
 }
 
 func (r *Repository) HasOpenPosition(ctx context.Context) (bool, error) {
@@ -208,17 +252,29 @@ func (r *Repository) LatestAnalysisForScheduledSlot(ctx context.Context, schedul
 }
 
 func (r *Repository) CreateAnalysis(ctx context.Context, run *AnalysisRun) error {
-	return r.db.WithContext(ctx).Create(run).Error
+	if strings.TrimSpace(run.StrategyVersion) == "" {
+		run.StrategyVersion = CurrentStrategyVersion
+	}
+	if strings.TrimSpace(run.DataProfileVersion) == "" {
+		run.DataProfileVersion = CurrentDataProfileVersion
+	}
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(run).Error })
 }
 
 func (r *Repository) SaveAnalysis(ctx context.Context, run *AnalysisRun) error {
-	return r.db.WithContext(ctx).Save(run).Error
+	if strings.TrimSpace(run.StrategyVersion) == "" {
+		run.StrategyVersion = CurrentStrategyVersion
+	}
+	if strings.TrimSpace(run.DataProfileVersion) == "" {
+		run.DataProfileVersion = CurrentDataProfileVersion
+	}
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Save(run).Error })
 }
 
 func (r *Repository) UpdateAnalysisAttemptLog(ctx context.Context, runID, value string) error {
-	return r.db.WithContext(ctx).Model(&AnalysisRun{}).
-		Where("run_id = ?", runID).
-		Update("model_attempt_log_json", value).Error
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&AnalysisRun{}).Where("run_id = ?", runID).Update("model_attempt_log_json", value).Error
+	})
 }
 
 func (r *Repository) CreateBuyOpportunity(ctx context.Context, opportunity *BuyOpportunity) error {
@@ -228,11 +284,32 @@ func (r *Repository) CreateBuyOpportunity(ctx context.Context, opportunity *BuyO
 	if opportunity.Status == "" {
 		opportunity.Status = "active"
 	}
-	return r.db.WithContext(ctx).Create(opportunity).Error
+	if strings.TrimSpace(opportunity.RequestedAction) == "" {
+		opportunity.RequestedAction = opportunity.Action
+	}
+	if !validOpportunityAction(opportunity.RequestedAction) || !validOpportunityAction(opportunity.Action) {
+		return errors.New("invalid buy opportunity action")
+	}
+	if strings.TrimSpace(opportunity.DataProfileVersion) == "" || opportunity.DataProfileVersion == "legacy-unversioned" {
+		opportunity.DataProfileVersion = CurrentDataProfileVersion
+	}
+	if strings.TrimSpace(opportunity.DecisionQuoteStatus) == "" || opportunity.DecisionQuoteStatus == "legacy-unavailable" {
+		if opportunity.QuotePrice > 0 && opportunity.QuoteAt != nil && !opportunity.QuoteAt.IsZero() {
+			opportunity.DecisionQuoteStatus = "ok"
+		} else {
+			opportunity.DecisionQuoteStatus = "unavailable"
+		}
+	}
+	if !validDecisionQuoteStatus(opportunity.DecisionQuoteStatus) {
+		return errors.New("invalid decision quote status")
+	}
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(opportunity).Error })
 }
 
 func (r *Repository) UpdateBuyOpportunity(ctx context.Context, opportunityID string, updates map[string]any) error {
-	return r.db.WithContext(ctx).Model(&BuyOpportunity{}).Where("opportunity_id = ?", opportunityID).Updates(updates).Error
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&BuyOpportunity{}).Where("opportunity_id = ?", opportunityID).Updates(updates).Error
+	})
 }
 
 func (r *Repository) BuyOpportunitiesForRun(ctx context.Context, runID string) ([]BuyOpportunity, error) {
@@ -253,8 +330,54 @@ func (r *Repository) ListBuyOpportunities(ctx context.Context, limit, offset int
 	return result, err
 }
 
+// ActiveWaitOpportunities returns waits created before the successor run's
+// evidence cutoff. They remain active until a successor analysis completes;
+// merely starting (or failing) a run must not consume them.
+func (r *Repository) ActiveWaitOpportunities(ctx context.Context, before time.Time, limit int) ([]BuyOpportunity, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	query := r.db.WithContext(ctx).Where("status = ? AND action = ?", "active", OpportunityActionWait)
+	if !before.IsZero() {
+		query = query.Where("created_at < ? AND (reanalysis_at IS NULL OR reanalysis_at <= ?)", before, before)
+	}
+	var result []BuyOpportunity
+	err := query.Order("created_at ASC, id ASC").Limit(limit).Find(&result).Error
+	return result, err
+}
+
+func (r *Repository) EarliestActiveWaitReanalysis(ctx context.Context) (*time.Time, error) {
+	var opportunity BuyOpportunity
+	err := r.db.WithContext(ctx).
+		Where("status = ? AND action = ? AND reanalysis_at IS NOT NULL", "active", OpportunityActionWait).
+		Order("reanalysis_at ASC, id ASC").First(&opportunity).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return opportunity.ReanalysisAt, nil
+}
+
+// SupersedeWaitOpportunities closes only the exact waits carried into a
+// successfully completed successor run. Repeating the call is idempotent.
+func (r *Repository) SupersedeWaitOpportunities(ctx context.Context, priorIDs []string, successorRunID string, now time.Time) error {
+	if len(priorIDs) == 0 {
+		return nil
+	}
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&BuyOpportunity{}).
+			Where("opportunity_id IN ? AND status = ? AND action = ?", priorIDs, "active", OpportunityActionWait).
+			Updates(map[string]any{
+				"status": "superseded", "superseded_at": now,
+				"superseded_by_run_id": successorRunID,
+			}).Error
+	})
+}
+
 func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := tx.Create(recommendation).Error; err != nil {
 			return err
 		}
@@ -280,6 +403,9 @@ func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *R
 // recommendation, initial memory and initial lifecycle event are committed as
 // one unit so a failed run can never leave an invisible queued buy behind.
 func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage, initialDecision *DecisionEvent) error {
+	if initialDecision != nil && strings.TrimSpace(initialDecision.DecisionPolicyVersion) == "" {
+		initialDecision.DecisionPolicyVersion = CurrentDecisionPolicyVersion
+	}
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
@@ -351,7 +477,13 @@ func (r *Repository) Messages(ctx context.Context, recommendationID string) ([]L
 }
 
 func (r *Repository) AppendMessage(ctx context.Context, message *LifecycleMessage) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		// Acquire SQLite's writer lock before reading MAX(sequence). Without this,
+		// two processes can both read the same next sequence in deferred WAL
+		// transactions and one will fail with BUSY_SNAPSHOT on insert.
+		if err := tx.Exec("UPDATE research_v160_lifecycle_messages SET sequence = sequence WHERE recommendation_id = ?", message.RecommendationID).Error; err != nil {
+			return err
+		}
 		var next int
 		if err := tx.Model(&LifecycleMessage{}).Where("recommendation_id = ?", message.RecommendationID).
 			Select("COALESCE(MAX(sequence), 0) + 1").Scan(&next).Error; err != nil {
@@ -363,16 +495,29 @@ func (r *Repository) AppendMessage(ctx context.Context, message *LifecycleMessag
 }
 
 func (r *Repository) AppendDecision(ctx context.Context, event *DecisionEvent) error {
-	return r.db.WithContext(ctx).Create(event).Error
+	if event.EventID == "" {
+		event.EventID = newID()
+	}
+	if strings.TrimSpace(event.DecisionPolicyVersion) == "" {
+		event.DecisionPolicyVersion = CurrentDecisionPolicyVersion
+	}
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(event).Error })
 }
 
 func (r *Repository) AppendObservation(ctx context.Context, observation *LifecycleObservation) error {
-	return r.db.WithContext(ctx).Create(observation).Error
+	if observation.ObservationID == "" {
+		observation.ObservationID = newID()
+	}
+	if strings.TrimSpace(observation.DataProfileVersion) == "" || observation.DataProfileVersion == "legacy-unversioned" {
+		observation.DataProfileVersion = CurrentDataProfileVersion
+	}
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(observation).Error })
 }
 
 func (r *Repository) MarkObservationModelInvoked(ctx context.Context, observationID string) error {
-	return r.db.WithContext(ctx).Model(&LifecycleObservation{}).
-		Where("observation_id = ?", observationID).Update("model_invoked", true).Error
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&LifecycleObservation{}).Where("observation_id = ?", observationID).Update("model_invoked", true).Error
+	})
 }
 
 func (r *Repository) LastUsableObservation(ctx context.Context, recommendationID string) (LifecycleObservation, error) {
@@ -404,7 +549,9 @@ func (r *Repository) ObservationFingerprints(ctx context.Context, recommendation
 }
 
 func (r *Repository) UpdateRecommendation(ctx context.Context, id string, updates map[string]any) error {
-	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(updates).Error
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(updates).Error
+	})
 }
 
 func (r *Repository) Position(ctx context.Context, recommendationID string) (Position, error) {
@@ -414,7 +561,8 @@ func (r *Repository) Position(ctx context.Context, recommendationID string) (Pos
 }
 
 func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quote, nextCheck time.Time, now time.Time) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	tradeID, eventID := newID(), newID()
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
@@ -463,7 +611,7 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 			return err
 		}
 		trade := SimulatedTrade{
-			TradeID: newID(), RecommendationID: recommendationID, StockCode: recommendation.StockCode, Side: "buy", TradedAt: quote.At,
+			TradeID: tradeID, RecommendationID: recommendationID, StockCode: recommendation.StockCode, Side: "buy", TradedAt: quote.At,
 			MarketPrice: quote.Price, ExecutionPrice: cost.ExecutionPrice, Quantity: quantity, Notional: cost.Notional,
 			Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount,
 			TotalFees: cost.TotalFees, NetCashFlow: cost.NetCashFlow,
@@ -478,14 +626,15 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 		}).Error; err != nil {
 			return err
 		}
-		return tx.Create(&DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
+		return tx.Create(&DecisionEvent{EventID: eventID, RecommendationID: recommendationID,
 			DecisionType: "模拟买入", DecidedAt: now, Reason: "AI 推荐后按最新可交易行情直接成交",
-			QuotePrice: quote.Price, QuoteAt: &quote.At}).Error
+			QuotePrice: quote.Price, QuoteAt: &quote.At, DecisionPolicyVersion: CurrentDecisionPolicyVersion}).Error
 	})
 }
 
 func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, decisionType, reason string, now time.Time, quote *Quote) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	eventID := newID()
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
@@ -498,8 +647,8 @@ func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, deci
 		if result.RowsAffected != 1 {
 			return errors.New("recommendation is no longer awaiting direct buy")
 		}
-		event := DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
-			DecisionType: decisionType, DecidedAt: now, Reason: reason}
+		event := DecisionEvent{EventID: eventID, RecommendationID: recommendationID,
+			DecisionType: decisionType, DecidedAt: now, Reason: reason, DecisionPolicyVersion: CurrentDecisionPolicyVersion}
 		if quote != nil {
 			event.QuotePrice, event.QuoteAt = quote.Price, &quote.At
 		}
@@ -508,7 +657,8 @@ func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, deci
 }
 
 func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendationID, reason string, next, now time.Time) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	eventID := newID()
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
@@ -521,23 +671,24 @@ func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendation
 		if result.RowsAffected != 1 {
 			return errors.New("recommendation is no longer awaiting direct buy")
 		}
-		return tx.Create(&DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
-			DecisionType: "买入处理重试", DecidedAt: now, Reason: reason, DataStatus: "internal_error"}).Error
+		return tx.Create(&DecisionEvent{EventID: eventID, RecommendationID: recommendationID,
+			DecisionType: "买入处理重试", DecidedAt: now, Reason: reason, DataStatus: "internal_error", DecisionPolicyVersion: CurrentDecisionPolicyVersion}).Error
 	})
 }
 
 func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Quote) error {
-	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		trade, err := sellInTransaction(tx, recommendationID, quote)
+	tradeID, eventID, triggerID := newID(), newID(), newID()
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		trade, err := sellInTransactionWithTradeID(tx, recommendationID, quote, tradeID)
 		if err != nil {
 			return err
 		}
-		if err := tx.Create(&DecisionEvent{EventID: newID(), RecommendationID: recommendationID,
+		if err := tx.Create(&DecisionEvent{EventID: eventID, RecommendationID: recommendationID,
 			DecisionType: "模拟卖出", DecidedAt: quote.At, Reason: "按最新可交易行情成交",
-			QuotePrice: quote.Price, QuoteAt: &quote.At}).Error; err != nil {
+			QuotePrice: quote.Price, QuoteAt: &quote.At, DecisionPolicyVersion: CurrentDecisionPolicyVersion}).Error; err != nil {
 			return err
 		}
-		trigger := AnalysisTrigger{TriggerID: newID(), Source: TriggerSourceSell, SourceKey: trade.TradeID,
+		trigger := AnalysisTrigger{TriggerID: triggerID, Source: TriggerSourceSell, SourceKey: trade.TradeID,
 			SourceRecommendationID: recommendationID, SourceTradeID: trade.TradeID,
 			Reason: "模拟卖出释放资金", Status: TriggerStatusQueued, AvailableAt: quote.At, CoalesceUntil: quote.At.Add(sellTriggerCoalesce)}
 		return enqueueTriggerInTransaction(tx, &trigger)
@@ -545,6 +696,10 @@ func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Qu
 }
 
 func sellInTransaction(tx *gorm.DB, recommendationID string, quote Quote) (SimulatedTrade, error) {
+	return sellInTransactionWithTradeID(tx, recommendationID, quote, newID())
+}
+
+func sellInTransactionWithTradeID(tx *gorm.DB, recommendationID string, quote Quote, tradeID string) (SimulatedTrade, error) {
 	if err := lockAccountForWrite(tx); err != nil {
 		return SimulatedTrade{}, err
 	}
@@ -562,7 +717,7 @@ func sellInTransaction(tx *gorm.DB, recommendationID string, quote Quote) (Simul
 	}
 	netPnL := cost.NetCashFlow - (position.EntryPrice*float64(position.Quantity) + position.BuyFees)
 	trade := SimulatedTrade{
-		TradeID: newID(), RecommendationID: recommendationID, StockCode: recommendation.StockCode, Side: "sell", TradedAt: quote.At,
+		TradeID: tradeID, RecommendationID: recommendationID, StockCode: recommendation.StockCode, Side: "sell", TradedAt: quote.At,
 		MarketPrice: quote.Price, ExecutionPrice: cost.ExecutionPrice, Quantity: position.Quantity, Notional: cost.Notional,
 		Commission: cost.Commission, StampDuty: cost.StampDuty, TransferFee: cost.TransferFee,
 		SlippageAmount: cost.SlippageAmount, TotalFees: cost.TotalFees, NetCashFlow: cost.NetCashFlow,
@@ -593,7 +748,7 @@ func sellInTransaction(tx *gorm.DB, recommendationID string, quote Quote) (Simul
 func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {
 	var runs []AnalysisRun
 	err := r.db.WithContext(ctx).
-		Select("run_id", "scheduled_for", "started_at", "completed_at", "status", "provider_name", "model_name", "recommendation_count", "failure_reason", "source_status_json", "trigger_source", "trigger_reason", "buy_now_count", "wait_count", "reject_count").
+		Select("run_id", "strategy_version", "data_profile_version", "scheduled_for", "started_at", "completed_at", "status", "provider_name", "model_name", "recommendation_count", "failure_reason", "source_status_json", "trigger_source", "trigger_reason", "buy_now_count", "wait_count", "reject_count").
 		Order("started_at DESC, id DESC").Limit(limit).Offset(offset).Find(&runs).Error
 	if err != nil {
 		return nil, err
@@ -611,7 +766,8 @@ func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]Ana
 			}
 		}
 		result = append(result, AnalysisRunSummary{
-			RunID: run.RunID, ScheduledFor: run.ScheduledFor, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
+			RunID: run.RunID, StrategyVersion: run.StrategyVersion, DataProfileVersion: run.DataProfileVersion,
+			ScheduledFor: run.ScheduledFor, StartedAt: run.StartedAt, CompletedAt: run.CompletedAt,
 			Status: run.Status, ProviderName: run.ProviderName, ModelName: run.ModelName,
 			RecommendationCount: run.RecommendationCount, FailureReason: run.FailureReason,
 			SourceCount: len(sources), FailedSourceCount: failed,
@@ -782,7 +938,9 @@ func (r *Repository) Account(ctx context.Context) (SimulatedAccount, error) {
 }
 
 func (r *Repository) UpdatePositionQuote(ctx context.Context, id uint, quote Quote) error {
-	return r.db.WithContext(ctx).Model(&Position{}).Where("id = ? AND status = ?", id, "open").Updates(map[string]any{
-		"current_price": quote.Price, "current_price_at": quote.At,
-	}).Error
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		return tx.Model(&Position{}).Where("id = ? AND status = ?", id, "open").Updates(map[string]any{
+			"current_price": quote.Price, "current_price_at": quote.At,
+		}).Error
+	})
 }

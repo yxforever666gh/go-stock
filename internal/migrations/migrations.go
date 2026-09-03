@@ -275,6 +275,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV24Definition,
 		apply:       applyResearch2AnalysisAttemptSchema,
 	},
+	{
+		id: 25, name: "research1_data_chain_v3_provenance",
+		description: "Adds Research Center 1 data-profile, requested-action, quote-state, wait-reanalysis and lifecycle-policy provenance while preserving account, trade, position and return history.",
+		definition:  mainMigrationV25Definition,
+		apply:       applyResearch1DataChainV3Schema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -882,6 +888,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 24 {
 		if err := verifyMainSchema24Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 25 {
+		if err := verifyMainSchema25Runtime(database); err != nil {
 			return result, err
 		}
 	}

@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -19,8 +20,9 @@ func TestTruncateResearchSourceJSONIsUTF8Safe(t *testing.T) {
 	if !utf8.ValidString(result) {
 		t.Fatal("truncated source is invalid UTF-8")
 	}
-	if !strings.HasSuffix(result, "...<truncated>") {
-		t.Fatalf("missing truncation marker: %q", result[len(result)-32:])
+	var decoded string
+	if len(result) > 16000 || json.Unmarshal([]byte(result), &decoded) != nil || decoded == value {
+		t.Fatalf("truncated source is not bounded structural JSON")
 	}
 }
 

@@ -162,7 +162,7 @@ func TestFinalDecisionStrictActionsLimitsAndDeduplication(t *testing.T) {
 	}
 }
 
-func TestEventRunCrossingCutoffClosesBuyDecisionWithoutReservation(t *testing.T) {
+func TestEventRunCrossingCutoffRetainsBuyDecisionAsWaitWithoutReservation(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 28, 14, 24, 0, 0, shanghaiLocation)
 	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
@@ -174,11 +174,11 @@ func TestEventRunCrossingCutoffClosesBuyDecisionWithoutReservation(t *testing.T)
 	service := NewService(repo, ai, quotes, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeEvent, TriggerIDs: []string{"event-1"}, TriggerSource: TriggerSourceCapitalGap})
-	if err != nil || run.RecommendationCount != 0 || run.WaitCount != 1 || quotes.calls != 0 {
+	if err != nil || run.RecommendationCount != 0 || run.WaitCount != 1 || quotes.calls != 1 {
 		t.Fatalf("run=%+v quoteCalls=%d err=%v", run, quotes.calls, err)
 	}
 	opportunities, err := repo.BuyOpportunitiesForRun(context.Background(), run.RunID)
-	if err != nil || len(opportunities) != 1 || opportunities[0].Action != OpportunityActionWait || opportunities[0].Status != "closed" {
+	if err != nil || len(opportunities) != 1 || opportunities[0].RequestedAction != OpportunityActionBuyNow || opportunities[0].Action != OpportunityActionWait || opportunities[0].Status != "active" || opportunities[0].ReanalysisAt == nil {
 		t.Fatalf("opportunities=%+v err=%v", opportunities, err)
 	}
 	capacity, _ := repo.RecommendationCapacity(context.Background())
@@ -210,6 +210,11 @@ func TestWaitAndRejectPersistWithoutRecommendationOrCashReservation(t *testing.T
 	opportunities, err := repo.BuyOpportunitiesForRun(context.Background(), run.RunID)
 	if err != nil || len(opportunities) != 2 || opportunities[0].RecommendationID != "" || opportunities[1].RecommendationID != "" {
 		t.Fatalf("opportunities=%+v err=%v", opportunities, err)
+	}
+	for _, opportunity := range opportunities {
+		if opportunity.RequestedAction == "" || opportunity.DecisionQuoteStatus == "" || opportunity.DataProfileVersion != CurrentDataProfileVersion {
+			t.Fatalf("opportunity audit metadata=%+v", opportunity)
+		}
 	}
 	detail, err := repo.Analysis(context.Background(), run.RunID)
 	if err != nil || len(detail.Opportunities) != 2 {

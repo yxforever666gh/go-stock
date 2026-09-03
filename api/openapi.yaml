@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.7.10
+  version: 2.7.11
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -1490,6 +1490,7 @@ components:
         sourceStatusJson: {type: string}
         modelAttemptLogJson: {type: string}
         strategyVersion: {type: string}
+        dataProfileVersion: {type: string}
         evidenceProfileVersion: {type: string}
         evidenceSetId: {type: string}
         failureReason: {type: string}
@@ -1517,6 +1518,8 @@ components:
       required: [runId, scheduledFor, startedAt, status, recommendationCount, sourceCount, failedSourceCount]
       properties:
         runId: {type: string}
+        strategyVersion: {type: string}
+        dataProfileVersion: {type: string}
         scheduledFor: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         completedAt: {type: string, format: date-time}
@@ -1559,19 +1562,24 @@ components:
         recommendationId: {type: string}
         stockCode: {type: string}
         stockName: {type: string}
+        requestedAction: {type: string, enum: [buy_now, wait, reject]}
         action: {type: string, enum: [buy_now, wait, reject]}
         priceLow: {type: number}
         priceHigh: {type: number}
         quotePrice: {type: number}
         quoteAt: {type: string, format: date-time}
+        decisionQuoteStatus: {type: string, enum: [ok, stale, unavailable, invalid, legacy-recorded, legacy-unavailable]}
         aiSummary: {type: string}
         mainRisk: {type: string}
         sourceRefs: {type: string}
         source: {type: string}
         status: {type: string}
         timingReason: {type: string}
-        expiresAt: {type: string, format: date-time}
+        expiresAt: {type: string, format: date-time, deprecated: true, description: Legacy expiry field; v3 waits use reanalysisAt.}
+        reanalysisAt: {type: string, format: date-time}
         supersededAt: {type: string, format: date-time}
+        supersededByRunId: {type: string}
+        dataProfileVersion: {type: string}
         validationReason: {type: string}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
@@ -1612,7 +1620,7 @@ components:
       properties: {sequence: {type: integer}, role: {type: string}, phase: {type: string}, content: {type: string}, responseId: {type: string}, createdAt: {type: string, format: date-time}}
     DecisionEvent:
       type: object
-      properties: {eventId: {type: string}, decisionType: {type: string}, decidedAt: {type: string, format: date-time}, aiResponse: {type: string}, reason: {type: string}, quotePrice: {type: number}, quoteAt: {type: string, format: date-time}, sourceRefs: {type: string}, dataStatus: {type: string}}
+      properties: {eventId: {type: string}, decisionType: {type: string}, decidedAt: {type: string, format: date-time}, aiResponse: {type: string}, reason: {type: string}, quotePrice: {type: number}, quoteAt: {type: string, format: date-time}, sourceRefs: {type: string}, dataStatus: {type: string}, decisionPolicyVersion: {type: string}}
     LifecycleObservation:
       type: object
       required: [observationId, recommendationId, phase, windowFrom, observedAt, status, quoteJson, minuteSummaryJson, evidenceJson, sourceStatusJson, modelInvoked]
@@ -1630,6 +1638,20 @@ components:
         criticalFailure: {type: string}
         contentFingerprint: {type: string}
         modelInvoked: {type: boolean}
+        dataProfileVersion: {type: string}
+    MinuteWindowSummary:
+      type: object
+      required: [minutes, bars, returnRate, high, low, volume, amount, averagePrice, averagePriceMethod]
+      properties:
+        minutes: {type: integer}
+        bars: {type: integer}
+        returnRate: {type: number}
+        high: {type: number}
+        low: {type: number}
+        volume: {type: number}
+        amount: {type: number}
+        averagePrice: {type: number}
+        averagePriceMethod: {type: string, enum: [amount_divided_by_share_volume, amount_divided_by_lot_volume_times_100, volume_weighted_minute_price_proxy]}
     SimulatedTrade:
       type: object
       properties: {side: {type: string}, tradedAt: {type: string, format: date-time}, marketPrice: {type: number}, executionPrice: {type: number}, quantity: {type: integer}, totalFees: {type: number}, netCashFlow: {type: number}}

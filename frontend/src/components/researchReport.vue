@@ -27,7 +27,7 @@ let pollTimer = null
 const hasRunningReport = computed(() => rows.value.some(row => row.status === 'running'))
 
 const statusLabels = {
-  running: '分析中', success: '已推荐', no_recommendation: '空仓', failed: '失败',
+  running: '分析中', success: '已推荐', partial_success: '部分完成', no_recommendation: '空仓', failed: '失败',
   skipped_non_trading_day: '非交易日跳过', skipped_open_position: '持仓中跳过', skipped_capacity: '容量不足跳过', skipped_cash: '现金不足跳过',
 }
 
@@ -37,6 +37,7 @@ function dateTime(value) {
 
 function statusType(status) {
   if (status === 'success') return 'success'
+  if (status === 'partial_success') return 'warning'
   if (status === 'failed') return 'error'
   if (status === 'running') return 'warning'
   return 'info'

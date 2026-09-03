@@ -63,7 +63,8 @@ func (s *Service) ProcessScheduledFunding(ctx context.Context, now time.Time) (F
 	// external contribution. The transaction below values missing quotes using
 	// the last persisted price and records the status as partial.
 	allFresh := s.refreshAccountQuotes(ctx, local, true)
-	err = s.repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	flowID := newID()
+	err = transactionWithWriteRetry(ctx, s.repository.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
@@ -115,7 +116,7 @@ func (s *Service) ProcessScheduledFunding(ctx context.Context, now time.Time) (F
 		issued := amount / unitValue
 		effectiveAt := local
 		flow := AccountCashFlow{
-			FlowID: newID(), Sequence: sequence, Type: "scheduled_deposit", Amount: amount,
+			FlowID: flowID, Sequence: sequence, Type: "scheduled_deposit", Amount: amount,
 			EffectiveAt: effectiveAt, TradingDate: date, NetAssetValueBefore: beforeNAV,
 			NetAssetValueAfter: beforeNAV + amount, UnitValueBefore: unitValue, UnitsIssued: issued,
 		}
@@ -182,7 +183,8 @@ func (s *Service) ProcessScheduledSnapshot(ctx context.Context, now time.Time) (
 	}
 	allFresh := s.refreshAccountQuotes(ctx, local, false)
 	applied := false
-	err = s.repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+	err = transactionWithWriteRetry(ctx, s.repository.db, func(tx *gorm.DB) error {
+		applied = false
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}

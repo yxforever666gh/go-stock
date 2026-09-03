@@ -182,6 +182,7 @@ export type AccountPerformancePoint = {
 export type AnalysisRun = {
   buyNowCount?: number
   completedAt?: string
+  dataProfileVersion?: string
   evidenceProfileVersion?: string
   evidenceSetId?: string
   failureReason?: string
@@ -219,6 +220,7 @@ export type AnalysisRun = {
 export type AnalysisRunSummary = {
   buyNowCount?: number
   completedAt?: string
+  dataProfileVersion?: string
   failedSourceCount: number
   failureReason?: string
   modelName?: string
@@ -230,6 +232,7 @@ export type AnalysisRunSummary = {
   sourceCount: number
   startedAt: string
   status: string
+  strategyVersion?: string
   triggerReason?: string
   triggerSource?: string
   waitCount?: number
@@ -263,6 +266,8 @@ export type BuyOpportunity = {
   aiSummary?: string
   analysisRunId: string
   createdAt: string
+  dataProfileVersion?: string
+  decisionQuoteStatus?: "ok" | "stale" | "unavailable" | "invalid" | "legacy-recorded" | "legacy-unavailable"
   expiresAt?: string
   mainRisk?: string
   opportunityId: string
@@ -270,13 +275,16 @@ export type BuyOpportunity = {
   priceLow?: number
   quoteAt?: string
   quotePrice?: number
+  reanalysisAt?: string
   recommendationId?: string
+  requestedAction?: "buy_now" | "wait" | "reject"
   source?: string
   sourceRefs?: string
   status: string
   stockCode: string
   stockName: string
   supersededAt?: string
+  supersededByRunId?: string
   timingReason?: string
   updatedAt?: string
   validationReason?: string
@@ -424,6 +432,7 @@ export type DecisionEvent = {
   aiResponse?: string
   dataStatus?: string
   decidedAt?: string
+  decisionPolicyVersion?: string
   decisionType?: string
   eventId?: string
   quoteAt?: string
@@ -800,6 +809,7 @@ export type LifecycleMessage = {
 export type LifecycleObservation = {
   contentFingerprint?: string
   criticalFailure?: string
+  dataProfileVersion?: string
   evidenceJson: string
   minuteSummaryJson: string
   modelInvoked: boolean
@@ -851,6 +861,18 @@ export type MarketBreadthData = {
 
 export type MarketBreadthEnvelope = DataEnvelope & {
   data: MarketBreadthData
+}
+
+export type MinuteWindowSummary = {
+  amount: number
+  averagePrice: number
+  averagePriceMethod: "amount_divided_by_share_volume" | "amount_divided_by_lot_volume_times_100" | "volume_weighted_minute_price_proxy"
+  bars: number
+  high: number
+  low: number
+  minutes: number
+  returnRate: number
+  volume: number
 }
 
 export type Position = {

@@ -12,6 +12,7 @@ var (
 	ErrInsufficientCash       = errors.New("insufficient cash")
 	ErrMinimumOrder           = errors.New("insufficient cash for minimum order unit")
 	ErrDuplicateStockExposure = errors.New("stock already has an open or pending exposure")
+	ErrExecutionWindowClosed  = errors.New("immediate execution window is closed")
 )
 
 const (

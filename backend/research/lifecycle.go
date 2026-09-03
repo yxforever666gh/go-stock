@@ -155,12 +155,26 @@ func (s *Service) recommendationCapacity(ctx context.Context) (RecommendationCap
 // trading session. The same serial lock is shared with the lifecycle scanner so
 // account competition is deterministic.
 func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, signalQuotes ...Quote) error {
+	return s.enqueueRecommendation(ctx, recommendation, initial, time.Time{}, signalQuotes...)
+}
+
+func (s *Service) EnqueueRecommendationBefore(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...Quote) error {
+	return s.enqueueRecommendation(ctx, recommendation, initial, executionDeadline, signalQuotes...)
+}
+
+func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...Quote) error {
 	s.serial.Lock()
 	defer s.serial.Unlock()
 	now := s.now()
+	if !executionDeadline.IsZero() && now.After(executionDeadline) {
+		return ErrExecutionWindowClosed
+	}
 	next, err := NextTradingSessionOpen(ctx, s.calendar, now)
 	if err != nil {
 		return err
+	}
+	if len(signalQuotes) > 0 && next.After(now) {
+		return ErrExecutionWindowClosed
 	}
 	recommendation.Status, recommendation.NextCheckAt = "buy_pending", &next
 	capacity, err := s.repository.RecommendationCapacity(ctx)
@@ -190,7 +204,7 @@ func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Rec
 		recommendation.ReservedCash = math.Min(TargetCashPerTrade, capacity.DeployableCash)
 	}
 	initialDecision := &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
-		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入"}
+		DecisionType: "待买入", DecidedAt: now, Reason: "AI 推荐已入库，按策略仅尝试一次直接买入", DecisionPolicyVersion: CurrentDecisionPolicyVersion}
 	if err := s.repository.CreateRecommendationWithinCapacity(ctx, recommendation, initial, initialDecision); err != nil {
 		return err
 	}
@@ -425,7 +439,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return s.repository.AppendDecision(ctx, &DecisionEvent{
 			EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: "响应跨休市", DecidedAt: decisionAt,
 			AIResponse: result.Content, Reason: "模型响应时市场已休市，本次判断不执行，顺延至下一固定卖出检查时点",
-			SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status,
+			SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status, DecisionPolicyVersion: CurrentDecisionPolicyVersion,
 		})
 	}
 	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
@@ -434,7 +448,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		return err
 	}
 	event := DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: decision.Action, DecidedAt: decisionAt,
-		AIResponse: result.Content, Reason: decision.Reason, SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status}
+		AIResponse: result.Content, Reason: decision.Reason, SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status, DecisionPolicyVersion: CurrentDecisionPolicyVersion}
 	if err := s.repository.AppendDecision(ctx, &event); err != nil {
 		return err
 	}
@@ -462,7 +476,7 @@ func (s *Service) deferForCriticalData(ctx context.Context, recommendation *Reco
 	}
 	reason := strings.TrimSpace(observation.CriticalFailure)
 	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
-		DecisionType: "数据不足重试", DecidedAt: now, Reason: reason, DataStatus: "critical_failed"})
+		DecisionType: "数据不足重试", DecidedAt: now, Reason: reason, DataStatus: "critical_failed", DecisionPolicyVersion: CurrentDecisionPolicyVersion})
 }
 
 func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation, now time.Time) error {
@@ -535,7 +549,7 @@ func (s *Service) deferSell(ctx context.Context, recommendationID string, now ti
 	if err := s.repository.UpdateRecommendation(ctx, recommendationID, map[string]any{"status": "sell_pending", "next_check_at": next}); err != nil {
 		return err
 	}
-	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendationID, DecisionType: "待卖", DecidedAt: now, Reason: reason})
+	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendationID, DecisionType: "待卖", DecidedAt: now, Reason: reason, DecisionPolicyVersion: CurrentDecisionPolicyVersion})
 }
 
 func (s *Service) recordError(ctx context.Context, recommendation Recommendation, now time.Time, processErr error) error {
@@ -550,7 +564,7 @@ func (s *Service) recordError(ctx context.Context, recommendation Recommendation
 		return err
 	}
 	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
-		DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error(), DataStatus: "model_error"})
+		DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error(), DataStatus: "model_error", DecisionPolicyVersion: CurrentDecisionPolicyVersion})
 }
 
 func (s *Service) deferBuyProcessingError(ctx context.Context, recommendationID string, now time.Time, processErr error) error {
@@ -749,7 +763,7 @@ func validateBuyQuoteAt(now time.Time, quote Quote) error {
 		return fmt.Errorf("quote trading date is stale: %s", localQuote.Format(time.RFC3339))
 	}
 	lag := localNow.Sub(localQuote)
-	if lag > 20*time.Minute || lag < -2*time.Minute {
+	if lag > decisionQuoteMaxLag || lag < -decisionQuoteFutureSkew {
 		return fmt.Errorf("quote time is stale or invalid: %s", lag.Round(time.Second))
 	}
 	return nil
@@ -771,7 +785,7 @@ func validateSellQuoteAt(now time.Time, recommendation *Recommendation, quote Qu
 		return fmt.Errorf("卖出行情日期滞后: %s", localQuote.Format(time.RFC3339))
 	}
 	lag := localNow.Sub(localQuote)
-	if lag > 20*time.Minute || lag < -2*time.Minute {
+	if lag > decisionQuoteMaxLag || lag < -decisionQuoteFutureSkew {
 		return fmt.Errorf("卖出行情时间异常: %s", lag.Round(time.Second))
 	}
 	return nil

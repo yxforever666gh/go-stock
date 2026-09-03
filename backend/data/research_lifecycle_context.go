@@ -15,7 +15,11 @@ import (
 	"go-stock/backend/research"
 )
 
-const lifecycleSourceTimeout = 20 * time.Second
+const (
+	lifecycleSourceTimeout     = 20 * time.Second
+	lifecycleEvidenceMaxLag    = 2 * time.Minute
+	lifecycleEvidenceClockSkew = 5 * time.Second
+)
 
 type lifecycleCachedSource struct {
 	name        string
@@ -110,7 +114,7 @@ func validateLifecycleQuoteFreshness(now time.Time, quote research.Quote) error 
 		return fmt.Errorf("实时行情日期滞后，行情时间为 %s", localQuote.Format(time.RFC3339))
 	}
 	lag := localNow.Sub(localQuote)
-	if lag > 20*time.Minute || lag < -2*time.Minute {
+	if lag > lifecycleEvidenceMaxLag || lag < -lifecycleEvidenceClockSkew {
 		return fmt.Errorf("实时行情时间异常，距当前时间 %s", lag.Round(time.Second))
 	}
 	return nil
@@ -157,7 +161,7 @@ func summarizeLifecycleMinutes(now time.Time, tradingDate string, rows []MinuteD
 	bars := make([]parsedBar, 0, len(rows))
 	for _, row := range rows {
 		at, parseErr := time.ParseInLocation("2006-01-02 15:04", date.Format("2006-01-02")+" "+strings.TrimSpace(row.Time), shanghaiDataLocation())
-		if parseErr != nil || row.Price <= 0 {
+		if parseErr != nil || row.Price <= 0 || math.IsNaN(row.Price) || math.IsInf(row.Price, 0) {
 			continue
 		}
 		bars = append(bars, parsedBar{at: at, MinuteData: row})
@@ -166,9 +170,17 @@ func summarizeLifecycleMinutes(now time.Time, tradingDate string, rows []MinuteD
 		return research.MinuteEvidenceSummary{}, errors.New("分钟行情没有有效价格记录")
 	}
 	sort.Slice(bars, func(i, j int) bool { return bars[i].at.Before(bars[j].at) })
+	volumes, amounts := make([]float64, len(bars)), make([]float64, len(bars))
+	for index := range bars {
+		volumes[index], amounts[index] = bars[index].Volume, bars[index].Amount
+	}
+	for index := len(bars) - 1; index > 0; index-- {
+		bars[index].Volume = lifecycleCumulativeDelta(volumes[index], volumes[index-1])
+		bars[index].Amount = lifecycleCumulativeDelta(amounts[index], amounts[index-1])
+	}
 	latest := bars[len(bars)-1]
 	localNow := research.ShanghaiTime(now)
-	if latest.at.Format("2006-01-02") != localNow.Format("2006-01-02") || localNow.Sub(latest.at) > 20*time.Minute || localNow.Sub(latest.at) < -2*time.Minute {
+	if latest.at.Format("2006-01-02") != localNow.Format("2006-01-02") || localNow.Sub(latest.at) > lifecycleEvidenceMaxLag || localNow.Sub(latest.at) < -lifecycleEvidenceClockSkew {
 		return research.MinuteEvidenceSummary{}, fmt.Errorf("分钟行情严重滞后，最新记录为 %s", latest.at.Format(time.RFC3339))
 	}
 	summary := research.MinuteEvidenceSummary{TradingDate: date.Format("2006-01-02"), LatestAt: latest.at, LatestPrice: latest.Price, TotalBars: len(bars)}
@@ -185,23 +197,63 @@ func summarizeLifecycleMinutes(now time.Time, tradingDate string, rows []MinuteD
 		}
 		window := research.MinuteWindowSummary{Minutes: minutes, Bars: len(selected), High: selected[0].Price, Low: selected[0].Price}
 		weightedPrice, weight := 0.0, 0.0
+		completeTurnover := true
 		for _, bar := range selected {
 			window.High = math.Max(window.High, bar.Price)
 			window.Low = math.Min(window.Low, bar.Price)
-			window.Volume += bar.Volume
-			window.Amount += bar.Amount
-			weightedPrice += bar.Price * math.Max(bar.Volume, 1)
-			weight += math.Max(bar.Volume, 1)
+			validVolume := bar.Volume > 0 && !math.IsNaN(bar.Volume) && !math.IsInf(bar.Volume, 0)
+			validAmount := bar.Amount > 0 && !math.IsNaN(bar.Amount) && !math.IsInf(bar.Amount, 0)
+			if validVolume {
+				window.Volume += bar.Volume
+			} else {
+				completeTurnover = false
+			}
+			priceWeight := bar.Volume
+			if !validVolume {
+				priceWeight = 1
+			}
+			weightedPrice += bar.Price * priceWeight
+			weight += priceWeight
+			if validAmount {
+				window.Amount += bar.Amount
+			} else {
+				completeTurnover = false
+			}
 		}
 		window.ReturnRate = safeRate(selected[len(selected)-1].Price-selected[0].Price, selected[0].Price)
-		if window.Amount > 0 && window.Volume > 0 {
-			window.AveragePrice = window.Amount / window.Volume
-		} else if weight > 0 {
-			window.AveragePrice = weightedPrice / weight
-		}
+		window.AveragePrice, window.AveragePriceMethod = lifecycleWindowAveragePrice(window, completeTurnover, weightedPrice, weight)
 		summary.Windows = append(summary.Windows, window)
 	}
 	return summary, nil
+}
+
+func lifecycleCumulativeDelta(current, previous float64) float64 {
+	if current <= 0 || math.IsNaN(current) || math.IsInf(current, 0) {
+		return 0
+	}
+	if current >= previous {
+		return current - previous
+	}
+	// A provider-side session/reset starts a new cumulative series.
+	return current
+}
+
+func lifecycleWindowAveragePrice(window research.MinuteWindowSummary, completeTurnover bool, weightedPrice, weight float64) (float64, string) {
+	reasonable := func(value float64) bool {
+		return value > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) &&
+			value >= window.Low*0.8 && value <= window.High*1.2
+	}
+	if completeTurnover && window.Amount > 0 && window.Volume > 0 {
+		if candidate := window.Amount / window.Volume; reasonable(candidate) {
+			return candidate, "amount_divided_by_share_volume"
+		} else if candidate /= 100; reasonable(candidate) {
+			return candidate, "amount_divided_by_lot_volume_times_100"
+		}
+	}
+	if weight > 0 {
+		return weightedPrice / weight, "volume_weighted_minute_price_proxy"
+	}
+	return 0, "volume_weighted_minute_price_proxy"
 }
 
 func parseMinuteTradingDate(value string) (time.Time, error) {

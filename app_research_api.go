@@ -337,6 +337,16 @@ func (a *App) startClaimedCapitalDeployment(runtime *data.ResearchRuntime, selec
 		status, statusErr := runtime.Service.CapitalDeploymentStatus(ctx, completedAt)
 		if statusErr == nil && status.DeployableCash >= research.TargetCashPerTrade {
 			requested := completedAt.Add(reanalysisInterval)
+			waitAt, waitErr := runtime.Repository.EarliestActiveWaitReanalysis(ctx)
+			if waitErr != nil {
+				logger.SugaredLogger.Warnf("读取待观察重分析时间失败 run=%s: %v", run.RunID, waitErr)
+			}
+			if waitErr == nil && waitAt != nil && waitAt.Before(requested) {
+				requested = *waitAt
+				if !requested.After(completedAt) {
+					requested = completedAt.Add(5 * time.Minute)
+				}
+			}
 			availableAt, windowErr := nextCapitalDeploymentWindow(ctx, runtime.Service, requested)
 			if windowErr == nil {
 				_, enqueueErr := runtime.Service.EnqueueCapitalGapTrigger(ctx, research.TriggerSourceCapitalGap,
@@ -434,8 +444,7 @@ func (a *App) getAICapitalDeploymentStatusContext(ctx context.Context) (capitalD
 		return capitalDeploymentStatusResponse{}, opportunityErr
 	}
 	for _, opportunity := range opportunities {
-		if opportunity.Action == research.OpportunityActionWait && opportunity.Status == "active" &&
-			(opportunity.ExpiresAt == nil || opportunity.ExpiresAt.After(now)) {
+		if opportunity.Action == research.OpportunityActionWait && opportunity.Status == "active" {
 			response.WatchingCandidateCount++
 		}
 	}

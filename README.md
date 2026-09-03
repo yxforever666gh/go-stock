@@ -2,7 +2,7 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 2.7.10
+## 当前版本：App 2.7.11
 
 Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本修复研究中心2午休证据窗口、证据冻结状态和报告邮件兼容性问题。
 

@@ -102,6 +102,7 @@ func NewLifecycleObservation(request LifecycleContextRequest, draft LifecycleObs
 		Phase: request.Phase, WindowFrom: request.WindowFrom, ObservedAt: request.Now, Status: draft.Status,
 		QuoteJSON: string(quoteJSON), MinuteSummaryJSON: string(minuteJSON), EvidenceJSON: string(evidenceJSON),
 		SourceStatusJSON: string(statusJSON), CriticalFailure: strings.TrimSpace(draft.CriticalFailure), ContentFingerprint: fingerprint,
+		DataProfileVersion: CurrentDataProfileVersion,
 	}, nil
 }
 

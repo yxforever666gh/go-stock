@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"go-stock/backend/research"
 )
 
 func TestSummarizeLifecycleMinutesBuildsFifteenThirtySixtyMinuteWindows(t *testing.T) {
@@ -23,6 +25,77 @@ func TestSummarizeLifecycleMinutesBuildsFifteenThirtySixtyMinuteWindows(t *testi
 	}
 	if summary.Windows[0].Minutes != 15 || summary.Windows[0].Bars != 16 || math.Abs(summary.Windows[0].ReturnRate-((10.6-10.45)/10.45)) > 1e-9 {
 		t.Fatalf("15-minute window=%+v", summary.Windows[0])
+	}
+}
+
+func TestSummarizeLifecycleMinutesAveragePriceFromShareVolume(t *testing.T) {
+	window := summarizeLifecycleMinuteWindowForAveragePriceTest(t, []MinuteData{
+		{Time: "10:29", Price: 10, Volume: 100, Amount: 1000},
+		{Time: "10:30", Price: 12, Volume: 400, Amount: 4600},
+	})
+	assertLifecycleMinuteAveragePrice(t, window.AveragePrice, window.AveragePriceMethod, 11.5, "amount_divided_by_share_volume")
+}
+
+func TestSummarizeLifecycleMinutesAveragePriceFromLotVolume(t *testing.T) {
+	window := summarizeLifecycleMinuteWindowForAveragePriceTest(t, []MinuteData{
+		{Time: "10:29", Price: 10, Volume: 100, Amount: 100000},
+		{Time: "10:30", Price: 12, Volume: 400, Amount: 460000},
+	})
+	assertLifecycleMinuteAveragePrice(t, window.AveragePrice, window.AveragePriceMethod, 11.5, "amount_divided_by_lot_volume_times_100")
+}
+
+func TestSummarizeLifecycleMinutesAveragePriceFallsBackForAbnormalAmount(t *testing.T) {
+	window := summarizeLifecycleMinuteWindowForAveragePriceTest(t, []MinuteData{
+		{Time: "10:29", Price: 10, Volume: 100, Amount: 100},
+		{Time: "10:30", Price: 12, Volume: 400, Amount: 200},
+	})
+	assertLifecycleMinuteAveragePrice(t, window.AveragePrice, window.AveragePriceMethod, 11.5, "volume_weighted_minute_price_proxy")
+}
+
+func TestSummarizeLifecycleMinutesAveragePriceFallsBackForMissingAmount(t *testing.T) {
+	window := summarizeLifecycleMinuteWindowForAveragePriceTest(t, []MinuteData{
+		{Time: "10:29", Price: 10, Volume: 100},
+		{Time: "10:30", Price: 12, Volume: 400},
+	})
+	assertLifecycleMinuteAveragePrice(t, window.AveragePrice, window.AveragePriceMethod, 11.5, "volume_weighted_minute_price_proxy")
+}
+
+func TestSummarizeLifecycleMinutesConvertsCumulativeTurnoverToDeltas(t *testing.T) {
+	location := shanghaiDataLocation()
+	now := time.Date(2026, 8, 18, 10, 30, 0, 0, location)
+	rows := make([]MinuteData, 0, 61)
+	for index := 0; index <= 60; index++ {
+		volume := float64((index + 1) * 100)
+		rows = append(rows, MinuteData{Time: now.Add(-time.Duration(60-index) * time.Minute).Format("15:04"), Price: 10, Volume: volume, Amount: volume * 10 * 100})
+	}
+	summary, err := summarizeLifecycleMinutes(now, "20260818", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	window := summary.Windows[0]
+	if window.Volume != 1600 || window.Amount != 1600000 || math.Abs(window.AveragePrice-10) > 1e-9 || window.AveragePriceMethod != "amount_divided_by_lot_volume_times_100" {
+		t.Fatalf("cumulative turnover was not normalized: %+v", window)
+	}
+}
+
+func summarizeLifecycleMinuteWindowForAveragePriceTest(t *testing.T, rows []MinuteData) research.MinuteWindowSummary {
+	t.Helper()
+	location := shanghaiDataLocation()
+	now := time.Date(2026, 8, 18, 10, 30, 0, 0, location)
+	summary, err := summarizeLifecycleMinutes(now, "20260818", rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Windows) == 0 {
+		t.Fatal("minute summary did not contain a window")
+	}
+	return summary.Windows[0]
+}
+
+func assertLifecycleMinuteAveragePrice(t *testing.T, got float64, gotMethod string, want float64, wantMethod string) {
+	t.Helper()
+	if math.Abs(got-want) > 1e-9 || gotMethod != wantMethod {
+		t.Fatalf("averagePrice=%v method=%q, want %v %q", got, gotMethod, want, wantMethod)
 	}
 }
 

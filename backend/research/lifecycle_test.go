@@ -45,9 +45,12 @@ type scriptedQuotes struct {
 	quotes []Quote
 	errors []error
 	calls  int
+	mu     sync.Mutex
 }
 
-func (m *scriptedQuotes) CurrentQuote(_ context.Context, _ string) (Quote, error) {
+func (m *scriptedQuotes) CurrentQuote(_ context.Context, requested string) (Quote, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	i := m.calls
 	m.calls++
 	if i < len(m.errors) && m.errors[i] != nil {
@@ -58,6 +61,14 @@ func (m *scriptedQuotes) CurrentQuote(_ context.Context, _ string) (Quote, error
 	}
 	if i >= len(m.quotes) {
 		i = len(m.quotes) - 1
+	}
+	if requestedCode, ok := NormalizeMainlandCode(requested); ok {
+		for index := i; index < len(m.quotes); index++ {
+			if quoteCode, quoteOK := NormalizeMainlandCode(m.quotes[index].Code); quoteOK && quoteCode == requestedCode {
+				m.quotes[i], m.quotes[index] = m.quotes[index], m.quotes[i]
+				break
+			}
+		}
 	}
 	return m.quotes[i], nil
 }

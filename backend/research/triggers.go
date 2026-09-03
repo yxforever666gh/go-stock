@@ -122,6 +122,7 @@ func (s *Service) EnqueueCapitalGapTrigger(ctx context.Context, source, sourceKe
 func (r *Repository) RecoverExpiredAnalysisLeases(ctx context.Context, now time.Time) (int64, error) {
 	var recovered int64
 	err := transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		recovered = 0
 		var triggers []AnalysisTrigger
 		if err := tx.Where("status = ? AND lease_expires_at IS NOT NULL AND lease_expires_at <= ?", TriggerStatusRunning, now).Find(&triggers).Error; err != nil {
 			return err
@@ -161,7 +162,9 @@ func (r *Repository) ClaimAnalysisTriggerBatch(ctx context.Context, now time.Tim
 		lease = defaultAnalysisLease
 	}
 	var claim AnalysisTriggerClaim
+	reservedRunID := newID()
 	err := transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		claim = AnalysisTriggerClaim{}
 		var active int64
 		if err := tx.Model(&AnalysisRun{}).
 			Where("status IN ? AND trigger_id <> '' AND (lease_expires_at IS NULL OR lease_expires_at > ?)", []string{"queued", "running"}, now).
@@ -208,11 +211,11 @@ func (r *Repository) ClaimAnalysisTriggerBatch(ctx context.Context, now time.Tim
 		}
 		idsJSON, _ := json.Marshal(ids)
 		expires := now.Add(lease)
-		run := AnalysisRun{RunID: newID(), ScheduledFor: now, StartedAt: now, Status: "queued", ModelAttemptLogJSON: "[]",
+		run := AnalysisRun{RunID: reservedRunID, ScheduledFor: now, StartedAt: now, Status: "queued", ModelAttemptLogJSON: "[]",
 			TriggerID: ids[0], TriggerIDsJSON: string(idsJSON), TriggerSource: strings.Join(sources, ","), TriggerReason: strings.Join(reasons, "；"),
 			FundingCash: capacity.Cash, FundingReservedCash: capacity.ReservedCash, FundingNetAssetValue: capacity.NetAssetValue,
 			FundingCapitalBuffer: capacity.CapitalBuffer, FundingDeployableCash: capacity.DeployableCash, FundingAvailableSlots: capacity.AvailableSlots,
-			LeaseOwner: owner, LeaseExpiresAt: &expires}
+			LeaseOwner: owner, LeaseExpiresAt: &expires, StrategyVersion: CurrentStrategyVersion, DataProfileVersion: CurrentDataProfileVersion}
 		if err := tx.Create(&run).Error; err != nil {
 			return err
 		}
@@ -225,10 +228,6 @@ func (r *Repository) ClaimAnalysisTriggerBatch(ctx context.Context, now time.Tim
 		}
 		if result.RowsAffected != int64(len(ids)) {
 			return errors.New("analysis trigger batch changed during claim")
-		}
-		if err := tx.Model(&BuyOpportunity{}).Where("status = ? AND action = ?", "active", OpportunityActionWait).
-			Updates(map[string]any{"status": "superseded", "superseded_at": now}).Error; err != nil {
-			return err
 		}
 		for index := range triggers {
 			triggers[index].Status, triggers[index].AnalysisRunID, triggers[index].LeaseOwner = TriggerStatusRunning, run.RunID, owner
