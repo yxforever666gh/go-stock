@@ -28,7 +28,7 @@ func TestResearch2TransactionRetriesSQLiteBusy(t *testing.T) {
 	}
 }
 
-func TestCreateRunAttemptAllowsAtMostThreeAttempts(t *testing.T) {
+func TestCreateRunAttemptAllowsAtMostFourAttempts(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
@@ -63,12 +63,21 @@ func TestCreateRunAttemptAllowsAtMostThreeAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	fourth, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
+	if err != nil || !created || fourth.AttemptNo != 4 || fourth.RunID == third.RunID {
+		t.Fatalf("fourth=%+v created=%v err=%v", fourth, created, err)
+	}
+	fourth.Status = "failed"
+	if err = repository.SaveRun(ctx, &fourth); err != nil {
+		t.Fatal(err)
+	}
+
 	latest, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
-	if err != nil || created || latest.RunID != third.RunID {
+	if err != nil || created || latest.RunID != fourth.RunID {
 		t.Fatalf("latest=%+v created=%v err=%v", latest, created, err)
 	}
 	lookup, exists, err := repository.RunForDate(ctx, "2026-09-03")
-	if err != nil || !exists || lookup.RunID != third.RunID {
+	if err != nil || !exists || lookup.RunID != fourth.RunID {
 		t.Fatalf("lookup=%+v exists=%v err=%v", lookup, exists, err)
 	}
 }

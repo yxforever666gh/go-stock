@@ -127,6 +127,12 @@ func (r *Repository) AppendItems(ctx context.Context, evidenceSetID string, valu
 		return nil
 	}
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// SQLite does not implement SELECT FOR UPDATE. Make the first statement
+		// a write so the transaction reserves the writer before reading a
+		// snapshot; otherwise the later insert can fail with SQLITE_BUSY_SNAPSHOT.
+		if err := acquireEvidenceBatchWriteLock(tx, evidenceSetID); err != nil {
+			return err
+		}
 		var batch EvidenceBatch
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("evidence_set_id = ?", evidenceSetID).First(&batch).Error; err != nil {
 			return fmt.Errorf("load evidence batch: %w", err)
@@ -173,6 +179,9 @@ func (r *Repository) FreezeBatch(ctx context.Context, evidenceSetID string, froz
 	}
 	var result EvidenceBatch
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := acquireEvidenceBatchWriteLock(tx, evidenceSetID); err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("evidence_set_id = ?", evidenceSetID).First(&result).Error; err != nil {
 			return fmt.Errorf("load evidence batch: %w", err)
 		}
@@ -224,6 +233,9 @@ func (r *Repository) SealBatchFailure(ctx context.Context, evidenceSetID string,
 	}
 	var result EvidenceBatch
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := acquireEvidenceBatchWriteLock(tx, evidenceSetID); err != nil {
+			return err
+		}
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("evidence_set_id = ?", evidenceSetID).First(&result).Error; err != nil {
 			return fmt.Errorf("load evidence batch: %w", err)
 		}
@@ -245,6 +257,17 @@ func (r *Repository) SealBatchFailure(ctx context.Context, evidenceSetID string,
 		}).Error
 	})
 	return result, err
+}
+
+func acquireEvidenceBatchWriteLock(tx *gorm.DB, evidenceSetID string) error {
+	result := tx.Exec("UPDATE research_evidence_sets SET status = status WHERE evidence_set_id = ?", evidenceSetID)
+	if result.Error != nil {
+		return fmt.Errorf("acquire evidence batch write lock: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *Repository) Batch(ctx context.Context, evidenceSetID string) (EvidenceBatch, error) {
