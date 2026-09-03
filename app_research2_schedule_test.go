@@ -18,9 +18,9 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 		{name: "before", at: time.Date(2026, 9, 3, 9, 49, 59, 0, location), want: false},
 		{name: "start", at: time.Date(2026, 9, 3, 9, 50, 0, 0, location), want: true},
 		{name: "during", at: time.Date(2026, 9, 3, 10, 14, 0, 0, location), want: true},
-		{name: "last second", at: time.Date(2026, 9, 3, 11, 29, 59, 0, location), want: true},
-		{name: "end", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: false},
-		{name: "afternoon", at: time.Date(2026, 9, 3, 13, 0, 0, 0, location), want: false},
+		{name: "morning close", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: true},
+		{name: "last second", at: time.Date(2026, 9, 3, 12, 59, 59, 0, location), want: true},
+		{name: "end", at: time.Date(2026, 9, 3, 13, 0, 0, 0, location), want: false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -43,7 +43,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 	}
 	for _, at := range []time.Time{
 		time.Date(2026, 9, 3, 9, 49, 59, 0, location),
-		time.Date(2026, 9, 3, 11, 30, 0, 0, location),
+		time.Date(2026, 9, 3, 13, 0, 0, 0, location),
 		time.Date(2026, 9, 5, 10, 0, 0, 0, location),
 	} {
 		app.recoverResearch2Schedule(1, at)

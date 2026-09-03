@@ -123,7 +123,7 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 	}
 	run, err := runtime.Runner.Run(a.ctx, scheduledFor)
 	if err != nil {
-		if errors.Is(err, research2.ErrOutsideMorningStartWindow) {
+		if errors.Is(err, research2.ErrOutsideAnalysisStartWindow) {
 			return
 		}
 		logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
@@ -143,7 +143,7 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 func withinResearch2RecoveryWindow(value time.Time) bool {
 	local := value.In(research2Location())
 	minutes := local.Hour()*60 + local.Minute()
-	return minutes >= 9*60+50 && minutes < 11*60+30
+	return minutes >= 9*60+50 && minutes < 13*60
 }
 
 func research2EmailConfig(setting *models.SettingConfig) research2.EmailConfig {

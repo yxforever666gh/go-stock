@@ -56,7 +56,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">“仅分析”推荐保留评分与研究依据，但不会进入模拟买卖或收益统计。</n-alert>
+    <n-alert type="info" :bordered="false">任务可在交易日 [09:50,13:00) 启动；报告在 13:00 前生成才进入模拟执行，13:00 起生成的“仅分析”推荐保留评分与研究依据，但不会进入模拟买卖或收益统计。</n-alert>
     <n-flex justify="space-between" align="center">
       <n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用；当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>

@@ -39,7 +39,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">自动任务计划 09:50 启动；以实际启动前5个已闭合交易分钟为证据窗口，报告校验完成后再获取可成交行情。</n-alert>
+    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:50,13:00)，以实际启动前5个已闭合交易分钟为证据窗口；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析且不计收益。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
   </n-space>

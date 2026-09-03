@@ -28,12 +28,12 @@ func TestResearch2TransactionRetriesSQLiteBusy(t *testing.T) {
 	}
 }
 
-func TestCreateRunAttemptAllowsAtMostFourAttempts(t *testing.T) {
+func TestCreateRunAttemptAllowsAtMostFiveAttempts(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
 	newRun := func(id string) *AnalysisRun {
-		return &AnalysisRun{RunID: id, TradingDate: "2026-09-03", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+		return &AnalysisRun{RunID: id, TradingDate: "2026-09-03", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v7", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
 	}
 
 	first, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
@@ -72,13 +72,64 @@ func TestCreateRunAttemptAllowsAtMostFourAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	fifth, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
+	if err != nil || !created || fifth.AttemptNo != 5 || fifth.RunID == fourth.RunID {
+		t.Fatalf("fifth=%+v created=%v err=%v", fifth, created, err)
+	}
+	fifth.Status = "failed"
+	if err = repository.SaveRun(ctx, &fifth); err != nil {
+		t.Fatal(err)
+	}
+
 	latest, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
-	if err != nil || created || latest.RunID != fourth.RunID {
+	if err != nil || created || latest.RunID != fifth.RunID {
 		t.Fatalf("latest=%+v created=%v err=%v", latest, created, err)
 	}
 	lookup, exists, err := repository.RunForDate(ctx, "2026-09-03")
-	if err != nil || !exists || lookup.RunID != fourth.RunID {
+	if err != nil || !exists || lookup.RunID != fifth.RunID {
 		t.Fatalf("lookup=%+v exists=%v err=%v", lookup, exists, err)
+	}
+}
+
+func TestCreateRunAttemptAllowsOneV7RerunForEligibleOldStrategyResults(t *testing.T) {
+	for _, status := range []string{"failed", "no_recommendation"} {
+		t.Run(status, func(t *testing.T) {
+			repository := research2TestRepository(t)
+			ctx := context.Background()
+			now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
+			old := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-09-03", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v6", Status: status, SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+			if err := repository.CreateRun(ctx, &old); err != nil {
+				t.Fatal(err)
+			}
+			candidate := AnalysisRun{RunID: uuid.NewString(), TradingDate: old.TradingDate, ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v7", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+			rerun, created, err := repository.CreateRunAttempt(ctx, &candidate, true)
+			if err != nil || !created || rerun.AttemptNo != 2 || rerun.StrategyVersion != "research2-trailing5-v7" {
+				t.Fatalf("rerun=%+v created=%v err=%v", rerun, created, err)
+			}
+			rerun.Status = "no_recommendation"
+			if err = repository.SaveRun(ctx, &rerun); err != nil {
+				t.Fatal(err)
+			}
+			latest, created, err := repository.CreateRunAttempt(ctx, &AnalysisRun{RunID: uuid.NewString(), TradingDate: old.TradingDate, ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v7", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}, true)
+			if err != nil || created || latest.RunID != rerun.RunID {
+				t.Fatalf("same-v7 result reran: latest=%+v created=%v err=%v", latest, created, err)
+			}
+		})
+	}
+}
+
+func TestCreateRunAttemptDoesNotRerunSuccessfulResult(t *testing.T) {
+	repository := research2TestRepository(t)
+	ctx := context.Background()
+	now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
+	success := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-09-03", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v6", Status: "success", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	if err := repository.CreateRun(ctx, &success); err != nil {
+		t.Fatal(err)
+	}
+	candidate := AnalysisRun{RunID: uuid.NewString(), TradingDate: success.TradingDate, ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v7", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	latest, created, err := repository.CreateRunAttempt(ctx, &candidate, true)
+	if err != nil || created || latest.RunID != success.RunID {
+		t.Fatalf("success reran: latest=%+v created=%v err=%v", latest, created, err)
 	}
 }
 

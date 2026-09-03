@@ -231,7 +231,7 @@ func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	if !collector.cutoff.Equal(started) || !run.EvidenceCutoffAt.Equal(actualCutoff) || run.EvidenceWindowStartAt == nil || !run.EvidenceWindowStartAt.Equal(wantStart) {
 		t.Fatalf("cutoff=%v run=%+v", collector.cutoff, run)
 	}
-	if run.StrategyVersion != "research2-trailing5-v6" || run.AttemptNo != 1 {
+	if run.StrategyVersion != "research2-trailing5-v7" || run.AttemptNo != 1 {
 		t.Fatalf("strategyVersion=%q", run.StrategyVersion)
 	}
 }
@@ -276,8 +276,9 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 	}{
 		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 49, 59, 0, loc)},
 		{name: "open", started: time.Date(2026, 8, 27, 9, 50, 0, 0, loc), accept: true},
-		{name: "last second", started: time.Date(2026, 8, 27, 11, 29, 59, 0, loc), accept: true},
-		{name: "close", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc)},
+		{name: "11:30 remains open", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc), accept: true},
+		{name: "last second", started: time.Date(2026, 8, 27, 12, 59, 59, 0, loc), accept: true},
+		{name: "close", started: time.Date(2026, 8, 27, 13, 0, 0, 0, loc)},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -297,7 +298,7 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 				}
 				return
 			}
-			if !errors.Is(err, ErrOutsideMorningStartWindow) || run.RunID != "" || ai.calls != 0 || count != 0 {
+			if !errors.Is(err, ErrOutsideAnalysisStartWindow) || run.RunID != "" || ai.calls != 0 || count != 0 {
 				t.Fatalf("outside window must be silent: run=%+v calls=%d rows=%d err=%v", run, ai.calls, count, err)
 			}
 		})
@@ -332,12 +333,12 @@ func TestRunnerTakesSignalTimeAfterAllValidation(t *testing.T) {
 	}
 }
 
-func TestRunnerAllowsModelCompletionAfterMorningStartWindow(t *testing.T) {
+func TestRunnerCompletionImmediatelyBeforeAfternoonOpenTargets1300(t *testing.T) {
 	repository := research2TestRepository(t)
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
 	current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
-	completed := time.Date(2026, 8, 27, 11, 31, 0, 0, loc)
+	completed := time.Date(2026, 8, 27, 12, 59, 59, 0, loc)
 	ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
 	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return current }, nil)
@@ -349,28 +350,34 @@ func TestRunnerAllowsModelCompletionAfterMorningStartWindow(t *testing.T) {
 	}
 }
 
-func TestRunnerKeepsAfterCloseRecommendationAsAnalysisOnly(t *testing.T) {
-	repository := research2TestRepository(t)
+func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
-	completed := time.Date(2026, 8, 27, 15, 0, 1, 0, loc)
-	ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
-	runner.ConfigureReplayClock(func() time.Time { return current }, nil)
+	for _, completed := range []time.Time{
+		time.Date(2026, 8, 27, 13, 0, 0, 0, loc),
+		time.Date(2026, 8, 27, 15, 0, 1, 0, loc),
+	} {
+		t.Run(completed.Format("15:04:05"), func(t *testing.T) {
+			repository := research2TestRepository(t)
+			current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
+			ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
+			runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+			runner.ConfigureReplayClock(func() time.Time { return current }, nil)
 
-	run, err := runner.Run(context.Background(), scheduled)
-	items, listErr := repository.ListRecommendations(context.Background(), 10, 0)
-	if err != nil || listErr != nil || run.Status != "success" || len(items) != 1 || items[0].Status != "analysis_only" {
-		t.Fatalf("run=%+v items=%+v err=%v listErr=%v", run, items, err, listErr)
-	}
-	market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
-	if err = NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), completed.Add(time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	detail, err := repository.GetRecommendation(context.Background(), items[0].RecommendationID)
-	if err != nil || detail.Recommendation.Status != "analysis_only" || len(detail.Trades) != 0 || len(market.currentFlags) != 0 {
-		t.Fatalf("analysis-only recommendation traded: detail=%+v calls=%v err=%v", detail, market.currentFlags, err)
+			run, err := runner.Run(context.Background(), scheduled)
+			items, listErr := repository.ListRecommendations(context.Background(), 10, 0)
+			if err != nil || listErr != nil || run.Status != "success" || len(items) != 1 || items[0].Status != "analysis_only" {
+				t.Fatalf("run=%+v items=%+v err=%v listErr=%v", run, items, err, listErr)
+			}
+			market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
+			if err = NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), completed.Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			detail, err := repository.GetRecommendation(context.Background(), items[0].RecommendationID)
+			if err != nil || detail.Recommendation.Status != "analysis_only" || len(detail.Trades) != 0 || detail.Recommendation.NetPnL != 0 || detail.Recommendation.NetYieldRate != 0 || len(market.currentFlags) != 0 {
+				t.Fatalf("analysis-only recommendation affected execution or return: detail=%+v calls=%v err=%v", detail, market.currentFlags, err)
+			}
+		})
 	}
 }
 
@@ -383,7 +390,7 @@ func TestBuildPromptUsesCompactInjectedEvidenceWithoutReportOrBuyRange(t *testin
 			t.Fatalf("prompt contains forbidden %q: %s", forbidden, prompt)
 		}
 	}
-	for _, required := range []string{"research2-trailing5-v6", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
+	for _, required := range []string{"research2-trailing5-v7", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q: %s", required, prompt)
 		}
@@ -519,7 +526,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	if err := repository.DB().Where("run_id = ?", run.RunID).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v6" {
+	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v7" {
 		t.Fatalf("failed run lost evidence association: %+v", stored)
 	}
 	if !strings.Contains(stored.SourceStatusJSON, "fixture") {

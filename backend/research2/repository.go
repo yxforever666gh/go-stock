@@ -88,7 +88,8 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 			run.AttemptNo = 1
 		case err != nil:
 			return err
-		case latest.Status != "failed" || latest.AttemptNo >= 4 || !allowRetry:
+		case !allowRetry || latest.AttemptNo >= 5 || (latest.Status != "failed" &&
+			!(latest.Status == "no_recommendation" && latest.StrategyVersion != run.StrategyVersion)):
 			selected = latest
 			return nil
 		default:

@@ -20,6 +20,12 @@ test('research2 report exposes trailing-five evidence timing, attempt and qualit
   assert.doesNotMatch(settings, /09:55 冻结数据/)
   assert.doesNotMatch(settings, /11:30 前完成/)
   assert.doesNotMatch(report, /11:25|11:30/)
+  for (const source of [report, recommendations, settings]) {
+    assert.match(source, /\[09:50,13:00\)/)
+    assert.match(source, /13:00 前生成/)
+    assert.match(source, /13:00 起/)
+    assert.doesNotMatch(source, /11:25|11:30/)
+  }
 })
 
 test('research2 details expose target and actual execution provenance', () => {
@@ -40,6 +46,7 @@ test('research2 analysis-only recommendations are explicit and non-transactional
   assert.match(recommendations, /status === 'analysis_only' \? 'default'/)
   assert.match(recommendations, /不会进入模拟买卖或收益统计/)
   assert.match(recommendations, /不会创建模拟成交或计入策略收益/)
+  assert.match(recommendations, /13:00 起生成的“仅分析”推荐/)
   assert.match(yieldView, /analysis_only: '仅分析'/)
   assert.match(generated, /\| "analysis_only"/)
 })
