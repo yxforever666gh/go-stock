@@ -195,8 +195,8 @@ function Start-Pointer {
     # query parameters, leaving the live service in DELETE journal mode.
     $mainSeparator = if ($MainDB.Contains("?")) { "&" } else { "?" }
     $minuteSeparator = if ($MinuteDB.Contains("?")) { "&" } else { "?" }
-    $env:GO_STOCK_DB_PATH = $MainDB + $mainSeparator + "cache_size=-524288&journal_mode=WAL"
-    $env:GO_STOCK_MINUTE_DB_PATH = $MinuteDB + $minuteSeparator + "cache_size=-524288&journal_mode=WAL"
+    $env:GO_STOCK_DB_PATH = $MainDB + $mainSeparator + "_pragma=cache_size(-524288)&_pragma=journal_mode(WAL)"
+    $env:GO_STOCK_MINUTE_DB_PATH = $MinuteDB + $minuteSeparator + "_pragma=cache_size(-524288)&_pragma=journal_mode(WAL)"
     $env:ZONEINFO = $Pointer.zoneInfo
     try {
         $process = Start-Process -FilePath $Pointer.binary -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru

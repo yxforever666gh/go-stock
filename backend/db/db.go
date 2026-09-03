@@ -116,6 +116,9 @@ func initWithLogger(sqlitePath string, dbLogger gormlogger.Interface) {
 	if err != nil {
 		log.Fatalf("db connection error is %s", err.Error())
 	}
+	if err = configureMainDB(openDb); err != nil {
+		log.Fatalf("main db configuration error is %s", err.Error())
+	}
 	//读写分离提高sqlite效率，防止锁库
 	if err = openDb.Use(dbresolver.Register(
 		dbresolver.Config{
@@ -273,6 +276,20 @@ func Close() error {
 }
 
 func configureMinuteDB(openDb *gorm.DB) error {
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL",
+		"PRAGMA synchronous=NORMAL",
+		"PRAGMA temp_store=MEMORY",
+	}
+	for _, pragma := range pragmas {
+		if err := openDb.Exec(pragma).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func configureMainDB(openDb *gorm.DB) error {
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
