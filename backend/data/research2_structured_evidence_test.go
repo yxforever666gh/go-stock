@@ -72,6 +72,14 @@ func research2StructuredRows(cutoff time.Time, count int) []research2MarketRow {
 	return rows
 }
 
+func research2InvalidatePrices(rows []research2MarketRow, count int) []research2MarketRow {
+	result := append([]research2MarketRow(nil), rows...)
+	for index := 0; index < count && index < len(result); index++ {
+		result[len(result)-1-index].Price = 0
+	}
+	return result
+}
+
 func research2StructuredEnvelope[T any](cutoff time.Time, data T) marketdata.DataEnvelope[T] {
 	available := cutoff
 	return marketdata.DataEnvelope[T]{Data: data, Source: "fixture", AsOf: cutoff, FetchedAt: cutoff.Add(time.Second), Status: marketdata.StatusOK,
@@ -83,7 +91,7 @@ func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []rese
 	sources := &research2StructuredSourceFixture{cutoff: cutoff}
 	return &Research2EvidenceCollector{
 		sources: sources, stocks: &StockDataApi{}, minuteWindows: research2MinuteFixture{count: minuteCount},
-		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV4,
+		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV5,
 		now: func() time.Time { return cutoff.Add(5 * time.Second) },
 		fetchSnapshot: func(context.Context, time.Time) (research2FullMarketSnapshot, error) {
 			return research2FullMarketSnapshot{Rows: rows, Reported: reported, SourceID: "fixture-market", SourceName: "测试全市场",
@@ -148,7 +156,7 @@ func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testin
 
 func TestResearch2StructuredEvidenceRejectsCoverageBelow95Percent(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
-	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 94), 100, 5)
+	collector := newResearch2StructuredCollector(t, cutoff, research2InvalidatePrices(research2StructuredRows(cutoff, 100), 6), 100, 5)
 	evidence, err := collector.Collect(context.Background(), cutoff)
 	if err == nil || !strings.Contains(err.Error(), "低于95") {
 		t.Fatalf("94%% coverage accepted: evidence=%+v err=%v", evidence, err)
@@ -161,7 +169,7 @@ func TestResearch2StructuredEvidenceRejectsCoverageBelow95Percent(t *testing.T) 
 func TestResearch2StructuredEvidenceFallsBackOnlyBelow95Percent(t *testing.T) {
 	startedAt := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
 	t.Run("exactly 95 percent keeps primary", func(t *testing.T) {
-		collector := newResearch2StructuredCollector(t, startedAt, research2StructuredRows(startedAt, 95), 100, 5)
+		collector := newResearch2StructuredCollector(t, startedAt, research2InvalidatePrices(research2StructuredRows(startedAt, 100), 5), 100, 5)
 		fallbackCalls := 0
 		collector.fetchFallback = func(context.Context) (research2FullMarketSnapshot, error) {
 			fallbackCalls++
@@ -174,7 +182,7 @@ func TestResearch2StructuredEvidenceFallsBackOnlyBelow95Percent(t *testing.T) {
 	})
 
 	t.Run("below 95 percent uses trusted fallback", func(t *testing.T) {
-		primaryRows := research2StructuredRows(startedAt, 94)
+		primaryRows := research2InvalidatePrices(research2StructuredRows(startedAt, 100), 6)
 		fallbackCutoff := startedAt.Add(3 * time.Second)
 		fallbackRows := research2StructuredRows(fallbackCutoff, 100)
 		collector := newResearch2StructuredCollector(t, startedAt, primaryRows, 100, 5)
@@ -284,15 +292,30 @@ func TestFilterResearch2JSONDoesNotLaunderUntimestampedSibling(t *testing.T) {
 func TestResearch2RowsTrustedAtCollectionRequiresTimestampPriceAndSaneTime(t *testing.T) {
 	collectedAt := time.Date(2026, 9, 3, 9, 50, 4, 0, shanghaiDataLocation())
 	rows := []research2MarketRow{
-		{Code: "600001", Price: 10, Timestamp: collectedAt.Add(-time.Second).Unix()},
-		{Code: "600002", Price: 10},
-		{Code: "600003", Price: 0, Timestamp: collectedAt.Unix()},
-		{Code: "600004", Price: 10, Timestamp: collectedAt.Add(research2QuoteFutureSkew).Unix()},
-		{Code: "600005", Price: 10, Timestamp: collectedAt.Add(research2QuoteFutureSkew + time.Second).Unix()},
+		{Code: "600001", Name: "测试1", ListingDate: 20200101, Price: 10, Timestamp: collectedAt.Add(-time.Second).Unix()},
+		{Code: "600002", Name: "测试2", ListingDate: 20200101, Price: 10},
+		{Code: "600003", Name: "测试3", ListingDate: 20200101, Price: 0, Timestamp: collectedAt.Unix()},
+		{Code: "600004", Name: "测试4", ListingDate: 20200101, Price: 10, Timestamp: collectedAt.Add(research2QuoteFutureSkew).Unix()},
+		{Code: "600005", Name: "测试5", ListingDate: 20200101, Price: 10, Timestamp: collectedAt.Add(research2QuoteFutureSkew + time.Second).Unix()},
 	}
 	filtered := research2RowsTrustedAtCollection(rows, collectedAt)
 	if len(filtered) != 2 || filtered[0].Code != "600001" || filtered[1].Code != "600004" {
 		t.Fatalf("unverifiable rows counted toward coverage: %+v", filtered)
+	}
+}
+
+func TestResearch2CoverageDenominatorExcludesDuplicatesAndNonSelectableRows(t *testing.T) {
+	collectedAt := time.Date(2026, 9, 3, 10, 50, 4, 0, shanghaiDataLocation())
+	rows := research2StructuredRows(collectedAt, 100)
+	rows = append(rows,
+		rows[0],
+		research2MarketRow{Code: "600900", Name: "退市样本", ListingDate: 20200101},
+		research2MarketRow{Code: "600901", Name: "*ST样本", ListingDate: 20200101},
+	)
+	rows[len(rows)-3].Timestamp = collectedAt.Unix()
+	trusted, eligible := research2EligibleCoverageRows(rows, collectedAt)
+	if eligible != 100 || len(trusted) != 100 {
+		t.Fatalf("coverage universe trusted=%d eligible=%d", len(trusted), eligible)
 	}
 }
 

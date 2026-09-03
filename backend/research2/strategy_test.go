@@ -231,7 +231,7 @@ func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	if !collector.cutoff.Equal(started) || !run.EvidenceCutoffAt.Equal(actualCutoff) || run.EvidenceWindowStartAt == nil || !run.EvidenceWindowStartAt.Equal(wantStart) {
 		t.Fatalf("cutoff=%v run=%+v", collector.cutoff, run)
 	}
-	if run.StrategyVersion != "research2-trailing5-v4" || run.AttemptNo != 1 {
+	if run.StrategyVersion != "research2-trailing5-v5" || run.AttemptNo != 1 {
 		t.Fatalf("strategyVersion=%q", run.StrategyVersion)
 	}
 }
@@ -347,7 +347,7 @@ func TestBuildPromptUsesCompactInjectedEvidenceWithoutReportOrBuyRange(t *testin
 			t.Fatalf("prompt contains forbidden %q: %s", forbidden, prompt)
 		}
 	}
-	for _, required := range []string{"research2-trailing5-v4", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
+	for _, required := range []string{"research2-trailing5-v5", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q: %s", required, prompt)
 		}
@@ -483,7 +483,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	if err := repository.DB().Where("run_id = ?", run.RunID).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v4" {
+	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v5" {
 		t.Fatalf("failed run lost evidence association: %+v", stored)
 	}
 	if !strings.Contains(stored.SourceStatusJSON, "fixture") {

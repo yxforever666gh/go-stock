@@ -173,7 +173,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 35, 0, 0, shanghai())
 	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 26, 0, 0, shanghai())
 	allowRetry := !now.Before(startWindow) && now.Before(lastStartExclusive)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v4", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v5", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
 	selected, created, err := r.repository.CreateRunAttempt(ctx, &run, allowRetry)
 	if err != nil {
 		return run, err
@@ -290,7 +290,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 			phase += "_repair"
 		}
 		if r.audit != nil {
-			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v4"})
+			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v5"})
 			err = prepareErr
 			if err != nil {
 				return finishFailure("failed", "准备研究审计载荷失败: "+err.Error(), err)
@@ -419,7 +419,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 		prepared, err := r.audit.Prepare(ctx, researchaudit.CallInput{
 			OwnerType: researchaudit.OwnerResearch2, OwnerID: runID, Phase: phase, CallSequence: callSequence, Attempt: 1,
 			CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{},
-			ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v4",
+			ModelParameters: map[string]any{"modelDeadline": modelDeadline}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v5",
 		})
 		if err != nil {
 			return err
@@ -437,7 +437,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 			Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{
 				"modelDeadline": modelDeadline,
 				"attempt":       attempt,
-			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v4",
+			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v5",
 		})
 		if err != nil {
 			return err
@@ -487,7 +487,7 @@ func buildPrompt(evidence Evidence, cutoff time.Time) string {
 	return strings.Join([]string{
 		strategyPrompt,
 		"\n# 本次执行参数",
-		"- 策略版本：research2-trailing5-v4",
+		"- 策略版本：research2-trailing5-v5",
 		"- 核心证据窗口：[" + windowStart.Format("2006-01-02 15:04:05") + ", " + cutoff.Format("2006-01-02 15:04:05") + "] Asia/Shanghai",
 		"- 数据截止时间：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 模型结果最晚必须在当日11:30完成校验；是否晚于10:00只用于统计。",

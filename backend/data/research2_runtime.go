@@ -56,7 +56,7 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*R
 	collector := &Research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
-		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV4,
+		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV5,
 		themes: newThemeEvidenceReader(mainDB),
 	}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
@@ -287,7 +287,13 @@ func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID st
 		actualCutoff = startedAt
 		evidence.CutoffAt = actualCutoff
 	}
-	batch, err := c.evidence.CreateBatch(ctx, marketdata.CreateBatchRequest{OwnerType: "research2", OwnerID: runID, CutoffAt: actualCutoff, CollectorVersion: "2.0", EvidenceProfileVersion: c.evidenceProfile})
+	request := marketdata.CreateBatchRequest{EvidenceSetID: uuid.NewString(), OwnerType: "research2", OwnerID: runID, CutoffAt: actualCutoff, CollectorVersion: "2.0", EvidenceProfileVersion: c.evidenceProfile}
+	var batch marketdata.EvidenceBatch
+	err = retryResearch2EvidenceWrite(ctx, func() error {
+		var createErr error
+		batch, createErr = c.evidence.CreateBatch(ctx, request)
+		return createErr
+	})
 	if err != nil {
 		return evidence, errors.Join(collectErr, err)
 	}
@@ -320,11 +326,37 @@ func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID st
 			Summary: researchEvidenceDocumentSummary(document), ErrorMessage: strings.TrimSpace(document.Error)})
 	}
 	if len(items) > 0 {
-		if appendErr := c.evidence.AppendItems(ctx, batch.EvidenceSetID, items); appendErr != nil {
+		if appendErr := retryResearch2EvidenceWrite(ctx, func() error { return c.evidence.AppendItems(ctx, batch.EvidenceSetID, items) }); appendErr != nil {
 			err = errors.Join(err, appendErr)
 		}
 	}
 	return evidence, err
+}
+
+func retryResearch2EvidenceWrite(ctx context.Context, operation func() error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = operation()
+		if !research2SQLiteBusy(err) {
+			return err
+		}
+		timer := time.NewTimer(time.Duration(20*(1<<attempt)) * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
+}
+
+func research2SQLiteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
 }
 
 func finalizeResearch2EvidenceBatch(repository research2EvidenceRepository, evidenceSetID string, frozenAt time.Time) error {

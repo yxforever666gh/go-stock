@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	research2EvidenceProfileV4 = "research2-trailing5-v4"
+	research2EvidenceProfileV5 = "research2-trailing5-v5"
 	research2MinimumCoverage   = 0.95
 	research2MinimumMinuteBars = 4
 	research2QuoteFreshness    = 3 * time.Minute
@@ -880,7 +880,8 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), Documents: []research.SourceDocument{document}, Degraded: true,
 			DegradedReasons: []string{"full_market_unavailable"}}, fmt.Errorf("全市场列表不可用: %w", marketErr)
 	}
-	marketSnapshot.Rows = research2RowsTrustedAtCollection(marketSnapshot.Rows, marketSnapshot.CollectedAt)
+	sourceReported := marketSnapshot.Reported
+	marketSnapshot.Rows, marketSnapshot.Reported = research2EligibleCoverageRows(marketSnapshot.Rows, marketSnapshot.CollectedAt)
 	marketSnapshot.AsOf = research2RowsAsOf(marketSnapshot.Rows)
 	observed := len(marketSnapshot.Rows)
 	coverage := 0.0
@@ -898,7 +899,8 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		fallback, fallbackErr := fetchFallback(fallbackCtx)
 		cancelFallback()
 		if fallbackErr == nil {
-			fallback.Rows = research2RowsTrustedAtCollection(fallback.Rows, fallback.CollectedAt)
+			fallbackSourceReported := fallback.Reported
+			fallback.Rows, fallback.Reported = research2EligibleCoverageRows(fallback.Rows, fallback.CollectedAt)
 			fallback.AsOf = research2RowsAsOf(fallback.Rows)
 			fallbackObserved := len(fallback.Rows)
 			fallbackCoverage := 0.0
@@ -907,6 +909,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 			}
 			if fallbackCoverage >= research2MinimumCoverage {
 				marketSnapshot, observed, coverage = fallback, fallbackObserved, fallbackCoverage
+				sourceReported = fallbackSourceReported
 			}
 		}
 	}
@@ -926,7 +929,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 	}
 	fullMarketPayload, _ := json.Marshal(map[string]any{
 		"sourceId": marketSnapshot.SourceID, "source": marketSnapshot.SourceName, "asOf": marketSnapshot.AsOf,
-		"reported": marketSnapshot.Reported, "observed": observed, "coveragePct": coverage * 100, "rows": marketSnapshot.Rows,
+		"sourceReported": sourceReported, "eligibleReported": marketSnapshot.Reported, "observed": observed, "coveragePct": coverage * 100, "rows": marketSnapshot.Rows,
 	})
 	fullMarketDocument := research.SourceDocument{SourceID: "research2:market:full", SourceName: marketSnapshot.SourceName, SourceRef: marketSnapshot.SourceRef,
 		Category: "market", CollectedAt: marketSnapshot.CollectedAt, AvailableAt: &availableAt, Content: string(fullMarketPayload)}
@@ -1121,7 +1124,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}
-	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV4, WindowStartAt: windowStart, CutoffAt: cutoff,
+	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV5, WindowStartAt: windowStart, CutoffAt: cutoff,
 		Market: compactMarket, Candidates: compactCandidates, Sources: compactSources, Degraded: len(degradedReasons) > 0, DegradedReasons: degradedReasons}
 	compactPayload, marshalErr := json.Marshal(compactSnapshot)
 	if marshalErr != nil {
@@ -1135,7 +1138,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		"availableAt": cutoff, "collectedAt": compactDocument.CollectedAt, "status": marketdata.StatusOK}}, statuses...)
 	statusJSON, _ := json.Marshal(statuses)
 	return research2.Evidence{Prompt: string(compactPayload), SourceStatusJSON: string(statusJSON), Candidates: eligibleCandidates,
-		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV4, CutoffAt: cutoff, WindowStartAt: windowStart,
+		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV5, CutoffAt: cutoff, WindowStartAt: windowStart,
 		CoveragePct: compactMarket.CoveragePct, Degraded: compactSnapshot.Degraded, DegradedReasons: degradedReasons,
 		CandidateReferencePrices: referencePrices}, nil
 }
@@ -1162,27 +1165,41 @@ func (c *Research2EvidenceCollector) fetchResearch2FullMarketSnapshot(ctx contex
 }
 
 func research2RowsTrustedAtCollection(rows []research2MarketRow, collectedAt time.Time) []research2MarketRow {
+	trusted, _ := research2EligibleCoverageRows(rows, collectedAt)
+	return trusted
+}
+
+func research2EligibleCoverageRows(rows []research2MarketRow, collectedAt time.Time) ([]research2MarketRow, int) {
 	if collectedAt.IsZero() {
-		return nil
+		return nil, 0
 	}
 	latestTrusted := collectedAt.In(shanghaiDataLocation()).Add(research2QuoteFutureSkew)
-	seen := make(map[string]struct{}, len(rows))
-	result := make([]research2MarketRow, 0, len(rows))
+	eligible := make(map[string]struct{}, len(rows))
+	best := make(map[string]research2MarketRow, len(rows))
 	for _, row := range rows {
 		code := research2CanonicalCode(row.Code)
-		if code == "" || row.Price <= 0 || row.Timestamp <= 0 {
+		name := strings.ToUpper(strings.TrimSpace(row.Name))
+		if code == "" || !(strings.HasPrefix(code, "sh60") || strings.HasPrefix(code, "sz00")) || strings.Contains(name, "ST") || strings.Contains(name, "退") || row.ListingDate <= 0 {
 			continue
 		}
-		if time.Unix(row.Timestamp, 0).In(shanghaiDataLocation()).After(latestTrusted) {
+		eligible[code] = struct{}{}
+		if row.Price <= 0 || row.Timestamp <= 0 || time.Unix(row.Timestamp, 0).In(shanghaiDataLocation()).After(latestTrusted) {
 			continue
 		}
-		if _, exists := seen[code]; exists {
-			continue
+		if existing, exists := best[code]; !exists || row.Timestamp > existing.Timestamp || (row.Timestamp == existing.Timestamp && row.Amount > existing.Amount) {
+			best[code] = row
 		}
-		seen[code] = struct{}{}
-		result = append(result, row)
 	}
-	return result
+	keys := make([]string, 0, len(best))
+	for code := range best {
+		keys = append(keys, code)
+	}
+	sort.Strings(keys)
+	result := make([]research2MarketRow, 0, len(keys))
+	for _, code := range keys {
+		result = append(result, best[code])
+	}
+	return result, len(eligible)
 }
 
 func research2RowsAsOf(rows []research2MarketRow) time.Time {

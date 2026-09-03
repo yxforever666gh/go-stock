@@ -3,6 +3,7 @@ package data
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,20 @@ import (
 	"time"
 	"unicode/utf8"
 )
+
+func TestRetryResearch2EvidenceWriteRetriesSQLiteBusy(t *testing.T) {
+	attempts := 0
+	err := retryResearch2EvidenceWrite(context.Background(), func() error {
+		attempts++
+		if attempts < 3 {
+			return errors.New("database is locked (SQLITE_BUSY)")
+		}
+		return nil
+	})
+	if err != nil || attempts != 3 {
+		t.Fatalf("attempts=%d err=%v", attempts, err)
+	}
+}
 
 type research2RoundTripFunc func(*http.Request) (*http.Response, error)
 
