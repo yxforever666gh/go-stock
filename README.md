@@ -111,6 +111,12 @@ go run .
 .\scripts\verify.ps1 -Tier release
 ```
 
+发布前可一次验证两个研究中心。该入口只使用测试 fixture，并在执行前后校验工作区及生产数据库、WAL、SHM 的 SHA256：
+
+```powershell
+.\scripts\research-centers.test.ps1
+```
+
 `fast`、`domain` 和 `release` 验证均关闭真实网络和集成测试开关；普通测试必须自行使用临时 fixture。真实来源、浏览器、邮件和生产数据库验证不属于日常开发入口。详细范围与停止条件见 [`AGENTS.md`](./AGENTS.md)。
 
 只有明确需要真实来源合同时才启用 integration build tag；测试仍必须使用临时数据库：
