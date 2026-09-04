@@ -7,24 +7,27 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	sharedai "go-stock/backend/ai"
+	"go-stock/internal/marketquote"
 )
 
 type clockAdvancingAI struct {
-	results        []CompletionResult
+	results        []sharedai.CompletionResult
 	calls          int
 	now            *time.Time
 	advanceAtPhase string
 	advanceTo      time.Time
 }
 
-func (client *clockAdvancingAI) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
+func (client *clockAdvancingAI) Complete(_ context.Context, request sharedai.CompletionRequest) (sharedai.CompletionResult, error) {
 	index := client.calls
 	client.calls++
 	if request.Phase == client.advanceAtPhase && client.now != nil {
 		*client.now = client.advanceTo
 	}
 	if index >= len(client.results) {
-		return CompletionResult{}, errors.New("missing scripted result")
+		return sharedai.CompletionResult{}, errors.New("missing scripted result")
 	}
 	return client.results[index], nil
 }
@@ -131,7 +134,7 @@ func TestSellAtomicallyCreatesExecutionDecisionAndFundingTrigger(t *testing.T) {
 	if err := repo.DB().Create(&position).Error; err != nil {
 		t.Fatal(err)
 	}
-	quote := Quote{Code: recommendation.StockCode, Name: recommendation.StockName, Market: "SH", Price: 11, PreviousClose: 10.5, At: now}
+	quote := marketquote.Quote{Code: recommendation.StockCode, Name: recommendation.StockName, Market: "SH", Price: 11, PreviousClose: 10.5, At: now}
 	if err := repo.Sell(ctx, recommendation.RecommendationID, quote); err != nil {
 		t.Fatal(err)
 	}
@@ -168,9 +171,9 @@ func TestEventRunCrossingCutoffRetainsBuyDecisionAsWaitWithoutReservation(t *tes
 	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
 	stock := `{"analysis":"量价改善","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"改善","mainRisk":"回落","sourceRefs":"S001"}]}`
 	final := `{"analysis":"可买但已临近截止","opportunities":[{"action":"buy_now","stockName":"浦发银行","stockCode":"sh600000","priceLow":9,"priceHigh":11,"aiSummary":"改善","timingReason":"当前","mainRisk":"回落","sourceRefs":"S001"}]}`
-	ai := &clockAdvancingAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}},
+	ai := &clockAdvancingAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}},
 		now: &now, advanceAtPhase: "final_decision", advanceTo: time.Date(2026, 8, 28, 14, 26, 0, 0, shanghaiLocation)}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Price: 10, At: now}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "浦发银行", Price: 10, At: now}}}
 	service := NewService(repo, ai, quotes, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeEvent, TriggerIDs: []string{"event-1"}, TriggerSource: TriggerSourceCapitalGap})
@@ -193,8 +196,8 @@ func TestWaitAndRejectPersistWithoutRecommendationOrCashReservation(t *testing.T
 	sector := `{"analysis":"观察","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"},{"code":"sz000001","name":"平安银行"}]}`
 	stock := `{"analysis":"暂不追高","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"等待回踩","mainRisk":"回落","sourceRefs":"S001"},{"stockName":"平安银行","stockCode":"sz000001","aiSummary":"信号不足","mainRisk":"量能","sourceRefs":"S002"}]}`
 	final := `{"analysis":"保持选择性","opportunities":[{"action":"wait","stockName":"浦发银行","stockCode":"sh600000","priceLow":9,"priceHigh":11,"aiSummary":"等待回踩","timingReason":"位置偏高","mainRisk":"回落","sourceRefs":"S001"},{"action":"reject","stockName":"平安银行","stockCode":"sz000001","priceLow":0,"priceHigh":0,"aiSummary":"信号不足","timingReason":"本轮放弃","mainRisk":"量能","sourceRefs":"S002"}]}`
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Price: 10, At: now}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "浦发银行", Price: 10, At: now}}}
 	service := NewService(repo, ai, quotes, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{
@@ -237,7 +240,7 @@ func TestReservedEventRunClearsRunLeaseOnSuccessfulSave(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("claim=%+v ok=%t err=%v", claim, ok, err)
 	}
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"},
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"},
 		{Content: `{"analysis":"无方向","directions":[],"candidates":[]}`},
 		{Content: `{"analysis":"空仓","opportunities":[]}`}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})

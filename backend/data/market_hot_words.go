@@ -566,9 +566,9 @@ func (a *hotWordAnalyzer) loadDynamicDictionary(database *gorm.DB) {
 	if database == nil {
 		return
 	}
-	if database.Migrator().HasTable(&StockBasic{}) {
-		stocks := make([]StockBasic, 0)
-		if err := database.Model(&StockBasic{}).Find(&stocks).Error; err == nil {
+	if database.Migrator().HasTable(&models.StockBasic{}) {
+		stocks := make([]models.StockBasic, 0)
+		if err := database.Model(&models.StockBasic{}).Find(&stocks).Error; err == nil {
 			for _, stock := range stocks {
 				a.addExplicit(stock.Name)
 				a.addExplicit(stock.BKName)

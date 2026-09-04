@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"go-stock/backend/marketdata"
-	"go-stock/backend/research"
 	"go-stock/backend/themes"
+	"go-stock/internal/researchevidence"
 
 	"gorm.io/gorm"
 )
@@ -22,14 +22,7 @@ func newThemeEvidenceReader(database *gorm.DB) themes.EvidenceReader {
 	return themes.NewService(themes.NewRepository(database))
 }
 
-func researchCollectorWithExperimentalEvidence(enabled bool, base research.SourceCollector, market *MarketEvidenceService, themeReader themes.EvidenceReader) research.SourceCollector {
-	if !enabled {
-		return base
-	}
-	return NewExperimentalResearchSourceCollector(base, market, themeReader)
-}
-
-func themeResearchEvidenceDocuments(envelope marketdata.DataEnvelope[themes.ResearchEvidence], cutoff time.Time) []research.SourceDocument {
+func themeResearchEvidenceDocuments(envelope marketdata.DataEnvelope[themes.ResearchEvidence], cutoff time.Time) []researchevidence.SourceDocument {
 	collectedAt := envelope.FetchedAt
 	if collectedAt.IsZero() {
 		collectedAt = cutoff
@@ -43,10 +36,10 @@ func themeResearchEvidenceDocuments(envelope marketdata.DataEnvelope[themes.Rese
 		if message == "" {
 			message = "题材仓储证据不可用"
 		}
-		return []research.SourceDocument{{SourceID: "theme-snapshot:unavailable", SourceName: "每日题材快照", Category: "theme", CollectedAt: collectedAt, Error: message}}
+		return []researchevidence.SourceDocument{{SourceID: "theme-snapshot:unavailable", SourceName: "每日题材快照", Category: "theme", CollectedAt: collectedAt, Error: message}}
 	}
 
-	documents := make([]research.SourceDocument, 0, len(envelope.Data.Themes)*2)
+	documents := make([]researchevidence.SourceDocument, 0, len(envelope.Data.Themes)*2)
 	for _, theme := range envelope.Data.Themes {
 		snapshot := theme.Snapshot
 		snapshotCollectedAt := collectedAt
@@ -96,7 +89,7 @@ func themeResearchEvidenceDocuments(envelope marketdata.DataEnvelope[themes.Rese
 			},
 			"stockConstituents": stockConstituents, "backgroundOnlyAssetTypes": backgroundOnly,
 		})
-		document := research.SourceDocument{
+		document := researchevidence.SourceDocument{
 			SourceID: "theme-snapshot:" + snapshot.ID, SourceName: "每日题材快照 / " + theme.Name,
 			SourceRef: "theme:" + theme.ID + "#snapshot:" + snapshot.ID, Category: "theme",
 			CollectedAt: snapshotCollectedAt, AvailableAt: snapshotAvailableAt,
@@ -125,7 +118,7 @@ func themeResearchEvidenceDocuments(envelope marketdata.DataEnvelope[themes.Rese
 						"collectedAt": claim.CollectedAt, "rawPayloadHash": claim.RawPayloadHash,
 					},
 				})
-				claimDocument := research.SourceDocument{
+				claimDocument := researchevidence.SourceDocument{
 					SourceID: "theme-catalyst:" + claim.ID, SourceName: "题材催化 / " + theme.Name + " / " + event.Title + " / " + claim.SourceName,
 					SourceRef: claim.SourceRef, Category: "catalyst", CollectedAt: claim.CollectedAt, AvailableAt: availableAt,
 				}

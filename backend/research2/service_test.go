@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/research"
+	"go-stock/internal/marketquote"
+	"go-stock/internal/recommendationchart"
+	"go-stock/internal/trading"
 
 	"github.com/google/uuid"
 )
@@ -32,7 +34,7 @@ func TestRecordBuyInitializesCurrentMarkAndLiveReturnIsNotPersisted(t *testing.T
 	if stored.CurrentPrice != 10 || stored.CurrentPriceAt == nil || !stored.CurrentPriceAt.Equal(now) {
 		t.Fatalf("buy mark = %.2f/%v", stored.CurrentPrice, stored.CurrentPriceAt)
 	}
-	wantPnL := research.CalculateSellCost(10, 100).NetCashFlow - 1006.01
+	wantPnL := trading.CalculateSellCost(10, 100).NetCashFlow - 1006.01
 	rows, err := repository.ListRecommendations(context.Background(), 10, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -50,7 +52,7 @@ func TestRecordBuyInitializesCurrentMarkAndLiveReturnIsNotPersisted(t *testing.T
 
 type blockingQuoteProvider struct {
 	mu      sync.Mutex
-	quotes  map[string]research.Quote
+	quotes  map[string]marketquote.Quote
 	errors  map[string]error
 	started chan string
 	release <-chan struct{}
@@ -58,7 +60,7 @@ type blockingQuoteProvider struct {
 	maximum int
 }
 
-func (p *blockingQuoteProvider) CurrentQuote(_ context.Context, code string) (research.Quote, error) {
+func (p *blockingQuoteProvider) CurrentQuote(_ context.Context, code string) (marketquote.Quote, error) {
 	p.mu.Lock()
 	p.current++
 	if p.current > p.maximum {
@@ -92,7 +94,7 @@ func TestServiceRefreshesHoldingsConcurrentlyAndFallsBackToLastMark(t *testing.T
 		t.Fatal(err)
 	}
 	release := make(chan struct{})
-	provider := &blockingQuoteProvider{quotes: map[string]research.Quote{"sh600000": {Code: "sh600000", Price: 11, At: now}}, errors: map[string]error{"sz000001": errors.New("unavailable")}, started: make(chan string, 2), release: release}
+	provider := &blockingQuoteProvider{quotes: map[string]marketquote.Quote{"sh600000": {Code: "sh600000", Price: 11, At: now}}, errors: map[string]error{"sz000001": errors.New("unavailable")}, started: make(chan string, 2), release: release}
 	service := NewService(repository, provider)
 	type overviewResult struct {
 		value AccountOverview
@@ -116,7 +118,7 @@ func TestServiceRefreshesHoldingsConcurrentlyAndFallsBackToLastMark(t *testing.T
 	if maximum < 2 {
 		t.Fatalf("quotes were not fetched concurrently, max=%d", maximum)
 	}
-	wantValue := research.CalculateSellCost(11, 100).NetCashFlow + research.CalculateSellCost(20, 100).NetCashFlow
+	wantValue := trading.CalculateSellCost(11, 100).NetCashFlow + trading.CalculateSellCost(20, 100).NetCashFlow
 	if math.Abs(result.value.PositionValue-wantValue) > 1e-8 || math.Abs(result.value.NetAssetValue-(9000+wantValue)) > 1e-8 {
 		t.Fatalf("overview=%+v want position value %.8f", result.value, wantValue)
 	}
@@ -160,14 +162,14 @@ func TestClosedRecommendationKeepsRealizedReturn(t *testing.T) {
 }
 
 type research2ChartProvider struct {
-	snapshot research.ChartProviderSnapshot
+	snapshot recommendationchart.ProviderSnapshot
 }
 
-func (p research2ChartProvider) LoadCached(context.Context, string, time.Time, time.Time) (research.ChartProviderSnapshot, error) {
+func (p research2ChartProvider) LoadCached(context.Context, string, time.Time, time.Time) (recommendationchart.ProviderSnapshot, error) {
 	return p.snapshot, nil
 }
 
-func (p research2ChartProvider) Refresh(context.Context, string, time.Time, time.Time, []string) (research.ChartProviderSnapshot, error) {
+func (p research2ChartProvider) Refresh(context.Context, string, time.Time, time.Time, []string) (recommendationchart.ProviderSnapshot, error) {
 	return p.snapshot, nil
 }
 
@@ -186,9 +188,9 @@ func TestRecommendationChartAdaptsResearch2TradesToSharedEngine(t *testing.T) {
 	if err := repository.DB().Create(&trade).Error; err != nil {
 		t.Fatal(err)
 	}
-	quote := research.Quote{Code: item.StockCode, Price: 11, At: now}
-	provider := research2ChartProvider{snapshot: research.ChartProviderSnapshot{
-		Bars: []research.ChartMinuteBar{
+	quote := recommendationchart.Quote{Price: 11, At: now}
+	provider := research2ChartProvider{snapshot: recommendationchart.ProviderSnapshot{
+		Bars: []recommendationchart.MinuteBar{
 			{At: now.Add(-5 * time.Minute), Open: 10, High: 10.1, Low: 9.9, Close: 10, Source: "fixture-unadjusted"},
 			{At: now, Open: 10.9, High: 11.1, Low: 10.8, Close: 11, Source: "fixture-unadjusted"},
 		},
@@ -196,7 +198,7 @@ func TestRecommendationChartAdaptsResearch2TradesToSharedEngine(t *testing.T) {
 	}}
 	service := NewService(repository, nil)
 	service.now = func() time.Time { return now }
-	service.SetRecommendationChartProvider(provider, research.WeekdayCalendar{})
+	service.SetRecommendationChartProvider(provider, recommendationchart.WeekdayCalendar{})
 	chart, err := service.RecommendationChart(context.Background(), item.RecommendationID, false)
 	if err != nil {
 		t.Fatal(err)
@@ -204,7 +206,7 @@ func TestRecommendationChartAdaptsResearch2TradesToSharedEngine(t *testing.T) {
 	if len(chart.Trades) != 1 || math.Abs(chart.Trades[0].TotalFees-5.02) > 1e-8 || chart.Trades[0].MarkerAt == nil || chart.Trades[0].MarkerSnapped {
 		t.Fatalf("chart trades=%+v", chart.Trades)
 	}
-	wantPnL := research.CalculateSellCost(11, 100).NetCashFlow - 1006.02
+	wantPnL := trading.CalculateSellCost(11, 100).NetCashFlow - 1006.02
 	if chart.CurrentPrice != 11 || math.Abs(chart.CurrentNetPnL-wantPnL) > 1e-8 || len(chart.Bars) != 2 {
 		t.Fatalf("chart=%+v want pnl %.8f", chart, wantPnL)
 	}

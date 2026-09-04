@@ -8,7 +8,7 @@ import (
 )
 
 func TestCapitalDeploymentSettingsSaveDisablesLegacySchedulerAndPreservesTimes(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "capital-deployment-settings.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "capital-deployment-settings.db"), testSchemaSettings)
 	config := GetSettingConfig()
 	if config == nil || config.Settings == nil {
 		t.Fatal("settings config is unavailable")

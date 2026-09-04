@@ -83,14 +83,53 @@ func main() {
 	var write bool
 	flag.StringVar(&specPath, "spec", "api/openapi.yaml", "OpenAPI source file")
 	flag.StringVar(&outputPath, "output", "frontend/src/services/api-types.generated.ts", "generated TypeScript output")
-	flag.StringVar(&goFiles, "go-files", "web_api.go,web_api_system.go,web_api_settings.go,web_api_groups.go,web_api_stocks.go,web_api_funds.go,web_api_market.go,web_api_market_evidence.go,web_api_instruments.go,web_api_charts.go,web_api_themes.go,web_api_research.go,web_api_research2.go,web_api_research_audit.go,web_api_knowledge.go", "comma-separated Go HTTP route files")
+	flag.StringVar(&goFiles, "go-files", "", "optional comma-separated Go HTTP route files; defaults to web_api*.go")
 	flag.BoolVar(&write, "write", false, "write generated output instead of checking it")
 	flag.Parse()
 
-	if err := run(specPath, outputPath, strings.Split(goFiles, ","), write); err != nil {
+	routeFiles, err := resolveGoRouteFiles(goFiles)
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "openapi contract:", err)
 		os.Exit(1)
 	}
+	if err := run(specPath, outputPath, routeFiles, write); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "openapi contract:", err)
+		os.Exit(1)
+	}
+}
+
+func resolveGoRouteFiles(configured string) ([]string, error) {
+	if strings.TrimSpace(configured) != "" {
+		files := make([]string, 0)
+		for _, value := range strings.Split(configured, ",") {
+			if value = strings.TrimSpace(value); value != "" {
+				files = append(files, value)
+			}
+		}
+		if len(files) == 0 {
+			return nil, errors.New("go-files did not contain a route file")
+		}
+		return files, nil
+	}
+	return discoverGoRouteFiles("web_api*.go")
+}
+
+func discoverGoRouteFiles(pattern string) ([]string, error) {
+	matches, err := filepath.Glob(pattern)
+	if err != nil {
+		return nil, fmt.Errorf("discover Go route files: %w", err)
+	}
+	files := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if !strings.HasSuffix(match, "_test.go") {
+			files = append(files, match)
+		}
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, errors.New("no production web_api*.go route files found")
+	}
+	return files, nil
 }
 
 func run(specPath, outputPath string, goFiles []string, write bool) error {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -15,9 +14,6 @@ import (
 	"time"
 
 	"go-stock/backend/models"
-	"go-stock/internal/bootstrap"
-	appcli "go-stock/internal/cli"
-	cliports "go-stock/internal/cli/ports"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -64,13 +60,11 @@ type networkAuditSummary struct {
 
 type networkAuditRunner struct {
 	report   *networkAuditReport
-	provider cliports.MarketAuditProvider
+	provider marketAuditProvider
 }
 
 type auditOptions struct {
-	DataDir string
-	DBPath  string
-	JSON    bool
+	DBPath string
 }
 
 type searchRow struct {
@@ -130,26 +124,7 @@ func skipAudit(format string, args ...any) error {
 	return &auditSkipError{message: fmt.Sprintf(format, args...)}
 }
 
-func runNetworkAudit(args []string, g auditOptions, stdout, stderr io.Writer) error {
-	fs := flag.NewFlagSet("network-audit", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-
-	var (
-		jsonOut   bool
-		reportDir string
-	)
-	fs.BoolVar(&jsonOut, "json", g.JSON, "输出 JSON")
-	fs.StringVar(&reportDir, "report-dir", "", "报告输出目录")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	proxyEnv := forceNoProxyEnv()
-	provider := bootstrap.NewProductionMarketAuditProvider()
-	return runNetworkAuditWithProvider(provider, jsonOut, reportDir, g, stdout, stderr, proxyEnv)
-}
-
-func runNetworkAuditWithProvider(provider cliports.MarketAuditProvider, jsonOut bool, reportDir string, g auditOptions, stdout, stderr io.Writer, proxyEnv map[string]string) error {
+func runNetworkAuditWithProvider(provider marketAuditProvider, jsonOut bool, reportDir string, g auditOptions, stdout, stderr io.Writer, proxyEnv map[string]string) error {
 	if provider == nil {
 		return errors.New("network audit provider is required")
 	}
@@ -213,8 +188,8 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 	fundAPI := r.provider.Fund()
 	crawlTimeout := auditDurationSeconds(cfg.CrawlTimeOut, 20)
 
-	searchFingerprint, fpErr := appcli.ResolveFingerprint("")
-	if fpErr != nil {
+	searchFingerprint := strings.TrimSpace(cfg.QgqpBId)
+	if searchFingerprint == "" {
 		r.report.Notes = append(r.report.Notes, "东财 fingerprint 未配置，部分搜索接口将跳过")
 	}
 	searchAPI := r.provider.Search("机器人", searchFingerprint)
@@ -722,11 +697,11 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 		if strings.TrimSpace(cfg.TushareToken) == "" {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
-		res := &cliports.TushareTableResponse{}
+		res := &tushareTableResponse{}
 		client := resty.New().SetTimeout(crawlTimeout)
 		resp, err := client.R().
 			SetHeader("content-type", "application/json").
-			SetBody(&cliports.TushareRequest{
+			SetBody(&tushareRequest{
 				APIName: "stock_basic",
 				Token:   cfg.TushareToken,
 				Fields:  "ts_code,symbol,name,market,list_date",
@@ -745,11 +720,11 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 		if strings.TrimSpace(cfg.TushareToken) == "" {
 			return nil, "", skipAudit("tushare token 未配置")
 		}
-		res := &cliports.TushareTableResponse{}
+		res := &tushareTableResponse{}
 		client := resty.New().SetTimeout(crawlTimeout)
 		resp, err := client.R().
 			SetHeader("content-type", "application/json").
-			SetBody(&cliports.TushareRequest{
+			SetBody(&tushareRequest{
 				APIName: "index_basic",
 				Token:   cfg.TushareToken,
 				Fields:  "ts_code,name,market,list_date",
@@ -766,7 +741,7 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 	})
 
 	r.runProbe("public_data", "github_raw_stock_basic", baseInfoEndpoint("stock_basic.json"), false, func() (map[string]any, string, error) {
-		res := &cliports.TushareTableResponse{}
+		res := &tushareTableResponse{}
 		client := resty.New().SetTimeout(crawlTimeout)
 		resp, err := client.R().SetResult(res).Get(baseInfoEndpoint("stock_basic.json"))
 		if err != nil {
@@ -934,85 +909,6 @@ func (r *networkAuditRunner) runAll(cfg *models.SettingConfig) {
 			return map[string]any{"result": result}, "", errors.New(result)
 		}
 		return map[string]any{"result": result}, trimSample(result), nil
-	})
-
-	r.runProbe("share", "share_upload", shareUploadEndpoint(), true, func() (map[string]any, string, error) {
-		uploadURL := shareUploadEndpoint()
-		if uploadURL == "" {
-			return nil, "", skipAudit("GO_STOCK_SHARE_UPLOAD_URL 未配置")
-		}
-		client := resty.New().SetTimeout(20 * time.Second)
-		resp, err := client.R().
-			SetHeader("ua-x", "go-stock-network-audit").
-			SetFormData(map[string]string{
-				"text":         "network audit share probe",
-				"stockCode":    "600519",
-				"stockName":    "贵州茅台",
-				"analysisTime": time.Now().Format("2006/01/02"),
-			}).
-			Post(uploadURL)
-		if err != nil {
-			return nil, "", err
-		}
-		if resp == nil {
-			return nil, "", errors.New("分享上传响应为空")
-		}
-		if resp.StatusCode() >= 400 {
-			return map[string]any{"statusCode": resp.StatusCode()}, trimSample(resp.String()), fmt.Errorf("分享上传返回 HTTP %d", resp.StatusCode())
-		}
-		return map[string]any{"statusCode": resp.StatusCode()}, trimSample(resp.String()), nil
-	})
-
-	r.runProbe("update", "github_release_check", latestReleaseEndpoint(), false, func() (map[string]any, string, error) {
-		client := resty.New().SetTimeout(20 * time.Second)
-		respBody := map[string]any{}
-		resp, err := client.R().
-			SetHeader("Accept", "application/vnd.github+json").
-			SetHeader("X-GitHub-Api-Version", "2022-11-28").
-			SetResult(&respBody).
-			Get(latestReleaseEndpoint())
-		if err != nil {
-			return nil, "", err
-		}
-		if resp == nil {
-			return nil, "", errors.New("GitHub release 响应为空")
-		}
-		tagName := strings.TrimSpace(pickMapString(anyToStringMap(respBody), "tag_name", "tagName"))
-		if resp.StatusCode() >= 400 || tagName == "" {
-			return map[string]any{"statusCode": resp.StatusCode(), "raw": respBody}, trimSample(stringifyAny(respBody)), fmt.Errorf("GitHub release 检查失败: HTTP %d", resp.StatusCode())
-		}
-		return map[string]any{"statusCode": resp.StatusCode(), "tagName": tagName}, tagName, nil
-	})
-	r.runProbe("update", "github_release_tag_check", githubReleaseTagEndpointFromLatest(), false, func() (map[string]any, string, error) {
-		tagName, raw, err := fetchLatestReleaseTagName(crawlTimeout)
-		if err != nil {
-			return nil, "", err
-		}
-		tagURL := githubReleaseTagEndpoint(tagName)
-		client := resty.New().SetTimeout(crawlTimeout)
-		body := map[string]any{}
-		resp, err := client.R().
-			SetHeader("Accept", "application/vnd.github+json").
-			SetHeader("X-GitHub-Api-Version", "2022-11-28").
-			SetResult(&body).
-			Get(tagURL)
-		if err != nil {
-			return map[string]any{"latestRelease": raw, "tagName": tagName}, "", err
-		}
-		objectURL := pickMapString(anyToStringMap(mapValue(body, "object")), "url")
-		if resp == nil || resp.StatusCode() >= 400 || objectURL == "" {
-			return map[string]any{"statusCode": statusCode(resp), "tagName": tagName, "raw": body}, trimSample(stringifyAny(body)), errors.New("GitHub tag 接口返回空数据")
-		}
-		return map[string]any{"statusCode": resp.StatusCode(), "tagName": tagName, "objectURL": objectURL}, trimSample(objectURL), nil
-	})
-	r.runProbe("update", "sync_news_stream", syncNewsEndpoint(time.Now().Add(-24*time.Hour).Unix()), false, func() (map[string]any, string, error) {
-		endpoint := syncNewsEndpoint(time.Now().Add(-24 * time.Hour).Unix())
-		if endpoint == "" {
-			return nil, "", skipAudit("GO_STOCK_SYNC_NEWS_URL_TEMPLATE 未配置")
-		}
-		return probeHTTPResource(endpoint, httpProbeOptions{
-			Timeout: crawlTimeout,
-		})
 	})
 
 	r.runProbe("frontend_direct", "stock_sina_min_gif_a", "http://image.sinajs.cn/newchart/min/n/sh600519.gif", false, func() (map[string]any, string, error) {
@@ -1394,38 +1290,36 @@ func defaultNetworkAuditBaseDir(dbPath string) string {
 	return filepath.Join(dir, "network-audit")
 }
 
-func buildNetworkAuditEnvironment(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) map[string]any {
+func buildNetworkAuditEnvironment(cfg *models.SettingConfig, provider marketAuditProvider) map[string]any {
 	loc := cnLocation()
 	return map[string]any{
 		"now":      time.Now().In(loc).Format(time.DateTime),
 		"timezone": loc.String(),
 		"runtime":  cfg != nil,
 		"config": map[string]any{
-			"httpProxyEnabled":         cfg.HttpProxyEnabled,
-			"forceNoProxyForFetch":     cfg.ForceNoProxyForFetch,
-			"minuteProviderOrder":      cfg.MinuteProviderOrder,
-			"privateMinuteEnabled":     cfg.PrivateMinuteEnabled,
-			"akshareEnabled":           cfg.AkshareEnabled,
-			"sinaMinuteEnabled":        cfg.SinaMinuteEnabled,
-			"tencentMinuteEnabled":     cfg.TencentMinuteEnabled,
-			"eastmoneyMinuteEnabled":   cfg.EastmoneyMinuteEnabled,
-			"aiAnalysisTimes":          cfg.AIAnalysisTimes,
-			"aiAnalysisAutoEnabled":    cfg.AIAnalysisEnabled,
-			"aiReviewStartTime":        cfg.AIReviewStartTime,
-			"aiReviewIntervalMinutes":  cfg.AIReviewIntervalMinutes,
-			"qgqpBidConfigured":        strings.TrimSpace(cfg.QgqpBId) != "",
-			"tushareTokenConfigured":   strings.TrimSpace(cfg.TushareToken) != "",
-			"dingRobotConfigured":      strings.TrimSpace(cfg.DingRobot) != "",
-			"shareUploadURLConfigured": shareUploadEndpoint() != "",
-			"releaseCheckURL":          latestReleaseEndpoint(),
-			"privateMinuteBaseURL":     provider.DiemengBaseURL(),
-			"privateMinuteTimeoutSec":  cfg.PrivateMinuteTimeoutSec,
-			"akshareMinuteSourceMode":  cfg.AkshareMinuteSourceMode,
+			"httpProxyEnabled":        cfg.HttpProxyEnabled,
+			"forceNoProxyForFetch":    cfg.ForceNoProxyForFetch,
+			"minuteProviderOrder":     cfg.MinuteProviderOrder,
+			"privateMinuteEnabled":    cfg.PrivateMinuteEnabled,
+			"akshareEnabled":          cfg.AkshareEnabled,
+			"sinaMinuteEnabled":       cfg.SinaMinuteEnabled,
+			"tencentMinuteEnabled":    cfg.TencentMinuteEnabled,
+			"eastmoneyMinuteEnabled":  cfg.EastmoneyMinuteEnabled,
+			"aiAnalysisTimes":         cfg.AIAnalysisTimes,
+			"aiAnalysisAutoEnabled":   cfg.AIAnalysisEnabled,
+			"aiReviewStartTime":       cfg.AIReviewStartTime,
+			"aiReviewIntervalMinutes": cfg.AIReviewIntervalMinutes,
+			"qgqpBidConfigured":       strings.TrimSpace(cfg.QgqpBId) != "",
+			"tushareTokenConfigured":  strings.TrimSpace(cfg.TushareToken) != "",
+			"dingRobotConfigured":     strings.TrimSpace(cfg.DingRobot) != "",
+			"privateMinuteBaseURL":    provider.DiemengBaseURL(),
+			"privateMinuteTimeoutSec": cfg.PrivateMinuteTimeoutSec,
+			"akshareMinuteSourceMode": cfg.AkshareMinuteSourceMode,
 		},
 	}
 }
 
-func buildNetworkAuditSettings(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) map[string]any {
+func buildNetworkAuditSettings(cfg *models.SettingConfig, provider marketAuditProvider) map[string]any {
 	return map[string]any{
 		"dingPushEnable":          cfg.DingPushEnable,
 		"dingRobotConfigured":     strings.TrimSpace(cfg.DingRobot) != "",
@@ -1449,7 +1343,7 @@ func buildNetworkAuditSettings(cfg *models.SettingConfig, provider cliports.Mark
 	}
 }
 
-func buildNetworkAuditAIConfigs(cfg *models.SettingConfig, provider cliports.MarketAuditProvider) []map[string]any {
+func buildNetworkAuditAIConfigs(cfg *models.SettingConfig, provider marketAuditProvider) []map[string]any {
 	items := make([]map[string]any, 0, len(cfg.AiConfigs))
 	for _, item := range cfg.AiConfigs {
 		if item == nil {
@@ -1647,7 +1541,7 @@ func minInt(value, fallback int) int {
 	return fallback
 }
 
-func minuteAuditMeta(res *cliports.MinuteProviderAuditResult) map[string]any {
+func minuteAuditMeta(res *minuteProviderAuditResult) map[string]any {
 	if res == nil {
 		return nil
 	}
@@ -1660,47 +1554,12 @@ func minuteAuditMeta(res *cliports.MinuteProviderAuditResult) map[string]any {
 	}
 }
 
-func latestReleaseEndpoint() string {
-	if value := strings.TrimSpace(os.Getenv("GO_STOCK_RELEASE_API_URL")); value != "" {
-		return value
-	}
-	return "https://api.github.com/repos/yxforever666gh/go-stock/releases/latest"
-}
-
-func githubReleaseTagEndpoint(tag string) string {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GO_STOCK_RELEASE_TAG_API_BASE_URL")), "/")
-	if base == "" {
-		base = "https://api.github.com/repos/yxforever666gh/go-stock/git/ref/tags"
-	}
-	return base + "/" + strings.TrimSpace(tag)
-}
-
-func githubReleaseTagEndpointFromLatest() string {
-	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GO_STOCK_RELEASE_TAG_API_BASE_URL")), "/")
-	if base == "" {
-		base = "https://api.github.com/repos/yxforever666gh/go-stock/git/ref/tags"
-	}
-	return base
-}
-
-func shareUploadEndpoint() string {
-	return strings.TrimSpace(os.Getenv("GO_STOCK_SHARE_UPLOAD_URL"))
-}
-
 func baseInfoEndpoint(fileName string) string {
 	base := strings.TrimRight(strings.TrimSpace(os.Getenv("GO_STOCK_BASEINFO_BASE_URL")), "/")
 	if base == "" {
 		base = "https://raw.githubusercontent.com/yxforever666gh/go-stock/main/build"
 	}
 	return base + "/" + strings.TrimSpace(fileName)
-}
-
-func syncNewsEndpoint(since int64) string {
-	template := strings.TrimSpace(os.Getenv("GO_STOCK_SYNC_NEWS_URL_TEMPLATE"))
-	if template == "" {
-		return ""
-	}
-	return strings.ReplaceAll(template, "{since}", fmt.Sprintf("%d", since))
 }
 
 func sortedMapKeys(m map[string]bool) []string {
@@ -1931,27 +1790,6 @@ func tradingViewStoryID(url string) string {
 		url = url[idx+len("/news/"):]
 	}
 	return strings.Trim(url, "/")
-}
-
-func fetchLatestReleaseTagName(timeout time.Duration) (string, map[string]any, error) {
-	client := resty.New().SetTimeout(timeout)
-	body := map[string]any{}
-	resp, err := client.R().
-		SetHeader("Accept", "application/vnd.github+json").
-		SetHeader("X-GitHub-Api-Version", "2022-11-28").
-		SetResult(&body).
-		Get(latestReleaseEndpoint())
-	if err != nil {
-		return "", nil, err
-	}
-	if resp == nil {
-		return "", nil, errors.New("GitHub release 响应为空")
-	}
-	tagName := strings.TrimSpace(pickMapString(anyToStringMap(body), "tag_name", "tagName"))
-	if resp.StatusCode() >= 400 || tagName == "" {
-		return "", body, fmt.Errorf("GitHub latest release 检查失败: HTTP %d", resp.StatusCode())
-	}
-	return tagName, body, nil
 }
 
 func statusCode(resp *resty.Response) int {

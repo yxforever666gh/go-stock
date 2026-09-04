@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"go-stock/backend/data"
+	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/backend/research2app"
+	"go-stock/backend/researchapp"
 	"go-stock/internal/bootstrap"
 	"go-stock/internal/service"
 	"sync"
@@ -12,6 +15,7 @@ import (
 	"github.com/coocood/freecache"
 	"github.com/google/uuid"
 	"github.com/robfig/cron/v3"
+	"gorm.io/gorm"
 )
 
 // App struct
@@ -36,11 +40,11 @@ type App struct {
 	themeErrorsMu          sync.Mutex
 	themeErrors            []error
 	researchRuntimeMu      sync.RWMutex
-	researchRuntime        *data.ResearchRuntime
-	researchFactory        func(int) (*data.ResearchRuntime, error)
+	researchRuntime        *researchapp.Runtime
+	researchFactory        func(int) (*researchapp.Runtime, error)
 	research2RuntimeMu     sync.RWMutex
-	research2Runtime       *data.Research2Runtime
-	research2Factory       func(int) (*data.Research2Runtime, error)
+	research2Runtime       *research2app.Runtime
+	research2Factory       func(int) (*research2app.Runtime, error)
 	aiAnalysisRunMu        sync.Mutex
 	aiAnalysisRunning      bool
 	aiDeploymentRunMu      sync.Mutex
@@ -60,31 +64,24 @@ const research2MetricsEntryKey = "Research2Metrics1505"
 const research2EmailEntryKey = "Research2EmailDelivery"
 const themeLifecycleEntryKey = "ThemeLifecycle1510"
 
-// NewApp creates a new App application struct
-func NewApp() *App {
-	services, err := bootstrap.NewProductionServices()
-	if err != nil {
-		panic(err)
-	}
-	return NewAppWithServices(services)
-}
-
 func NewAppWithServices(services service.AppServices) *App {
 	cacheSize := 512 * 1024
 	cache := freecache.NewCache(cacheSize)
 	c := cron.New(cron.WithSeconds())
 	runtime := newRuntimeCoordinator(context.Background())
 	return &App{
-		ctx:                    runtime.Context(),
-		runtime:                runtime,
-		cache:                  cache,
-		cron:                   c,
-		cronEntrys:             make(map[string]cron.EntryID),
-		services:               services,
-		themeClock:             time.Now,
-		themeOpenTradeDay:      data.IsCNOpenTradeDayStrict,
-		researchFactory:        data.NewResearchRuntime,
-		research2Factory:       data.NewResearch2Runtime,
+		ctx:               runtime.Context(),
+		runtime:           runtime,
+		cache:             cache,
+		cron:              c,
+		cronEntrys:        make(map[string]cron.EntryID),
+		services:          services,
+		themeClock:        time.Now,
+		themeOpenTradeDay: data.IsCNOpenTradeDayStrict,
+		researchFactory:   newResearchRuntime,
+		research2Factory: func(configID int) (*research2app.Runtime, error) {
+			return newResearch2RuntimeWithStorage(configID, db.Dao, db.MinuteDao)
+		},
 		aiDeploymentLeaseOwner: "go-stock-" + uuid.NewString(),
 	}
 }
@@ -95,13 +92,33 @@ func NewAppWithRuntime(appRuntime bootstrap.AppRuntime) *App {
 		app.themeClock = appRuntime.Clock.Now
 	}
 	app.configureThemeLifecycleRuntime(appRuntime.Storage.Main, appRuntime.Storage.Minute)
-	app.researchFactory = func(configID int) (*data.ResearchRuntime, error) {
-		return data.NewResearchRuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
+	app.researchFactory = func(configID int) (*researchapp.Runtime, error) {
+		return newResearchRuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	}
-	app.research2Factory = func(configID int) (*data.Research2Runtime, error) {
-		return data.NewResearch2RuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
+	app.research2Factory = func(configID int) (*research2app.Runtime, error) {
+		return newResearch2RuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	}
 	return app
+}
+
+func newResearchRuntime(configID int) (*researchapp.Runtime, error) {
+	return newResearchRuntimeWithStorage(configID, db.Dao, db.MinuteDao)
+}
+
+func newResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*researchapp.Runtime, error) {
+	dependencies, options, err := data.NewResearchDependencies(configID, mainDB, minuteDB)
+	if err != nil {
+		return nil, err
+	}
+	return researchapp.NewRuntime(mainDB, dependencies, options)
+}
+
+func newResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*research2app.Runtime, error) {
+	dependencies, err := data.NewResearch2Dependencies(configID, mainDB, minuteDB)
+	if err != nil {
+		return nil, err
+	}
+	return research2app.NewRuntime(mainDB, dependencies)
 }
 
 // isTradingDay 判断是否是交易日
@@ -212,46 +229,3 @@ func MonitorFundPrices(a *App) {
 		a.services.Fund.CrawlFundNetUnitValue(follow.Code)
 	}
 }
-
-// shutdown is called at application termination
-func (a *App) shutdown(ctx context.Context) {
-	defer PanicHandler()
-	// Perform your teardown here
-	//os.Exit(0)
-	logger.SugaredLogger.Infof("application shutdown Version:%s", Version)
-}
-
-//// checkChromeOnWindows 在 Windows 系统上检查谷歌浏览器是否安装
-//func checkChromeOnWindows() bool {
-//	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe`, registry.QUERY_VALUE)
-//	if err != nil {
-//		// 尝试在 WOW6432Node 中查找（适用于 64 位系统上的 32 位程序）
-//		key, err = registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe`, registry.QUERY_VALUE)
-//		if err != nil {
-//			return false
-//		}
-//		defer key.Close()
-//	}
-//	defer key.Close()
-//	_, _, err = key.GetValue("Path", nil)
-//	return err == nil
-//}
-//
-//// checkEdgeOnWindows 在 Windows 系统上检查Edge浏览器是否安装，并返回安装路径
-//func checkEdgeOnWindows() (string, bool) {
-//	key, err := registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe`, registry.QUERY_VALUE)
-//	if err != nil {
-//		// 尝试在 WOW6432Node 中查找（适用于 64 位系统上的 32 位程序）
-//		key, err = registry.OpenKey(registry.LOCAL_MACHINE, `SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe`, registry.QUERY_VALUE)
-//		if err != nil {
-//			return "", false
-//		}
-//		defer key.Close()
-//	}
-//	defer key.Close()
-//	path, _, err := key.GetStringValue("Path")
-//	if err != nil {
-//		return "", false
-//	}
-//	return path, true
-//}

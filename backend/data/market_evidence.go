@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"go-stock/backend/db"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 
 	"github.com/go-resty/resty/v2"
@@ -995,7 +996,7 @@ func providerFailure[T any](asOf time.Time, sourceRef string, err error) marketd
 }
 
 func eastmoneySecurityID(code, assetType string) (string, error) {
-	normalized, ok := NormalizeInstrumentID(code, assetType)
+	normalized, ok := instruments.NormalizeInstrumentID(code, assetType)
 	if !ok {
 		return "", errors.New("invalid Shanghai/Shenzhen instrument code")
 	}

@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/funds"
+	"go-stock/backend/instruments"
 	"go-stock/backend/models"
 )
 
@@ -119,7 +119,7 @@ func registerFundRoutes(mux *http.ServeMux, app *App) {
 		req.Name = strings.TrimSpace(req.Name)
 		req.Market = strings.ToUpper(strings.TrimSpace(req.Market))
 		req.Category = strings.ToLower(strings.TrimSpace(req.Category))
-		instrument, instrumentErr := data.ParseInstrumentID(req.Code, "etf", req.Market)
+		instrument, instrumentErr := instruments.ParseInstrumentID(req.Code, "etf", req.Market)
 		if instrumentErr != nil || req.Name == "" || !validETFCategory(req.Category) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "code, name, SH/SZ market and a valid ETF category are required"})
 			return
@@ -128,7 +128,7 @@ func registerFundRoutes(mux *http.ServeMux, app *App) {
 		writeCommandResult(w, message, err)
 	})
 	mux.HandleFunc("DELETE /api/v1/watchlist/etfs/{code}", func(w http.ResponseWriter, r *http.Request) {
-		code, ok := data.NormalizeETFCode(r.PathValue("code"))
+		code, ok := instruments.NormalizeETFCode(r.PathValue("code"))
 		if !ok {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid ETF code"})
 			return

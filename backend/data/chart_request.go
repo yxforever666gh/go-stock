@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"go-stock/backend/instruments"
 )
 
 const (
@@ -25,7 +27,7 @@ func NormalizeChartRequest(request ChartRequest, now time.Time) (ChartRequest, e
 	if request.Instrument.AssetType == "" || request.Instrument.Code == "" {
 		return ChartRequest{}, errors.New("instrument is required")
 	}
-	instrument, err := ParseInstrumentID(request.Instrument.Code, request.Instrument.AssetType, request.Instrument.Market)
+	instrument, err := instruments.ParseInstrumentID(request.Instrument.Code, request.Instrument.AssetType, request.Instrument.Market)
 	if err != nil {
 		return ChartRequest{}, err
 	}

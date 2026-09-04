@@ -11,35 +11,35 @@ import (
 	"time"
 
 	"go-stock/backend/marketdata"
-	"go-stock/backend/research"
 	"go-stock/backend/research2"
+	"go-stock/internal/researchevidence"
 )
 
 type research2StructuredSourceFixture struct {
 	cutoff     time.Time
-	candidates []research.StockCandidate
+	candidates []researchevidence.StockCandidate
 }
 
-func (f *research2StructuredSourceFixture) CollectMarket(context.Context, time.Time) ([]research.SourceDocument, error) {
+func (f *research2StructuredSourceFixture) CollectMarket(context.Context, time.Time) ([]researchevidence.SourceDocument, error) {
 	available := f.cutoff
-	return []research.SourceDocument{{SourceName: "空市场响应", Category: "market", CollectedAt: f.cutoff.Add(time.Second), AvailableAt: &available,
+	return []researchevidence.SourceDocument{{SourceName: "空市场响应", Category: "market", CollectedAt: f.cutoff.Add(time.Second), AvailableAt: &available,
 		Content: `{"code":0,"data":{"total":0,"items":[]}}`}}, nil
 }
 
-func (f *research2StructuredSourceFixture) CollectSectors(context.Context, time.Time) ([]research.SourceDocument, error) {
+func (f *research2StructuredSourceFixture) CollectSectors(context.Context, time.Time) ([]researchevidence.SourceDocument, error) {
 	available := f.cutoff.Add(time.Second)
-	return []research.SourceDocument{{SourceName: "无法证明时间的板块资料", Category: "sector", CollectedAt: available, AvailableAt: &available,
+	return []researchevidence.SourceDocument{{SourceName: "无法证明时间的板块资料", Category: "sector", CollectedAt: available, AvailableAt: &available,
 		Content: `{"items":[{"name":"未来内容但没有时间"}]}`}}, nil
 }
 
-func (f *research2StructuredSourceFixture) CollectStocks(_ context.Context, _ time.Time, candidates []research.StockCandidate) ([]research.SourceDocument, error) {
-	f.candidates = append([]research.StockCandidate(nil), candidates...)
+func (f *research2StructuredSourceFixture) CollectStocks(_ context.Context, _ time.Time, candidates []researchevidence.StockCandidate) ([]researchevidence.SourceDocument, error) {
+	f.candidates = append([]researchevidence.StockCandidate(nil), candidates...)
 	available := f.cutoff.Add(2 * time.Second)
-	documents := make([]research.SourceDocument, 0, len(candidates))
+	documents := make([]researchevidence.SourceDocument, 0, len(candidates))
 	for _, candidate := range candidates {
 		content := fmt.Sprintf(`[{"title":"截止前公告-%s","publishedAt":"%s"},{"title":"截止后公告-%s","publishedAt":"%s"}]`,
 			candidate.Code, f.cutoff.Add(-time.Hour).Format(time.RFC3339), candidate.Code, f.cutoff.Add(time.Hour).Format(time.RFC3339))
-		documents = append(documents, research.SourceDocument{SourceName: "公告 " + candidate.Code, Category: "stock", CollectedAt: available,
+		documents = append(documents, researchevidence.SourceDocument{SourceName: "公告 " + candidate.Code, Category: "stock", CollectedAt: available,
 			AvailableAt: &available, SourceRef: "https://example.invalid/" + candidate.Code, Content: content})
 	}
 	return documents, nil
@@ -66,21 +66,21 @@ type research2LateAuxiliaryFixture struct {
 	freezeAt   time.Time
 }
 
-func (f research2LateAuxiliaryFixture) CollectMarket(context.Context, time.Time) ([]research.SourceDocument, error) {
+func (f research2LateAuxiliaryFixture) CollectMarket(context.Context, time.Time) ([]researchevidence.SourceDocument, error) {
 	collectedAt := f.freezeAt.Add(-time.Second)
 	availableAt := collectedAt
-	return []research.SourceDocument{
+	return []researchevidence.SourceDocument{
 		{SourceID: "research2:test:late-aux", SourceName: "快照后完成的辅助资料", Category: "market", CollectedAt: collectedAt, AvailableAt: &availableAt, Content: `{"items":[{"name":"辅助信息"}]}`},
 		{SourceID: "research2:test:future-event", SourceName: "真正晚于行情锚点的事件", Category: "market", CollectedAt: collectedAt, AvailableAt: &availableAt,
 			Content: fmt.Sprintf(`[{"title":"未来事件","publishedAt":"%s"}]`, f.snapshotAt.Add(time.Second).Format(time.RFC3339))},
 	}, nil
 }
 
-func (research2LateAuxiliaryFixture) CollectSectors(context.Context, time.Time) ([]research.SourceDocument, error) {
+func (research2LateAuxiliaryFixture) CollectSectors(context.Context, time.Time) ([]researchevidence.SourceDocument, error) {
 	return nil, nil
 }
 
-func (research2LateAuxiliaryFixture) CollectStocks(context.Context, time.Time, []research.StockCandidate) ([]research.SourceDocument, error) {
+func (research2LateAuxiliaryFixture) CollectStocks(context.Context, time.Time, []researchevidence.StockCandidate) ([]researchevidence.SourceDocument, error) {
 	return nil, nil
 }
 
@@ -110,12 +110,11 @@ func research2StructuredEnvelope[T any](cutoff time.Time, data T) marketdata.Dat
 		Sources: []marketdata.SourceState{{Provider: "fixture", Status: marketdata.StatusOK, AsOf: cutoff, AvailableAt: &available, SourceRef: "fixture"}}}
 }
 
-func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []research2MarketRow, reported, minuteCount int) *Research2EvidenceCollector {
+func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []research2MarketRow, reported, minuteCount int) *research2EvidenceCollector {
 	t.Helper()
 	sources := &research2StructuredSourceFixture{cutoff: cutoff}
-	return &Research2EvidenceCollector{
+	return &research2EvidenceCollector{
 		sources: sources, stocks: &StockDataApi{}, minuteWindows: research2MinuteFixture{count: minuteCount},
-		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV7,
 		now: func() time.Time { return cutoff.Add(5 * time.Second) },
 		fetchSnapshot: func(context.Context, time.Time) (research2FullMarketSnapshot, error) {
 			return research2FullMarketSnapshot{Rows: rows, Reported: reported, SourceID: "fixture-market", SourceName: "测试全市场",
@@ -197,10 +196,10 @@ func TestResearch2StructuredEvidenceExcludesTodayNearLimitCandidate(t *testing.T
 	assertResearch2CandidateAbsent(t, evidence, "sh600001")
 }
 
-func TestResearch2CollectForRunWithExclusionsRemovesCodeBeforePromptConstruction(t *testing.T) {
+func TestResearch2CollectWithExclusionsRemovesCodeBeforePromptConstruction(t *testing.T) {
 	cutoff := time.Date(2026, 9, 4, 10, 14, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 20), 20, 5)
-	evidence, err := collector.CollectForRunWithExclusions(context.Background(), "run-with-exclusions", cutoff, map[string]struct{}{"SH600001": {}})
+	evidence, err := collector.CollectWithExclusions(context.Background(), cutoff, map[string]struct{}{"SH600001": {}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,9 +393,9 @@ func TestResearch2StructuredEvidenceExcludesCandidateWithFewerThanFourBars(t *te
 func TestResearch2DocumentStatusDistinguishesNestedEmptyAndAfterCutoff(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
 	available, after := cutoff, cutoff.Add(time.Second)
-	empty := research.SourceDocument{Content: `{"code":0,"data":{"result":{"items":[]}}}`, AvailableAt: &available}
-	late := research.SourceDocument{Content: `[{"name":"value"}]`, AvailableAt: &after}
-	failed := research.SourceDocument{Content: `{"error":true}`, Error: "provider failed", AvailableAt: &available}
+	empty := researchevidence.SourceDocument{Content: `{"code":0,"data":{"result":{"items":[]}}}`, AvailableAt: &available}
+	late := researchevidence.SourceDocument{Content: `[{"name":"value"}]`, AvailableAt: &after}
+	failed := researchevidence.SourceDocument{Content: `{"error":true}`, Error: "provider failed", AvailableAt: &available}
 	if status := research2DocumentStatus(empty, cutoff, true); status != marketdata.StatusEmpty {
 		t.Fatalf("nested empty status=%s", status)
 	}
@@ -548,7 +547,7 @@ func TestCollectResearch2CandidateWindowsHonorsContext(t *testing.T) {
 	start := time.Date(2026, 9, 3, 9, 45, 0, 0, shanghaiDataLocation())
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
-	result := collectResearch2CandidateWindows(ctx, blockingResearch2MinuteProvider{}, []research.StockCandidate{{Code: "sh600001"}},
+	result := collectResearch2CandidateWindows(ctx, blockingResearch2MinuteProvider{}, []researchevidence.StockCandidate{{Code: "sh600001"}},
 		[]research2MarketRow{{Code: "600001", Price: 10}}, start, start.Add(5*time.Minute))
 	if len(result) != 1 || result[0].Error == nil {
 		t.Fatalf("blocked provider did not return deadline evidence: %+v", result)

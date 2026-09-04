@@ -8,20 +8,20 @@ import (
 	"time"
 
 	"go-stock/backend/marketdata"
-	"go-stock/backend/research"
 	"go-stock/backend/themes"
+	"go-stock/internal/researchevidence"
 )
 
 // ExperimentalResearchSourceCollector augments the unchanged legacy corpus
 // with typed 2.0 market evidence. It is only constructed behind the
 // experimental_evidence_enabled switch.
 type ExperimentalResearchSourceCollector struct {
-	base   research.SourceCollector
+	base   researchevidence.SourceCollector
 	market *MarketEvidenceService
 	themes themes.EvidenceReader
 }
 
-func NewExperimentalResearchSourceCollector(base research.SourceCollector, market *MarketEvidenceService, themeReaders ...themes.EvidenceReader) *ExperimentalResearchSourceCollector {
+func NewExperimentalResearchSourceCollector(base researchevidence.SourceCollector, market *MarketEvidenceService, themeReaders ...themes.EvidenceReader) *ExperimentalResearchSourceCollector {
 	if market == nil {
 		market = NewMarketEvidenceService()
 	}
@@ -32,40 +32,40 @@ func NewExperimentalResearchSourceCollector(base research.SourceCollector, marke
 	return &ExperimentalResearchSourceCollector{base: base, market: market, themes: themeReader}
 }
 
-func (c *ExperimentalResearchSourceCollector) CollectMarket(ctx context.Context, at time.Time) ([]research.SourceDocument, error) {
+func (c *ExperimentalResearchSourceCollector) CollectMarket(ctx context.Context, at time.Time) ([]researchevidence.SourceDocument, error) {
 	documents, baseErr := c.base.CollectMarket(ctx, at)
 	type result struct {
 		index    int
-		document research.SourceDocument
+		document researchevidence.SourceDocument
 	}
 	results := make(chan result, 8)
-	jobs := []func() research.SourceDocument{
-		func() research.SourceDocument {
+	jobs := []func() researchevidence.SourceDocument{
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0市场宽度", "market-breadth", c.market.Breadth(ctx))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0行业资金流", "fund-flow-sector", c.market.FundFlows(ctx, marketdata.ProviderRequest{Scope: "sector", Sort: "netamount", Limit: 20}))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0概念资金流", "fund-flow-concept", c.market.FundFlows(ctx, marketdata.ProviderRequest{Scope: "concept", Sort: "netamount", Limit: 20}))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0 IF期指持仓", "futures-if", c.market.FuturesPositions(ctx, marketdata.ProviderRequest{Symbol: "IF"}))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0 IH期指持仓", "futures-ih", c.market.FuturesPositions(ctx, marketdata.ProviderRequest{Symbol: "IH"}))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0 IC期指持仓", "futures-ic", c.market.FuturesPositions(ctx, marketdata.ProviderRequest{Symbol: "IC"}))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0 IM期指持仓", "futures-im", c.market.FuturesPositions(ctx, marketdata.ProviderRequest{Symbol: "IM"}))
 		},
-		func() research.SourceDocument {
+		func() researchevidence.SourceDocument {
 			return marketEnvelopeDocument("2.0沪深两融汇总", "margin-market", c.market.Margin(ctx, marketdata.ProviderRequest{Scope: "market"}))
 		},
 	}
-	ordered := make([]research.SourceDocument, len(jobs))
+	ordered := make([]researchevidence.SourceDocument, len(jobs))
 	for index, job := range jobs {
 		index, job := index, job
 		go func() { results <- result{index: index, document: job()} }()
@@ -81,16 +81,16 @@ func (c *ExperimentalResearchSourceCollector) CollectMarket(ctx context.Context,
 	return documents, baseErr
 }
 
-func (c *ExperimentalResearchSourceCollector) CollectSectors(ctx context.Context, at time.Time) ([]research.SourceDocument, error) {
+func (c *ExperimentalResearchSourceCollector) CollectSectors(ctx context.Context, at time.Time) ([]researchevidence.SourceDocument, error) {
 	return c.base.CollectSectors(ctx, at)
 }
 
-func (c *ExperimentalResearchSourceCollector) CollectStocks(ctx context.Context, at time.Time, candidates []research.StockCandidate) ([]research.SourceDocument, error) {
+func (c *ExperimentalResearchSourceCollector) CollectStocks(ctx context.Context, at time.Time, candidates []researchevidence.StockCandidate) ([]researchevidence.SourceDocument, error) {
 	return c.base.CollectStocks(ctx, at, candidates)
 }
 
-func marketEnvelopeDocument[T any](name, sourceID string, envelope marketdata.DataEnvelope[T]) research.SourceDocument {
-	document := research.SourceDocument{SourceID: sourceID, SourceName: name, Category: "market", CollectedAt: envelope.FetchedAt}
+func marketEnvelopeDocument[T any](name, sourceID string, envelope marketdata.DataEnvelope[T]) researchevidence.SourceDocument {
+	document := researchevidence.SourceDocument{SourceID: sourceID, SourceName: name, Category: "market", CollectedAt: envelope.FetchedAt}
 	for _, source := range envelope.Sources {
 		if source.Provider != envelope.Source {
 			continue

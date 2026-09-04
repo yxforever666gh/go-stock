@@ -2,10 +2,7 @@ package research2
 
 import "time"
 
-const (
-	InitialCash = 12000.0
-	LotSize     = int64(100)
-)
+const InitialCash = 12000.0
 
 type AnalysisRun struct {
 	ID                     uint            `json:"id" gorm:"primaryKey"`

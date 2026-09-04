@@ -13,9 +13,11 @@ import (
 	"time"
 	"unicode/utf8"
 
+	aicontract "go-stock/backend/ai"
 	"go-stock/backend/knowledge"
-	"go-stock/backend/research"
 	"go-stock/backend/researchaudit"
+	"go-stock/internal/researchevidence"
+	"go-stock/internal/trading"
 
 	"github.com/google/uuid"
 )
@@ -28,8 +30,8 @@ var ErrOutsideAnalysisStartWindow = errors.New("research2 analysis start is outs
 type Evidence struct {
 	Prompt                   string
 	SourceStatusJSON         string
-	Candidates               []research.StockCandidate
-	Documents                []research.SourceDocument
+	Candidates               []researchevidence.StockCandidate
+	Documents                []researchevidence.SourceDocument
 	EvidenceProfileVersion   string
 	EvidenceSetID            string
 	CutoffAt                 time.Time
@@ -113,7 +115,7 @@ type modelRecommendation struct {
 
 type Runner struct {
 	repository             *Repository
-	ai                     research.AIClient
+	ai                     aicontract.AIClient
 	collector              EvidenceCollector
 	calendar               Calendar
 	now                    func() time.Time
@@ -138,7 +140,7 @@ func (r *Runner) ConfigureAudit(recorder *researchaudit.Recorder) {
 	}
 }
 
-func NewRunner(repository *Repository, ai research.AIClient, collector EvidenceCollector, calendar Calendar) *Runner {
+func NewRunner(repository *Repository, ai aicontract.AIClient, collector EvidenceCollector, calendar Calendar) *Runner {
 	return &Runner{repository: repository, ai: ai, collector: collector, calendar: calendar, now: time.Now, waitUntil: waitUntil}
 }
 
@@ -347,10 +349,10 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			evidence.Prompt = strings.TrimSpace(evidence.Prompt) + "\n\n" + retrieval.Prompt
 		}
 	}
-	attempts := make(map[string]research.ModelAttemptRecord)
+	attempts := make(map[string]aicontract.ModelAttemptRecord)
 	modelCtx := ctx
 	prompt := buildPrompt(evidence, cutoff)
-	var result research.CompletionResult
+	var result aicontract.CompletionResult
 	var output modelOutput
 	var sourceValidationMessages []string
 	for structureAttempt := 1; structureAttempt <= 2; structureAttempt++ {
@@ -366,12 +368,12 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			}
 			prompt = prepared.Prompt
 		}
-		callAttempts := make(map[string]research.ModelAttemptRecord)
-		result, err = r.ai.Complete(modelCtx, research.CompletionRequest{RecommendationID: run.RunID, Phase: "research2_overnight_strength", Prompt: prompt, OnAttempt: func(record research.ModelAttemptRecord) {
+		callAttempts := make(map[string]aicontract.ModelAttemptRecord)
+		result, err = r.ai.Complete(modelCtx, aicontract.CompletionRequest{RecommendationID: run.RunID, Phase: "research2_overnight_strength", Prompt: prompt, OnAttempt: func(record aicontract.ModelAttemptRecord) {
 			attempts[record.ID] = record
 			callAttempts[record.ID] = record
 			run.ProviderName = record.ProviderName
-			values := make([]research.ModelAttemptRecord, 0, len(attempts))
+			values := make([]aicontract.ModelAttemptRecord, 0, len(attempts))
 			for _, item := range attempts {
 				values = append(values, item)
 			}
@@ -383,7 +385,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			_ = r.repository.SaveRun(persistCtx, &run)
 		}})
 		if r.audit != nil {
-			attemptValues := make([]research.ModelAttemptRecord, 0, len(callAttempts))
+			attemptValues := make([]aicontract.ModelAttemptRecord, 0, len(callAttempts))
 			for _, item := range callAttempts {
 				attemptValues = append(attemptValues, item)
 			}
@@ -526,7 +528,7 @@ func research2AuditEvidence(evidence Evidence) map[string]any {
 	}
 }
 
-func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase string, callSequence int, cutoff time.Time, prompt string, evidence Evidence, attempts []research.ModelAttemptRecord, result research.CompletionResult, repaired bool, callErr error) error {
+func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase string, callSequence int, cutoff time.Time, prompt string, evidence Evidence, attempts []aicontract.ModelAttemptRecord, result aicontract.CompletionResult, repaired bool, callErr error) error {
 	if r == nil || r.audit == nil {
 		return nil
 	}
@@ -559,7 +561,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 		attemptJSON, _ := json.Marshal(attempt)
 		callResult := researchaudit.CallResult{
 			ProviderName: attempt.ProviderName, ModelName: attempt.ModelName, ActualConfigID: attempt.ConfigID,
-			RepairLog: string(attemptJSON), ModelParameters: research.AuditModelParameters([]research.ModelAttemptRecord{attempt}),
+			RepairLog: string(attemptJSON), ModelParameters: aicontract.AuditModelParameters([]aicontract.ModelAttemptRecord{attempt}),
 		}
 		if attempt.Status == "success" || (index == len(attempts)-1 && callErr == nil) {
 			if repaired {
@@ -646,23 +648,23 @@ func ParseModelOutput(content string) (modelOutput, error) {
 	return output, nil
 }
 
-func validateRecommendations(runID string, generated, tradingDay time.Time, candidates []research.StockCandidate, values []modelRecommendation) ([]Recommendation, []string) {
+func validateRecommendations(runID string, generated, tradingDay time.Time, candidates []researchevidence.StockCandidate, values []modelRecommendation) ([]Recommendation, []string) {
 	return validateRecommendationsWithEvidence(runID, generated, tradingDay, generated, candidates, nil, nil, values)
 }
 
-func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cutoff time.Time, candidates []research.StockCandidate, documents []research.SourceDocument, referencePrices map[string]float64, values []modelRecommendation) ([]Recommendation, []string) {
+func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cutoff time.Time, candidates []researchevidence.StockCandidate, documents []researchevidence.SourceDocument, referencePrices map[string]float64, values []modelRecommendation) ([]Recommendation, []string) {
 	items := make([]Recommendation, 0, len(values))
 	warnings := make([]string, 0)
 	seen := map[string]struct{}{}
 	allowed := make(map[string]string, len(candidates))
 	for _, candidate := range candidates {
-		if code, ok := research.NormalizeMainlandCode(candidate.Code); ok {
+		if code, ok := trading.NormalizeMainlandCode(candidate.Code); ok {
 			allowed[code] = strings.TrimSpace(candidate.Name)
 		}
 	}
 	restrictToEvidence := candidates != nil
 	for _, value := range values {
-		code, ok := research.NormalizeMainlandCode(value.Code)
+		code, ok := trading.NormalizeMainlandCode(value.Code)
 		if !ok || !(strings.HasPrefix(code, "sh60") || strings.HasPrefix(code, "sz00")) {
 			warnings = append(warnings, value.Code+"不是沪深主板普通A股")
 			continue
@@ -709,7 +711,8 @@ func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cu
 			warnings = append(warnings, code+"参考价格无效")
 			continue
 		}
-		lotCost := -research.CalculateBuyCost(referencePrice, LotSize).NetCashFlow
+		lot, _ := trading.LotSize(code)
+		lotCost := -trading.CalculateBuyCost(referencePrice, lot).NetCashFlow
 		if lotCost > InitialCash+1e-7 {
 			warnings = append(warnings, code+"一手含费成本超过12000元")
 			continue
@@ -736,13 +739,13 @@ func validScoreComponent(value, maximum float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= maximum
 }
 
-func validateModelSourceRefs(values []modelRecommendation, documents []research.SourceDocument, cutoff time.Time, candidates []research.StockCandidate) []string {
+func validateModelSourceRefs(values []modelRecommendation, documents []researchevidence.SourceDocument, cutoff time.Time, candidates []researchevidence.StockCandidate) []string {
 	if documents == nil {
 		return nil
 	}
 	warnings := make([]string, 0)
 	for _, value := range values {
-		code, ok := research.NormalizeMainlandCode(value.Code)
+		code, ok := trading.NormalizeMainlandCode(value.Code)
 		if !ok {
 			code = strings.TrimSpace(value.Code)
 		}
@@ -752,11 +755,11 @@ func validateModelSourceRefs(values []modelRecommendation, documents []research.
 	return warnings
 }
 
-func validateRecommendationScoreEvidence(code string, value modelRecommendation, documents []research.SourceDocument, cutoff time.Time, candidates []research.StockCandidate) []string {
+func validateRecommendationScoreEvidence(code string, value modelRecommendation, documents []researchevidence.SourceDocument, cutoff time.Time, candidates []researchevidence.StockCandidate) []string {
 	if documents == nil {
 		return nil
 	}
-	byID := make(map[string]research.SourceDocument, len(documents))
+	byID := make(map[string]researchevidence.SourceDocument, len(documents))
 	for _, document := range documents {
 		byID[strings.TrimSpace(document.SourceID)] = document
 	}
@@ -800,7 +803,7 @@ func validateRecommendationScoreEvidence(code string, value modelRecommendation,
 	return warnings
 }
 
-func validateRecommendationSourceRefs(code string, refs []string, documents []research.SourceDocument, cutoff time.Time, candidates []research.StockCandidate) []string {
+func validateRecommendationSourceRefs(code string, refs []string, documents []researchevidence.SourceDocument, cutoff time.Time, candidates []researchevidence.StockCandidate) []string {
 	// A nil document slice represents a legacy collector that cannot expose
 	// stable source IDs. New trailing5 evidence always supplies Documents.
 	if documents == nil {
@@ -809,7 +812,7 @@ func validateRecommendationSourceRefs(code string, refs []string, documents []re
 	if len(refs) == 0 {
 		return []string{code + "未提供sourceRefs"}
 	}
-	byID := make(map[string]research.SourceDocument, len(documents))
+	byID := make(map[string]researchevidence.SourceDocument, len(documents))
 	for _, document := range documents {
 		if id := strings.TrimSpace(document.SourceID); id != "" {
 			byID[id] = document
@@ -879,7 +882,7 @@ func research2CitationPayloadUsable(content string) bool {
 	}
 }
 
-func sourceDocumentAppliesToStock(document research.SourceDocument, code string, candidates []research.StockCandidate) bool {
+func sourceDocumentAppliesToStock(document researchevidence.SourceDocument, code string, candidates []researchevidence.StockCandidate) bool {
 	category := strings.ToLower(strings.TrimSpace(document.Category))
 	stockScoped := category == "stock" || category == "quote" || category == "minute" || strings.HasPrefix(category, "stock_")
 	if !stockScoped {
@@ -895,7 +898,7 @@ func sourceDocumentAppliesToStock(document research.SourceDocument, code string,
 	// cannot be cited for this one. Sources without any entity marker are also
 	// rejected because ownership cannot be proven.
 	for _, candidate := range candidates {
-		candidateCode, ok := research.NormalizeMainlandCode(candidate.Code)
+		candidateCode, ok := trading.NormalizeMainlandCode(candidate.Code)
 		if !ok || candidateCode == code {
 			continue
 		}
@@ -1292,7 +1295,7 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				break
 			}
 			cashCap := allocation
-			quantity, cost, sizeErr := sizeWithin(snapshots[item.RecommendationID].Price, cashCap)
+			quantity, cost, sizeErr := trading.SizeBuy(item.StockCode, snapshots[item.RecommendationID].Price, cashCap)
 			if sizeErr != nil {
 				if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "missed_cash", "等额分仓后不足买入100股"); markErr != nil {
 					return markErr
@@ -1372,7 +1375,7 @@ func (s *TradingService) processSells(ctx context.Context, now time.Time) error 
 			_ = s.repository.MarkStatus(ctx, item.RecommendationID, "sell_pending", "等待下一交易日10:00目标分钟行情")
 			continue
 		}
-		cost := research.CalculateSellCost(snapshot.Price, item.Quantity)
+		cost := trading.CalculateSellCost(snapshot.Price, item.Quantity)
 		tradeAt := snapshot.At
 		if tradeAt.IsZero() {
 			tradeAt = now
@@ -1411,7 +1414,7 @@ func affordableEqualAllocation(items []Recommendation, snapshots map[string]Pric
 		allocation := cash / float64(len(eligible))
 		failed := make([]int, 0)
 		for index, item := range eligible {
-			if _, _, err := sizeWithin(snapshots[item.RecommendationID].Price, allocation); err != nil {
+			if _, _, err := trading.SizeBuy(item.StockCode, snapshots[item.RecommendationID].Price, allocation); err != nil {
 				failed = append(failed, index)
 			}
 		}
@@ -1473,21 +1476,6 @@ func (s *TradingService) nextTradingDayAt(ctx context.Context, from time.Time, h
 	return time.Time{}, errors.New("20日内找不到下一A股交易日")
 }
 
-func sizeWithin(price, cash float64) (int64, research.CostBreakdown, error) {
-	if price <= 0 || cash <= 0 {
-		return 0, research.CostBreakdown{}, research.ErrInsufficientCash
-	}
-	quantity := int64(math.Floor(cash/(price*(1+research.SlippageRate))/float64(LotSize))) * LotSize
-	for quantity >= LotSize {
-		cost := research.CalculateBuyCost(price, quantity)
-		if -cost.NetCashFlow <= cash+1e-7 {
-			return quantity, cost, nil
-		}
-		quantity -= LotSize
-	}
-	return 0, research.CostBreakdown{}, research.ErrMinimumOrder
-}
-
 func (r *Runner) Prompt() string { return strategyPrompt }
 
 func ValidateAllocation(prices []float64, cash float64) ([]int64, error) {
@@ -1497,7 +1485,9 @@ func ValidateAllocation(prices []float64, cash float64) ([]int64, error) {
 	result := make([]int64, len(prices))
 	for index, price := range prices {
 		cap := cash / float64(len(prices))
-		quantity, _, err := sizeWithin(price, cap)
+		// This legacy helper has prices but no codes and historically assumes a
+		// standard 100-share mainland lot.
+		quantity, _, err := trading.SizeBuy("sz000001", price, cap)
 		if err != nil {
 			continue
 		}

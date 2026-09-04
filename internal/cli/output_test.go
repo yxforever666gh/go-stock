@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"go-stock/backend/data"
+	"go-stock/backend/models"
 )
 
 func TestFormatQuoteText(t *testing.T) {
-	item := &data.StockInfo{
+	item := &models.StockInfo{
 		Name:          "测试股份",
 		Code:          "sh600000",
 		Price:         "10.23",

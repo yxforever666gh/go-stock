@@ -11,7 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/research"
+	"go-stock/internal/researchevidence"
+	"go-stock/internal/trading"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -425,7 +426,7 @@ func TestExecutionChainConcurrentBuysNeverExceedThree(t *testing.T) {
 	if err = repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
 	}
-	cost := research.CalculateBuyCost(10, 100)
+	cost := trading.CalculateBuyCost(10, 100)
 	var wait sync.WaitGroup
 	errorsByIndex := make([]error, len(items))
 	for index, item := range items {
@@ -484,7 +485,7 @@ func TestChainlessLegacyPendingCannotExceedDailyThreeBuys(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
 	}
-	cost := research.CalculateBuyCost(10, 100)
+	cost := trading.CalculateBuyCost(10, 100)
 	trade := Trade{TradeID: uuid.NewString(), RecommendationID: pending.RecommendationID, Side: "buy", TradedAt: now, MarketPrice: 10, ExecutionPrice: cost.ExecutionPrice, Quantity: 100, Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount, NetCashFlow: cost.NetCashFlow}
 	if err := repository.RecordBuy(context.Background(), pending.RecommendationID, trade, now.AddDate(0, 0, 1)); err == nil {
 		t.Fatal("chainless fourth same-day buy was accepted")
@@ -541,7 +542,7 @@ func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
 	}
 	collector := &filteredEvidenceRecorder{value: Evidence{
 		Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: now,
-		Candidates:               []research.StockCandidate{{Code: "sh600042", Name: "replacement"}},
+		Candidates:               []researchevidence.StockCandidate{{Code: "sh600042", Name: "replacement"}},
 		CandidateReferencePrices: map[string]float64{"sh600042": 10},
 	}}
 	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"refill","recommendations":[{"code":"sh600042","marketScore":20,"sectorScore":20,"stockScore":20,"catalystScore":0,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}}
@@ -567,7 +568,7 @@ func TestNoRecommendationTerminatesChainInsteadOfHotLooping(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 9, 55, 0, 0, shanghai())
 	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"证据不足","recommendations":[]}`}}
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600061", Name: "candidate"}}}}, testCalendar{})
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600061", Name: "candidate"}}}}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return now }, nil)
 	run, err := runner.Run(context.Background(), now)
 	if err != nil || run.Status != "no_recommendation" || ai.calls != 1 {

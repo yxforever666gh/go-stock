@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.8.0
+  version: 1.0.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -18,12 +18,10 @@ paths:
         "200": {description: Ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
         "503": {description: Not ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
   /api/v1/system/info:
-    get: {operationId: getSystemInfo, responses: {"200": {description: Display version information}}}
-  /api/v1/system/update-check:
-    post:
-      operationId: checkForUpdates
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/UpdateCheckRequest"}}}}
-      responses: {"202": {description: Update check accepted, content: {application/json: {schema: {$ref: "#/components/schemas/AcceptedResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+    get:
+      operationId: getSystemInfo
+      responses:
+        "200": {description: Display version information, content: {application/json: {schema: {$ref: "#/components/schemas/SystemInfo"}}}}
   /api/v1/system/shutdown:
     post:
       operationId: shutdownSystem
@@ -1377,6 +1375,13 @@ components:
         summary: {type: string}
         contentHash: {type: string}
         errorMessage: {type: string}
+    SystemInfo:
+      type: object
+      required: [version, content, icon]
+      properties:
+        version: {type: string}
+        content: {type: string}
+        icon: {type: string}
     ErrorResponse:
       type: object
       required: [error]
@@ -1385,14 +1390,6 @@ components:
       type: object
       required: [ok]
       properties: {ok: {type: boolean}, message: {type: string}}
-    AcceptedResponse:
-      type: object
-      required: [accepted]
-      properties: {accepted: {type: boolean}}
-    UpdateCheckRequest:
-      type: object
-      required: [flag]
-      properties: {flag: {type: integer}}
     AIConfigTestRequest:
       type: object
       required: [id]

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/themes"
 	"go-stock/internal/bootstrap"
 	"go-stock/internal/service"
 
@@ -25,10 +25,10 @@ type themeTestCollector struct {
 	err        error
 }
 
-func (collector *themeTestCollector) CollectAndFreeze(_ context.Context, observedAt time.Time) (data.ThemeLifecycleRunResult, error) {
+func (collector *themeTestCollector) CollectAndFreeze(_ context.Context, observedAt time.Time) (themes.ThemeLifecycleRunResult, error) {
 	collector.calls++
 	collector.observedAt = observedAt
-	return data.ThemeLifecycleRunResult{}, collector.err
+	return themes.ThemeLifecycleRunResult{}, collector.err
 }
 
 func TestNewAppWithRuntimeBuildsProductionThemeLifecycleRuntime(t *testing.T) {
@@ -38,9 +38,9 @@ func TestNewAppWithRuntimeBuildsProductionThemeLifecycleRuntime(t *testing.T) {
 		Clock:   themeTestClock{now: fixed},
 	})
 
-	runtime, ok := app.themeRuntime.(*data.ThemeLifecycleRuntime)
+	runtime, ok := app.themeRuntime.(*themes.ThemeLifecycleRuntime)
 	if !ok || runtime == nil {
-		t.Fatalf("theme runtime type=%T, want *data.ThemeLifecycleRuntime", app.themeRuntime)
+		t.Fatalf("theme runtime type=%T, want *themes.ThemeLifecycleRuntime", app.themeRuntime)
 	}
 	if runtime.Repository == nil || runtime.Service == nil || runtime.Sources == nil {
 		t.Fatal("production theme runtime dependencies were not assembled")

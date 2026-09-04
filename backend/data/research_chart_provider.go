@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"go-stock/backend/db"
-	"go-stock/backend/research"
+	"go-stock/backend/instruments"
+	"go-stock/internal/recommendationchart"
+	sharedtrading "go-stock/internal/trading"
 
 	"gorm.io/gorm"
 )
@@ -33,27 +35,27 @@ func NewResearchChartProviderWithStorage(quotes *ResearchQuoteProvider, minuteDB
 	return &ResearchChartProvider{quotes: quotes, minuteDB: minuteDB}
 }
 
-func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string, start, end time.Time) (research.ChartProviderSnapshot, error) {
+func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string, start, end time.Time) (recommendationchart.ProviderSnapshot, error) {
 	keys, err := chartMinuteCacheKeys(code)
 	if err != nil {
-		return research.ChartProviderSnapshot{}, err
+		return recommendationchart.ProviderSnapshot{}, err
 	}
 	rows := make([]minuteBar, 0)
 	for _, key := range keys {
 		cached, cacheErr := listMinuteBarsFromMinuteDatabase(provider.minuteDB, key, start, end)
 		if cacheErr != nil {
-			return research.ChartProviderSnapshot{}, cacheErr
+			return recommendationchart.ProviderSnapshot{}, cacheErr
 		}
 		rows = append(rows, cached...)
 	}
 	// The professional chart cache is scoped explicitly to stock/1m/none.
 	// Reading it here lets ResearchTradeChart share the unified rendering data
 	// without ever accepting qfq/hfq observations for real executions or PnL.
-	if instrument, instrumentErr := ParseInstrumentID(code, "stock", ""); instrumentErr == nil && provider.minuteDB != nil && provider.minuteDB.Migrator().HasTable(&marketChartBarRow{}) {
+	if instrument, instrumentErr := instruments.ParseInstrumentID(code, "stock", ""); instrumentErr == nil && provider.minuteDB != nil && provider.minuteDB.Migrator().HasTable(&marketChartBarRow{}) {
 		common, commonErr := loadChartBarsFromCache(provider.minuteDB, ChartRequest{Instrument: instrument, Period: ChartPeriod1Minute,
 			Adjustment: ChartAdjustmentNone, From: start, To: end})
 		if commonErr != nil {
-			return research.ChartProviderSnapshot{}, commonErr
+			return recommendationchart.ProviderSnapshot{}, commonErr
 		}
 		for _, bar := range common.Bars {
 			rows = append(rows, minuteBar{TradeTime: bar.At, Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close,
@@ -61,13 +63,13 @@ func (provider *ResearchChartProvider) LoadCached(_ context.Context, code string
 		}
 	}
 	rows, rejected := dedupeProvenResearchChartBars(rows)
-	result := research.ChartProviderSnapshot{Bars: make([]research.ChartMinuteBar, 0, len(rows)), ProviderErrors: []research.ChartProviderError{}}
+	result := recommendationchart.ProviderSnapshot{Bars: make([]recommendationchart.MinuteBar, 0, len(rows)), ProviderErrors: []recommendationchart.ProviderError{}}
 	for _, row := range rows {
-		result.Bars = append(result.Bars, research.ChartMinuteBar{At: row.TradeTime, Open: row.Open, High: row.High,
+		result.Bars = append(result.Bars, recommendationchart.MinuteBar{At: row.TradeTime, Open: row.Open, High: row.High,
 			Low: row.Low, Close: row.Close, Volume: row.Volume, Amount: row.Amount, Source: strings.TrimSpace(row.Source)})
 	}
 	if rejected > 0 {
-		result.ProviderErrors = append(result.ProviderErrors, research.ChartProviderError{Provider: "cache",
+		result.ProviderErrors = append(result.ProviderErrors, recommendationchart.ProviderError{Provider: "cache",
 			Message: fmt.Sprintf("已忽略 %d 条无法证明为未复权或价格无效的分钟数据", rejected)})
 	}
 	result.RefreshedAt = provider.chartCacheUpdatedAt(keys, start, end)
@@ -97,14 +99,14 @@ func dedupeProvenResearchChartBars(rows []minuteBar) ([]minuteBar, int) {
 	return result, rejected
 }
 
-func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string, start, end time.Time, sessionDates []string) (research.ChartProviderSnapshot, error) {
+func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string, start, end time.Time, sessionDates []string) (recommendationchart.ProviderSnapshot, error) {
 	keys, err := chartMinuteCacheKeys(code)
 	if err != nil {
-		return research.ChartProviderSnapshot{}, err
+		return recommendationchart.ProviderSnapshot{}, err
 	}
 	canonical := keys[0]
-	instrument, instrumentErr := ParseInstrumentID(code, "stock", "")
-	errorsOut := make([]research.ChartProviderError, 0)
+	instrument, instrumentErr := instruments.ParseInstrumentID(code, "stock", "")
+	errorsOut := make([]recommendationchart.ProviderError, 0)
 
 	for _, date := range sessionDates {
 		day, parseErr := time.ParseInLocation("2006-01-02", date, cnLocation())
@@ -121,7 +123,7 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 		}
 		providers := enabledChartMinuteProviders(day)
 		if len(providers) == 0 {
-			errorsOut = append(errorsOut, research.ChartProviderError{Provider: "configuration",
+			errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: "configuration",
 				Message: date + " 没有已启用且适用于该日期的一分钟数据源"})
 			continue
 		}
@@ -146,10 +148,10 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 					proven = append(proven, bar)
 				}
 				if len(proven) == 0 {
-					errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+					errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: item.name,
 						Message: date + " 返回的数据无法证明为未复权，已拒绝写入"})
 				} else if _, upsertErr := upsertMinuteBarsToCache(canonical, proven, source); upsertErr != nil {
-					errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name, Message: sanitizeChartError(upsertErr)})
+					errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: item.name, Message: sanitizeChartError(upsertErr)})
 				} else {
 					accepted = len(proven)
 					if instrumentErr == nil && provider.minuteDB != nil && provider.minuteDB.Migrator().HasTable(&marketChartBarRow{}) {
@@ -161,23 +163,23 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 						cacheRequest := ChartRequest{Instrument: instrument, Period: ChartPeriod1Minute, Adjustment: ChartAdjustmentNone,
 							From: winStart, To: winEnd}
 						if commonErr := upsertChartBarsToCache(provider.minuteDB, cacheRequest, commonBars, time.Now().In(cnLocation())); commonErr != nil {
-							errorsOut = append(errorsOut, research.ChartProviderError{Provider: "chart_cache", Message: sanitizeChartError(commonErr)})
+							errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: "chart_cache", Message: sanitizeChartError(commonErr)})
 						}
 					}
 				}
 			}
 			if fetchErr != nil {
-				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+				errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: item.name,
 					Message: date + "：" + sanitizeChartError(fetchErr) + fallbackSuffix})
 			} else if len(bars) == 0 {
-				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+				errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: item.name,
 					Message: date + " 返回空数据" + fallbackSuffix})
 			}
 			if provider.chartAnyCacheWindowCovered(keys, winStart, winEnd) {
 				break
 			}
 			if accepted > 0 && fetchErr == nil {
-				errorsOut = append(errorsOut, research.ChartProviderError{Provider: item.name,
+				errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: item.name,
 					Message: fmt.Sprintf("%s 已写入 %d 条分钟数据但覆盖仍不完整%s", date, accepted, fallbackSuffix)})
 			}
 		}
@@ -188,12 +190,12 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 		return result, err
 	}
 	if quote, quoteErr := provider.quotes.CurrentQuote(ctx, code); quoteErr == nil {
-		result.Quote = &quote
+		result.Quote = &recommendationchart.Quote{Price: quote.Price, PreviousClose: quote.PreviousClose, At: quote.At}
 		if result.RefreshedAt.IsZero() || quote.At.After(result.RefreshedAt) {
 			result.RefreshedAt = quote.At
 		}
 	} else if !hasChartProviderError(errorsOut, "realtime_quote") {
-		errorsOut = append(errorsOut, research.ChartProviderError{Provider: "realtime_quote", Message: sanitizeChartError(quoteErr)})
+		errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: "realtime_quote", Message: sanitizeChartError(quoteErr)})
 	}
 	result.ProviderErrors = append(result.ProviderErrors, errorsOut...)
 	return result, nil
@@ -255,7 +257,7 @@ func availablePublicChartMinuteProviders(settings *Settings, day time.Time) map[
 }
 
 func chartMinuteCacheKeys(code string) ([]string, error) {
-	normalized, ok := research.NormalizeMainlandCode(code)
+	normalized, ok := sharedtrading.NormalizeMainlandCode(code)
 	if !ok {
 		return nil, fmt.Errorf("only Shanghai/Shenzhen A shares are supported")
 	}
@@ -343,7 +345,7 @@ func sanitizeChartError(err error) string {
 	return message
 }
 
-func hasChartProviderError(items []research.ChartProviderError, provider string) bool {
+func hasChartProviderError(items []recommendationchart.ProviderError, provider string) bool {
 	for _, item := range items {
 		if item.Provider == provider {
 			return true

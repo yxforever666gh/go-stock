@@ -1,16 +1,37 @@
-import {
-  AnalyticsOutline,
-  BarChartSharp,
-  Flag,
-  NewspaperSharp,
-  Pulse,
-  ScaleOutline,
-  WalletOutline,
-} from '@vicons/ionicons5'
-import { Dragon, FirefoxBrowser, Gripfire } from '@vicons/fa'
-import { ReportMoney, ReportSearch, TrendingUp } from '@vicons/tabler'
-import { BoxSearch20Regular } from '@vicons/fluent'
-import { NotificationFilled, StockOutlined } from '@vicons/antd'
+import AnalyticsOutlineModule from '@vicons/ionicons5/AnalyticsOutline.js'
+import BarChartSharpModule from '@vicons/ionicons5/BarChartSharp.js'
+import FlagModule from '@vicons/ionicons5/Flag.js'
+import NewspaperSharpModule from '@vicons/ionicons5/NewspaperSharp.js'
+import PulseModule from '@vicons/ionicons5/Pulse.js'
+import ScaleOutlineModule from '@vicons/ionicons5/ScaleOutline.js'
+import WalletOutlineModule from '@vicons/ionicons5/WalletOutline.js'
+import DragonModule from '@vicons/fa/Dragon.js'
+import FirefoxBrowserModule from '@vicons/fa/FirefoxBrowser.js'
+import GripfireModule from '@vicons/fa/Gripfire.js'
+import ReportMoneyModule from '@vicons/tabler/ReportMoney.js'
+import ReportSearchModule from '@vicons/tabler/ReportSearch.js'
+import TrendingUpModule from '@vicons/tabler/TrendingUp.js'
+import BoxSearch20RegularModule from '@vicons/fluent/BoxSearch20Regular.js'
+import NotificationFilledModule from '@vicons/antd/NotificationFilled.js'
+import StockOutlinedModule from '@vicons/antd/StockOutlined.js'
+
+const iconComponent = module => module.default ?? module
+const AnalyticsOutline = iconComponent(AnalyticsOutlineModule)
+const BarChartSharp = iconComponent(BarChartSharpModule)
+const Flag = iconComponent(FlagModule)
+const NewspaperSharp = iconComponent(NewspaperSharpModule)
+const Pulse = iconComponent(PulseModule)
+const ScaleOutline = iconComponent(ScaleOutlineModule)
+const WalletOutline = iconComponent(WalletOutlineModule)
+const Dragon = iconComponent(DragonModule)
+const FirefoxBrowser = iconComponent(FirefoxBrowserModule)
+const Gripfire = iconComponent(GripfireModule)
+const ReportMoney = iconComponent(ReportMoneyModule)
+const ReportSearch = iconComponent(ReportSearchModule)
+const TrendingUp = iconComponent(TrendingUpModule)
+const BoxSearch20Regular = iconComponent(BoxSearch20RegularModule)
+const NotificationFilled = iconComponent(NotificationFilledModule)
+const StockOutlined = iconComponent(StockOutlinedModule)
 
 export const MARKET_TABS = Object.freeze([
   {key: 'market1', name: '市场快讯', icon: NewspaperSharp, load: () => import('./MarketNewsTab.vue'), activeAware: true},

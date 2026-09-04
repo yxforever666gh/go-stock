@@ -3,7 +3,6 @@
 export const API_PATHS = {
   addGroupStock: "/api/v1/groups/{id}/stocks",
   analyzeWeightedSentiment: "/api/v1/market/sentiment/weighted",
-  checkForUpdates: "/api/v1/system/update-check",
   connectEventsWebSocket: "/api/v1/events/ws",
   createGroup: "/api/v1/groups",
   createKnowledgeDocument: "/api/v1/knowledge/documents",
@@ -118,10 +117,6 @@ export const API_PATHS = {
 
 export type AIConfigTestRequest = {
   id: number
-}
-
-export type AcceptedResponse = {
-  accepted: boolean
 }
 
 export type AccountCashFlow = {
@@ -1313,6 +1308,12 @@ export type StrategyPerformanceMetrics = {
   winRate: number
 }
 
+export type SystemInfo = {
+  content: string
+  icon: string
+  version: string
+}
+
 export type SystemVersionStatus = {
   appVersion: string
   artifactSHA256?: string
@@ -1499,8 +1500,4 @@ export type TradesData = {
 
 export type TradesEnvelope = DataEnvelope & {
   data: TradesData
-}
-
-export type UpdateCheckRequest = {
-  flag: number
 }

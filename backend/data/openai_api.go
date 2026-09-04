@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	aicontract "go-stock/backend/ai"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
@@ -13,7 +14,6 @@ import (
 	"io"
 	"net"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -51,26 +51,6 @@ type OpenAi struct {
 	// It is enabled by the 1.6.0 research workflow so one logical attempt maps
 	// to one provider request instead of being multiplied by Resty retries.
 	DisableRequestRetries bool `json:"-"`
-}
-
-var runtimeEventEmitter struct {
-	mu sync.RWMutex
-	fn func(context.Context, string, any)
-}
-
-func SetRuntimeEventEmitter(fn func(context.Context, string, any)) {
-	runtimeEventEmitter.mu.Lock()
-	defer runtimeEventEmitter.mu.Unlock()
-	runtimeEventEmitter.fn = fn
-}
-
-func EmitRuntimeEvent(ctx context.Context, eventName string, payload any) {
-	runtimeEventEmitter.mu.RLock()
-	fn := runtimeEventEmitter.fn
-	runtimeEventEmitter.mu.RUnlock()
-	if fn != nil {
-		fn(ctx, eventName, payload)
-	}
 }
 
 func (o OpenAi) String() string {
@@ -172,9 +152,6 @@ type AiResponse struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 }
 
-type Tool = models.Tool
-type FunctionParameters = models.FunctionParameters
-
 // NewChatStreamLite provides a CLI-friendly chat stream path that avoids
 // GUI events and browser crawler dependencies.
 func (o *OpenAi) NewChatStreamLite(stock, stockCode, userQuestion string, thinking bool) <-chan map[string]any {
@@ -211,7 +188,7 @@ func (o *OpenAi) NewChatStreamLite(stock, stockCode, userQuestion string, thinki
 		stockName := strutil.Trim(stock)
 		stockCode = strutil.Trim(stockCode)
 		if stockCode != "" {
-			if stockData, err := NewStockDataApi().GetStockCodeRealTimeData(stockCode); err == nil && len(*stockData) > 0 {
+			if stockData, err := NewStockDataApi().GetStockCodeRealTimeDataReadOnly(context.Background(), stockCode); err == nil && len(*stockData) > 0 {
 				msg = append(msg, map[string]interface{}{
 					"role":    "user",
 					"content": fmt.Sprintf("当前%s[%s]价格是多少？", stockName, stockCode),
@@ -756,39 +733,16 @@ func (o *OpenAi) completeOpenAIResponsesWithContext(ctx context.Context, message
 	return content, result.ID, result.Model, nil
 }
 
-type AIStreamActivity struct {
-	EventType string
-	State     string
-}
-
-type aiProviderCallError struct {
-	Category      string
-	StatusCode    int
-	Message       string
-	Retryable     bool
-	LastEventType string
-}
-
-func (e *aiProviderCallError) Error() string {
-	if e == nil {
-		return ""
-	}
-	if e.StatusCode > 0 {
-		return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
-	}
-	return e.Message
-}
-
 func providerHTTPError(statusCode int, body []byte) error {
 	retryable := statusCode == 408 || statusCode == 429 || statusCode >= 500
-	return &aiProviderCallError{
+	return &aicontract.ProviderCallError{
 		Category: "http_error", StatusCode: statusCode,
 		Message: parseAIHTTPError(statusCode, body), Retryable: retryable,
 	}
 }
 
 func providerProtocolError(category, message, lastEvent string, retryable bool) error {
-	return &aiProviderCallError{Category: category, Message: message, Retryable: retryable, LastEventType: lastEvent}
+	return &aicontract.ProviderCallError{Category: category, Message: message, Retryable: retryable, LastEventType: lastEvent}
 }
 
 func providerStreamError(message, lastEvent string) error {
@@ -933,13 +887,13 @@ func streamEventError(raw json.RawMessage) string {
 	return "model provider reported a failed stream"
 }
 
-func emitResearchActivity(callback func(AIStreamActivity), eventType, state string) {
+func emitResearchActivity(callback func(aicontract.StreamActivity), eventType, state string) {
 	if callback != nil {
-		callback(AIStreamActivity{EventType: eventType, State: state})
+		callback(aicontract.StreamActivity{EventType: eventType, State: state})
 	}
 }
 
-func (o *OpenAi) completeOpenAIResponsesStream(ctx context.Context, messages []map[string]any, previousResponseID string, activity func(AIStreamActivity)) (string, string, string, error) {
+func (o *OpenAi) completeOpenAIResponsesStream(ctx context.Context, messages []map[string]any, previousResponseID string, activity func(aicontract.StreamActivity)) (string, string, string, error) {
 	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
 		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
@@ -1034,7 +988,7 @@ func (o *OpenAi) completeOpenAIResponsesStream(ctx context.Context, messages []m
 	return result, responseID, model, nil
 }
 
-func (o *OpenAi) completeChatCompletionsStream(ctx context.Context, messages []map[string]any, activity func(AIStreamActivity)) (string, string, string, error) {
+func (o *OpenAi) completeChatCompletionsStream(ctx context.Context, messages []map[string]any, activity func(aicontract.StreamActivity)) (string, string, string, error) {
 	bodyMap := map[string]any{"model": o.Model, "max_tokens": o.MaxTokens, "temperature": o.Temperature, "stream": true, "messages": messages}
 	request := func(enableProxy bool) (*resty.Response, error) {
 		return o.newResearchAIClientWithProxy(enableProxy).R().SetContext(ctx).SetDoNotParseResponse(true).SetBody(bodyMap).Post("/chat/completions")
@@ -1123,7 +1077,7 @@ func (o *OpenAi) completeChatCompletionsStream(ctx context.Context, messages []m
 	return result, responseID, model, nil
 }
 
-func (o *OpenAi) completeAnthropicMessagesStream(ctx context.Context, messages []map[string]any, activity func(AIStreamActivity)) (string, string, string, error) {
+func (o *OpenAi) completeAnthropicMessagesStream(ctx context.Context, messages []map[string]any, activity func(aicontract.StreamActivity)) (string, string, string, error) {
 	interfaceMessages := make([]map[string]interface{}, 0, len(messages))
 	for _, msg := range messages {
 		interfaceMessages = append(interfaceMessages, map[string]interface{}(msg))
@@ -1222,7 +1176,7 @@ func (o *OpenAi) completeAnthropicMessagesStream(ctx context.Context, messages [
 
 // CompleteResearchStream performs an activity-observable streaming request for
 // research. The orchestrator owns the inactivity timer and retry ordering.
-func (o *OpenAi) CompleteResearchStream(ctx context.Context, messages []map[string]any, previousResponseID string, activity func(AIStreamActivity)) (string, string, string, error) {
+func (o *OpenAi) CompleteResearchStream(ctx context.Context, messages []map[string]any, previousResponseID string, activity func(aicontract.StreamActivity)) (string, string, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -1504,7 +1458,7 @@ func AskAi(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any,
 		}
 	}
 }
-func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string, tools []Tool, thinkingMode bool) {
+func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any, question string, tools []models.Tool, thinkingMode bool) {
 	if NormalizeAIAPIProtocol(o.ApiProtocol) != AIAPIProtocolChatCompletions {
 		emitAIStreamError(ch, question, "当前协议暂不支持工具调用，请切换到 Chat Completions 或关闭工具模式")
 		return
@@ -1934,7 +1888,7 @@ func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[st
 								}
 
 								if strutil.HasPrefixAny(stockCode, []string{"sz", "sh", "hk", "us", "gb_"}) {
-									K := &[]KLineData{}
+									K := &[]models.KLineData{}
 									if strutil.HasPrefixAny(stockCode, []string{"sz", "sh"}) {
 										K = NewStockDataApi().GetKLineData(stockCode, "240", o.KDays)
 									}
@@ -2479,7 +2433,7 @@ func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[st
 }
 func checkIsIndexBasic(stock string) bool {
 	count := int64(0)
-	db.Dao.Model(&IndexBasic{}).Where("name =  ?", stock).Count(&count)
+	db.Dao.Model(&models.IndexBasic{}).Where("name =  ?", stock).Count(&count)
 	return count > 0
 }
 

@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"go-stock/backend/models"
-	"go-stock/backend/research"
+	"go-stock/internal/sqlitedb"
+	"go-stock/internal/trading"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -18,8 +19,8 @@ import (
 type Repository struct{ db *gorm.DB }
 
 var (
-	ErrDailyBuyLimitReached   = errors.New("research2 daily buy limit is already reached")
-	ErrExecutionChainClosed  = errors.New("research2 daily execution target is already closed")
+	ErrDailyBuyLimitReached = errors.New("research2 daily buy limit is already reached")
+	ErrExecutionChainClosed = errors.New("research2 daily execution target is already closed")
 )
 
 // SQLite ignores SELECT FOR UPDATE. Acquire the single-writer lock explicitly
@@ -36,29 +37,10 @@ func lockResearch2AccountForWrite(tx *gorm.DB) error {
 	return nil
 }
 
-func isResearch2SQLiteBusy(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked")
-}
-
 func research2TransactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation func(*gorm.DB) error) error {
-	var err error
-	for attempt := 0; attempt < 5; attempt++ {
-		err = database.WithContext(ctx).Transaction(operation)
-		if !isResearch2SQLiteBusy(err) {
-			return err
-		}
-		delay := time.Duration(20*(1<<attempt)) * time.Millisecond
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
-	return err
+	return sqlitedb.Retry(ctx, func() error {
+		return database.WithContext(ctx).Transaction(operation)
+	}, nil)
 }
 
 func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
@@ -598,7 +580,7 @@ func enrichLiveRecommendation(item *Recommendation) {
 	}
 	item.CurrentPrice = price
 	buyCost := item.BuyPrice*float64(item.Quantity) + item.BuyFees
-	item.NetPnL = research.CalculateSellCost(price, item.Quantity).NetCashFlow - buyCost
+	item.NetPnL = trading.CalculateSellCost(price, item.Quantity).NetCashFlow - buyCost
 	item.NetYieldRate = 0
 	if buyCost > 0 {
 		item.NetYieldRate = item.NetPnL / buyCost
@@ -610,7 +592,7 @@ func livePositionValue(item Recommendation) float64 {
 	if price <= 0 || item.Quantity <= 0 {
 		return 0
 	}
-	return research.CalculateSellCost(price, item.Quantity).NetCashFlow
+	return trading.CalculateSellCost(price, item.Quantity).NetCashFlow
 }
 
 func livePrice(item Recommendation) float64 {

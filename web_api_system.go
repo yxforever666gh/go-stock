@@ -1,13 +1,6 @@
 package main
 
-import (
-	"context"
-	"net/http"
-)
-
-type updateCheckRequest struct {
-	Flag int `json:"flag"`
-}
+import "net/http"
 
 func registerSystemRoutes(mux *http.ServeMux, app *App, hub *WebEventHub, status webStatusProvider, shutdown func()) {
 	mux.HandleFunc("GET /livez", func(w http.ResponseWriter, _ *http.Request) {
@@ -23,14 +16,6 @@ func registerSystemRoutes(mux *http.ServeMux, app *App, hub *WebEventHub, status
 	})
 	mux.HandleFunc("GET /api/v1/system/info", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, app.versionInfo())
-	})
-	mux.HandleFunc("POST /api/v1/system/update-check", func(w http.ResponseWriter, r *http.Request) {
-		var req updateCheckRequest
-		if !decodeAPIRequest(w, r, &req) {
-			return
-		}
-		app.goTask(func(context.Context) { app.checkUpdate(req.Flag) })
-		writeJSON(w, http.StatusAccepted, acceptedResponse{Accepted: true})
 	})
 	mux.HandleFunc("POST /api/v1/system/shutdown", func(w http.ResponseWriter, r *http.Request) {
 		if !isLocalRequest(r) {

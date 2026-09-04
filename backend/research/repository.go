@@ -9,9 +9,12 @@ import (
 	"sync"
 	"time"
 
+	"go-stock/internal/marketquote"
+	"go-stock/internal/sqlitedb"
+	"go-stock/internal/trading"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
-	sqlite3 "modernc.org/sqlite/lib"
 )
 
 var repositoryWriteGate = func() chan struct{} {
@@ -19,14 +22,6 @@ var repositoryWriteGate = func() chan struct{} {
 	gate <- struct{}{}
 	return gate
 }()
-
-var writeRetryDelays = [...]time.Duration{
-	20 * time.Millisecond,
-	40 * time.Millisecond,
-	80 * time.Millisecond,
-	160 * time.Millisecond,
-	320 * time.Millisecond,
-}
 
 type Repository struct {
 	db                       *gorm.DB
@@ -51,21 +46,6 @@ func lockAccountForWrite(tx *gorm.DB) error {
 	return nil
 }
 
-func isSQLiteBusy(err error) bool {
-	if err == nil {
-		return false
-	}
-	var sqliteErr interface{ Code() int }
-	if errors.As(err, &sqliteErr) {
-		code := sqliteErr.Code()
-		return code == sqlite3.SQLITE_BUSY_SNAPSHOT || code&0xff == sqlite3.SQLITE_BUSY || code&0xff == sqlite3.SQLITE_LOCKED
-	}
-	message := strings.ToLower(err.Error())
-	return strings.Contains(message, "sqlite_busy") || strings.Contains(message, "sqlite_locked") ||
-		strings.Contains(message, "database is locked") || strings.Contains(message, "database table is locked") ||
-		strings.Contains(message, "(517)")
-}
-
 func transactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation func(*gorm.DB) error) error {
 	select {
 	case <-ctx.Done():
@@ -74,33 +54,26 @@ func transactionWithWriteRetry(ctx context.Context, database *gorm.DB, operation
 	}
 	defer func() { repositoryWriteGate <- struct{}{} }()
 
-	for attempt := 0; ; attempt++ {
-		err := database.WithContext(ctx).Transaction(operation)
-		if !isSQLiteBusy(err) {
-			if attempt > 0 && database.Logger != nil {
-				if err == nil {
-					database.Logger.Info(ctx, "research repository write recovered after busy retry: retries=%d", attempt)
-				} else {
-					database.Logger.Error(ctx, "research repository write failed after busy retry: retries=%d error=%v", attempt, err)
-				}
-			}
-			return err
-		}
-		if attempt == len(writeRetryDelays) {
-			if database.Logger != nil {
-				database.Logger.Error(ctx, "research repository write failed after busy retries: retries=%d error=%v", len(writeRetryDelays), err)
-			}
-			return err
-		}
+	retries := 0
+	err := sqlitedb.Retry(ctx, func() error {
+		return database.WithContext(ctx).Transaction(operation)
+	}, func(retry int, delay time.Duration, err error) {
+		retries = retry
 		if database.Logger != nil {
-			database.Logger.Warn(ctx, "research repository write busy; retrying whole transaction: retry=%d delay=%s error=%v", attempt+1, writeRetryDelays[attempt], err)
+			database.Logger.Warn(ctx, "research repository write busy; retrying whole transaction: retry=%d delay=%s error=%v", retry, delay, err)
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(writeRetryDelays[attempt]):
+	})
+	if retries > 0 && database.Logger != nil {
+		switch {
+		case err == nil:
+			database.Logger.Info(ctx, "research repository write recovered after busy retry: retries=%d", retries)
+		case sqlitedb.IsBusy(err):
+			database.Logger.Error(ctx, "research repository write failed after busy retries: retries=%d error=%v", retries, err)
+		default:
+			database.Logger.Error(ctx, "research repository write failed after busy retry: retries=%d error=%v", retries, err)
 		}
 	}
+	return err
 }
 
 // RecommendationCapacity is the cash-admission snapshot used before an AI run
@@ -164,7 +137,7 @@ func (r *Repository) HasBlockingExposure(ctx context.Context) (bool, error) {
 }
 
 func (r *Repository) HasStockExposure(ctx context.Context, code string) (bool, error) {
-	code, ok := NormalizeMainlandCode(code)
+	code, ok := trading.NormalizeMainlandCode(code)
 	if !ok {
 		return false, nil
 	}
@@ -208,7 +181,7 @@ func recommendationCapacity(tx *gorm.DB, targetUtilization float64) (Recommendat
 			price = position.EntryPrice
 		}
 		if price > 0 && position.Quantity > 0 {
-			positionValue += CalculateSellCost(price, position.Quantity).NetCashFlow
+			positionValue += trading.CalculateSellCost(price, position.Quantity).NetCashFlow
 		}
 	}
 	result.NetAssetValue = math.Max(0, result.Cash+positionValue)
@@ -416,7 +389,7 @@ func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, rec
 			return err
 		}
 		if recommendation.ReservedCash <= 0 || recommendation.ReservedCash > TargetCashPerTrade+1e-8 || recommendation.ReservedCash > capacity.DeployableCash+1e-8 {
-			return ErrInsufficientCash
+			return trading.ErrInsufficientCash
 		}
 		var duplicate int64
 		if err := tx.Model(&Position{}).Where("stock_code = ? AND status = ?", recommendation.StockCode, "open").Count(&duplicate).Error; err != nil {
@@ -560,7 +533,7 @@ func (r *Repository) Position(ctx context.Context, recommendationID string) (Pos
 	return result, err
 }
 
-func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quote, nextCheck time.Time, now time.Time) error {
+func (r *Repository) Buy(ctx context.Context, recommendationID string, quote marketquote.Quote, nextCheck time.Time, now time.Time) error {
 	tradeID, eventID := newID(), newID()
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
@@ -589,7 +562,7 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 		}
 		availableCash := math.Max(0, account.Cash-reservedOthers-capacity.CapitalBuffer)
 		budget := math.Min(TargetCashPerTrade, recommendation.ReservedCash)
-		quantity, cost, err := sizeBuyWithinCashCap(recommendation.StockCode, quote.Price, availableCash, budget)
+		quantity, cost, err := trading.SizeBuy(recommendation.StockCode, quote.Price, math.Min(availableCash, budget))
 		if err != nil {
 			return err
 		}
@@ -600,7 +573,7 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return ErrInsufficientCash
+			return trading.ErrInsufficientCash
 		}
 		position := Position{
 			RecommendationID: recommendationID, StockCode: recommendation.StockCode, StockName: recommendation.StockName,
@@ -632,7 +605,7 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote Quo
 	})
 }
 
-func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, decisionType, reason string, now time.Time, quote *Quote) error {
+func (r *Repository) FailBuy(ctx context.Context, recommendationID, status, decisionType, reason string, now time.Time, quote *marketquote.Quote) error {
 	eventID := newID()
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
@@ -676,7 +649,7 @@ func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendation
 	})
 }
 
-func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Quote) error {
+func (r *Repository) Sell(ctx context.Context, recommendationID string, quote marketquote.Quote) error {
 	tradeID, eventID, triggerID := newID(), newID(), newID()
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		trade, err := sellInTransactionWithTradeID(tx, recommendationID, quote, tradeID)
@@ -695,11 +668,11 @@ func (r *Repository) Sell(ctx context.Context, recommendationID string, quote Qu
 	})
 }
 
-func sellInTransaction(tx *gorm.DB, recommendationID string, quote Quote) (SimulatedTrade, error) {
+func sellInTransaction(tx *gorm.DB, recommendationID string, quote marketquote.Quote) (SimulatedTrade, error) {
 	return sellInTransactionWithTradeID(tx, recommendationID, quote, newID())
 }
 
-func sellInTransactionWithTradeID(tx *gorm.DB, recommendationID string, quote Quote, tradeID string) (SimulatedTrade, error) {
+func sellInTransactionWithTradeID(tx *gorm.DB, recommendationID string, quote marketquote.Quote, tradeID string) (SimulatedTrade, error) {
 	if err := lockAccountForWrite(tx); err != nil {
 		return SimulatedTrade{}, err
 	}
@@ -711,7 +684,7 @@ func sellInTransactionWithTradeID(tx *gorm.DB, recommendationID string, quote Qu
 	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("recommendation_id = ? AND status = ?", recommendationID, "open").First(&position).Error; err != nil {
 		return SimulatedTrade{}, err
 	}
-	cost := CalculateSellCost(quote.Price, position.Quantity)
+	cost := trading.CalculateSellCost(quote.Price, position.Quantity)
 	if err := tx.Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", gorm.Expr("cash + ?", cost.NetCashFlow)).Error; err != nil {
 		return SimulatedTrade{}, err
 	}
@@ -937,7 +910,7 @@ func (r *Repository) Account(ctx context.Context) (SimulatedAccount, error) {
 	return account, err
 }
 
-func (r *Repository) UpdatePositionQuote(ctx context.Context, id uint, quote Quote) error {
+func (r *Repository) UpdatePositionQuote(ctx context.Context, id uint, quote marketquote.Quote) error {
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.Model(&Position{}).Where("id = ? AND status = ?", id, "open").Updates(map[string]any{
 			"current_price": quote.Price, "current_price_at": quote.At,

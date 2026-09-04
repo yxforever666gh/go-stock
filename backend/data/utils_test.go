@@ -1,49 +1,71 @@
 package data
 
 import (
-	"github.com/duke-git/lancet/v2/slice"
-	"go-stock/backend/logger"
-	"os"
 	"testing"
 )
 
-// TestRemoveNonPrintable tests the RemoveAllBlankChar function.
-func TestRemoveNonPrintable(t *testing.T) {
-	//tests := []struct {
-	//	input    string
-	//	expected string
-	//}{
-	//	{"新 希 望", "新希望"},
-	//	{"", ""},
-	//	{"Hello, World!", "Hello, World!"},
-	//	{"\x00\x01\x02", ""},
-	//	{"Hello\x00World", "HelloWorld"},
-	//	{"\x1F\x20\x7E\x7F", " \x7E"},
-	//}
+func TestRemoveAllBlankChar(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "spaces", in: "新 希 望", want: "新希望"},
+		{name: "mixed whitespace", in: "a\tb\nc\rd", want: "abcd"},
+		{name: "empty", in: "", want: ""},
+	}
 
-	//for _, test := range tests {
-	//	actual := RemoveAllBlankChar(test.input)
-	//	if actual != test.expected {
-	//		t.Errorf("RemoveAllBlankChar(%q) = %q; expected %q", test.input, actual, test.expected)
-	//	}
-	//}
-	txt := "新 希 望"
-	txt2 := RemoveAllBlankChar(txt)
-	logger.SugaredLogger.Infof("RemoveAllBlankChar(%s)", txt2)
-	logger.SugaredLogger.Infof("RemoveAllBlankChar(%s)", txt)
-
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := RemoveAllBlankChar(tt.in); got != tt.want {
+				t.Fatalf("RemoveAllBlankChar(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
 }
 
-func TestConvertStockCodeToTushareCode(t *testing.T) {
-	logger.SugaredLogger.Infof("ConvertStockCodeToTushareCode(%s)", ConvertStockCodeToTushareCode("sz000802"))
-	logger.SugaredLogger.Infof("ConvertTushareCodeToStockCode(%s)", ConvertTushareCodeToStockCode("000802.SZ"))
+func TestStockCodeConversions(t *testing.T) {
+	tests := []struct {
+		name        string
+		stockCode   string
+		tushareCode string
+	}{
+		{name: "shanghai", stockCode: "sh600000", tushareCode: "600000.SH"},
+		{name: "shenzhen", stockCode: "sz000802", tushareCode: "000802.SZ"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ConvertStockCodeToTushareCode(tt.stockCode); got != tt.tushareCode {
+				t.Fatalf("ConvertStockCodeToTushareCode(%q) = %q, want %q", tt.stockCode, got, tt.tushareCode)
+			}
+			if got := ConvertTushareCodeToStockCode(tt.tushareCode); got != tt.stockCode {
+				t.Fatalf("ConvertTushareCodeToStockCode(%q) = %q, want %q", tt.tushareCode, got, tt.stockCode)
+			}
+		})
+	}
 }
+
 func TestReplaceSensitiveWords(t *testing.T) {
-	txt := "新 希 望习近平"
-	txt2 := ReplaceSensitiveWords(txt)
-	logger.SugaredLogger.Infof("ReplaceSensitiveWords(%s)", txt2)
+	original := SensitiveWords
+	SensitiveWords = []string{"secret", "敏感"}
+	t.Cleanup(func() { SensitiveWords = original })
 
-	if err := os.WriteFile("words.txt", []byte(slice.Join(SensitiveWords, "\n")), 0644); err != nil {
-		t.Fatalf("write words.txt failed: %v", err)
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{name: "removes all matches", in: "a secret 和敏感内容 secret", want: "a  和内容 "},
+		{name: "leaves other text", in: "普通内容", want: "普通内容"},
+		{name: "empty", in: "", want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ReplaceSensitiveWords(tt.in); got != tt.want {
+				t.Fatalf("ReplaceSensitiveWords(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
 	}
 }

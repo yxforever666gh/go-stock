@@ -104,14 +104,16 @@ func TestDecodeAPIRequestRejectsUnknownFieldsAndTrailingValues(t *testing.T) {
 		name string
 		body string
 	}{
-		{name: "unknown field", body: `{"flag":1,"legacy":true}`},
-		{name: "trailing value", body: `{"flag":1} {"flag":2}`},
+		{name: "unknown field", body: `{"value":1,"legacy":true}`},
+		{name: "trailing value", body: `{"value":1} {"value":2}`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:34115/api/v1/system/update-check", strings.NewReader(test.body))
+			req := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:34115/test", strings.NewReader(test.body))
 			recorder := httptest.NewRecorder()
-			var target updateCheckRequest
+			var target struct {
+				Value int `json:"value"`
+			}
 			if decodeAPIRequest(recorder, req, &target) {
 				t.Fatal("invalid JSON request was accepted")
 			}

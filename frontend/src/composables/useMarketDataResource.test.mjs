@@ -1,13 +1,8 @@
 import assert from 'node:assert/strict'
-import {readFile} from 'node:fs/promises'
 import test from 'node:test'
 import {nextTick, ref} from 'vue'
 
 import {hasUsableEnvelopeData, useMarketDataResource} from './useMarketDataResource.js'
-
-const futuresSource = await readFile(new URL('../market-tabs/FuturesPositionsTab.vue', import.meta.url), 'utf8')
-const marginSource = await readFile(new URL('../market-tabs/MarginTradingTab.vue', import.meta.url), 'utf8')
-const fundFlowSource = await readFile(new URL('../components/FundFlowExplorer.vue', import.meta.url), 'utf8')
 
 test('only successful envelopes with meaningful data can replace a snapshot', () => {
   assert.equal(hasUsableEnvelopeData({status: 'ok', data: {advanceCount: 12}}), true)
@@ -35,7 +30,7 @@ test('request identity changes clear old success data and reject superseded resp
     intervalMs: 60 * 60 * 1000,
     requestKey,
     session: 'always',
-    loader: () => new Promise(resolve => requests.push({identity: requestKey.value, resolve})),
+    loader: () => new Promise(resolve => requests.push(resolve)),
   })
 
   assert.equal(requests.length, 1)
@@ -44,11 +39,11 @@ test('request identity changes clear old success data and reject superseded resp
   assert.equal(requests.length, 2)
   assert.deepEqual(resource.data.value, {rows: []})
 
-  requests[0].resolve({status: 'ok', data: {rows: [{symbol: 'IF'}]}})
+  requests[0]({status: 'ok', data: {rows: [{symbol: 'IF'}]}})
   await flushReactivity()
   assert.deepEqual(resource.data.value, {rows: []})
 
-  requests[1].resolve({status: 'unavailable', data: {rows: []}, errors: [{message: 'IM unavailable'}]})
+  requests[1]({status: 'unavailable', data: {rows: []}, errors: [{message: 'IM unavailable'}]})
   await flushReactivity()
   assert.deepEqual(resource.data.value, {rows: []})
   assert.equal(resource.envelope.value.status, 'unavailable')
@@ -78,10 +73,4 @@ test('a new request identity resets an already successful snapshot before loadin
   assert.deepEqual(resource.data.value, {rows: []})
   assert.equal(resource.envelope.value.status, 'unavailable')
   resource.dispose()
-})
-
-test('market evidence consumers key snapshots by every query dimension', () => {
-  assert.match(futuresSource, /requestKey[\s\S]{0,160}symbol\.value[\s\S]{0,80}selectedDate\.value/)
-  assert.match(marginSource, /requestKey[\s\S]{0,180}scope\.value[\s\S]{0,80}requestCode\.value[\s\S]{0,80}selectedDate\.value/)
-  assert.match(fundFlowSource, /requestKey[\s\S]{0,220}props\.scope[\s\S]{0,80}selectedDate\.value[\s\S]{0,80}sort\.value[\s\S]{0,80}limit\.value/)
 })

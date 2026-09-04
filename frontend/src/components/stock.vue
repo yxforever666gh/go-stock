@@ -23,7 +23,6 @@ import {GetConfig} from '../services/settings-api'
 import {GetVersionInfo} from '../services/system-api'
 import {
   NAvatar,
-  NButton,
   NFlex,
   NForm,
   NFormItem,
@@ -175,7 +174,6 @@ onBeforeMount(() => {
   EventsOff("stock_price")
   EventsOff("refreshFollowList")
   EventsOff("changeTab")
-  EventsOff("updateVersion")
   EventsOff("warnMsg")
 
   // Register event listeners
@@ -216,63 +214,6 @@ onBeforeMount(() => {
       updateTab(currentGroupId.value);
     });
   })
-
-
-  EventsOn("updateVersion", async (msg) => {
-    const githubTimeStr = msg.published_at;
-    // 创建一个 Date 对象
-    const utcDate = new Date(githubTimeStr);
-// 获取本地时间
-    const date = new Date(utcDate.getTime());
-    const year = date.getFullYear();
-// getMonth 返回值是 0 - 11，所以要加 1
-    const month = String(date.getMonth() + 1).padStart(2, '0');
-    const day = String(date.getDate()).padStart(2, '0');
-    const hours = String(date.getHours()).padStart(2, '0');
-    const minutes = String(date.getMinutes()).padStart(2, '0');
-    const seconds = String(date.getSeconds()).padStart(2, '0');
-
-    const formattedDate = `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-
-    notify.info({
-      avatar: () =>
-          h(NAvatar, {
-            size: 'small',
-            round: false,
-            src: icon.value
-          }),
-      title: '发现新版本: ' + msg.tag_name,
-      content: () => {
-        //return h(MdPreview, {theme:'dark',modelValue:msg.commit?.message}, null)
-        return h('div', {
-          style: {
-            'text-align': 'left',
-            'font-size': '14px',
-          }
-        }, {default: () => msg.commit?.message})
-      },
-      duration: 5000,
-      meta: "发布时间:" + formattedDate,
-      action: () => {
-        return h(NButton, {
-          type: 'primary',
-          size: 'small',
-          onClick: () => {
-            Environment().then(env => {
-              switch (env.platform) {
-                case 'windows':
-                  window.open(msg.html_url)
-                  break
-                default :
-                  OpenURL(msg.html_url)
-              }
-            })
-          }
-        }, {default: () => '查看'})
-      }
-    })
-  })
-
   EventsOn("warnMsg", async (msg) => {
     notify.error({
       avatar: () =>
@@ -344,7 +285,6 @@ onBeforeUnmount(() => {
   EventsOff("stock_price")
   EventsOff("refreshFollowList")
   EventsOff("changeTab")
-  EventsOff("updateVersion")
   EventsOff("warnMsg")
   EventsOff("loadingDone")
 

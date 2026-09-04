@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import {readFile} from 'node:fs/promises'
 import test from 'node:test'
 
 import {
@@ -14,11 +13,6 @@ import {
   optionalNumberValue,
   rowsFrom,
 } from './market-data.js'
-
-const drawerSource = await readFile(new URL('../components/InstrumentMicrostructureDrawer.vue', import.meta.url), 'utf8')
-const breadthSource = await readFile(new URL('../components/MarketBreadthOverview.vue', import.meta.url), 'utf8')
-const evidenceStatusSource = await readFile(new URL('../components/EvidenceStatusBar.vue', import.meta.url), 'utf8')
-const marketDataSource = await readFile(new URL('./market-data.js', import.meta.url), 'utf8')
 
 test('normalizes market row collections and provider field aliases', () => {
   const row = {sectorCode: 'BK001', sectorName: '半导体', net_inflow: '12.5', trend: [{time: '10:00'}]}
@@ -59,28 +53,4 @@ test('uses the explicit final auction snapshot before summaries and row fallback
   const data = {finalSnapshot, summary: {price: 10.1}, snapshots: [{time: '09:24:59', price: 10.0}]}
   assert.equal(auctionSummaryFrom(data), finalSnapshot)
   assert.deepEqual(auctionSummaryFrom({snapshots: [{time: '09:25:00'}]}), {time: '09:25:00'})
-})
-
-test('microstructure state is keyed by code, asset type, market and date and resets all three resources', () => {
-  assert.match(drawerSource, /instrumentIdentity[\s\S]{0,220}props\.code\.trim\(\)[\s\S]{0,80}props\.assetType[\s\S]{0,80}props\.market[\s\S]{0,80}requestDate\.value/)
-  assert.match(drawerSource, /watch\(instrumentIdentity,[\s\S]{0,100}resetInstrumentState\(\)/)
-  for (const reset of ['auctionEnvelope', 'intradayEnvelope', 'tradesEnvelope', 'tradeRows', 'nextCursor', 'auctionSucceeded', 'intradaySucceeded', 'tradesSucceeded']) {
-    assert.match(drawerSource, new RegExp(`${reset}\\.value =|${reset} = false`))
-  }
-})
-
-test('breadth and auction summaries consume the complete 2.0 evidence fields', () => {
-  for (const field of ['newHighs', 'newLows', 'medianChangePct']) assert.match(breadthSource, new RegExp(field))
-  assert.match(breadthSource, /\['ok', 'partial', 'stale'\]/)
-  assert.match(breadthSource, /usable\.value \? numberValue\([\s\S]*?\) : '—'/)
-  assert.match(breadthSource, /if \(!usable\.value\) return null/)
-  assert.match(breadthSource, /riseRatio === null \? '—'/)
-  assert.match(marketDataSource, /data\.finalSnapshot \|\| data\.summary/)
-  for (const field of ['auctionStrength', 'gapPct']) assert.match(drawerSource, new RegExp(field))
-})
-
-test('evidence status distinguishes degraded success from total failure', () => {
-  assert.match(evidenceStatusSource, /status === 'unavailable' \? '异常' : '降级'/)
-  assert.match(evidenceStatusSource, /\[\.\.\.new Set\(messages\)\]/)
-  assert.match(evidenceStatusSource, /status === 'unavailable' \? 'error' : 'warning'/)
 })

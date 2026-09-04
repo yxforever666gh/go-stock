@@ -11,7 +11,7 @@ import (
 func initMinuteCacheTestDB(t *testing.T, name string) {
 	t.Helper()
 	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "silent")
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), name))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), name), testSchemaMinuteCache, testSchemaChartCache, testSchemaSettings)
 }
 
 func testMinuteTime(hour, minute int) time.Time {
@@ -35,7 +35,7 @@ func TestMinuteCacheUsesOnlyMinuteDatabase(t *testing.T) {
 		t.Fatalf("upsert minute bars = %d, %v; want 1, nil", inserted, err)
 	}
 
-	bars, err := listMinuteBarsFromCache("300001.SZ", tradeTime.Add(-time.Minute), tradeTime.Add(time.Minute))
+	bars, err := listMinuteBarsFromMinuteDatabase(db.MinuteDao, "300001.SZ", tradeTime.Add(-time.Minute), tradeTime.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("list minute bars failed: %v", err)
 	}
@@ -52,15 +52,12 @@ func TestMinuteCacheDoesNotRecreateArchivedMainTable(t *testing.T) {
 	initMinuteCacheTestDB(t, "minute-cache-no-legacy-access.db")
 	tradeTime := normalizeMinuteTime(testMinuteTime(10, 1))
 
-	bars, err := listMinuteBarsFromCache("300003.SZ", tradeTime, tradeTime)
+	bars, err := listMinuteBarsFromMinuteDatabase(db.MinuteDao, "300003.SZ", tradeTime, tradeTime)
 	if err != nil {
 		t.Fatalf("list minute bars failed: %v", err)
 	}
 	if len(bars) != 0 {
 		t.Fatalf("historical main-db row leaked into 1.6 runtime: %+v", bars)
-	}
-	if err := deleteMinuteBarsCache("300003.SZ"); err != nil {
-		t.Fatalf("delete minute cache failed: %v", err)
 	}
 	if db.Dao.Migrator().HasTable("ai_recommend_minute_bar") {
 		t.Fatal("minute cache access recreated the archived main-db strategy table")
@@ -76,7 +73,7 @@ func TestMinuteCacheUpsertOverwritesMinuteDatabase(t *testing.T) {
 	if _, err := upsertMinuteBarsToCache("300002.SZ", []minuteBar{{TradeTime: tradeTime, Open: 3, High: 4, Low: 3, Close: 4}}, "second"); err != nil {
 		t.Fatal(err)
 	}
-	bars, err := listMinuteBarsFromCache("300002.SZ", tradeTime, tradeTime)
+	bars, err := listMinuteBarsFromMinuteDatabase(db.MinuteDao, "300002.SZ", tradeTime, tradeTime)
 	if err != nil || len(bars) != 1 || bars[0].Close != 4 {
 		t.Fatalf("bars = %+v, err = %v; want overwritten close=4", bars, err)
 	}

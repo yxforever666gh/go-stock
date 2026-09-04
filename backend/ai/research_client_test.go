@@ -1,0 +1,280 @@
+package ai
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	"go-stock/backend/models"
+)
+
+func TestResearchClientRetriesFiveTimesThenFallsBackInEnabledTableOrder(t *testing.T) {
+	configs := []*models.AIConfig{
+		{ID: 1, Sort: 1, Name: "primary", ModelName: "model-1"},
+		{ID: 2, Sort: 2, Disabled: true, Name: "off", ModelName: "model-2"},
+		{ID: 3, Sort: 3, Name: "fallback", ModelName: "model-3"},
+	}
+	called := make([]uint, 0, 6)
+	client := &ResearchClient{
+		loadConfigs: func() []*models.AIConfig { return configs },
+		retryWait:   func(context.Context, time.Duration) error { return nil },
+		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(StreamActivity)) (string, string, string, error) {
+			called = append(called, config.ID)
+			if _, ok := ctx.Deadline(); ok {
+				t.Fatal("research attempt must use inactivity cancellation, not a fixed deadline")
+			}
+			if config.ID == 1 {
+				return "", "", "", &ProviderCallError{Category: "provider_error", Message: "Upstream request failed", Retryable: true}
+			}
+			return "ok", "response-3", config.ModelName, nil
+		},
+	}
+	result, err := client.Complete(context.Background(), CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(called, []uint{1, 1, 1, 1, 1, 3}) {
+		t.Fatalf("called configs = %v, want [1 1 1 1 1 3]", called)
+	}
+	if result.Content != "ok" || result.Model != "model-3" || result.ResponseID != "response-3" {
+		t.Fatalf("result = %+v", result)
+	}
+}
+
+func TestResearchReplayAIClientPinsRequestedConfiguration(t *testing.T) {
+	configs := []*models.AIConfig{
+		{ID: 1, Sort: 1, Name: "global-first", ModelName: "model-1"},
+		{ID: 2, Sort: 2, Name: "replay-selected", ModelName: "model-2"},
+	}
+	client := NewResearchReplayClient(2, ResearchClientOptions{})
+	client.loadConfigs = func() []*models.AIConfig { return configs }
+	var called []uint
+	client.completeProvider = func(_ context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(StreamActivity)) (string, string, string, error) {
+		called = append(called, config.ID)
+		return "selected", "response-2", config.ModelName, nil
+	}
+	result, err := client.Complete(context.Background(), CompletionRequest{Phase: "replay", Prompt: "fixed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(called, []uint{2}) {
+		t.Fatalf("called configs=%v, want only requested config 2", called)
+	}
+	if result.Model != "model-2" || result.Content != "selected" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestResearchClientDefaultRetryPolicy(t *testing.T) {
+	client := &ResearchClient{}
+	if got := client.modelAttemptTimeout(); got != 300*time.Second {
+		t.Fatalf("attempt timeout=%s, want 300s", got)
+	}
+	if got := client.modelMaxAttempts(); got != 5 {
+		t.Fatalf("max attempts=%d, want 5", got)
+	}
+}
+
+func TestResearchClientHardTimeoutThenFallback(t *testing.T) {
+	configs := []*models.AIConfig{
+		{ID: 1, Sort: 1, Name: "slow", ModelName: "model-1"},
+		{ID: 2, Sort: 2, Name: "fallback", ModelName: "model-2"},
+	}
+	called := make([]uint, 0, 3)
+	client := &ResearchClient{
+		loadConfigs:    func() []*models.AIConfig { return configs },
+		attemptTimeout: 10 * time.Millisecond,
+		maxAttempts:    2,
+		retryWait:      func(context.Context, time.Duration) error { return nil },
+		completeProvider: func(ctx context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(StreamActivity)) (string, string, string, error) {
+			called = append(called, config.ID)
+			if config.ID == 1 {
+				<-ctx.Done()
+				return "", "", "", ctx.Err()
+			}
+			return "ok", "response-2", config.ModelName, nil
+		},
+	}
+	started := time.Now()
+	result, err := client.Complete(context.Background(), CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 20*time.Millisecond || elapsed > 500*time.Millisecond {
+		t.Fatalf("elapsed=%s, want two bounded attempts", elapsed)
+	}
+	if !reflect.DeepEqual(called, []uint{1, 1, 2}) {
+		t.Fatalf("called configs=%v, want [1 1 2]", called)
+	}
+	if result.Content != "ok" || result.Model != "model-2" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestResearchClientBacksOffAndCoolsDownSharedEndpoint(t *testing.T) {
+	configs := []*models.AIConfig{
+		{ID: 1, Sort: 1, Name: "primary", BaseUrl: "https://shared.example/v1/", ModelName: "model-1"},
+		{ID: 2, Sort: 2, Name: "fallback", BaseUrl: "https://shared.example/v1", ModelName: "model-2"},
+	}
+	waits := make([]time.Duration, 0, 2)
+	client := &ResearchClient{
+		loadConfigs: func() []*models.AIConfig { return configs },
+		maxAttempts: 2,
+		retryWait: func(_ context.Context, delay time.Duration) error {
+			waits = append(waits, delay)
+			return nil
+		},
+		completeProvider: func(_ context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(StreamActivity)) (string, string, string, error) {
+			if config.ID == 1 {
+				return "", "", "", &ProviderCallError{Category: "network_error", Message: "connection reset", Retryable: true}
+			}
+			return "ok", "response-2", config.ModelName, nil
+		},
+	}
+	result, err := client.Complete(context.Background(), CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result=%+v", result)
+	}
+	want := []time.Duration{time.Second, researchSameEndpointFallbackCooldown}
+	if !reflect.DeepEqual(waits, want) {
+		t.Fatalf("waits=%v want=%v", waits, want)
+	}
+}
+
+func TestResearchModelRetryDelayIsExponentiallyBounded(t *testing.T) {
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 8 * time.Second}
+	for index, expected := range want {
+		if got := researchModelRetryDelay(index + 1); got != expected {
+			t.Fatalf("attempt=%d delay=%s want=%s", index+1, got, expected)
+		}
+	}
+}
+
+func TestResearchClientActiveInferenceResetsInactivityTimeout(t *testing.T) {
+	configs := []*models.AIConfig{{ID: 1, Sort: 1, Name: "active", ModelName: "model-1"}}
+	client := &ResearchClient{
+		loadConfigs:    func() []*models.AIConfig { return configs },
+		attemptTimeout: 25 * time.Millisecond,
+		maxAttempts:    1,
+		completeProvider: func(ctx context.Context, _ *models.AIConfig, _ []map[string]any, _ string, activity func(StreamActivity)) (string, string, string, error) {
+			for index := 0; index < 8; index++ {
+				select {
+				case <-ctx.Done():
+					return "", "", "", context.Cause(ctx)
+				case <-time.After(10 * time.Millisecond):
+					activity(StreamActivity{EventType: "response.in_progress", State: "reasoning"})
+				}
+			}
+			return "ok", "response-1", "model-1", nil
+		},
+	}
+	started := time.Now()
+	result, err := client.Complete(context.Background(), CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(started); elapsed < 70*time.Millisecond {
+		t.Fatalf("elapsed=%s, active stream should outlive one inactivity window", elapsed)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestResearchClientFatalErrorFallsBackImmediately(t *testing.T) {
+	configs := []*models.AIConfig{
+		{ID: 1, Sort: 1, Name: "bad-key", ModelName: "model-1", ApiKey: "secret-key", BaseUrl: "https://secret.example", MaxTokens: 64, TimeOut: 90},
+		{ID: 2, Sort: 2, Name: "fallback", ModelName: "model-2"},
+	}
+	called := make([]uint, 0, 2)
+	records := make([]ModelAttemptRecord, 0)
+	client := &ResearchClient{
+		loadConfigs: func() []*models.AIConfig { return configs },
+		completeProvider: func(_ context.Context, config *models.AIConfig, _ []map[string]any, _ string, _ func(StreamActivity)) (string, string, string, error) {
+			called = append(called, config.ID)
+			if config.ID == 1 {
+				return "", "", "", &ProviderCallError{Category: "http_error", StatusCode: 401, Message: "secret-key rejected by https://secret.example", Retryable: false}
+			}
+			return "ok", "response-2", "model-2", nil
+		},
+	}
+	result, err := client.Complete(context.Background(), CompletionRequest{
+		Phase: "sector_analysis", Prompt: "test", OnAttempt: func(record ModelAttemptRecord) { records = append(records, record) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(called, []uint{1, 2}) {
+		t.Fatalf("called=%v, fatal provider should fall back immediately", called)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("result=%+v", result)
+	}
+	var failed *ModelAttemptRecord
+	for index := range records {
+		if records[index].ConfigID == 1 && records[index].Status == "failed" {
+			failed = &records[index]
+		}
+	}
+	if failed == nil || failed.NextAction != "fallback_next_model" || failed.Retryable {
+		t.Fatalf("failed record=%+v", failed)
+	}
+	if failed.APIProtocol == "" || failed.FallbackCount != 2 || failed.FallbackIndex != 1 || failed.MaxTokens == 0 || failed.RequestTimeoutSeconds == 0 {
+		t.Fatalf("audit model parameters missing: %+v", failed)
+	}
+	if strings.Contains(failed.ErrorMessage, "secret-key") || strings.Contains(failed.ErrorMessage, "secret.example") {
+		t.Fatalf("error was not sanitized: %q", failed.ErrorMessage)
+	}
+}
+
+func TestResearchClientParentCancellationIsNotRetried(t *testing.T) {
+	configs := []*models.AIConfig{{ID: 1, Sort: 1, Name: "slow", ModelName: "model-1"}}
+	calls := 0
+	client := &ResearchClient{
+		loadConfigs:    func() []*models.AIConfig { return configs },
+		attemptTimeout: time.Second,
+		completeProvider: func(ctx context.Context, _ *models.AIConfig, _ []map[string]any, _ string, _ func(StreamActivity)) (string, string, string, error) {
+			calls++
+			<-ctx.Done()
+			return "", "", "", context.Cause(ctx)
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := client.Complete(ctx, CompletionRequest{Phase: "market_analysis", Prompt: "test"})
+	if !errors.Is(err, context.DeadlineExceeded) || calls != 1 {
+		t.Fatalf("err=%v calls=%d", err, calls)
+	}
+}
+
+func TestResearchClientPreservesPreviousResponseID(t *testing.T) {
+	configs := []*models.AIConfig{{ID: 1, Name: "provider", ModelName: "model"}}
+	var previous string
+	var records []ModelAttemptRecord
+	client := &ResearchClient{
+		loadConfigs: func() []*models.AIConfig { return configs },
+		completeProvider: func(_ context.Context, _ *models.AIConfig, _ []map[string]any, previousResponseID string, _ func(StreamActivity)) (string, string, string, error) {
+			previous = previousResponseID
+			return "ok", "next-response", "model", nil
+		},
+	}
+	result, err := client.Complete(context.Background(), CompletionRequest{
+		Phase: "stock_analysis", Prompt: "test", PreviousResponseID: "previous-response",
+		OnAttempt: func(record ModelAttemptRecord) { records = append(records, record) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous != "previous-response" || result.ResponseID != "next-response" {
+		t.Fatalf("previous=%q result=%+v", previous, result)
+	}
+	if len(records) == 0 || !records[0].PreviousResponseIDPresent {
+		t.Fatalf("previous-response audit flag missing: %+v", records)
+	}
+}

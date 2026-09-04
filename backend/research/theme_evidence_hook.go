@@ -1,6 +1,8 @@
 package research
 
-func sourceBelongsToStage(source SourceDocument, category string) bool {
+import "go-stock/internal/researchevidence"
+
+func sourceBelongsToStage(source researchevidence.SourceDocument, category string) bool {
 	if source.Category == "theme" || source.Category == "catalyst" {
 		return category == "sector"
 	}

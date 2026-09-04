@@ -20,10 +20,7 @@ func TestNewRealtimeRestyClientDisablesProxy(t *testing.T) {
 }
 
 func TestNewFetchRestyClientDisablesProxyWhenForced(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-force.db"))
-	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
-		t.Fatalf("migrate settings failed: %v", err)
-	}
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-force.db"), testSchemaSettings)
 	if err := db.Dao.Create(&Settings{
 		HttpProxy:            "http://127.0.0.1:7890",
 		HttpProxyEnabled:     true,
@@ -37,10 +34,7 @@ func TestNewFetchRestyClientDisablesProxyWhenForced(t *testing.T) {
 }
 
 func TestNewFetchRestyClientUsesSettingsProxyWhenForceDisabled(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-enabled.db"))
-	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
-		t.Fatalf("migrate settings failed: %v", err)
-	}
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-enabled.db"), testSchemaSettings)
 	if err := db.Dao.Create(&Settings{
 		HttpProxy:        "http://127.0.0.1:7890",
 		HttpProxyEnabled: true,
@@ -56,10 +50,7 @@ func TestNewFetchRestyClientUsesSettingsProxyWhenForceDisabled(t *testing.T) {
 }
 
 func TestNewSettingsProxyRestyClientIfConfiguredUsesProxy(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-settings-only.db"))
-	if err := db.Dao.AutoMigrate(&Settings{}); err != nil {
-		t.Fatalf("migrate settings failed: %v", err)
-	}
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-settings-only.db"), testSchemaSettings)
 	if err := db.Dao.Create(&Settings{
 		HttpProxy:        "http://127.0.0.1:7890",
 		HttpProxyEnabled: true,
@@ -77,13 +68,10 @@ func TestNewSettingsProxyRestyClientIfConfiguredUsesProxy(t *testing.T) {
 func TestDataFetchClientsDisableProxyByDefault(t *testing.T) {
 	t.Setenv("GO_STOCK_DIEMENG_PROXY_MODE", "")
 	t.Setenv("GO_STOCK_AKSHARE_PROXY_MODE", "")
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-test.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "proxy-test.db"), testSchemaSettings)
 
 	stockAPI := NewStockDataApi()
 	assertRestyProxyDisabled(t, stockAPI.client)
-
-	fundAPI := NewFundApi()
-	assertRestyProxyDisabled(t, fundAPI.client)
 
 	tushareAPI := NewTushareApi(&SettingConfig{})
 	assertRestyProxyDisabled(t, tushareAPI.client)

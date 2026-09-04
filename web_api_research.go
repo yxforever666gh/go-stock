@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"go-stock/backend/research"
+	"go-stock/internal/recommendationchart"
 )
 
 func registerResearchRoutes(mux *http.ServeMux, app *App) {
@@ -47,7 +47,7 @@ func registerResearchRoutes(mux *http.ServeMux, app *App) {
 		controller := http.NewResponseController(w)
 		_ = controller.SetWriteDeadline(time.Now().Add(5 * time.Minute))
 		item, err := app.getAIRecommendationChart(r.Context(), r.PathValue("id"), true)
-		if errors.Is(err, research.ErrChartRefreshInProgress) {
+		if errors.Is(err, recommendationchart.ErrRefreshInProgress) {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 			return
 		}

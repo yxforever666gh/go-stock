@@ -23,21 +23,11 @@ var icon []byte
 //go:embed build/app.ico
 var icon2 []byte
 
-var alipay []byte
-
-var wxpay []byte
-
-var wxgzh []byte
-
 //go:embed build/stock_basic.json
 var stocksBin []byte
 
-//go:generate cp -R ./data ./build/bin
-
 var Version string
 var VersionCommit string
-var OFFICIAL_STATEMENT string
-var BuildKey string
 
 func main() {
 	if err := releaseinfo.InitializeBuildInfo(""); err != nil {
@@ -67,13 +57,9 @@ func main() {
 	if err != nil {
 		log.SugaredLogger.Fatalf("application initialization failed: %v", err)
 	}
-	bootstrap.ConfigureRuntimeEventEmitter(emitEvent)
-
 	log.SugaredLogger.Info("starting...")
 	log.SugaredLogger.Info(startupBanner(cfg))
 	logStartupConfig(cfg)
-	//log.SugaredLogger.Infof("build key: %s", BuildKey)
-
 	app := NewAppWithRuntime(appRuntime)
 	log.SugaredLogger.Infof("starting web mode at http://%s", cfg.Web.ListenAddr)
 	hub := NewWebEventHub()

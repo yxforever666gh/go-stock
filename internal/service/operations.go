@@ -50,7 +50,6 @@ type GroupService interface {
 	GetGroupList() []models.Group
 	UpdateGroupSort(int, int) bool
 	InitializeGroupSort() bool
-	GetGroupStockList(int) []models.GroupStock
 	AddStockGroup(int, string) bool
 	RemoveStockGroup(string, string, int) bool
 	RemoveGroup(int) bool
@@ -85,7 +84,6 @@ type MarketService interface {
 }
 
 type StockService interface {
-	ReplaceStockBaseInfo(context.Context, []models.StockBasic, []models.StockInfoHK, []models.StockInfoUS) error
 	RefreshStockBaseInfo(context.Context) (models.StockMasterRefreshResult, error)
 	RefreshIndexBaseInfo()
 	Follow(string) (string, error)
@@ -98,9 +96,7 @@ type StockService interface {
 	GetAllFollowedStocks() []models.FollowedStock
 	GetFollowedStockDetail(string) *models.FollowedStock
 	UpdateFollowPrice(string, float64)
-	GetStoredStockInfo(string) *models.StockInfo
 	GetStockKLine(string, int64) *[]models.KLineData
-	GetStockCommonKLine(string, int64) *[]models.KLineData
 	GetStockMinutePriceLineData(string, string) map[string]any
 	SearchStock(string) map[string]any
 	SearchStockWithFingerprint(string, string, int) map[string]any

@@ -5,12 +5,33 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"go-stock/backend/data"
+	"go-stock/backend/db"
+	"go-stock/backend/stocks"
+	"go-stock/internal/aiapp"
+	"go-stock/internal/settingsapp"
 )
 
 type GlobalOptions struct {
 	DataDir string
 	DBPath  string
 	JSON    bool
+}
+
+func newCLIStockService() *stocks.Service {
+	stockAPI := data.NewStockDataApi()
+	return stocks.NewService(stocks.Dependencies{
+		Database: db.Dao,
+		SearchWithFingerprint: func(words, fingerprint string, pageSize int) map[string]any {
+			return data.NewSearchStockApiWithFingerprint(words, fingerprint).SearchStock(pageSize)
+		},
+		Realtime: stockAPI.GetStockCodeRealTimeDataReadOnly,
+	})
+}
+
+func newCLISettingsService() *settingsapp.Service {
+	return settingsapp.NewService(data.NewSettingsProvider())
 }
 
 func Execute(args []string, stdout, stderr io.Writer) int {
@@ -48,11 +69,16 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 	var runErr error
 	switch cmd {
 	case "quote":
-		runErr = runQuote(cmdArgs, opts, stdout, stderr)
+		runErr = runQuote(cmdArgs, opts, stdout, stderr, newCLIStockService())
 	case "search":
-		runErr = runSearch(cmdArgs, opts, stdout, stderr)
+		runErr = runSearch(cmdArgs, opts, stdout, stderr, newCLIStockService(), newCLISettingsService())
 	case "ai":
-		runErr = runAI(cmdArgs, opts, stdout, stderr)
+		resolver, resolverErr := aiapp.NewCommandResolver(db.Dao)
+		if resolverErr != nil {
+			runErr = resolverErr
+			break
+		}
+		runErr = runAI(cmdArgs, opts, stdout, stderr, resolver)
 	case "research":
 		runErr = runResearch(cmdArgs, opts, stdout, stderr)
 	case "help", "-h", "--help":
@@ -124,7 +150,7 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  quote   查询实时行情")
 	fmt.Fprintln(w, "  search  自然语言选股")
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
-	fmt.Fprintln(w, "  research run-once|repair-missed-cash|repair-xd-sell  研究任务与受控历史纠正")
+	fmt.Fprintln(w, "  research run-once  运行一次研究任务")
 	fmt.Fprintln(w, "  db status|archive|backup|compact|migrate|verify  管理、归档并校验主库和分钟库")
 	fmt.Fprintln(w, "  release inspect  查看 App 与数据库版本身份")
 }

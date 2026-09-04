@@ -26,10 +26,6 @@ type commandResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-type acceptedResponse struct {
-	Accepted bool `json:"accepted"`
-}
-
 func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status webStatusProvider, shutdown func()) {
 	registerSystemRoutes(mux, app, hub, status, shutdown)
 	registerSettingsRoutes(mux, app)

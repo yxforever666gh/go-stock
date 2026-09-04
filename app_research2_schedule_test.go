@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/research2app"
 )
 
 func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
@@ -49,7 +49,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 	created := 0
 	app := &App{
 		ctx: context.Background(),
-		research2Factory: func(int) (*data.Research2Runtime, error) {
+		research2Factory: func(int) (*research2app.Runtime, error) {
 			created++
 			return nil, nil
 		},

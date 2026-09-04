@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 )
 
@@ -92,9 +93,9 @@ func registerMarketEvidenceRoutes(mux *http.ServeMux, _ *App) {
 			return
 		}
 		if scope == "security" {
-			normalized, valid := data.NormalizeInstrumentID(code, "stock")
+			normalized, valid := instruments.NormalizeInstrumentID(code, "stock")
 			if !valid {
-				normalized, valid = data.NormalizeInstrumentID(code, "etf")
+				normalized, valid = instruments.NormalizeInstrumentID(code, "etf")
 			}
 			if !valid {
 				writeJSON(w, http.StatusBadRequest, badMarketEvidence(data.MarginData{Scope: scope, Rows: []data.MarginRow{}}, "validation", "invalid_code", "code 必须是沪深股票或场内 ETF 代码"))

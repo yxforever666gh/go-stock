@@ -10,8 +10,9 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
-	"go-stock/backend/research"
 	"go-stock/backend/research2"
+	"go-stock/backend/research2app"
+	"go-stock/internal/recommendationchart"
 	"go-stock/internal/service"
 )
 
@@ -21,7 +22,7 @@ const (
 	research2AnalysisStartMinute = 55
 )
 
-func (a *App) ensureResearch2Runtime(configID int) (*data.Research2Runtime, error) {
+func (a *App) ensureResearch2Runtime(configID int) (*research2app.Runtime, error) {
 	if a == nil {
 		return nil, errors.New("application is unavailable")
 	}
@@ -257,7 +258,7 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 	a.runResearch2Analysis(research2ScheduledRoot(now))
 }
 
-func (a *App) queueResearch2FinalEmail(runtime *data.Research2Runtime, setting *models.SettingConfig, chain research2.ExecutionChain) {
+func (a *App) queueResearch2FinalEmail(runtime *research2app.Runtime, setting *models.SettingConfig, chain research2.ExecutionChain) {
 	if runtime == nil || runtime.Email == nil || setting == nil || setting.Settings == nil || !setting.Research2EmailEnabled || chain.Status == "running" {
 		return
 	}
@@ -453,10 +454,10 @@ func (a *App) getResearch2Performance(ctx context.Context) (research2.Performanc
 	}
 	return valuation.Performance(ctx)
 }
-func (a *App) getResearch2RecommendationChart(ctx context.Context, id string, refresh bool) (research.RecommendationChart, error) {
+func (a *App) getResearch2RecommendationChart(ctx context.Context, id string, refresh bool) (recommendationchart.Chart, error) {
 	valuation, err := a.research2Valuation()
 	if err != nil {
-		return research.RecommendationChart{}, err
+		return recommendationchart.Chart{}, err
 	}
 	return valuation.RecommendationChart(ctx, id, refresh)
 }

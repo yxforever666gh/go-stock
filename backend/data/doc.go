@@ -1,6 +1,4 @@
-// Package data contains the pre-1.5 provider and persistence implementation.
-//
-// Deprecated: new business logic belongs in a domain package and must depend
-// on consumer-owned interfaces. This package remains only as a compatibility
-// adapter while existing callers are migrated.
+// Package data contains legacy concrete market-data, AI, and persistence
+// providers. New business logic belongs in a focused domain or application
+// package and consumes these providers through narrow interfaces.
 package data

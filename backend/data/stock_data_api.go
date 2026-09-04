@@ -10,29 +10,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/stocks"
 	"io"
 	"math"
 	url2 "net/url"
 	"os"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
-	"github.com/chromedp/chromedp"
 	"github.com/duke-git/lancet/v2/convertor"
 	"github.com/duke-git/lancet/v2/slice"
 	"github.com/duke-git/lancet/v2/strutil"
 	"github.com/go-resty/resty/v2"
 	"github.com/robertkrimen/otto"
-	"github.com/samber/lo"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
-	"gorm.io/gorm"
 )
 
 const sinaStockUrl = "http://hq.sinajs.cn/rn=%d&list=%s"
@@ -44,13 +40,11 @@ const defaultPublicStockMasterURL = "https://raw.githubusercontent.com/yxforever
 const tushareApiUrl = "https://api.tushare.pro"
 
 var ErrInvalidDataFormat = errors.New("invalid data format")
-var realtimeStockInfoPersisting atomic.Bool
 
 type StockDataApi struct {
 	client *resty.Client
 	config *SettingConfig
 }
-type StockInfo = models.StockInfo
 
 type TushareRequest struct {
 	ApiName string `json:"api_name"`
@@ -85,9 +79,6 @@ type TushareResponse struct {
 	act_name	str	实控人名称
 	act_ent_type	str	实控人企业性质*/
 
-type StockBasic = models.StockBasic
-type FollowedStock = models.FollowedStock
-
 type TushareStockBasicResponse struct {
 	TushareResponse
 	Data StockBasicResponse `json:"data"`
@@ -108,11 +99,17 @@ func NewStockDataApi() *StockDataApi {
 	}
 }
 
-// GetIndexBasic 获取指数信息
-func (receiver StockDataApi) GetIndexBasic() {
+func (receiver StockDataApi) FetchIndexBasic(ctx context.Context) ([]models.IndexBasic, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if receiver.config == nil || strings.TrimSpace(receiver.config.TushareToken) == "" {
+		return nil, errors.New("Tushare token is not configured")
+	}
 	res := &TushareStockBasicResponse{}
 	fields := "ts_code,name,market,publisher,category,base_date,base_point,list_date,fullname,index_type,weight_rule,desc"
 	_, err := receiver.client.R().
+		SetContext(ctx).
 		SetHeader("content-type", "application/json").
 		SetBody(&TushareRequest{
 			ApiName: "index_basic",
@@ -122,40 +119,47 @@ func (receiver StockDataApi) GetIndexBasic() {
 		SetResult(res).
 		Post(tushareApiUrl)
 	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return
+		return nil, fmt.Errorf("fetch Tushare index master: %w", err)
 	}
 	if res.Code != 0 {
-		logger.SugaredLogger.Error(res.Msg)
-		return
+		return nil, fmt.Errorf("Tushare index master rejected request: code=%d message=%s", res.Code, strings.TrimSpace(res.Msg))
 	}
-	//ioutil.WriteFile("index_basic.json", resp.Body(), 0666)
-
+	rows := make([]models.IndexBasic, 0, len(res.Data.Items))
 	for _, item := range res.Data.Items {
-		data := map[string]any{}
+		values := map[string]any{}
 		for _, field := range strings.Split(fields, ",") {
 			idx := slice.IndexOf(res.Data.Fields, field)
-			if idx == -1 {
+			if idx == -1 || idx >= len(item) {
 				continue
 			}
-			data[field] = item[idx]
+			values[field] = item[idx]
 		}
-		index := &IndexBasic{}
-		jsonData, _ := json.Marshal(data)
-		err := json.Unmarshal(jsonData, index)
+		payload, err := json.Marshal(values)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("encode Tushare index row: %w", err)
+		}
+		var index models.IndexBasic
+		if err := json.Unmarshal(payload, &index); err != nil {
+			return nil, fmt.Errorf("decode Tushare index row: %w", err)
+		}
+		index.TsCode = strings.TrimSpace(index.TsCode)
+		index.Name = strings.TrimSpace(index.Name)
+		if index.TsCode == "" || index.Name == "" {
+			return nil, errors.New("Tushare index master contains an incomplete row")
 		}
 		index.ID = 0
-		db.Dao.Model(&IndexBasic{}).FirstOrCreate(index, &IndexBasic{TsCode: index.TsCode}).Where("ts_code = ?", index.TsCode).Updates(index)
+		rows = append(rows, index)
 	}
-
+	if len(rows) == 0 {
+		return nil, errors.New("Tushare index master returned no valid rows")
+	}
+	return rows, nil
 }
 
 // map转换为结构体
 
-func (receiver StockDataApi) FetchValidatedStockMaster(ctx context.Context) ([]models.StockBasic, StockMasterRefreshResult, error) {
-	result := StockMasterRefreshResult{Source: "tushare", FetchedAt: time.Now().UTC()}
+func (receiver StockDataApi) FetchValidatedStockMaster(ctx context.Context) ([]models.StockBasic, models.StockMasterRefreshResult, error) {
+	result := models.StockMasterRefreshResult{Source: "tushare", FetchedAt: time.Now().UTC()}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -179,7 +183,7 @@ func (receiver StockDataApi) FetchValidatedStockMaster(ctx context.Context) ([]m
 	if resp.IsError() {
 		return nil, result, fmt.Errorf("fetch Tushare stock master: status=%s", resp.Status())
 	}
-	rows, decoded, err := DecodeStockMasterPayload(resp.Body())
+	rows, decoded, err := stocks.DecodeStockMasterPayload(resp.Body())
 	decoded.Source = result.Source
 	if err != nil {
 		return nil, decoded, err
@@ -190,8 +194,8 @@ func (receiver StockDataApi) FetchValidatedStockMaster(ctx context.Context) ([]m
 // FetchValidatedPublicStockMaster loads the controlled public snapshot used
 // when Tushare is unavailable. It is validated by the same strict decoder and
 // never writes the database itself.
-func (receiver StockDataApi) FetchValidatedPublicStockMaster(ctx context.Context) ([]models.StockBasic, StockMasterRefreshResult, error) {
-	result := StockMasterRefreshResult{Source: "controlled_public", FetchedAt: time.Now().UTC()}
+func (receiver StockDataApi) FetchValidatedPublicStockMaster(ctx context.Context) ([]models.StockBasic, models.StockMasterRefreshResult, error) {
+	result := models.StockMasterRefreshResult{Source: "controlled_public", FetchedAt: time.Now().UTC()}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -212,7 +216,7 @@ func (receiver StockDataApi) FetchValidatedPublicStockMaster(ctx context.Context
 	if resp.IsError() {
 		return nil, result, fmt.Errorf("fetch controlled public stock master: status=%s", resp.Status())
 	}
-	rows, decoded, err := DecodeStockMasterPayload(resp.Body())
+	rows, decoded, err := stocks.DecodeStockMasterPayload(resp.Body())
 	decoded.Source = result.Source
 	if err != nil {
 		return nil, decoded, err
@@ -220,88 +224,16 @@ func (receiver StockDataApi) FetchValidatedPublicStockMaster(ctx context.Context
 	return rows, decoded, nil
 }
 
-func (receiver StockDataApi) GetStockBaseInfo() {
-	res := &TushareStockBasicResponse{}
-	fields := "ts_code,symbol,name,area,industry,cnspell,market,list_date,act_name,act_ent_type,fullname,exchange,list_status,curr_type,enname,delist_date,is_hs"
-	resp, err := receiver.client.R().
-		SetHeader("content-type", "application/json").
-		SetBody(&TushareRequest{
-			ApiName: "stock_basic",
-			Token:   receiver.config.TushareToken,
-			Params:  nil,
-			Fields:  fields,
-		}).
-		SetResult(res).
-		Post(tushareApiUrl)
-	//logger.SugaredLogger.Infof("GetStockBaseInfo %s", string(resp.Body()))
-	if err := os.WriteFile("stock_basic.json", resp.Body(), 0666); err != nil {
-		logger.SugaredLogger.Warnf("write stock_basic.json failed: %v", err)
-	}
-	//logger.SugaredLogger.Infof("GetStockBaseInfo %+v", res)
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return
-	}
-	if res.Code != 0 {
-		logger.SugaredLogger.Error(res.Msg)
-		return
-	}
-
-	// 使用批量操作和限流，避免阻塞主线程
-	batchSize := 100
-	semaphore := make(chan struct{}, 5) // 限制并发数为5
-
-	for i := 0; i < len(res.Data.Items); i += batchSize {
-		end := i + batchSize
-		if end > len(res.Data.Items) {
-			end = len(res.Data.Items)
-		}
-		batch := res.Data.Items[i:end]
-
-		semaphore <- struct{}{} // 获取信号量
-		go func(items [][]any) {
-			defer func() { <-semaphore }() // 释放信号量
-
-			for _, item := range items {
-				stock := &StockBasic{}
-				data := map[string]any{}
-				for _, field := range strings.Split(fields, ",") {
-					idx := slice.IndexOf(res.Data.Fields, field)
-					if idx == -1 {
-						continue
-					}
-					data[field] = item[idx]
-				}
-				jsonData, _ := json.Marshal(data)
-				err := json.Unmarshal(jsonData, stock)
-				if err != nil {
-					continue
-				}
-				stock.ID = 0
-				db.Dao.Model(&StockBasic{}).FirstOrCreate(stock, &StockBasic{TsCode: stock.TsCode}).Where("ts_code = ?", stock.TsCode).Updates(stock)
-			}
-		}(batch)
-	}
-
-}
-
-func (receiver StockDataApi) GetStockCodeRealTimeData(StockCodes ...string) (*[]StockInfo, error) {
-	return receiver.getStockCodeRealTimeData(context.Background(), true, StockCodes...)
-}
-
-// GetStockCodeRealTimeDataReadOnly performs the same live provider request as
-// GetStockCodeRealTimeData, but deliberately bypasses the legacy stock_info
-// cache writer. Read-only health checks use this method so a probe
-// can never make the state it is checking look healthier.
-func (receiver StockDataApi) GetStockCodeRealTimeDataReadOnly(ctx context.Context, StockCodes ...string) (*[]StockInfo, error) {
+// GetStockCodeRealTimeDataReadOnly fetches quotes without writing stock_info.
+func (receiver StockDataApi) GetStockCodeRealTimeDataReadOnly(ctx context.Context, StockCodes ...string) (*[]models.StockInfo, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return receiver.getStockCodeRealTimeData(ctx, false, StockCodes...)
+	return receiver.getStockCodeRealTimeData(ctx, StockCodes...)
 }
 
-func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, persist bool, StockCodes ...string) (*[]StockInfo, error) {
-	stockInfos := make([]StockInfo, 0)
+func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, StockCodes ...string) (*[]models.StockInfo, error) {
+	stockInfos := make([]models.StockInfo, 0)
 
 	hkcodes := slice.Filter(StockCodes, func(i int, s string) bool {
 		return strutil.HasPrefixAny(s, []string{"hk", "HK", "sh", "sz"})
@@ -325,7 +257,7 @@ func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, persi
 		logger.SugaredLogger.Infof("GetStockCodeRealTimeData %s", url)
 		if err != nil {
 			logger.SugaredLogger.Error(err.Error())
-			return &[]StockInfo{}, err
+			return &[]models.StockInfo{}, err
 		}
 		str := GB18030ToUTF8(resp.Body())
 		dataStr := strutil.SplitAndTrim(strings.Trim(str, "\n"), ";")
@@ -358,9 +290,6 @@ func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, persi
 	})
 
 	if strings.TrimSpace(codes) == "" {
-		if persist {
-			persistRealtimeStockInfosAsync(stockInfos)
-		}
 		return &stockInfos, nil
 	}
 
@@ -374,7 +303,7 @@ func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, persi
 		Get(url)
 	if err != nil {
 		logger.SugaredLogger.Error(err.Error())
-		return &[]StockInfo{}, err
+		return &[]models.StockInfo{}, err
 	}
 
 	str := GB18030ToUTF8(resp.Body())
@@ -398,276 +327,7 @@ func (receiver StockDataApi) getStockCodeRealTimeData(ctx context.Context, persi
 
 	}
 
-	if persist {
-		persistRealtimeStockInfosAsync(stockInfos)
-	}
 	return &stockInfos, err
-}
-
-func persistRealtimeStockInfosAsync(stockInfos []StockInfo) {
-	if len(stockInfos) == 0 {
-		return
-	}
-	if !realtimeStockInfoPersisting.CompareAndSwap(false, true) {
-		return
-	}
-	rows := make([]StockInfo, 0, len(stockInfos))
-	seen := make(map[string]struct{}, len(stockInfos))
-	for _, info := range stockInfos {
-		code := strings.TrimSpace(info.Code)
-		if code == "" {
-			continue
-		}
-		if _, ok := seen[code]; ok {
-			continue
-		}
-		seen[code] = struct{}{}
-		rows = append(rows, info)
-	}
-	if len(rows) == 0 {
-		realtimeStockInfoPersisting.Store(false)
-		return
-	}
-
-	go func() {
-		defer realtimeStockInfoPersisting.Store(false)
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		err := db.Dao.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-			for idx := range rows {
-				row := rows[idx]
-				result := tx.Model(&StockInfo{}).Where("code = ?", row.Code).Updates(&row)
-				if result.Error != nil {
-					return result.Error
-				}
-				if result.RowsAffected == 0 {
-					if err := tx.Create(&row).Error; err != nil {
-						return err
-					}
-				}
-			}
-			return nil
-		})
-		if err != nil {
-			logErrorEvery("StockDataApi.persistRealtimeStockInfos", 30*time.Second, "persist realtime stock info failed: %v", err)
-		}
-	}()
-}
-
-func (receiver StockDataApi) Follow(stockCode string) string {
-	//logger.SugaredLogger.Infof("Follow %s", stockCode)
-	stockInfos, err := receiver.GetStockCodeRealTimeData(stockCode)
-	if err != nil || len(*stockInfos) == 0 {
-		logger.SugaredLogger.Error(err)
-		return "关注失败"
-	}
-	if strings.HasPrefix(stockCode, "us") {
-		stockCode = strings.Replace(stockCode, "us", "gb_", 1)
-	}
-	if strings.HasPrefix(stockCode, "US") {
-		stockCode = strings.Replace(stockCode, "US", "gb_", 1)
-	}
-	count := int64(0)
-	db.Dao.Model(&FollowedStock{}).Where("is_del = ?", 0).Count(&count)
-	logger.SugaredLogger.Errorf("Follow-count %v", count)
-	if count >= 63 {
-		return "最多只能关注63只股票"
-	}
-
-	stockCode = strings.ToLower(stockCode)
-
-	// 检查是否已经关注过该股票
-	var existingStock FollowedStock
-	result := db.Dao.Model(&FollowedStock{}).Where("stock_code = ? AND is_del = ?", stockCode, 0).First(&existingStock)
-	if result.Error == nil {
-		// 股票已经关注过
-		return "已经关注了"
-	}
-
-	maxSort := int64(0)
-	db.Dao.Model(&FollowedStock{}).Raw("select max(sort) as sort from followed_stock").Scan(&maxSort)
-
-	//logger.SugaredLogger.Infof("Follow-maxSort %v", maxSort)
-
-	stockInfo := (*stockInfos)[0]
-	price, _ := convertor.ToFloat(stockInfo.Price)
-	db.Dao.Model(&FollowedStock{}).FirstOrCreate(&FollowedStock{
-		StockCode:          stockCode,
-		Name:               stockInfo.Name,
-		Price:              price,
-		Time:               time.Now(),
-		ChangePercent:      0,
-		PriceChange:        0,
-		Sort:               maxSort + 1,
-		AlarmChangePercent: 3,
-		AlarmPrice:         price + 1,
-	}, &FollowedStock{StockCode: stockCode})
-	return "关注成功"
-}
-
-func (receiver StockDataApi) UnFollow(stockCode string) string {
-	if strutil.HasPrefixAny(stockCode, []string{"gb_"}) {
-		stockCode = strings.ToUpper(stockCode)
-		stockCode = strings.Replace(stockCode, "gb_", "us", 1)
-		stockCode = strings.Replace(stockCode, "GB_", "us", 1)
-	}
-	db.Dao.Model(&FollowedStock{}).Where("stock_code = ?", strings.ToLower(stockCode)).Delete(&FollowedStock{})
-	return "取消关注成功"
-}
-
-func (receiver StockDataApi) SetCostPriceAndVolume(price float64, volume int64, stockCode string) string {
-	if strutil.HasPrefixAny(stockCode, []string{"gb_"}) {
-		stockCode = strings.ToUpper(stockCode)
-		stockCode = strings.Replace(stockCode, "gb_", "us", 1)
-		stockCode = strings.Replace(stockCode, "GB_", "us", 1)
-	}
-	err := db.Dao.Model(&FollowedStock{}).Where("stock_code = ?", strings.ToLower(stockCode)).Update("cost_price", price).Update("volume", volume).Error
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return "设置失败"
-	}
-	return "设置成功"
-}
-
-func (receiver StockDataApi) SetAlarmChangePercent(val, alarmPrice float64, stockCode string) string {
-	if strutil.HasPrefixAny(stockCode, []string{"gb_"}) {
-		stockCode = strings.ToUpper(stockCode)
-		stockCode = strings.Replace(stockCode, "gb_", "us", 1)
-		stockCode = strings.Replace(stockCode, "GB_", "us", 1)
-	}
-	err := db.Dao.Model(&FollowedStock{}).Where("stock_code = ?", strings.ToLower(stockCode)).Updates(&map[string]any{
-		"alarm_change_percent": val,
-		"alarm_price":          alarmPrice,
-	}).Error
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return "设置失败"
-	}
-	return "设置成功"
-}
-
-func (receiver StockDataApi) SetStockSort(newSort int64, stockCode string) {
-	//if strutil.HasPrefixAny(stockCode, []string{"gb_"}) {
-	//	stockCode = strings.ToLower(stockCode)
-	//	stockCode = strings.Replace(stockCode, "gb_", "us", 1)
-	//}
-
-	// 获取当前排序值
-	var currentStock FollowedStock
-	if err := db.Dao.Model(&FollowedStock{}).Where("stock_code = ?", strings.ToLower(stockCode)).First(&currentStock).Error; err != nil {
-		logger.SugaredLogger.Error("找不到当前股票: ", err.Error())
-		return
-	}
-
-	oldSort := currentStock.Sort
-
-	// 如果排序值没有变化，直接返回
-	if oldSort == newSort {
-		return
-	}
-	// 检查新排序位置是否被占用
-	var count int64
-	if err := db.Dao.Model(&FollowedStock{}).Where("sort = ?", newSort).Count(&count).Error; err != nil {
-		logger.SugaredLogger.Error("检查新排序位置被占用失败: ", err.Error())
-		return
-	}
-	if count == 0 {
-		// 新位置未被占用，直接更新当前记录
-		if err := db.Dao.Model(&FollowedStock{}).
-			Where("stock_code = ?", strings.ToLower(stockCode)).
-			Update("sort", newSort).Error; err != nil {
-			logger.SugaredLogger.Error("更新排序位置失败: ", err.Error())
-		}
-	} else {
-		// 新位置已被占用，需要移动其他记录
-		if newSort < oldSort {
-			// 向前移动：将中间记录向后移动
-			if err := db.Dao.Model(&FollowedStock{}).
-				Where("sort >= ? AND sort < ?", newSort, oldSort).
-				Update("sort", gorm.Expr("sort + 1")).Error; err != nil {
-				logger.SugaredLogger.Error("向前排序更新失败: ", err.Error())
-			}
-		} else {
-			// 向后移动：将中间记录向前移动
-			if err := db.Dao.Model(&FollowedStock{}).
-				Where("sort > ? AND sort <= ?", oldSort, newSort).
-				Update("sort", gorm.Expr("sort - 1")).Error; err != nil {
-				logger.SugaredLogger.Error("向后排序更新失败: ", err.Error())
-			}
-		}
-
-		// 更新目标记录的排序
-		if err := db.Dao.Model(&FollowedStock{}).
-			Where("stock_code = ?", strings.ToLower(stockCode)).
-			Update("sort", newSort).Error; err != nil {
-			logger.SugaredLogger.Error("更新股票排序失败: ", err.Error())
-		}
-	}
-
-}
-func (receiver StockDataApi) GetFollowList(groupId int) *[]FollowedStock {
-	logger.SugaredLogger.Infof("GetFollowList %d", groupId)
-
-	var result *[]FollowedStock
-	if groupId == 0 {
-		db.Dao.Model(&FollowedStock{}).Order("sort asc,time desc").Find(&result)
-	} else {
-		infos := NewStockGroupApi(db.Dao).GetGroupStockByGroupId(groupId)
-		codes := lo.FlatMap(infos, func(info GroupStock, idx int) []string {
-			return []string{info.StockCode}
-		})
-		db.Dao.Model(&FollowedStock{}).Where("stock_code in ?", codes).Order("sort asc,time desc").Find(&result)
-		logger.SugaredLogger.Infof("GetFollowList %+v", result)
-	}
-	return result
-}
-
-func (receiver StockDataApi) GetStockList(key string) []StockBasic {
-	var result []StockBasic
-	db.Dao.Model(&StockBasic{}).Where("name like ? or ts_code like ?", "%"+key+"%", "%"+key+"%").Find(&result)
-	var result2 []IndexBasic
-	db.Dao.Model(&IndexBasic{}).Where("market in ?", []string{"SSE", "SZSE"}).Where("name like ? or ts_code like ?", "%"+key+"%", "%"+key+"%").Find(&result2)
-
-	var result3 []models.StockInfoHK
-	db.Dao.Model(&models.StockInfoHK{}).Where("name like ? or code like ?", "%"+key+"%", "%"+key+"%").Find(&result3)
-
-	var result4 []models.StockInfoUS
-	db.Dao.Model(&models.StockInfoUS{}).Where("name like ? or code like ? or e_name like ?", "%"+key+"%", "%"+key+"%", "%"+key+"%").Find(&result4)
-
-	for _, item := range result2 {
-		result = append(result, StockBasic{
-			TsCode:   item.TsCode,
-			Name:     item.Name,
-			Fullname: item.FullName,
-			Symbol:   item.Symbol,
-			Market:   item.Market,
-			ListDate: item.ListDate,
-		})
-	}
-	for _, item := range result3 {
-		result = append(result, StockBasic{
-			TsCode:   item.Code,
-			Name:     item.Name,
-			Fullname: item.Name,
-			Market:   "HK",
-		})
-	}
-	for _, item := range result4 {
-		result = append(result, StockBasic{
-			TsCode:   strings.ToLower(strings.Replace(item.Code, "us", "gb_", 1)),
-			Name:     item.Name,
-			Fullname: item.Name,
-			Market:   "US",
-		})
-	}
-
-	return result
-}
-
-func (receiver StockDataApi) GetFollowedStockByStockCode(code string) FollowedStock {
-	var result FollowedStock
-	db.Dao.Model(&FollowedStock{}).Where("stock_code = ?", strings.ToLower(code)).First(&result)
-	return result
 }
 
 // GB18030ToUTF8 GB18030 转换为 UTF8
@@ -680,11 +340,11 @@ func GB18030ToUTF8(bs []byte) string {
 	return string(d)
 }
 
-func ParseTxStockData(data string) (*StockInfo, error) {
+func ParseTxStockData(data string) (*models.StockInfo, error) {
 	return parseTencentStockInfoLine(data)
 }
 
-func parseTencentStockInfoLine(data string) (*StockInfo, error) {
+func parseTencentStockInfoLine(data string) (*models.StockInfo, error) {
 	separator := strings.Index(data, "=")
 	if separator <= 0 {
 		return nil, fmt.Errorf("%w: Tencent assignment is missing", ErrInvalidDataFormat)
@@ -699,7 +359,7 @@ func parseTencentStockInfoLine(data string) (*StockInfo, error) {
 	return parseTencentStockInfo(variable, payload)
 }
 
-func parseTencentStockInfo(variable, payload string) (*StockInfo, error) {
+func parseTencentStockInfo(variable, payload string) (*models.StockInfo, error) {
 	parts := strings.Split(payload, "~")
 	for index := range parts {
 		parts[index] = strings.TrimSpace(parts[index])
@@ -729,7 +389,7 @@ func parseTencentStockInfo(variable, payload string) (*StockInfo, error) {
 	// into a price and poisons every downstream research prompt.
 	highIndex, lowIndex := 33, 34
 
-	info := &StockInfo{
+	info := &models.StockInfo{
 		Code:     code,
 		Name:     strings.TrimSpace(parts[1]),
 		Price:    strings.TrimSpace(parts[3]),
@@ -763,7 +423,7 @@ func parseTencentStockInfo(variable, payload string) (*StockInfo, error) {
 	return info, nil
 }
 
-func validateTencentOHLC(info *StockInfo) error {
+func validateTencentOHLC(info *models.StockInfo) error {
 	if info == nil {
 		return fmt.Errorf("%w: Tencent quote is nil", ErrInvalidDataFormat)
 	}
@@ -853,142 +513,7 @@ func parseTencentTurnover(code string, parts []string) (string, string, error) {
 	return strconv.FormatFloat(volumeLots*100, 'f', -1, 64), strconv.FormatFloat(amount, 'f', -1, 64), nil
 }
 
-func parseTxStockDataLegacy(data string) (*StockInfo, error) {
-	//v_r_hk09660="100~地平线机器人-W~09660~6.240~5.690~5.800~192659034.0~0~0~6.240~0~0~0~0~0~0~0~0~0~6.240~0~0~0~0~0~0~0~0~0~192659034.0~2025/04/29
-	//13:41:04~0.550~9.67~6.450~5.710~6.240~192659034.0~1180471843.140~0~32.51~~0~0~13.01~691.1364~823.6983~HORIZONROBOT-W~0.00~10.380~3.320~1.07~-16.03~0~0~0~0~0~32.51~6.40~1.74~600~73.33~17.96~GP~19.70~11.51~-0.95~-18.54~44.44~13200293682.00~11075904412.00~32.51~0.000~6.127~56.39~HKD~1~30";
-	//v_sz002241="51~歌尔股份~002241~22.26~22.27~0.00~0~0~0~22.26~1004~0.00~0~0.00~0~0.00~0~0.00~0~22.26~1004~0.00~558~0.00~0~0.00~0~0.00~0~~20250509092233~-0.01~-0.04~0.00~0.00~22.26/0/0~0~0~0.00~28.21~~0.00~0.00~0.00~686.46~777.09~2.31~24.50~20.04~0.00~-558~0.00~41.44~29.16~~~1.24~0.0000~0.0000~0~
-	//~GP-A~-13.75~6.76~1.09~8.18~3.39~30.63~15.70~6.87~17.47~-23.95~3083811231~3490989083~-21.75~12.02~3083811231~~~39.36~-0.04~~CNY~0~~0.00~0";
-
-	datas := strutil.SplitAndTrim(data, "=", "\"")
-	if len(datas) < 2 {
-		return nil, ErrInvalidDataFormat
-	}
-	var result map[string]string
-	if strutil.ContainsAny(datas[0], []string{"v_r_hk", "v_hk", "v_sz", "v_sh"}) {
-		result, _ = ParseTxHKStockData(datas)
-	}
-
-	//logger.SugaredLogger.Infof("股票数据解析完成: %v", result)
-	marshal, err := json.Marshal(result)
-	if err != nil {
-		logger.SugaredLogger.Errorf("json.Marshal error:%s", err.Error())
-		return nil, err
-	}
-	//logger.SugaredLogger.Infof("股票数据解析完成marshal: %s", marshal)
-	stockInfo := &StockInfo{}
-	err = json.Unmarshal(marshal, &stockInfo)
-	if err != nil {
-		logger.SugaredLogger.Errorf("json.Unmarshal error:%s", err.Error())
-		return nil, err
-	}
-	//logger.SugaredLogger.Infof("股票数据解析完成stockInfo: %+v", stockInfo)
-
-	return stockInfo, nil
-
-}
-
-func ParseTxHKStockData(datas []string) (map[string]string, error) {
-	//v_r_hk09660="
-	//100~   0
-	//地平线机器人-W~  1
-	//09660~ 2
-	//6.270~ 3 当前价
-	//5.690~ 4 昨收价
-	//5.800~ 5 开盘价
-	//195083034.0~
-	//0~
-	//0~
-	//6.270~
-	//0~
-	//0~
-	//0~
-	//0~
-	//0~
-	//0~
-	//0~
-	//0~
-	//0~
-	//6.270~
-	//0~0~0~0~0~0~0~0~0~
-	//195083034.0~
-	//2025/04/29 13:45:41~  30 当前时间
-	//0.580~
-	//10.19~
-	//6.450~  最高价
-	//5.710~  最低价
-	//6.270~
-	//195083034.0~
-	//1195673623.140~
-	//0~
-	//32.66
-	//~~0~0~13.01~694.4592~827.6584~HORIZONROBOT-W~0.00~10.380~3.320~1.06~-18.71~0~0~0~0~0~32.66~6.43~1.76~600~74.17~18.53~GP~19.70~11.51~-0.48~-18.15~45.14~13200293682.00~11075904412.00~32.66~0.000~6.129~57.14~HKD~1~30";
-	result := make(map[string]string)
-
-	stockCode := strutil.ReplaceWithMap(datas[0], map[string]string{
-		"v_r_": "",
-		"v_":   "",
-	})
-	result["股票代码"] = stockCode
-
-	parts := strings.Split(datas[1], "~")
-	for index := range parts {
-		parts[index] = strings.TrimSpace(parts[index])
-	}
-	//logger.SugaredLogger.Infof("股票数据解析完成 len: %v", len(parts))
-	if len(parts) < 35 {
-		return nil, ErrInvalidDataFormat
-	}
-	result["股票名称"] = parts[1]
-	result["当前价格"] = parts[3]
-	result["昨日收盘价"] = parts[4]
-	result["今日开盘价"] = parts[5]
-
-	result["今日最高价"] = parts[33]
-	result["今日最低价"] = parts[34]
-
-	if strutil.HasPrefixAny(stockCode, []string{"sz", "sh"}) {
-		result["买一报价"] = parts[9]
-		result["买一申报"] = parts[10]
-		result["买二报价"] = parts[11]
-		result["买二申报"] = parts[12]
-		result["买三报价"] = parts[13]
-		result["买三申报"] = parts[14]
-		result["买四报价"] = parts[15]
-		result["买四申报"] = parts[16]
-		result["买五报价"] = parts[17]
-		result["买五申报"] = parts[18]
-
-		result["卖一报价"] = parts[19]
-		result["卖一申报"] = parts[20]
-		result["卖二报价"] = parts[21]
-		result["卖二申报"] = parts[22]
-		result["卖三报价"] = parts[23]
-		result["卖三申报"] = parts[24]
-		result["卖四报价"] = parts[25]
-		result["卖四申报"] = parts[26]
-		result["卖五报价"] = parts[27]
-		result["卖五申报"] = parts[28]
-
-	}
-
-	date, clock, err := parseTencentQuoteTime(parts)
-	if err != nil {
-		return nil, err
-	}
-	result["日期"], result["时间"] = date, clock
-	if err := validateTencentOHLC(&StockInfo{Price: result["当前价格"], Open: result["今日开盘价"], High: result["今日最高价"], Low: result["今日最低价"]}); err != nil {
-		return nil, err
-	}
-	//logger.SugaredLogger.Infof("股票数据解析完成 %s %s 时间: %s,%s", parts[1], parts[3], parts[29], parts[30])
-
-	//logger.SugaredLogger.Infof("股票数据解析完成 时间: %v", timestr)
-
-	//logger.SugaredLogger.Infof("股票数据解析完成: %v", result)
-
-	return result, nil
-}
-
-func ParseFullSingleStockData(data string) (*StockInfo, error) {
+func ParseFullSingleStockData(data string) (*models.StockInfo, error) {
 	datas := strutil.SplitAndTrim(data, "=", "\"")
 	if len(datas) < 2 {
 		return nil, ErrInvalidDataFormat
@@ -1011,7 +536,7 @@ func ParseFullSingleStockData(data string) (*StockInfo, error) {
 		return nil, err
 	}
 	//logger.SugaredLogger.Infof("股票数据解析完成marshal: %s", marshal)
-	stockInfo := &StockInfo{}
+	stockInfo := &models.StockInfo{}
 	err = json.Unmarshal(marshal, &stockInfo)
 	if err != nil {
 		logger.SugaredLogger.Errorf("json.Unmarshal error:%s", err.Error())
@@ -1202,27 +727,6 @@ func ParseSHSZStockData(datas []string) (map[string]string, error) {
 	return result, nil
 }
 
-type IndexBasic struct {
-	gorm.Model
-	TsCode        string  `json:"ts_code" gorm:"index"`
-	Symbol        string  `json:"symbol" gorm:"index"`
-	Name          string  `json:"name" gorm:"index"`
-	FullName      string  `json:"fullname"`
-	IndexType     string  `json:"index_type"`
-	IndexCategory string  `json:"category"`
-	Market        string  `json:"market"`
-	ListDate      string  `json:"list_date"`
-	BaseDate      string  `json:"base_date"`
-	BasePoint     float64 `json:"base_point"`
-	Publisher     string  `json:"publisher"`
-	WeightRule    string  `json:"weight_rule"`
-	DESC          string  `json:"desc"`
-}
-
-func (IndexBasic) TableName() string {
-	return "tushare_index_basic"
-}
-
 type RealTimeStockPriceInfo struct {
 	StockCode string
 	Price     string `json:"当前价格"`
@@ -1392,41 +896,6 @@ func getHKStockPriceInfo(stockCode string, crawlTimeOut int64) *[]string {
 	return &messages
 }
 
-func GetZSInfo(name, stockCode string, crawlTimeOut int64) string {
-	url := "https://finance.sina.com.cn/realstock/company/" + stockCode + "/nc.shtml"
-	crawlerAPI := CrawlerApi{}
-	crawlerBaseInfo := CrawlerBaseInfo{
-		Name:        "TestCrawler",
-		Description: "Test Crawler Description",
-		BaseUrl:     "https://finance.sina.com.cn",
-		Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(crawlTimeOut)*time.Second)
-	defer cancel()
-	crawlerAPI = crawlerAPI.NewCrawler(ctx, crawlerBaseInfo)
-	html, ok := crawlerAPI.GetHtml(url, "div#hqDetails table", true)
-	if !ok {
-		return ""
-	}
-	document, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-	}
-
-	//price
-	price := strutil.RemoveWhiteSpace(document.Find("div#price").First().Text(), false)
-	hqTime := strutil.RemoveWhiteSpace(document.Find("div#hqTime").First().Text(), false)
-
-	if strutil.ContainsAny(price, []string{"-", "--"}) {
-		return "暂无数据"
-	}
-
-	var markdown strings.Builder
-	markdown.WriteString(fmt.Sprintf("### 时间：%s %s：%s \n", hqTime, name, price))
-	GetTableMarkdown(document, "div#hqDetails table", &markdown)
-	return markdown.String()
-}
-
 func getSHSZStockPriceInfo(stockName, stockCode string, crawlTimeOut int64) *[]string {
 	url := "https://finance.sina.com.cn/realstock/company/" + stockCode + "/nc.shtml"
 	crawlerAPI := CrawlerApi{}
@@ -1456,79 +925,6 @@ func getSHSZStockPriceInfo(stockName, stockCode string, crawlTimeOut int64) *[]s
 	markdown.WriteString(fmt.Sprintf("### %s现价：%s 现价时间：%s\n", stockName, price, hqTime))
 	GetTableMarkdown(document, "div#hqDetails table", &markdown)
 	return &[]string{markdown.String()}
-}
-
-func SearchStockInfo(stock, msgType string, crawlTimeOut int64) *[]string {
-	crawler := CrawlerApi{
-		crawlerBaseInfo: CrawlerBaseInfo{
-
-			Name:        "财联社",
-			BaseUrl:     "https://www.cls.cn",
-			Description: "财联社",
-			Headers:     map[string]string{"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36 Edg/133.0.0.0"},
-		},
-	}
-	timeoutCtx, timeoutCtxCancel := context.WithTimeout(context.Background(), time.Duration(crawlTimeOut)*time.Second)
-	defer timeoutCtxCancel()
-	crawler = crawler.NewCrawler(timeoutCtx, crawler.crawlerBaseInfo)
-	url := fmt.Sprintf("https://www.cls.cn/searchPage?keyword=%s&type=%s", RemoveAllBlankChar(stock), msgType)
-	//logger.SugaredLogger.Infof("SearchStockInfo url:%s", url)
-	waitVisible := ".search-telegraph-list,.subject-interest-list"
-	htmlContent, ok := crawler.GetHtml(url, waitVisible, true)
-	if !ok {
-		return &[]string{}
-	}
-	document, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return &[]string{}
-	}
-	var messages []string
-	document.Find(waitVisible).Each(func(i int, selection *goquery.Selection) {
-		text := strutil.RemoveNonPrintable(selection.Text())
-		messages = append(messages, ReplaceSensitiveWords(text))
-		//logger.SugaredLogger.Infof("搜索到消息-%s: %s", msgType, text)
-	})
-	return &messages
-}
-
-func SearchStockInfoByCode(stock string) *[]string {
-	// 创建一个 chromedp 上下文
-	ctx, cancel := chromedp.NewContext(
-		context.Background(),
-		chromedp.WithLogf(logger.SugaredLogger.Infof),
-		chromedp.WithErrorf(logger.SugaredLogger.Errorf),
-	)
-	defer cancel()
-	var htmlContent string
-	stock = strings.ReplaceAll(stock, "sh", "")
-	stock = strings.ReplaceAll(stock, "sz", "")
-	url := fmt.Sprintf("https://gushitong.baidu.com/stock/ab-%s", stock)
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(url),
-		// 等待页面加载完成，可以根据需要调整等待时间
-		//chromedp.Sleep(3*time.Second),
-		chromedp.WaitVisible("a.news-item-link", chromedp.ByQuery),
-		chromedp.OuterHTML("html", &htmlContent, chromedp.ByQuery),
-	)
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return &[]string{}
-	}
-	document, err := goquery.NewDocumentFromReader(strings.NewReader(htmlContent))
-	if err != nil {
-		logger.SugaredLogger.Error(err.Error())
-		return &[]string{}
-	}
-	var messages []string
-	document.Find("a.news-item-link").Each(func(i int, selection *goquery.Selection) {
-		text := strutil.RemoveNonPrintable(selection.Text())
-		if strings.Contains(text, stock) {
-			messages = append(messages, text)
-			//logger.SugaredLogger.Infof("搜索到消息: %s", text)
-		}
-	})
-	return &messages
 }
 
 // 分时数据
@@ -1594,9 +990,9 @@ func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]Minut
 	return minuteDatas, date
 }
 
-func (receiver StockDataApi) GetKLineData(stockCode string, kLineType string, days int64) *[]KLineData {
+func (receiver StockDataApi) GetKLineData(stockCode string, kLineType string, days int64) *[]models.KLineData {
 	url := fmt.Sprintf("https://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=%s&ma=yes&datalen=%d", stockCode, kLineType, days)
-	K := &[]KLineData{}
+	K := &[]models.KLineData{}
 	_, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
 		SetHeader("Host", "quotes.sina.cn").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
@@ -1608,7 +1004,7 @@ func (receiver StockDataApi) GetKLineData(stockCode string, kLineType string, da
 	}
 	return K
 }
-func (receiver StockDataApi) GetHK_KLineData(stockCode string, kLineType string, days int64) *[]KLineData {
+func (receiver StockDataApi) GetHK_KLineData(stockCode string, kLineType string, days int64) *[]models.KLineData {
 
 	logger.SugaredLogger.Infof("GetHK_KLineData stockCode:%s,kLineType:%s,days:%d", stockCode, kLineType, days)
 	if strutil.HasPrefixAny(stockCode, []string{"gb_", "GB_"}) {
@@ -1617,7 +1013,7 @@ func (receiver StockDataApi) GetHK_KLineData(stockCode string, kLineType string,
 
 	url := fmt.Sprintf("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,%s,,,%d,qfq", stockCode, kLineType, days)
 	//logger.SugaredLogger.Infof("url:%s", url)
-	K := &[]KLineData{}
+	K := &[]models.KLineData{}
 	res := make(map[string]interface{})
 	resp, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
 		SetHeader("Host", "web.ifzq.gtimg.cn").
@@ -1649,7 +1045,7 @@ func (receiver StockDataApi) GetHK_KLineData(stockCode string, kLineType string,
 			for _, v := range day {
 				if v != nil {
 					vv := v.([]any)
-					KLine := &KLineData{
+					KLine := &models.KLineData{
 						Day:    convertor.ToString(vv[0]),
 						Open:   convertor.ToString(vv[1]),
 						Close:  convertor.ToString(vv[2]),
@@ -1664,272 +1060,11 @@ func (receiver StockDataApi) GetHK_KLineData(stockCode string, kLineType string,
 	}
 	return K
 }
-func (receiver StockDataApi) GetSinaHKStockInfo() {
-
-	pageSize := 500
-	for i := 1; i <= 3060/pageSize; i++ {
-		infos := getSinaStockInfo(receiver, i, pageSize)
-		for i, info := range *infos {
-			logger.SugaredLogger.Infof("infos:%d,%s:%s", i, info.Symbol, info.Name)
-		}
-	}
-
-}
-
-func getSinaStockInfo(receiver StockDataApi, page, pageSize int) *[]models.SinaStockInfo {
-	infos := &[]models.SinaStockInfo{}
-	url := "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHKStockData?page=%d&num=%d&sort=symbol&asc=1&node=qbgg_hk&_s_r_a=init"
-	_, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
-		SetHeader("Host", "vip.stock.finance.sina.com.cn").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
-		SetResult(infos).
-		Get(fmt.Sprintf(url, page, pageSize))
-
-	if err != nil {
-		logger.SugaredLogger.Errorf("err:%s", err.Error())
-	}
-	return infos
-}
-
-func (receiver StockDataApi) getDCStockInfo(market string, page, pageSize int) {
-	//m:105,m:106,m:107  //美股
-	//m:128+t:3,m:128+t:4,m:128+t:1,m:128+t:2 //港股
-	fs := "m:0+t:6,m:0+t:80,m:1+t:2,m:1+t:23,m:0+t:81+s:2048"
-	switch market {
-	case "hk":
-		fs = "m:128+t:3,m:128+t:4,m:128+t:1,m:128+t:2"
-	case "us":
-		fs = "m:105,m:106,m:107"
-	}
-
-	url := "https://push2.eastmoney.com/api/qt/clist/get?np=1&fltt=1&invt=2&cb=data&fs=%s&fields=f12,f13,f14,f1,f2,f4,f3,f152,f5,f6,f7,f15,f18,f16,f17,f10,f8,f9,f23,f100,f265&fid=f3&pn=%d&pz=%d&po=1&dect=1&wbp2u=|0|0|0|web&_=%d"
-	sprintfUrl := fmt.Sprintf(url, fs, page, pageSize, time.Now().UnixMilli())
-	logger.SugaredLogger.Infof("page:%d  url:%s", page, sprintfUrl)
-	resp, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
-		SetHeader("Host", "push2.eastmoney.com").
-		SetHeader("Referer", "https://quote.eastmoney.com/center/gridlist.html").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:146.0) Gecko/20100101 Firefox/146.0").
-		Get(sprintfUrl)
-	if err != nil {
-		logger.SugaredLogger.Errorf("err:%s", err.Error())
-		return
-	}
-	body := string(resp.Body())
-	logger.SugaredLogger.Infof("resp:%s", body)
-	vm := otto.New()
-	if _, err := vm.Run("function data(res){return res};"); err != nil {
-		logger.SugaredLogger.Errorf("vm.Run init error:%v", err.Error())
-		return
-	}
-	val, err := vm.Run(body)
-	if err != nil {
-		logger.SugaredLogger.Errorf("vm.Run error:%v", err.Error())
-	}
-	value, _ := val.Object().Value().Export()
-	marshal, err := json.Marshal(value)
-	if err != nil {
-		logger.SugaredLogger.Errorf("json.Marshal error:%v", err.Error())
-		return
-	}
-	data := make(map[string]any)
-	err = json.Unmarshal(marshal, &data)
-	if err != nil {
-		logger.SugaredLogger.Errorf("json.Unmarshal error:%v", err.Error())
-	}
-	logger.SugaredLogger.Infof("resp:%s", data)
-	if data["data"] != nil {
-		datas := data["data"].(map[string]any)
-		total := datas["total"].(float64)
-		diff := datas["diff"].([]any)
-		logger.SugaredLogger.Infof("total:%d", int(total))
-		for k, item := range diff {
-			stock := item.(map[string]any)
-			logger.SugaredLogger.Infof("k:%d,%s:%s:%s %s:%s", k, stock["f14"], stock["f12"], DCToTsCode(stock["f12"].(string)), stock["f100"], stock["f265"])
-
-			if market == "" {
-				stockInfo := &StockBasic{
-					Symbol: stock["f12"].(string),
-					TsCode: DCToTsCode(stock["f12"].(string)),
-					Name:   stock["f14"].(string),
-					BKName: stock["f100"].(string),
-					BKCode: stock["f265"].(string),
-				}
-				db.Dao.Model(&StockBasic{}).Where("symbol = ?", stockInfo.Symbol).First(stockInfo)
-				logger.SugaredLogger.Infof("stockInfo:%+v", stockInfo)
-				if stockInfo.ID == 0 {
-					db.Dao.Model(&StockBasic{}).Create(stockInfo)
-				} else {
-					stockInfo = &StockBasic{
-						Symbol: stock["f12"].(string),
-						TsCode: DCToTsCode(stock["f12"].(string)),
-						Name:   stock["f14"].(string),
-						BKName: stock["f100"].(string),
-						BKCode: stock["f265"].(string),
-					}
-					db.Dao.Model(&StockBasic{}).Where("symbol = ?", stockInfo.Symbol).Updates(stockInfo)
-				}
-			}
-
-			if market == "hk" {
-				stockInfo := &models.StockInfoHK{
-					Code:   strutil.PadStart(stock["f12"].(string), 5, "0") + ".HK",
-					Name:   stock["f14"].(string),
-					BKName: stock["f100"].(string),
-					BKCode: stock["f265"].(string),
-				}
-				db.Dao.Model(&models.StockInfoHK{}).Where("code = ?", stockInfo.Code).First(stockInfo)
-				logger.SugaredLogger.Infof("stockInfo:%+v", stockInfo)
-				if stockInfo.ID == 0 {
-					db.Dao.Model(&models.StockInfoHK{}).Create(stockInfo)
-				} else {
-					stockInfo = &models.StockInfoHK{
-						Code:   strutil.PadStart(stock["f12"].(string), 5, "0") + ".HK",
-						Name:   stock["f14"].(string),
-						BKName: stock["f100"].(string),
-						BKCode: stock["f265"].(string),
-					}
-					db.Dao.Model(&models.StockInfoHK{}).Where("code = ?", stockInfo.Code).Updates(stockInfo)
-				}
-			}
-
-			if market == "us" {
-				stockInfo := &models.StockInfoUS{
-					Code:   strutil.PadStart(stock["f12"].(string), 5, "0") + ".US",
-					Name:   stock["f14"].(string),
-					BKName: stock["f100"].(string),
-					BKCode: stock["f265"].(string),
-				}
-				db.Dao.Model(&models.StockInfoUS{}).Where("code = ?", stockInfo.Code).First(stockInfo)
-				logger.SugaredLogger.Infof("stockInfo:%+v", stockInfo)
-				if stockInfo.ID == 0 {
-					db.Dao.Model(&models.StockInfoUS{}).Create(stockInfo)
-				} else {
-					stockInfo = &models.StockInfoUS{
-						Code:   strutil.PadStart(stock["f12"].(string), 5, "0") + ".US",
-						Name:   stock["f14"].(string),
-						BKName: stock["f100"].(string),
-						BKCode: stock["f265"].(string),
-					}
-					db.Dao.Model(&models.StockInfoUS{}).Where("code = ?", stockInfo.Code).Updates(stockInfo)
-				}
-			}
-
-		}
-
-	}
-}
-
-func DCToTsCode(dcCode string) string {
-	//北京证券交易所	8（83、87、88 等）	创新型中小企业（专精特新为主）
-	//上海证券交易所	6（60、688 等）	大盘蓝筹、科创板（高新技术）
-	//深圳证券交易所	0、3（000、002、30 等）	中小盘、创业板（成长型创新企业）
-	switch dcCode[0:1] {
-	case "8":
-		return dcCode + ".BJ"
-	case "9":
-		return dcCode + ".BJ"
-	case "6":
-		return dcCode + ".SH"
-	case "0":
-		return dcCode + ".SZ"
-	case "3":
-		return dcCode + ".SZ"
-	}
-	return ""
-}
-
-func (receiver StockDataApi) GetHKStockInfo(pageSize int) {
-	url := "https://stock.gtimg.cn/data/hk_rank.php?board=main_all&metric=price&pageSize=%d&reqPage=1&order=desc&var_name=list_data"
-	resp, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
-		SetHeader("Host", "stock.gtimg.cn").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
-		Get(fmt.Sprintf(url, pageSize))
-	if err != nil {
-		logger.SugaredLogger.Errorf("err:%s", err.Error())
-		return
-	}
-	js := "var " + string(resp.Body())
-	vm := otto.New()
-	if _, err = vm.Run(js); err != nil {
-		return
-	}
-	if _, err = vm.Run("var data = JSON.stringify(list_data);"); err != nil {
-		return
-	}
-	value, _ := vm.Get("data")
-	data := make(map[string]any)
-	err = json.Unmarshal([]byte(value.String()), &data)
-	if err != nil {
-		logger.SugaredLogger.Errorf("json.Unmarshal error:%v", err.Error())
-	}
-	logger.SugaredLogger.Infof("resp:%s", data)
-	if data["code"] != nil && data["code"].(float64) == 0 {
-		d := data["data"].(map[string]any)
-		saveHKStockInfo(d)
-
-		page_count := int64(d["page_count"].(float64))
-		logger.SugaredLogger.Infof("page_count:%d", page_count)
-		page := int64(1)
-		for page > page_count {
-			urlx := fmt.Sprintf("https://stock.gtimg.cn/data/hk_rank.php?board=main_all&metric=price&pageSize=%d&reqPage=%d&order=desc&var_name=list_data", pageSize, page)
-			logger.SugaredLogger.Infof("url:%s", urlx)
-			resp, err = receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
-				SetHeader("Host", "stock.gtimg.cn").
-				SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
-				Get(urlx)
-			if err != nil {
-				logger.SugaredLogger.Errorf("err:%s", err.Error())
-				break
-			}
-			js = "var " + string(resp.Body())
-			if _, err = vm.Run(js); err != nil {
-				return
-			}
-			if _, err = vm.Run("var data = JSON.stringify(list_data);"); err != nil {
-				return
-			}
-			value, _ = vm.Get("data")
-			data = make(map[string]any)
-			err = json.Unmarshal([]byte(value.String()), &data)
-			if err != nil {
-				logger.SugaredLogger.Errorf("json.Unmarshal error:%v", err.Error())
-			}
-			logger.SugaredLogger.Infof("resp:%s", data)
-			if data != nil && data["code"] != nil && data["code"].(float64) == 0 {
-				if data["data"] != nil {
-					d = data["data"].(map[string]any)
-					saveHKStockInfo(d)
-				}
-			}
-			page++
-		}
-		//
-	}
-
-}
-
-func saveHKStockInfo(d map[string]any) {
-	for _, v := range d["page_data"].([]any) {
-		vv := v.(string)
-		splits := strings.Split(vv, "~")
-		stock := &models.StockInfoHK{
-			Code: strutil.PadStart(splits[0], 5, "0") + ".HK",
-			Name: splits[1],
-		}
-		logger.SugaredLogger.Infof("vv:%s", vv)
-		db.Dao.Model(stock).Where("code = ?", stock.Code).First(stock)
-		if stock.ID == 0 {
-			logger.SugaredLogger.Infof("stock:%+v", stock)
-			db.Dao.Model(&models.StockInfoHK{}).Create(stock)
-		}
-	}
-}
-
-func (receiver StockDataApi) GetCommonKLineData(stockCode string, kLineType string, days int64) *[]KLineData {
+func (receiver StockDataApi) GetCommonKLineData(stockCode string, kLineType string, days int64) *[]models.KLineData {
 
 	url := fmt.Sprintf("https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=%s,%s,,,%d,qfq", stockCode, kLineType, days)
 	logger.SugaredLogger.Infof("url:%s", url)
-	K := &[]KLineData{}
+	K := &[]models.KLineData{}
 	res := make(map[string]interface{})
 	resp, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
 		SetHeader("Host", "web.ifzq.gtimg.cn").
@@ -1961,7 +1096,7 @@ func (receiver StockDataApi) GetCommonKLineData(stockCode string, kLineType stri
 			for _, v := range day {
 				if v != nil {
 					vv := v.([]any)
-					KLine := &KLineData{
+					KLine := &models.KLineData{
 						Day:    convertor.ToString(vv[0]),
 						Open:   convertor.ToString(vv[1]),
 						Close:  convertor.ToString(vv[2]),
@@ -1975,11 +1110,6 @@ func (receiver StockDataApi) GetCommonKLineData(stockCode string, kLineType stri
 		}
 	}
 	return K
-}
-
-// GetStockHistoryMoneyData 获取股票历史资金流向数据
-func (receiver StockDataApi) GetStockHistoryMoneyData() {
-
 }
 
 // GetStockMoneyData 获取个股资金流数据
@@ -2146,8 +1276,6 @@ func JSONToMarkdownTable(jsonData []byte) (string, error) {
 
 	return headerRow + separatorRow + bodyRows, nil
 }
-
-type KLineData = models.KLineData
 
 type MinuteData struct {
 	Time   string  `json:"time"`

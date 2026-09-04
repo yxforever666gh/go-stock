@@ -32,7 +32,6 @@ func (a *App) domReady(ctx context.Context) {
 		return
 	}
 	releaseinfo.MarkSchedulerReady(true)
-	a.updateBasicInfo()
 	a.startImmediateRuntimeTasks(config)
 	a.startMaintenanceRuntime(config)
 
@@ -163,6 +162,7 @@ func (a *App) registerMaintenanceRuntime() {
 func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 	if config.UpdateBasicInfoOnStart {
 		a.goTask(a.checkStockBaseInfo)
+		a.goTask(func(context.Context) { a.services.Stock.RefreshIndexBaseInfo() })
 	}
 }
 

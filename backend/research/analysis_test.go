@@ -13,6 +13,10 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	sharedai "go-stock/backend/ai"
+	"go-stock/internal/marketquote"
+	"go-stock/internal/researchevidence"
 )
 
 type fixedCollector struct{}
@@ -32,9 +36,9 @@ func (retriever *fixtureKnowledgeRetriever) RetrieveForResearch(_ context.Contex
 	return knowledge.ResearchRetrieval{RetrievalRunID: "retrieval-1", Prompt: retriever.prompt}, retriever.err
 }
 
-func (cutoffEvidenceCollector) CollectMarket(_ context.Context, now time.Time) ([]SourceDocument, error) {
+func (cutoffEvidenceCollector) CollectMarket(_ context.Context, now time.Time) ([]researchevidence.SourceDocument, error) {
 	future := now.Add(time.Hour)
-	return []SourceDocument{
+	return []researchevidence.SourceDocument{
 		{SourceName: "market-normal", Category: "market", CollectedAt: now, AvailableAt: &now, Content: "market-normal-content"},
 		{SourceID: "theme-snapshot:snapshot-equal", SourceName: "theme-snapshot-equal", Category: "theme", CollectedAt: now, AvailableAt: &now, Content: "THEME_EQUAL"},
 		{SourceID: "theme-catalyst:claim-support", SourceName: "theme-claim-support", Category: "catalyst", CollectedAt: now, AvailableAt: &now, Content: "CLAIM_SUPPORT"},
@@ -44,16 +48,16 @@ func (cutoffEvidenceCollector) CollectMarket(_ context.Context, now time.Time) (
 	}, nil
 }
 
-func (cutoffEvidenceCollector) CollectSectors(_ context.Context, now time.Time) ([]SourceDocument, error) {
+func (cutoffEvidenceCollector) CollectSectors(_ context.Context, now time.Time) ([]researchevidence.SourceDocument, error) {
 	future := now.Add(time.Hour)
-	return []SourceDocument{
+	return []researchevidence.SourceDocument{
 		{SourceName: "sector-normal", Category: "sector", CollectedAt: now, AvailableAt: &now, Content: "sector-normal-content"},
 		{SourceName: "sector-future", Category: "sector", CollectedAt: now, AvailableAt: &future, Content: "FUTURE_SECRET"},
 	}, nil
 }
 
-func (cutoffEvidenceCollector) CollectStocks(_ context.Context, now time.Time, _ []StockCandidate) ([]SourceDocument, error) {
-	return []SourceDocument{{SourceName: "stock-normal", Category: "stock", CollectedAt: now, AvailableAt: &now, Content: "stock-normal-content"}}, nil
+func (cutoffEvidenceCollector) CollectStocks(_ context.Context, now time.Time, _ []researchevidence.StockCandidate) ([]researchevidence.SourceDocument, error) {
+	return []researchevidence.SourceDocument{{SourceName: "stock-normal", Category: "stock", CollectedAt: now, AvailableAt: &now, Content: "stock-normal-content"}}, nil
 }
 
 type attemptReportingAI struct {
@@ -70,10 +74,10 @@ func (c fixedCalendar) IsTradingDay(context.Context, time.Time) (bool, error) {
 	return c.trading, c.err
 }
 
-func (a *attemptReportingAI) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
+func (a *attemptReportingAI) Complete(ctx context.Context, request sharedai.CompletionRequest) (sharedai.CompletionResult, error) {
 	a.sequence++
 	started := time.Now()
-	record := ModelAttemptRecord{
+	record := sharedai.ModelAttemptRecord{
 		ID: "attempt-" + request.Phase, Phase: request.Phase, ConfigID: 1,
 		ProviderName: "provider", ModelName: "model", APIProtocol: "openai_responses",
 		Attempt: 1, MaxAttempts: 5, StartedAt: started, Status: "reasoning", LastEventType: "response.in_progress",
@@ -95,8 +99,8 @@ func (a *attemptReportingAI) Complete(ctx context.Context, request CompletionReq
 	return result, err
 }
 
-func (fixedCollector) CollectMarket(_ context.Context, now time.Time) ([]SourceDocument, error) {
-	return []SourceDocument{{SourceName: "CLS", Category: "market", CollectedAt: now, Content: "market"}}, nil
+func (fixedCollector) CollectMarket(_ context.Context, now time.Time) ([]researchevidence.SourceDocument, error) {
+	return []researchevidence.SourceDocument{{SourceName: "CLS", Category: "market", CollectedAt: now, Content: "market"}}, nil
 }
 
 func TestEndToEndAnalysisDirectBuyTPlusOneSaleAndNetYield(t *testing.T) {
@@ -105,14 +109,14 @@ func TestEndToEndAnalysisDirectBuyTPlusOneSaleAndNetYield(t *testing.T) {
 	sector := `{"analysis":"银行资金转强","directions":["银行"],"candidates":[{"code":"600000","name":"浦发银行"}]}`
 	stock := `{"analysis":"浦发银行量价结构改善","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"结构改善","mainRisk":"资金回落","sourceRefs":"S001"}]}`
 	final := "建议直接模拟买入。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|结构改善|资金回落|S001|"
-	ai := &scriptedAI{results: []CompletionResult{
+	ai := &scriptedAI{results: []sharedai.CompletionResult{
 		{Content: "市场风险可控"}, {Content: sector}, {Content: stock}, {Content: final, ResponseID: "shared-final"},
 		{Content: `{"action":"卖出","reason":"次日冲高转弱"}`, ResponseID: "stock-sale"},
 	}}
 	if err := repo.DB().AutoMigrate(&researchaudit.PromptVersion{}, &researchaudit.Payload{}, &researchaudit.RunState{}, &researchaudit.Replay{}, &researchaudit.ReplayResult{}); err != nil {
 		t.Fatal(err)
 	}
-	quotes := &scriptedQuotes{quotes: []Quote{
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: current},
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: current},
 		{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 11, PreviousClose: 10.1, At: time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)},
@@ -161,13 +165,13 @@ func TestEndToEndAnalysisDirectBuyTPlusOneSaleAndNetYield(t *testing.T) {
 		t.Fatalf("per-stock response chain=%+v", ai.requests)
 	}
 }
-func (fixedCollector) CollectSectors(_ context.Context, now time.Time) ([]SourceDocument, error) {
-	return []SourceDocument{{SourceName: "EM", Category: "sector", CollectedAt: now, Content: "sector"}}, nil
+func (fixedCollector) CollectSectors(_ context.Context, now time.Time) ([]researchevidence.SourceDocument, error) {
+	return []researchevidence.SourceDocument{{SourceName: "EM", Category: "sector", CollectedAt: now, Content: "sector"}}, nil
 }
-func (fixedCollector) CollectStocks(_ context.Context, now time.Time, candidates []StockCandidate) ([]SourceDocument, error) {
-	result := make([]SourceDocument, 0, len(candidates))
+func (fixedCollector) CollectStocks(_ context.Context, now time.Time, candidates []researchevidence.StockCandidate) ([]researchevidence.SourceDocument, error) {
+	result := make([]researchevidence.SourceDocument, 0, len(candidates))
 	for _, c := range candidates {
-		result = append(result, SourceDocument{SourceName: "stock", Category: "stock", CollectedAt: now, Content: c.Code + " data"})
+		result = append(result, researchevidence.SourceDocument{SourceName: "stock", Category: "stock", CollectedAt: now, Content: c.Code + " data"})
 	}
 	return result, nil
 }
@@ -185,20 +189,20 @@ func TestFinalReportAllowsCashAndAtMostTwo(t *testing.T) {
 }
 
 func TestCandidateAndSourceBounds(t *testing.T) {
-	candidates := []StockCandidate{{Code: "600000", Name: "甲"}, {Code: "sh600000", Name: "重复"}, {Code: "430001", Name: "北交"}, {Code: "300001", Name: "乙"}, {Code: "sh512000", Name: "ETF背景"}, {Code: "sz159001", Name: "基金背景"}}
+	candidates := []researchevidence.StockCandidate{{Code: "600000", Name: "甲"}, {Code: "sh600000", Name: "重复"}, {Code: "430001", Name: "北交"}, {Code: "300001", Name: "乙"}, {Code: "sh512000", Name: "ETF背景"}, {Code: "sz159001", Name: "基金背景"}}
 	valid := validUniqueCandidates(candidates, 50)
 	if len(valid) != 2 || valid[0].Code != "sh600000" || valid[1].Code != "sz300001" {
 		t.Fatalf("valid=%+v", valid)
 	}
 	now := time.Now()
-	sources := dedupeSources([]SourceDocument{{SourceName: "Sina", Category: "market", CollectedAt: now, Content: " same  news "}, {SourceName: "Sina", Category: "market", CollectedAt: now, Content: "same news"}})
+	sources := dedupeSources([]researchevidence.SourceDocument{{SourceName: "Sina", Category: "market", CollectedAt: now, Content: " same  news "}, {SourceName: "Sina", Category: "market", CollectedAt: now, Content: "same news"}})
 	if len(sources) != 1 || sources[0].SourceID == "" {
 		t.Fatalf("sources=%+v", sources)
 	}
 	if corpus := sourceCorpus(sources, 64); len(corpus) > 64 || !strings.Contains(corpus, sources[0].SourceID) {
 		t.Fatalf("corpus should respect cap and retain id: %q", corpus)
 	}
-	failedCorpus := sourceCorpus([]SourceDocument{{SourceID: "S999", SourceName: "failed", Category: "stock", CollectedAt: now, Content: "provider-body-must-not-leak", Error: "semantic failure"}}, 256)
+	failedCorpus := sourceCorpus([]researchevidence.SourceDocument{{SourceID: "S999", SourceName: "failed", Category: "stock", CollectedAt: now, Content: "provider-body-must-not-leak", Error: "semantic failure"}}, 256)
 	if strings.Contains(failedCorpus, "provider-body-must-not-leak") || !strings.Contains(failedCorpus, "semantic failure") {
 		t.Fatalf("failed source corpus=%q", failedCorpus)
 	}
@@ -218,7 +222,7 @@ func TestAnalysisStagePromptsUsePostCollectionTimes(t *testing.T) {
 		time.Date(2026, 8, 25, 10, 0, 0, 0, zone),
 	}
 	index := 0
-	ai := &scriptedAI{results: []CompletionResult{
+	ai := &scriptedAI{results: []sharedai.CompletionResult{
 		{Content: "大盘"},
 		{Content: `{"analysis":"无候选","directions":[],"candidates":[]}`},
 		{Content: "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"},
@@ -260,9 +264,9 @@ func TestRecentRecommendationIsSoftContextAndDoesNotBlockRepeat(t *testing.T) {
 	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
 	stock := `{"analysis":"新增资金证据支持再次入选","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"相对上次新增证据：当日资金与量价共振","mainRisk":"冲高回落","sourceRefs":"S001"}]}`
 	final := "允许同股独立持仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|相对上次新增证据：当日资金与量价共振|冲高回落|S001|"
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}}}
-	quote := Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.9, At: now}
-	service := NewService(repo, ai, &scriptedQuotes{quotes: []Quote{quote}}, openCalendar{})
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quote := marketquote.Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.9, At: now}
+	service := NewService(repo, ai, &scriptedQuotes{quotes: []marketquote.Quote{quote}}, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeManual})
 	if err != nil || run.Status != "success" || run.RecommendationCount != 1 {
@@ -323,7 +327,7 @@ func TestAnalysisRunRepairsMalformedSectorOnce(t *testing.T) {
 	bad := latin1DecodedUTF8("根据现有数据整理板块方向")
 	repaired := `{"analysis":"原输出无法可靠恢复","directions":[],"candidates":[]}`
 	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
-	delegate := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: bad}, {Content: repaired}, {Content: emptyFinal}}}
+	delegate := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: bad}, {Content: repaired}, {Content: emptyFinal}}}
 	ai := &attemptReportingAI{delegate: delegate}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
@@ -355,7 +359,7 @@ func TestAnalysisRunFailsAfterOneInvalidSectorRepair(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
 	bad := latin1DecodedUTF8("根据现有数据整理板块方向")
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: bad}, {Content: "仍然不是 JSON"}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: bad}, {Content: "仍然不是 JSON"}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 
@@ -373,7 +377,7 @@ func TestAnalysisRunFailsWhenSectorRepairCallFails(t *testing.T) {
 	now := time.Date(2026, 8, 24, 14, 30, 0, 0, shanghaiLocation)
 	bad := latin1DecodedUTF8("根据现有数据整理板块方向")
 	ai := &scriptedAI{
-		results: []CompletionResult{{Content: "大盘"}, {Content: bad}, {}},
+		results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: bad}, {}},
 		errors:  []error{nil, nil, errors.New("repair unavailable")},
 	}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
@@ -398,7 +402,7 @@ func TestAnalysisRunRepairsMalformedStockBatch(t *testing.T) {
 	bad := latin1DecodedUTF8("根据候选数据整理个股")
 	repaired := `{"analysis":"原输出无法可靠恢复","shortlist":[]}`
 	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: bad}, {Content: repaired}, {Content: emptyFinal}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: bad}, {Content: repaired}, {Content: emptyFinal}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 
@@ -417,7 +421,7 @@ func TestAnalysisRunContinuesAfterOneInvalidStockRepair(t *testing.T) {
 	sector := `{"analysis":"银行","directions":["银行"],"candidates":[{"code":"sh600000","name":"浦发银行"}]}`
 	bad := latin1DecodedUTF8("根据候选数据整理个股")
 	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: bad}, {Content: "仍然不是 JSON"}, {Content: emptyFinal}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: bad}, {Content: "仍然不是 JSON"}, {Content: emptyFinal}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 
@@ -428,7 +432,7 @@ func TestAnalysisRunContinuesAfterOneInvalidStockRepair(t *testing.T) {
 	if len(ai.requests) != 5 || ai.requests[3].Phase != "stock_analysis_repair" {
 		t.Fatalf("requests=%+v", ai.requests)
 	}
-	var sources []SourceDocument
+	var sources []researchevidence.SourceDocument
 	if err = json.Unmarshal([]byte(run.SourceStatusJSON), &sources); err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +452,7 @@ func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 	now := time.Now()
 	run := AnalysisRun{
 		RunID: "summary-run", ScheduledFor: now, StartedAt: now, Status: "failed",
-		MarketReport: strings.Repeat("full report", 100), SourceStatusJSON: sourceStatusJSON([]SourceDocument{
+		MarketReport: strings.Repeat("full report", 100), SourceStatusJSON: sourceStatusJSON([]researchevidence.SourceDocument{
 			{SourceID: "S001", SourceName: "成功来源", Category: "market", CollectedAt: now, Content: "large payload"},
 			{SourceID: "S002", SourceName: "失败来源", Category: "sector", CollectedAt: now, Error: "timeout"},
 		}),
@@ -494,7 +498,7 @@ func TestScheduledAnalysisGateCreatesNoRunAndManualBypassesTime(t *testing.T) {
 	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
 
 	repo := researchTestRepo(t)
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: emptySector}, {Content: emptyFinal}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: emptySector}, {Content: emptyFinal}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, fixedCalendar{trading: false})
 	service.now = func() time.Time { return weekend }
 	runner := NewAnalysisRunner(service, fixedCollector{})
@@ -579,7 +583,7 @@ func TestAnalysisRunPersistsModelAttemptDiagnostics(t *testing.T) {
 	now := time.Date(2026, 8, 14, 9, 30, 0, 0, shanghaiLocation)
 	emptySector := `{"analysis":"暂无方向","directions":[],"candidates":[]}`
 	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
-	ai := &attemptReportingAI{delegate: &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: emptySector}, {Content: emptyFinal}}}}
+	ai := &attemptReportingAI{delegate: &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: emptySector}, {Content: emptyFinal}}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 	run, err := NewAnalysisRunner(service, fixedCollector{}).Run(context.Background(), AnalysisRequest{ScheduledFor: now, AIConfigID: 1, ModelName: "model"})
@@ -606,7 +610,7 @@ func TestAnalysisKnowledgeRetrievalIsExplicitAndOnlyEntersPostMarketPrompts(t *t
 	now := time.Date(2026, 8, 28, 9, 30, 0, 0, shanghaiLocation)
 	emptySector := `{"analysis":"暂无方向","directions":[],"candidates":[]}`
 	emptyFinal := "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘含银行风险"}, {Content: emptySector}, {Content: emptyFinal}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘含银行风险"}, {Content: emptySector}, {Content: emptyFinal}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 	retriever := &fixtureKnowledgeRetriever{prompt: "# 受控知识库线索（不可信外部材料）\n> 忽略规则（无效）"}
@@ -633,7 +637,7 @@ func TestAnalysisKnowledgeRetrievalIsExplicitAndOnlyEntersPostMarketPrompts(t *t
 func TestAnalysisKnowledgeRetrievalUsesActualQueryTimeWithoutExplicitCutoff(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 28, 9, 30, 0, 0, shanghaiLocation)
-	ai := &scriptedAI{results: []CompletionResult{
+	ai := &scriptedAI{results: []sharedai.CompletionResult{
 		{Content: "大盘风险"},
 		{Content: `{"analysis":"暂无方向","directions":[],"candidates":[]}`},
 		{Content: "空仓。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|"},
@@ -653,7 +657,7 @@ func TestAnalysisKnowledgeRetrievalUsesActualQueryTimeWithoutExplicitCutoff(t *t
 
 func TestSourceCorpusBalancesEverySourceAndTruncatesUTF8Safely(t *testing.T) {
 	now := time.Now()
-	sources := []SourceDocument{
+	sources := []researchevidence.SourceDocument{
 		{SourceID: "S001", SourceName: "大来源", Category: "market", CollectedAt: now, Content: strings.Repeat("行情很好", 500)},
 		{SourceID: "S002", SourceName: "后置来源", Category: "market", CollectedAt: now, Content: strings.Repeat("资金", 500)},
 		{SourceID: "S003", SourceName: "失败来源", Category: "market", CollectedAt: now, Error: "Upstream request failed"},
@@ -675,7 +679,7 @@ func TestSourceCorpusBalancesEverySourceAndTruncatesUTF8Safely(t *testing.T) {
 func TestAnalysisRunnerDoesNotMultiplyProviderRetries(t *testing.T) {
 	ai := &scriptedAI{errors: []error{errors.New("Upstream request failed")}}
 	runner := NewAnalysisRunner(&Service{ai: ai}, nil)
-	if _, err := runner.completeAI(context.Background(), CompletionRequest{Phase: "sector_analysis", Prompt: "test"}); err == nil {
+	if _, err := runner.completeAI(context.Background(), sharedai.CompletionRequest{Phase: "sector_analysis", Prompt: "test"}); err == nil {
 		t.Fatal("expected provider error")
 	}
 	if len(ai.requests) != 1 {
@@ -694,7 +698,7 @@ func TestLifecycleDecisionRejectsUnapprovedAction(t *testing.T) {
 }
 
 func TestStockShortlistIsRestrictedToItsBatchAndValidatedName(t *testing.T) {
-	batch := []StockCandidate{{Code: "sh600000", Name: "浦发银行"}}
+	batch := []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}
 	result := shortlistForBatch([]recommendationRow{
 		{StockCode: "sz000001", StockName: "平安银行"},
 		{StockCode: "600000", StockName: "浦发银行"},
@@ -720,8 +724,8 @@ func TestAnalysisRunRepairsReportAndCreatesAtMostTwoIsolatedSessions(t *testing.
 	sector := `{"analysis":"板块","directions":["银行"],"candidates":[{"code":"600000","name":"甲"},{"code":"000001","name":"乙"},{"code":"300001","name":"丙"}]}`
 	stock := `{"analysis":"个股","shortlist":[{"stockName":"甲","stockCode":"sh600000","aiSummary":"A","mainRisk":"R1","sourceRefs":"S1"},{"stockName":"乙","stockCode":"sz000001","aiSummary":"B","mainRisk":"R2","sourceRefs":"S2"},{"stockName":"丙","stockCode":"sz300001","aiSummary":"C","mainRisk":"R3","sourceRefs":"S3"}]}`
 	repaired := "完成。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|甲|sh600000|A|R1|S1|\n|乙|sz000001|B|R2|S2|"
-	ai := &scriptedAI{results: []CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: "bad"}, {Content: repaired, ResponseID: "final-response", Model: "gpt-5.6-sol"}}}
-	quotes := &scriptedQuotes{quotes: []Quote{
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "大盘"}, {Content: sector}, {Content: stock}, {Content: "bad"}, {Content: repaired, ResponseID: "final-response", Model: "gpt-5.6-sol"}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{
 		{Code: "sh600000", Name: "甲", Market: "SH", Price: 10, At: now},
 		{Code: "sz000001", Name: "乙", Market: "SZ", Price: 12, At: now},
 	}}
@@ -777,8 +781,8 @@ func TestExperimentalEvidenceUsesRunWideIDsAndActualFreezeCutoff(t *testing.T) {
 	sector := `{"analysis":"板块","directions":["银行"],"candidates":[{"code":"600000","name":"浦发银行"}]}`
 	stock := `{"analysis":"个股","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"结构改善","mainRisk":"资金回落","sourceRefs":"S004"}]}`
 	final := "建议。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|结构改善|资金回落|S004|"
-	ai := &scriptedAI{results: []CompletionResult{{Content: "市场"}, {Content: sector}, {Content: stock}, {Content: final}}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "市场"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}}}
 	service := NewService(repo, ai, quotes, openCalendar{})
 	service.now = func() time.Time { return now }
 	runner := NewAnalysisRunner(service, cutoffEvidenceCollector{})
@@ -840,16 +844,16 @@ func TestExperimentalEvidenceUsesRunWideIDsAndActualFreezeCutoff(t *testing.T) {
 
 func TestThemeEvidenceStageHookDoesNotChangeLegacyOrStockFiltering(t *testing.T) {
 	now := time.Now()
-	legacy := []SourceDocument{{SourceName: "sector", Category: "sector", CollectedAt: now, Content: "legacy-sector"}}
+	legacy := []researchevidence.SourceDocument{{SourceName: "sector", Category: "sector", CollectedAt: now, Content: "legacy-sector"}}
 	before, _ := json.Marshal(filterSources(legacy, "sector"))
-	after, _ := json.Marshal(filterSources(append([]SourceDocument(nil), legacy...), "sector"))
+	after, _ := json.Marshal(filterSources(append([]researchevidence.SourceDocument(nil), legacy...), "sector"))
 	if !bytes.Equal(before, after) {
 		t.Fatalf("theme hook changed legacy sector bytes: before=%s after=%s", before, after)
 	}
 	sources := append(legacy,
-		SourceDocument{SourceID: "theme-snapshot:1", Category: "theme", Content: "theme"},
-		SourceDocument{SourceID: "theme-catalyst:1", Category: "catalyst", Content: "catalyst"},
-		SourceDocument{SourceID: "theme-catalyst:failed", Category: "catalyst", Error: "after cutoff"},
+		researchevidence.SourceDocument{SourceID: "theme-snapshot:1", Category: "theme", Content: "theme"},
+		researchevidence.SourceDocument{SourceID: "theme-catalyst:1", Category: "catalyst", Content: "catalyst"},
+		researchevidence.SourceDocument{SourceID: "theme-catalyst:failed", Category: "catalyst", Error: "after cutoff"},
 	)
 	if got := filterSources(sources, "sector"); len(got) != 4 {
 		t.Fatalf("sector stage did not receive theme/catalyst: %+v", got)
@@ -857,7 +861,7 @@ func TestThemeEvidenceStageHookDoesNotChangeLegacyOrStockFiltering(t *testing.T)
 	if got := filterSources(sources, "market"); len(got) != 0 {
 		t.Fatalf("market stage received theme/catalyst: %+v", got)
 	}
-	if got := filterSourcesForCandidates(sources, []StockCandidate{{Code: "sh600000", Name: "浦发银行"}}); len(got) != 0 {
+	if got := filterSourcesForCandidates(sources, []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}); len(got) != 0 {
 		t.Fatalf("theme/catalyst bypassed stock candidate filtering: %+v", got)
 	}
 }

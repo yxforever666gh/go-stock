@@ -13,6 +13,7 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/internal/marketquote"
 )
 
 const (
@@ -105,7 +106,7 @@ func (collector *ResearchLifecycleContextCollector) CollectLifecycleContext(ctx 
 	return draft, nil
 }
 
-func validateLifecycleQuoteFreshness(now time.Time, quote research.Quote) error {
+func validateLifecycleQuoteFreshness(now time.Time, quote marketquote.Quote) error {
 	if quote.Price <= 0 || quote.At.IsZero() {
 		return errors.New("实时行情缺少有效价格或时间")
 	}

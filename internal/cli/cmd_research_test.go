@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -52,5 +53,16 @@ func TestExecuteResearchOnceRunsSingleAnalysis(t *testing.T) {
 func TestResearchIsRecognizedAsCLICommand(t *testing.T) {
 	if !IsCommand("research") || !HasCommand([]string{"--db-path", "stock.db", "research", "run-once"}) {
 		t.Fatal("research command was not recognized")
+	}
+}
+
+func TestResearchRepairCommandsAreRetired(t *testing.T) {
+	for _, command := range []string{"repair-missed-cash", "repair-xd-sell", "repair-post-sell-buy"} {
+		t.Run(command, func(t *testing.T) {
+			err := runResearch([]string{command}, GlobalOptions{}, io.Discard, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "未知 research 子命令") {
+				t.Fatalf("error=%v", err)
+			}
+		})
 	}
 }

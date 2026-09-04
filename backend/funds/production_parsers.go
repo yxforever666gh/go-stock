@@ -13,7 +13,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 )
 
 var (
@@ -412,7 +412,7 @@ func parseTencentETFQuotes(body []byte) (map[string]ETFQuote, error) {
 		}
 		variable := strings.TrimSpace(line[:separator])
 		code := strings.TrimPrefix(strings.TrimPrefix(variable, "v_r_"), "v_")
-		canonical, ok := data.NormalizeETFCode(code)
+		canonical, ok := instruments.NormalizeETFCode(code)
 		if !ok {
 			continue
 		}
@@ -473,7 +473,7 @@ func parseSinaETFQuotes(body []byte) (map[string]ETFQuote, error) {
 		}
 		variable := strings.TrimSpace(line[:separator])
 		code := strings.TrimPrefix(variable, "var hq_str_")
-		canonical, ok := data.NormalizeETFCode(code)
+		canonical, ok := instruments.NormalizeETFCode(code)
 		if !ok {
 			continue
 		}
@@ -1045,24 +1045,24 @@ func canonicalETFCode(code, market string) (string, bool) {
 	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(code)), "sh") && !strings.HasPrefix(strings.ToLower(strings.TrimSpace(code)), "sz") {
 		code = prefix + strings.TrimSpace(code)
 	}
-	return data.NormalizeETFCode(code)
+	return instruments.NormalizeETFCode(code)
 }
 
 func canonicalETFFromUnknown(code string) (string, bool) {
-	if canonical, ok := data.NormalizeETFCode(code); ok {
+	if canonical, ok := instruments.NormalizeETFCode(code); ok {
 		return canonical, true
 	}
 	digits := strings.TrimSpace(code)
 	if len(digits) > 6 {
 		digits = digits[len(digits)-6:]
 	}
-	return data.NormalizeETFCode(digits)
+	return instruments.NormalizeETFCode(digits)
 }
 
 func identityCodeSet(identities []ETFIdentity) map[string]struct{} {
 	result := make(map[string]struct{}, len(identities))
 	for _, identity := range identities {
-		if code, ok := data.NormalizeETFCode(identity.Code); ok {
+		if code, ok := instruments.NormalizeETFCode(identity.Code); ok {
 			result[code] = struct{}{}
 		}
 	}

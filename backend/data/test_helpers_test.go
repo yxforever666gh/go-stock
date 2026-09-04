@@ -1,26 +1,56 @@
 package data
 
 import (
-	"os"
+	"fmt"
 	"testing"
 
 	"go-stock/backend/db"
-	"go-stock/internal/migrations"
+	"go-stock/backend/models"
 )
 
-func requireIntegration(t *testing.T) {
-	t.Helper()
-	if os.Getenv("GO_STOCK_RUN_INTEGRATION") != "1" {
-		t.Skip("integration test disabled")
-	}
-}
+type testSchema string
 
-func initDatabaseForTest(t *testing.T, path string) {
+const (
+	testSchemaSettings     testSchema = "settings"
+	testSchemaMinuteCache  testSchema = "minute-cache"
+	testSchemaChartCache   testSchema = "chart-cache"
+	testSchemaChartDrawing testSchema = "chart-drawing"
+	testSchemaMarketNews   testSchema = "market-news"
+)
+
+func initDatabaseForTest(t *testing.T, path string, schemas ...testSchema) {
 	t.Helper()
 	_ = db.Close()
-	db.Init(path)
-	if err := migrations.MigrateAll(db.Dao, db.MinuteDao); err != nil {
-		t.Fatal(err)
+	db.Dao = nil
+	db.MinuteDao = nil
+	db.InitSilent(path)
+	for _, schema := range schemas {
+		var err error
+		switch schema {
+		case testSchemaSettings:
+			err = db.Dao.AutoMigrate(&Settings{}, &AIConfig{})
+		case testSchemaMinuteCache:
+			err = db.MinuteDao.AutoMigrate(&minuteCacheDBBar{})
+		case testSchemaChartCache:
+			err = db.MinuteDao.AutoMigrate(&marketChartBarRow{})
+		case testSchemaChartDrawing:
+			err = installChartDrawingTestSchema()
+		case testSchemaMarketNews:
+			err = db.Dao.AutoMigrate(&Settings{}, &AIConfig{}, &models.Telegraph{}, &models.Tags{}, &models.TelegraphTags{})
+		default:
+			err = fmt.Errorf("unknown test schema %q", schema)
+		}
+		if err != nil {
+			t.Fatalf("install %s schema: %v", schema, err)
+		}
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	t.Cleanup(func() {
+		_ = db.Close()
+		db.Dao = nil
+		db.MinuteDao = nil
+	})
+}
+
+func installChartDrawingTestSchema() error {
+	return db.Dao.AutoMigrate(&chartDrawingDocumentRow{}, &chartDrawingRevisionRow{})
 }

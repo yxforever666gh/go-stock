@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"go-stock/internal/marketquote"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -187,7 +189,7 @@ func TestScheduledFundingRejectsStaleQuoteAndAcceptsPreviousTradingClose(t *test
 			if err := database.Create(&position).Error; err != nil {
 				t.Fatal(err)
 			}
-			service.quotes = &scriptedQuotes{quotes: []Quote{{Code: position.StockCode, Name: position.StockName, Market: "SH", Price: 20, At: testCase.quoteAt}}}
+			service.quotes = &scriptedQuotes{quotes: []marketquote.Quote{{Code: position.StockCode, Name: position.StockName, Market: "SH", Price: 20, At: testCase.quoteAt}}}
 			now := time.Date(2026, 8, 19, 9, 20, 0, 0, shanghaiLocation)
 			result, err := service.ProcessScheduledFunding(context.Background(), now)
 			if err != nil || !result.Applied {
@@ -216,14 +218,14 @@ type delayedAccountQuotes struct {
 	calls atomic.Int64
 }
 
-func (provider *delayedAccountQuotes) CurrentQuote(ctx context.Context, code string) (Quote, error) {
+func (provider *delayedAccountQuotes) CurrentQuote(ctx context.Context, code string) (marketquote.Quote, error) {
 	provider.calls.Add(1)
 	select {
 	case <-ctx.Done():
-		return Quote{}, ctx.Err()
+		return marketquote.Quote{}, ctx.Err()
 	case <-time.After(provider.delay):
 	}
-	return Quote{Code: code, Name: code, Market: "SH", Price: 10, At: time.Now()}, nil
+	return marketquote.Quote{Code: code, Name: code, Market: "SH", Price: 10, At: time.Now()}, nil
 }
 
 func TestAccountOverviewRefreshesTenHoldingsWithBoundedConcurrency(t *testing.T) {

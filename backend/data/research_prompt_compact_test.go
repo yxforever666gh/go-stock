@@ -6,12 +6,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go-stock/backend/models"
 )
 
 func TestCompactResearchDailyPromptKeepsNewestBarsAndReturns(t *testing.T) {
-	rows := make([]KLineData, 0, 61)
+	rows := make([]models.KLineData, 0, 61)
 	for index := 1; index <= 61; index++ {
-		rows = append(rows, KLineData{Day: fmt.Sprintf("2026-08-%02d", index), Open: fmt.Sprint(index), High: fmt.Sprint(index + 1), Low: fmt.Sprint(index - 1), Close: fmt.Sprint(index), Volume: "100"})
+		rows = append(rows, models.KLineData{Day: fmt.Sprintf("2026-08-%02d", index), Open: fmt.Sprint(index), High: fmt.Sprint(index + 1), Low: fmt.Sprint(index - 1), Close: fmt.Sprint(index), Volume: "100"})
 	}
 	content := compactResearchPromptValue("Sina日K sh600000", &rows)
 	if !json.Valid([]byte(content)) || !strings.Contains(content, `"asOf":"2026-08-61"`) || !strings.Contains(content, `"2026-08-60"`) {
@@ -56,7 +58,7 @@ func TestCompactResearchOptionalListsKeepNewestWholeRecords(t *testing.T) {
 }
 
 func TestCompactResearchRealtimeQuoteKeepsRequiredFields(t *testing.T) {
-	rows := []StockInfo{{Date: "2026-09-03", Time: "14:20:01", Code: "sh600000", Name: "Alpha", Price: "10.10", PreClose: "10.00", High: "10.20", Low: "9.90", Volume: "10000", Amount: "100500"}}
+	rows := []models.StockInfo{{Date: "2026-09-03", Time: "14:20:01", Code: "sh600000", Name: "Alpha", Price: "10.10", PreClose: "10.00", High: "10.20", Low: "9.90", Volume: "10000", Amount: "100500"}}
 	content := compactResearchPromptValue("Sina/Tencent实时行情 sh600000", &rows)
 	if !json.Valid([]byte(content)) || !strings.Contains(content, `"price":10.1`) || !strings.Contains(content, `"time":"14:20:01"`) || strings.Contains(content, "DeletedAt") {
 		t.Fatalf("realtime quote was not compacted safely: %s", content)
@@ -65,7 +67,7 @@ func TestCompactResearchRealtimeQuoteKeepsRequiredFields(t *testing.T) {
 
 func TestResearchDocumentRejectsStaleInternalRealtimeTimestamp(t *testing.T) {
 	now := time.Date(2026, 9, 3, 14, 20, 0, 0, shanghaiDataLocation())
-	rows := []StockInfo{{Date: "2026-09-03", Time: "14:15:00", Code: "sh600000", Name: "Alpha", Price: "10.10"}}
+	rows := []models.StockInfo{{Date: "2026-09-03", Time: "14:15:00", Code: "sh600000", Name: "Alpha", Price: "10.10"}}
 	document := researchDocument("Sina/Tencent实时行情 sh600000", "stock", now, &rows)
 	if document.Error == "" || !json.Valid([]byte(document.Content)) {
 		t.Fatalf("stale internal quote was not rejected structurally: %+v", document)

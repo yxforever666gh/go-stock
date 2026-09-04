@@ -8,9 +8,11 @@ import (
 	"testing"
 	"time"
 
+	aicontract "go-stock/backend/ai"
 	"go-stock/backend/knowledge"
-	"go-stock/backend/research"
 	"go-stock/backend/researchaudit"
+	"go-stock/internal/researchevidence"
+	"go-stock/internal/trading"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -20,7 +22,7 @@ import (
 type sequenceAI struct {
 	responses []string
 	calls     int
-	requests  []research.CompletionRequest
+	requests  []aicontract.CompletionRequest
 }
 
 type advancingAI struct {
@@ -32,35 +34,35 @@ type advancingAI struct {
 
 type multiAttemptAI struct{}
 
-func (multiAttemptAI) Complete(_ context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
+func (multiAttemptAI) Complete(_ context.Context, request aicontract.CompletionRequest) (aicontract.CompletionResult, error) {
 	if request.OnAttempt != nil {
 		started := time.Date(2026, 8, 27, 1, 55, 1, 0, time.UTC)
 		failedAt := started.Add(time.Second)
-		request.OnAttempt(research.ModelAttemptRecord{ID: "provider-attempt-1", Phase: request.Phase, ConfigID: 7, ProviderName: "primary", ModelName: "fixture", Attempt: 1, MaxAttempts: 2, StartedAt: started, CompletedAt: &failedAt, Status: "failed", ErrorCategory: "network_error", ErrorMessage: "connection reset", Retryable: true})
+		request.OnAttempt(aicontract.ModelAttemptRecord{ID: "provider-attempt-1", Phase: request.Phase, ConfigID: 7, ProviderName: "primary", ModelName: "fixture", Attempt: 1, MaxAttempts: 2, StartedAt: started, CompletedAt: &failedAt, Status: "failed", ErrorCategory: "network_error", ErrorMessage: "connection reset", Retryable: true})
 		succeededAt := failedAt.Add(time.Second)
-		request.OnAttempt(research.ModelAttemptRecord{ID: "provider-attempt-2", Phase: request.Phase, ConfigID: 7, ProviderName: "primary", ModelName: "fixture", Attempt: 2, MaxAttempts: 2, StartedAt: failedAt, CompletedAt: &succeededAt, Status: "success"})
+		request.OnAttempt(aicontract.ModelAttemptRecord{ID: "provider-attempt-2", Phase: request.Phase, ConfigID: 7, ProviderName: "primary", ModelName: "fixture", Attempt: 2, MaxAttempts: 2, StartedAt: failedAt, CompletedAt: &succeededAt, Status: "success"})
 	}
-	return research.CompletionResult{Content: `{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`, Model: "fixture"}, nil
+	return aicontract.CompletionResult{Content: `{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`, Model: "fixture"}, nil
 }
 
-func (a *advancingAI) Complete(_ context.Context, _ research.CompletionRequest) (research.CompletionResult, error) {
+func (a *advancingAI) Complete(_ context.Context, _ aicontract.CompletionRequest) (aicontract.CompletionResult, error) {
 	a.calls++
 	*a.current = a.advance
-	return research.CompletionResult{Content: a.response, Model: "test-model"}, nil
+	return aicontract.CompletionResult{Content: a.response, Model: "test-model"}, nil
 }
 
-func (a *sequenceAI) Complete(_ context.Context, request research.CompletionRequest) (research.CompletionResult, error) {
+func (a *sequenceAI) Complete(_ context.Context, request aicontract.CompletionRequest) (aicontract.CompletionResult, error) {
 	a.calls++
 	a.requests = append(a.requests, request)
 	if request.OnAttempt != nil {
 		now := time.Date(2026, 8, 27, 1, 56, a.calls, 0, time.UTC)
-		request.OnAttempt(research.ModelAttemptRecord{ID: fmt.Sprintf("attempt-%d", a.calls), Phase: request.Phase, ConfigID: 7, ProviderName: "fixture-provider", ModelName: "fixture-model", Attempt: 1, MaxAttempts: 1, StartedAt: now, CompletedAt: &now, Status: "success"})
+		request.OnAttempt(aicontract.ModelAttemptRecord{ID: fmt.Sprintf("attempt-%d", a.calls), Phase: request.Phase, ConfigID: 7, ProviderName: "fixture-provider", ModelName: "fixture-model", Attempt: 1, MaxAttempts: 1, StartedAt: now, CompletedAt: &now, Status: "success"})
 	}
 	index := a.calls - 1
 	if index >= len(a.responses) {
 		index = len(a.responses) - 1
 	}
-	return research.CompletionResult{Content: a.responses[index], Model: "test-model"}, nil
+	return aicontract.CompletionResult{Content: a.responses[index], Model: "test-model"}, nil
 }
 
 type fixtureKnowledgeRetriever struct {
@@ -312,7 +314,7 @@ func TestRunnerTakesSignalTimeAfterAllValidation(t *testing.T) {
 	started := time.Date(2026, 8, 27, 10, 3, 40, 0, loc)
 	validated := started.Add(4 * time.Second)
 	clockCalls := 0
-	runner := NewRunner(repository, &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}}, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+	runner := NewRunner(repository, &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}}, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time {
 		clockCalls++
 		if clockCalls >= 2 {
@@ -341,7 +343,7 @@ func TestRunnerCompletionImmediatelyBeforeAfternoonOpenTargets1300(t *testing.T)
 	current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
 	completed := time.Date(2026, 8, 27, 12, 59, 59, 0, loc)
 	ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return current }, nil)
 
 	run, err := runner.Run(context.Background(), scheduled)
@@ -362,7 +364,7 @@ func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 			repository := research2TestRepository(t)
 			current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
 			ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
-			runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+			runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
 			runner.ConfigureReplayClock(func() time.Time { return current }, nil)
 
 			run, err := runner.Run(context.Background(), scheduled)
@@ -410,8 +412,8 @@ func TestRunnerRepairsInvalidSourceRefsAndStoresOnlyStableIDs(t *testing.T) {
 	evidence := Evidence{
 		Prompt:           `{"sources":[{"sourceId":"market"},{"sourceId":"quote-sh600000"}]}`,
 		SourceStatusJSON: `[]`,
-		Candidates:       []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}},
-		Documents: []research.SourceDocument{
+		Candidates:       []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}},
+		Documents: []researchevidence.SourceDocument{
 			{SourceID: "market", SourceName: "市场宽度", Category: "market", AvailableAt: &available, CollectedAt: available, Content: `{"advances":3000}`},
 			{SourceID: "quote-sh600000", SourceName: "腾讯行情 sh600000", Category: "stock", AvailableAt: &available, CollectedAt: available, Content: "sh600000 quote"},
 		},
@@ -435,9 +437,9 @@ func TestRunnerRepairsInvalidSourceRefsAndStoresOnlyStableIDs(t *testing.T) {
 
 func TestSourceRefsRejectStaleEnvelopeEvenWhenItHasContent(t *testing.T) {
 	cutoff := time.Date(2026, 8, 27, 9, 50, 0, 0, shanghai())
-	document := research.SourceDocument{SourceID: "stale-market", SourceName: "stale", Category: "market", AvailableAt: &cutoff, CollectedAt: cutoff,
+	document := researchevidence.SourceDocument{SourceID: "stale-market", SourceName: "stale", Category: "market", AvailableAt: &cutoff, CollectedAt: cutoff,
 		Content: `{"status":"stale","data":{"advances":3000}}`}
-	warnings := validateRecommendationSourceRefs("sh600000", []string{"stale-market"}, []research.SourceDocument{document}, cutoff, []research.StockCandidate{{Code: "sh600000"}})
+	warnings := validateRecommendationSourceRefs("sh600000", []string{"stale-market"}, []researchevidence.SourceDocument{document}, cutoff, []researchevidence.StockCandidate{{Code: "sh600000"}})
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "非可用状态") {
 		t.Fatalf("warnings=%v", warnings)
 	}
@@ -545,7 +547,7 @@ func TestRunnerStoresScoreAbove50EvenWhenModelConclusionSaysStayOut(t *testing.T
 	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{
 		Prompt:           "测试证据",
 		SourceStatusJSON: "[]",
-		Candidates:       []research.StockCandidate{{Code: "sh600000", Name: "证据名称"}},
+		Candidates:       []researchevidence.StockCandidate{{Code: "sh600000", Name: "证据名称"}},
 	}}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 
@@ -575,7 +577,7 @@ func TestValidateRecommendationsRejectsStocksOutsideFrozenEvidence(t *testing.T)
 		{Code: "sh600000", Name: "模型名称", MarketScore: 15, SectorScore: 15, StockScore: 20, CatalystScore: 10, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
 		{Code: "sz000001", Name: "证据外股票", MarketScore: 15, SectorScore: 15, StockScore: 20, CatalystScore: 10, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
 	}
-	items, warnings := validateRecommendations("run", generated, generated, []research.StockCandidate{{Code: "sh600000", Name: "证据名称"}}, values)
+	items, warnings := validateRecommendations("run", generated, generated, []researchevidence.StockCandidate{{Code: "sh600000", Name: "证据名称"}}, values)
 	if len(items) != 1 || items[0].StockCode != "sh600000" || items[0].StockName != "证据名称" {
 		t.Fatalf("unexpected validated items: %+v", items)
 	}
@@ -787,7 +789,7 @@ func TestSellRetryRecoversTheExactTargetMinuteInsteadOfUsingCurrentQuote(t *test
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	buyCost := research.CalculateBuyCost(10, 100)
+	buyCost := trading.CalculateBuyCost(10, 100)
 	sellAt := now.Add(-3 * time.Minute)
 	if err := repository.RecordBuy(context.Background(), item.RecommendationID, Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now.AddDate(0, 0, -1), MarketPrice: 10, ExecutionPrice: buyCost.ExecutionPrice, Quantity: 100, Commission: buyCost.Commission, TransferFee: buyCost.TransferFee, SlippageAmount: buyCost.SlippageAmount, NetCashFlow: buyCost.NetCashFlow}, sellAt); err != nil {
 		t.Fatal(err)
@@ -825,7 +827,7 @@ func TestSellRecoveryStillRunsAfterMarketClose(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	buyCost := research.CalculateBuyCost(10, 100)
+	buyCost := trading.CalculateBuyCost(10, 100)
 	if err := repository.RecordBuy(context.Background(), item.RecommendationID, Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now.AddDate(0, 0, -1), MarketPrice: 10, ExecutionPrice: buyCost.ExecutionPrice, Quantity: 100, Commission: buyCost.Commission, TransferFee: buyCost.TransferFee, SlippageAmount: buyCost.SlippageAmount, NetCashFlow: buyCost.NetCashFlow}, targetSell); err != nil {
 		t.Fatal(err)
 	}

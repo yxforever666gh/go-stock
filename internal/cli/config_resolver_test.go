@@ -3,24 +3,8 @@ package cli
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
-
-	"go-stock/backend/data"
-	"go-stock/backend/db"
 )
-
-func initTestDB(t *testing.T) {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "stock.db")
-	db.Init(dbPath)
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.Dao.AutoMigrate(&data.Settings{}, &data.AIConfig{}); err != nil {
-		t.Fatalf("migrate failed: %v", err)
-	}
-	_ = db.Dao.Exec("DELETE FROM settings").Error
-	_ = db.Dao.Exec("DELETE FROM ai_config").Error
-}
 
 type fakeCommandAIClient struct{}
 
@@ -82,30 +66,37 @@ func TestResolveAIForCommandRejectsMissingResolver(t *testing.T) {
 	}
 }
 
+type fingerprintResolverFixture struct {
+	value string
+	err   error
+	calls int
+}
+
+func (f *fingerprintResolverFixture) ResolveFingerprint() (string, error) {
+	f.calls++
+	return f.value, f.err
+}
+
 func TestResolveFingerprint(t *testing.T) {
-	initTestDB(t)
-
-	got, err := ResolveFingerprint("from-flag")
+	resolver := &fingerprintResolverFixture{value: "from-settings"}
+	got, err := ResolveFingerprint("from-flag", resolver)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "from-flag" {
-		t.Fatalf("flag priority failed: %s", got)
+	if got != "from-flag" || resolver.calls != 0 {
+		t.Fatalf("flag priority failed: value=%s calls=%d", got, resolver.calls)
 	}
 
-	if err := db.Dao.Create(&data.Settings{QgqpBId: "from-db"}).Error; err != nil {
-		t.Fatalf("seed settings failed: %v", err)
-	}
-	got, err = ResolveFingerprint("")
+	got, err = ResolveFingerprint("", resolver)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "from-db" {
-		t.Fatalf("db fallback failed: %s", got)
+	if got != "from-settings" || resolver.calls != 1 {
+		t.Fatalf("settings fallback failed: value=%s calls=%d", got, resolver.calls)
 	}
 
-	_ = db.Dao.Exec("DELETE FROM settings").Error
-	_, err = ResolveFingerprint("")
+	resolver.value = ""
+	_, err = ResolveFingerprint("", resolver)
 	if err == nil {
 		t.Fatal("expected error when qgqp_b_id missing")
 	}

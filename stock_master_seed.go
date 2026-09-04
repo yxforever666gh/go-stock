@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"go-stock/backend/data"
 	"go-stock/backend/models"
+	"go-stock/backend/stocks"
 )
 
 var embeddedStockMasterSeedManifest = models.StockMasterSeedManifest{
@@ -14,8 +14,8 @@ var embeddedStockMasterSeedManifest = models.StockMasterSeedManifest{
 	SHA256:      "ee91ce3ae7f91238c24afa2817bc570f1f310683ef13b22424ddc69480502edb",
 }
 
-func embeddedDomesticStockMaster() ([]models.StockBasic, data.StockMasterRefreshResult, error) {
-	rows, result, err := data.DecodeStockMasterPayload(stocksBin)
+func embeddedDomesticStockMaster() ([]models.StockBasic, models.StockMasterRefreshResult, error) {
+	rows, result, err := stocks.DecodeStockMasterPayload(stocksBin)
 	if err != nil {
 		return nil, result, fmt.Errorf("embedded stock master seed: %w", err)
 	}

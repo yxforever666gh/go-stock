@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -42,20 +41,6 @@ func NewProductionCLIStorageAdmin(dbPath string, readOnly bool) (cliports.Storag
 	}
 	installSilentCLIStorageSessions()
 	return &cliStorageAdmin{main: db.Dao, minute: db.MinuteDao}, nil
-}
-
-func InitCLIStorageReadOnly(dataDir, dbPath string) (string, error) {
-	resolvedPath := resolveCLIStoragePath(dataDir, dbPath)
-	resolvedPath, err := db.InitReadOnly(resolvedPath)
-	if err != nil {
-		return "", err
-	}
-	if db.Dao == nil {
-		_ = db.Close()
-		return "", fmt.Errorf("main database must be initialized")
-	}
-	installSilentCLIStorageSessions()
-	return resolvedPath, nil
 }
 
 func installSilentCLIStorageSessions() {
@@ -150,14 +135,4 @@ func mapDatabaseStatus(status migrations.DatabaseStatus) cliports.DatabaseStatus
 		Records:         records,
 		QuickCheck:      status.QuickCheck,
 	}
-}
-
-func resolveCLIStoragePath(dataDir, dbPath string) string {
-	if value := strings.TrimSpace(dbPath); value != "" {
-		return value
-	}
-	if strings.TrimSpace(dataDir) == "" {
-		dataDir = "data"
-	}
-	return filepath.Join(dataDir, "stock.db")
 }

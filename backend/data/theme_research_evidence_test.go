@@ -5,16 +5,28 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"go-stock/backend/marketdata"
-	"go-stock/backend/research"
 	"go-stock/backend/research2"
+	"go-stock/backend/research2app"
 	"go-stock/backend/themes"
+	"go-stock/internal/researchevidence"
 )
+
+type themeResearch2EvidenceProvider struct {
+	evidence research2.Evidence
+}
+
+func (provider themeResearch2EvidenceProvider) Collect(context.Context, time.Time) (research2.Evidence, error) {
+	return provider.evidence, nil
+}
+
+func (provider themeResearch2EvidenceProvider) CollectWithExclusions(context.Context, time.Time, map[string]struct{}) (research2.Evidence, error) {
+	return provider.evidence, nil
+}
 
 type themeEvidenceReaderFixture struct {
 	calls    int
@@ -28,60 +40,9 @@ func (f *themeEvidenceReaderFixture) ResearchEvidence(_ context.Context, cutoff 
 	return f.envelope
 }
 
-type sourceCollectorFixture struct {
-	market     []research.SourceDocument
-	sectors    []research.SourceDocument
-	stocks     []research.SourceDocument
-	candidates []research.StockCandidate
-}
-
-func (f *sourceCollectorFixture) CollectMarket(context.Context, time.Time) ([]research.SourceDocument, error) {
-	return append([]research.SourceDocument(nil), f.market...), nil
-}
-func (f *sourceCollectorFixture) CollectSectors(context.Context, time.Time) ([]research.SourceDocument, error) {
-	return append([]research.SourceDocument(nil), f.sectors...), nil
-}
-func (f *sourceCollectorFixture) CollectStocks(_ context.Context, _ time.Time, candidates []research.StockCandidate) ([]research.SourceDocument, error) {
-	f.candidates = append([]research.StockCandidate(nil), candidates...)
-	return append([]research.SourceDocument(nil), f.stocks...), nil
-}
-
-func TestExperimentalEvidenceDisabledLeavesCorpusAndCandidatesByteIdentical(t *testing.T) {
+func TestNonExperimentalResearch2CutoffKeepsLegacyRule(t *testing.T) {
 	at := time.Date(2026, 8, 28, 9, 55, 0, 0, time.FixedZone("Asia/Shanghai", 8*60*60))
-	available := at.Add(-time.Minute)
-	base := &sourceCollectorFixture{
-		market:  []research.SourceDocument{{SourceID: "legacy-market", SourceName: "legacy", Category: "market", CollectedAt: available, Content: "legacy-market-bytes"}},
-		sectors: []research.SourceDocument{{SourceID: "legacy-sector", SourceName: "legacy", Category: "sector", CollectedAt: available, Content: "legacy-sector-bytes"}},
-		stocks:  []research.SourceDocument{{SourceID: "legacy-stock", SourceName: "legacy", Category: "stock", CollectedAt: available, Content: "legacy-stock-bytes"}},
-	}
-	reader := &themeEvidenceReaderFixture{}
-	collector := researchCollectorWithExperimentalEvidence(false, base, nil, reader)
-	if collector != base {
-		t.Fatal("disabled evidence did not preserve the original collector instance")
-	}
-	candidates := []research.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}
-	wantMarket, _ := json.Marshal(base.market)
-	wantSectors, _ := json.Marshal(base.sectors)
-	wantStocks, _ := json.Marshal(base.stocks)
-	market, marketErr := collector.CollectMarket(context.Background(), at)
-	sectors, sectorErr := collector.CollectSectors(context.Background(), at)
-	stocks, stockErr := collector.CollectStocks(context.Background(), at, candidates)
-	if marketErr != nil || sectorErr != nil || stockErr != nil {
-		t.Fatalf("disabled collector returned an error: %v %v %v", marketErr, sectorErr, stockErr)
-	}
-	gotMarket, _ := json.Marshal(market)
-	gotSectors, _ := json.Marshal(sectors)
-	gotStocks, _ := json.Marshal(stocks)
-	if !bytes.Equal(gotMarket, wantMarket) || !bytes.Equal(gotSectors, wantSectors) || !bytes.Equal(gotStocks, wantStocks) {
-		t.Fatalf("disabled evidence changed source bytes:\nmarket=%s\nsectors=%s\nstocks=%s", gotMarket, gotSectors, gotStocks)
-	}
-	if !reflect.DeepEqual(base.candidates, candidates) {
-		t.Fatalf("disabled evidence changed candidates: got=%+v want=%+v", base.candidates, candidates)
-	}
-	if reader.calls != 0 {
-		t.Fatalf("disabled evidence called the theme reader %d times", reader.calls)
-	}
-	late := research.SourceDocument{CollectedAt: at.Add(2 * time.Minute), Content: "late"}
+	late := researchevidence.SourceDocument{CollectedAt: at.Add(2 * time.Minute), Content: "late"}
 	legacyFrozen := research2DocumentAtCutoff(late, at, false)
 	if legacyFrozen.Content != "" || legacyFrozen.Error == "" || research2DocumentStatus(legacyFrozen, at, false) != "failed" {
 		t.Fatalf("disabled Research2 cutoff bytes/status changed: %+v status=%s", legacyFrozen, research2DocumentStatus(legacyFrozen, at, false))
@@ -123,7 +84,7 @@ func TestThemeResearchEvidenceUsesStrictInclusiveCutoffAndIndependentConflictCla
 		}},
 	}
 	documents := themeResearchEvidenceDocuments(envelope, cutoff)
-	byID := make(map[string]research.SourceDocument, len(documents))
+	byID := make(map[string]researchevidence.SourceDocument, len(documents))
 	for _, document := range documents {
 		byID[document.SourceID] = document
 	}
@@ -164,7 +125,7 @@ func TestResearch2ThemeEvidencePersistsAfterCutoffWithoutContentAndCannotRewrite
 	repository := research2EvidenceTestRepository(t)
 	cutoff := time.Date(2026, 8, 28, 9, 55, 0, 0, shanghaiDataLocation())
 	equal, future := cutoff, cutoff.Add(time.Nanosecond)
-	documents := []research.SourceDocument{
+	documents := []researchevidence.SourceDocument{
 		{SourceID: "theme-snapshot:equal", SourceName: "equal", Category: "theme", CollectedAt: cutoff.Add(time.Minute), AvailableAt: &equal, Content: "equal-content"},
 		{SourceID: "theme-catalyst:future", SourceName: "future", Category: "catalyst", CollectedAt: cutoff.Add(-time.Hour), AvailableAt: &future, Content: "future-secret"},
 		{SourceID: "theme-catalyst:null", SourceName: "null", Category: "catalyst", CollectedAt: cutoff.Add(-time.Hour), AvailableAt: nil, Content: "null-secret"},
@@ -172,12 +133,10 @@ func TestResearch2ThemeEvidencePersistsAfterCutoffWithoutContentAndCannotRewrite
 	for index := range documents {
 		documents[index] = research2DocumentAtCutoff(documents[index], cutoff, true)
 	}
-	collector := &Research2EvidenceCollector{
-		evidence: repository, evidenceProfile: researchThemeEvidenceProfile,
-		collectEvidence: func(context.Context, time.Time) (research2.Evidence, error) {
-			return research2.Evidence{Prompt: "fixture", SourceStatusJSON: "[]", Documents: documents}, nil
-		},
-	}
+	collector := research2app.NewDurableEvidenceCollector(
+		themeResearch2EvidenceProvider{evidence: research2.Evidence{Prompt: "fixture", SourceStatusJSON: "[]", Documents: documents}},
+		repository, researchThemeEvidenceProfile, buildResearch2EvidenceItem,
+	)
 	evidence, err := collector.CollectForRun(context.Background(), "theme-r2-run", cutoff)
 	if err != nil {
 		t.Fatal(err)

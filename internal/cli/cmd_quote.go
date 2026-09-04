@@ -7,10 +7,14 @@ import (
 	"io"
 	"strings"
 
-	"go-stock/internal/bootstrap"
+	"go-stock/backend/models"
 )
 
-func runQuote(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+type quoteService interface {
+	GetStockCodeRealTimeData(...string) (*[]models.StockInfo, error)
+}
+
+func runQuote(args []string, g GlobalOptions, stdout, stderr io.Writer, quotes quoteService) error {
 	_ = stderr
 	fs := flag.NewFlagSet("quote", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -29,11 +33,7 @@ func runQuote(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
 		return errors.New("请通过 --code 提供股票代码")
 	}
 
-	services, err := bootstrap.NewProductionServices()
-	if err != nil {
-		return err
-	}
-	items, err := services.Stock.GetStockCodeRealTimeData(code)
+	items, err := quotes.GetStockCodeRealTimeData(code)
 	if err != nil {
 		return err
 	}

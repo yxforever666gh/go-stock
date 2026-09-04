@@ -1,6 +1,10 @@
 package data
 
-import "time"
+import (
+	"time"
+
+	"go-stock/backend/instruments"
+)
 
 const (
 	ChartPeriod1Minute  = "1m"
@@ -20,7 +24,7 @@ const (
 )
 
 type ChartRequest struct {
-	Instrument InstrumentID
+	Instrument instruments.InstrumentID
 	Period     string
 	Adjustment string
 	From       time.Time
@@ -46,14 +50,14 @@ type ChartMissingInterval struct {
 }
 
 type ChartData struct {
-	Instrument       InstrumentID           `json:"instrument"`
-	Period           string                 `json:"period"`
-	Adjustment       string                 `json:"adjustment"`
-	Timezone         string                 `json:"timezone"`
-	RangeFrom        time.Time              `json:"rangeFrom"`
-	RangeTo          time.Time              `json:"rangeTo"`
-	Bars             []ChartBar             `json:"bars"`
-	MissingIntervals []ChartMissingInterval `json:"missingIntervals"`
+	Instrument       instruments.InstrumentID `json:"instrument"`
+	Period           string                   `json:"period"`
+	Adjustment       string                   `json:"adjustment"`
+	Timezone         string                   `json:"timezone"`
+	RangeFrom        time.Time                `json:"rangeFrom"`
+	RangeTo          time.Time                `json:"rangeTo"`
+	Bars             []ChartBar               `json:"bars"`
+	MissingIntervals []ChartMissingInterval   `json:"missingIntervals"`
 }
 
 type ChartDrawingPoint struct {
@@ -72,13 +76,13 @@ type ChartDrawing struct {
 }
 
 type ChartDrawingDocument struct {
-	Instrument InstrumentID   `json:"instrument"`
-	Period     string         `json:"period"`
-	Adjustment string         `json:"adjustment"`
-	Revision   int64          `json:"revision"`
-	Drawings   []ChartDrawing `json:"drawings"`
-	DeletedAt  *time.Time     `json:"deletedAt,omitempty"`
-	UpdatedAt  time.Time      `json:"updatedAt"`
+	Instrument instruments.InstrumentID `json:"instrument"`
+	Period     string                   `json:"period"`
+	Adjustment string                   `json:"adjustment"`
+	Revision   int64                    `json:"revision"`
+	Drawings   []ChartDrawing           `json:"drawings"`
+	DeletedAt  *time.Time               `json:"deletedAt,omitempty"`
+	UpdatedAt  time.Time                `json:"updatedAt"`
 }
 
 type ChartDrawingScope struct {

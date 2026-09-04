@@ -152,20 +152,3 @@ func TestAuctionDerivedSummary(t *testing.T) {
 		t.Fatalf("auction=%#v err=%v", result.Data, result.Err)
 	}
 }
-
-func TestNormalizeInstrumentID(t *testing.T) {
-	for _, test := range []struct{ code, kind, want string }{{"510300", "etf", "sh510300"}, {"159919", "etf", "sz159919"}, {"sh000300", "index", "sh000300"}, {"399001", "index", "sz399001"}, {"600000", "stock", "sh600000"}} {
-		got, ok := NormalizeInstrumentID(test.code, test.kind)
-		if !ok || got != test.want {
-			t.Fatalf("NormalizeInstrumentID(%q,%q)=%q,%v", test.code, test.kind, got, ok)
-		}
-	}
-	if _, ok := NormalizeInstrumentID("510300", "stock"); ok {
-		t.Fatal("ETF unexpectedly accepted as stock")
-	}
-	for _, invalid := range []string{"sh000300", "sz600000", "sh510300", "sz399001"} {
-		if _, ok := NormalizeInstrumentID(invalid, "stock"); ok {
-			t.Fatalf("non-stock or conflicting code %q unexpectedly accepted", invalid)
-		}
-	}
-}

@@ -15,7 +15,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode"
 
 	"github.com/gorilla/websocket"
 	log "go-stock/backend/logger"
@@ -281,33 +280,6 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
-}
-
-func sanitizeFilename(name string, ext string) string {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		name = "export" + ext
-	}
-	name = filepath.Base(name)
-	name = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
-			return -1
-		}
-		switch r {
-		case '<', '>', ':', '"', '/', '\\', '|', '?', '*':
-			return '_'
-		default:
-			return r
-		}
-	}, name)
-	name = strings.TrimSpace(name)
-	if name == "" || name == "." || name == ".." {
-		name = "export" + ext
-	}
-	if ext != "" && !strings.HasSuffix(strings.ToLower(name), strings.ToLower(ext)) {
-		name += ext
-	}
-	return name
 }
 
 func writeExport(w http.ResponseWriter, mode string, filename string, mime string, content []byte) {

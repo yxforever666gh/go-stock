@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"go-stock/internal/trading"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -86,7 +88,7 @@ func TestCashAdmissionAcrossTwoRepositoriesNeverOverspends(t *testing.T) {
 			switch {
 			case err == nil:
 				accepted++
-			case errors.Is(err, ErrInsufficientCash):
+			case errors.Is(err, trading.ErrInsufficientCash):
 				rejected++
 			default:
 				unexpected = append(unexpected, err)
@@ -122,7 +124,7 @@ func TestCapacityRequiresFullSlotAfterCapitalBuffer(t *testing.T) {
 	}
 	second := Recommendation{RecommendationID: "reserved-over", AnalysisRunID: "run", StockCode: "sh600001", StockName: "浦发银行", SignalAt: now, Status: "buy_pending", ReservedCash: 50000}
 	err = repo.CreateRecommendationWithinCapacity(context.Background(), &second, nil, &DecisionEvent{EventID: "reserved-over-event", RecommendationID: second.RecommendationID, DecisionType: "待买入", DecidedAt: now})
-	if !errors.Is(err, ErrInsufficientCash) {
+	if !errors.Is(err, trading.ErrInsufficientCash) {
 		t.Fatalf("err=%v, want ErrInsufficientCash", err)
 	}
 }

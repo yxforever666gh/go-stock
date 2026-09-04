@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"go-stock/internal/trading"
+
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -444,7 +446,7 @@ func storedAccountValuation(tx *gorm.DB) (SimulatedAccount, float64, string, err
 			status = "partial"
 			continue
 		}
-		value += CalculateSellCost(price, position.Quantity).NetCashFlow
+		value += trading.CalculateSellCost(price, position.Quantity).NetCashFlow
 	}
 	return account, value, status, nil
 }

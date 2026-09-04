@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"go-stock/backend/models"
 	"go-stock/backend/research"
 )
 
@@ -41,7 +42,7 @@ func compactResearchPromptValue(name string, value any) string {
 }
 
 func compactRealtimeQuote(value any) any {
-	rows, ok := value.(*[]StockInfo)
+	rows, ok := value.(*[]models.StockInfo)
 	if !ok || rows == nil {
 		return compactGenericPromptValue(value, 1)
 	}
@@ -70,11 +71,11 @@ func compactRealtimeQuote(value any) any {
 }
 
 func compactDailyKLine(value any) any {
-	rows, ok := value.(*[]KLineData)
+	rows, ok := value.(*[]models.KLineData)
 	if !ok || rows == nil {
 		return compactGenericPromptValue(value, 20)
 	}
-	ordered := append([]KLineData(nil), (*rows)...)
+	ordered := append([]models.KLineData(nil), (*rows)...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Day < ordered[j].Day })
 	result := map[string]any{"order": "newest_first", "barCount": len(ordered), "bars": []compactDailyBar{}}
 	if len(ordered) == 0 {
@@ -103,7 +104,7 @@ func compactDailyKLine(value any) any {
 	return result
 }
 
-func kLineReturn(rows []KLineData, horizon int) (float64, bool) {
+func kLineReturn(rows []models.KLineData, horizon int) (float64, bool) {
 	if len(rows) < 2 || horizon <= 0 {
 		return 0, false
 	}

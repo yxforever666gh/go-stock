@@ -1,6 +1,8 @@
 package data
 
 import (
+	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -47,6 +49,30 @@ func normalizeMinuteTime(t time.Time) time.Time {
 	return t.Truncate(time.Minute)
 }
 
+func toFloatAny(row []any, idx int) float64 {
+	if idx < 0 || idx >= len(row) {
+		return 0
+	}
+	switch value := row[idx].(type) {
+	case float64:
+		return value
+	case float32:
+		return float64(value)
+	case int:
+		return float64(value)
+	case int64:
+		return float64(value)
+	case json.Number:
+		parsed, _ := value.Float64()
+		return parsed
+	case string:
+		parsed, _ := strconv.ParseFloat(strings.TrimSpace(value), 64)
+		return parsed
+	default:
+		return 0
+	}
+}
+
 // minuteBarSourceProvesUnadjusted is intentionally allowlist-based so cached
 // raw execution prices cannot be confused with qfq/hfq observations.
 func minuteBarSourceProvesUnadjusted(source string) bool {
@@ -84,22 +110,6 @@ func minuteTimeFromMillis(ms int64) time.Time {
 		return time.Time{}
 	}
 	return time.UnixMilli(ms).In(cnLocation())
-}
-
-func listMinuteBarsFromCache(stockCode string, start, end time.Time) ([]minuteBar, error) {
-	code := strings.ToUpper(strings.TrimSpace(stockCode))
-	if code == "" {
-		return []minuteBar{}, nil
-	}
-	if start.After(end) {
-		return []minuteBar{}, nil
-	}
-
-	return listMinuteBarsFromMinuteDB(code, start, end)
-}
-
-func listMinuteBarsFromMinuteDB(code string, start, end time.Time) ([]minuteBar, error) {
-	return listMinuteBarsFromMinuteDatabase(db.MinuteDao, code, start, end)
 }
 
 func listMinuteBarsFromMinuteDatabase(database *gorm.DB, code string, start, end time.Time) ([]minuteBar, error) {
@@ -212,172 +222,4 @@ func upsertMinuteBarsToMinuteDB(rows []minuteCacheDBBar) error {
 			"updated_at": gorm.Expr("excluded.updated_at"),
 		}),
 	}).CreateInBatches(dbRows, 800).Error
-}
-
-func getMinuteCacheRange(stockCode string) (*time.Time, *time.Time, error) {
-	code := strings.ToUpper(strings.TrimSpace(stockCode))
-	if code == "" {
-		return nil, nil, nil
-	}
-
-	minuteStart, minuteEnd, found, err := getMinuteCacheRangeFromMinuteDB(code)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !found {
-		return nil, nil, nil
-	}
-	return minuteStart, minuteEnd, nil
-}
-
-func getMinuteCacheRangeFromMinuteDB(code string) (*time.Time, *time.Time, bool, error) {
-	if db.MinuteDao == nil {
-		return nil, nil, false, nil
-	}
-	type scopeRow struct {
-		Start *int64 `gorm:"column:start_time"`
-		End   *int64 `gorm:"column:end_time"`
-	}
-	row := scopeRow{}
-	err := db.MinuteDao.Model(&minuteCacheDBBar{}).
-		Select("MIN(trade_time) AS start_time, MAX(trade_time) AS end_time").
-		Where("stock_code = ?", code).
-		Scan(&row).Error
-	if err != nil {
-		return nil, nil, false, err
-	}
-	if row.Start == nil || row.End == nil {
-		return nil, nil, false, nil
-	}
-	start := minuteTimeFromMillis(*row.Start)
-	end := minuteTimeFromMillis(*row.End)
-	return &start, &end, true, nil
-}
-
-type minuteCacheRange struct {
-	Start *time.Time
-	End   *time.Time
-}
-
-func loadMinuteCacheRangeMap() (map[string]minuteCacheRange, error) {
-	return loadMinuteCacheRangeMapByCodes(nil)
-}
-
-func loadMinuteCacheRangeMapByCodes(codes []string) (map[string]minuteCacheRange, error) {
-	normalizedCodes := make([]string, 0, len(codes))
-	seen := make(map[string]struct{}, len(codes))
-	for _, code := range codes {
-		normalized := strings.ToUpper(strings.TrimSpace(code))
-		if normalized == "" {
-			continue
-		}
-		if _, ok := seen[normalized]; ok {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		normalizedCodes = append(normalizedCodes, normalized)
-	}
-
-	return loadMinuteCacheRangeMapFromMinuteDB(normalizedCodes)
-}
-
-func loadMinuteCacheRangeMapFromMinuteDB(normalizedCodes []string) (map[string]minuteCacheRange, error) {
-	type row struct {
-		StockCode string `gorm:"column:stock_code"`
-		Start     *int64 `gorm:"column:start_time"`
-		End       *int64 `gorm:"column:end_time"`
-	}
-	out := make(map[string]minuteCacheRange)
-	if db.MinuteDao == nil {
-		return out, nil
-	}
-	rows := make([]row, 0)
-	q := db.MinuteDao.Model(&minuteCacheDBBar{})
-	if len(normalizedCodes) > 0 {
-		q = q.Where("stock_code IN ?", normalizedCodes)
-	}
-	err := q.
-		Select("stock_code, MIN(trade_time) AS start_time, MAX(trade_time) AS end_time").
-		Group("stock_code").
-		Scan(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range rows {
-		code := strings.ToUpper(strings.TrimSpace(r.StockCode))
-		if code == "" || r.Start == nil || r.End == nil {
-			continue
-		}
-		start := minuteTimeFromMillis(*r.Start)
-		end := minuteTimeFromMillis(*r.End)
-		if start.IsZero() || end.IsZero() {
-			continue
-		}
-		out[code] = minuteCacheRange{Start: &start, End: &end}
-	}
-	return out, nil
-}
-
-func missingMinuteCacheRangeCodes(normalizedCodes []string, existing map[string]minuteCacheRange) []string {
-	if len(normalizedCodes) == 0 {
-		return nil
-	}
-	missing := make([]string, 0, len(normalizedCodes))
-	for _, code := range normalizedCodes {
-		if _, ok := existing[code]; ok {
-			continue
-		}
-		missing = append(missing, code)
-	}
-	return missing
-}
-
-func deleteMinuteBarsCache(stockCode string) error {
-	code := strings.ToUpper(strings.TrimSpace(stockCode))
-	if code == "" {
-		return nil
-	}
-	if db.MinuteDao != nil {
-		if err := db.MinuteDao.Where("stock_code = ?", code).Delete(&minuteCacheDBBar{}).Error; err != nil {
-			return err
-		}
-	}
-	clearMinuteCoverageStatsCache()
-	return nil
-}
-
-func cleanMinuteCacheForTrackedCodes(codes []string) error {
-	if len(codes) == 0 {
-		if db.MinuteDao != nil {
-			if err := db.MinuteDao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&minuteCacheDBBar{}).Error; err != nil {
-				return err
-			}
-		}
-		clearMinuteCoverageStatsCache()
-		return nil
-	}
-	normalized := make([]string, 0, len(codes))
-	for _, code := range codes {
-		c := strings.ToUpper(strings.TrimSpace(code))
-		if c == "" {
-			continue
-		}
-		normalized = append(normalized, c)
-	}
-	if len(normalized) == 0 {
-		if db.MinuteDao != nil {
-			if err := db.MinuteDao.Session(&gorm.Session{AllowGlobalUpdate: true}).Delete(&minuteCacheDBBar{}).Error; err != nil {
-				return err
-			}
-		}
-		clearMinuteCoverageStatsCache()
-		return nil
-	}
-	if db.MinuteDao != nil {
-		if err := db.MinuteDao.Where("stock_code NOT IN ?", normalized).Delete(&minuteCacheDBBar{}).Error; err != nil {
-			return err
-		}
-	}
-	clearMinuteCoverageStatsCache()
-	return nil
 }

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"go-stock/backend/instruments"
 )
 
 type fixtureChartProvider struct {
@@ -27,9 +29,9 @@ func (p fixtureChartProvider) Fetch(_ context.Context, request ChartRequest) cha
 }
 
 func TestChartServiceFallbackAndCacheAdjustmentIsolation(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-service.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-service.db"), testSchemaChartCache)
 	now := time.Date(2026, 8, 28, 16, 0, 0, 0, cnLocation())
-	instrument, _ := ParseInstrumentID("159915", "etf", "SZ")
+	instrument, _ := instruments.ParseInstrumentID("159915", "etf", "SZ")
 	request := ChartRequest{Instrument: instrument, Period: ChartPeriodDay, Adjustment: ChartAdjustmentNone,
 		From: now.AddDate(0, 0, -2), To: now, Limit: 20}
 	barAt := time.Date(2026, 8, 28, 0, 0, 0, 0, cnLocation())
@@ -62,7 +64,7 @@ func TestChartServiceFallbackAndCacheAdjustmentIsolation(t *testing.T) {
 
 func TestAdjustedMinuteBarsUseVerifiedDailyRatioWithoutChangingVolume(t *testing.T) {
 	now := time.Date(2026, 8, 28, 10, 0, 0, 0, cnLocation())
-	instrument, _ := ParseInstrumentID("600000", "stock", "SH")
+	instrument, _ := instruments.ParseInstrumentID("600000", "stock", "SH")
 	service := &ChartService{now: func() time.Time { return now }}
 	service.providerFactory = func(request ChartRequest) []chartBarProvider {
 		price := 10.0
@@ -84,12 +86,12 @@ func TestAdjustedMinuteBarsUseVerifiedDailyRatioWithoutChangingVolume(t *testing
 }
 
 func TestChartServiceContinuesFallbackUntilMultiDayRangeIsCovered(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-range-fallback.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-range-fallback.db"), testSchemaChartCache)
 	loc := cnLocation()
 	thursday := time.Date(2026, 8, 27, 0, 0, 0, 0, loc)
 	friday := thursday.AddDate(0, 0, 1)
 	monday := thursday.AddDate(0, 0, 4)
-	instrument, _ := ParseInstrumentID("159915", "etf", "SZ")
+	instrument, _ := instruments.ParseInstrumentID("159915", "etf", "SZ")
 	request := ChartRequest{Instrument: instrument, Period: ChartPeriodDay, Adjustment: ChartAdjustmentNone, From: thursday, To: monday, Limit: 10}
 	primaryCalls, fallbackCalls := 0, 0
 	service := NewChartService()
@@ -113,12 +115,12 @@ func TestChartServiceContinuesFallbackUntilMultiDayRangeIsCovered(t *testing.T) 
 }
 
 func TestChartServiceMarksRangePartialWhenAllSourcesRemainIncomplete(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-range-partial.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-range-partial.db"), testSchemaChartCache)
 	loc := cnLocation()
 	thursday := time.Date(2026, 8, 27, 0, 0, 0, 0, loc)
 	friday := thursday.AddDate(0, 0, 1)
 	monday := thursday.AddDate(0, 0, 4)
-	instrument, _ := ParseInstrumentID("159915", "etf", "SZ")
+	instrument, _ := instruments.ParseInstrumentID("159915", "etf", "SZ")
 	request := ChartRequest{Instrument: instrument, Period: ChartPeriodDay, Adjustment: ChartAdjustmentNone, From: thursday, To: monday, Limit: 10}
 	service := NewChartService()
 	service.now = func() time.Time { return monday.Add(16 * time.Hour) }
@@ -140,11 +142,11 @@ func TestChartServiceMarksRangePartialWhenAllSourcesRemainIncomplete(t *testing.
 }
 
 func TestChartServiceExpandsLongPeriodProviderLimit(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-long-limit.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-long-limit.db"), testSchemaChartCache)
 	loc := cnLocation()
 	from := time.Date(2026, 8, 1, 0, 0, 0, 0, loc)
 	to := time.Date(2026, 8, 31, 0, 0, 0, 0, loc)
-	instrument, _ := ParseInstrumentID("159915", "etf", "SZ")
+	instrument, _ := instruments.ParseInstrumentID("159915", "etf", "SZ")
 	request := ChartRequest{Instrument: instrument, Period: ChartPeriodMonth, Adjustment: ChartAdjustmentNone, From: from, To: to, Limit: 100}
 	requests := make([]ChartRequest, 0)
 	service := NewChartService()

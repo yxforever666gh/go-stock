@@ -5,6 +5,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"go-stock/internal/researchevidence"
+	"go-stock/internal/trading"
 )
 
 const (
@@ -40,7 +43,7 @@ type compactStockPromptBatch struct {
 // source corpus by bytes. Mandatory quote/K-line payloads are packed first;
 // optional payloads are admitted only while the per-candidate budget holds.
 // Source metadata remains present even when an optional payload is omitted.
-func stockSourceCorpus(sources []SourceDocument, candidates []StockCandidate, maxBytes, candidateMaxBytes int) string {
+func stockSourceCorpus(sources []researchevidence.SourceDocument, candidates []researchevidence.StockCandidate, maxBytes, candidateMaxBytes int) string {
 	if maxBytes <= 0 {
 		maxBytes = defaultStockBatchPromptBytes
 	}
@@ -71,9 +74,9 @@ func stockSourceCorpus(sources []SourceDocument, candidates []StockCandidate, ma
 	return string(encoded)
 }
 
-func compactCandidateSources(candidate StockCandidate, sources []SourceDocument, maxBytes int) json.RawMessage {
-	matched := make([]SourceDocument, 0, 10)
-	code, _ := NormalizeMainlandCode(candidate.Code)
+func compactCandidateSources(candidate researchevidence.StockCandidate, sources []researchevidence.SourceDocument, maxBytes int) json.RawMessage {
+	matched := make([]researchevidence.SourceDocument, 0, 10)
+	code, _ := trading.NormalizeMainlandCode(candidate.Code)
 	digits := strings.TrimPrefix(strings.TrimPrefix(code, "sh"), "sz")
 	for _, source := range sources {
 		name := strings.ToLower(source.SourceName)

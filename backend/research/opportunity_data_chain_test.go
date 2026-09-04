@@ -5,6 +5,10 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	sharedai "go-stock/backend/ai"
+	"go-stock/internal/marketquote"
+	"go-stock/internal/researchevidence"
 )
 
 type failAtCalendar struct{ at time.Time }
@@ -18,7 +22,7 @@ func (calendar failAtCalendar) IsTradingDay(_ context.Context, value time.Time) 
 
 func TestClassifyDecisionQuoteEnforcesIdentityAndPointInTimeFreshness(t *testing.T) {
 	now := time.Date(2026, 9, 3, 10, 0, 0, 0, shanghaiLocation)
-	valid := Quote{Code: "sh600000", Name: "Alpha", Price: 10, At: now.Add(-time.Minute)}
+	valid := marketquote.Quote{Code: "sh600000", Name: "Alpha", Price: 10, At: now.Add(-time.Minute)}
 	if got := classifyDecisionQuote(now, "sh600000", "Alpha", valid, nil); got.status != "ok" {
 		t.Fatalf("valid quote=%+v", got)
 	}
@@ -37,7 +41,7 @@ func TestClassifyDecisionQuoteEnforcesIdentityAndPointInTimeFreshness(t *testing
 	if got := classifyDecisionQuote(now, "sh600000", "Alpha", wrong, nil); got.status != "invalid" {
 		t.Fatalf("wrong quote=%+v", got)
 	}
-	if got := classifyDecisionQuote(now, "sh600000", "Alpha", Quote{}, errors.New("down")); got.status != "unavailable" {
+	if got := classifyDecisionQuote(now, "sh600000", "Alpha", marketquote.Quote{}, errors.New("down")); got.status != "unavailable" {
 		t.Fatalf("unavailable quote=%+v", got)
 	}
 }
@@ -45,7 +49,7 @@ func TestClassifyDecisionQuoteEnforcesIdentityAndPointInTimeFreshness(t *testing
 func TestStockPromptRevalidatesInternalMarketTimeAtStageBoundary(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 14, 20, 0, 0, shanghaiLocation)
 	available := cutoff
-	sources := []SourceDocument{{SourceID: "S1", SourceName: "Tencent分钟K sh600000", CollectedAt: cutoff.Add(-4 * time.Minute), AvailableAt: &available,
+	sources := []researchevidence.SourceDocument{{SourceID: "S1", SourceName: "Tencent分钟K sh600000", CollectedAt: cutoff.Add(-4 * time.Minute), AvailableAt: &available,
 		Content: `{"asOf":"2026-09-03T14:16:00+08:00"}`, PromptContent: `{"asOf":"2026-09-03T14:16:00+08:00"}`}}
 	filtered := sourcesAvailableAtCutoff(sources, cutoff, false)
 	if len(filtered) != 1 || filtered[0].Error == "" || filtered[0].PromptContent != "" {
@@ -72,7 +76,7 @@ func TestImmediateQuoteCannotBecomeAnOvernightPendingBuy(t *testing.T) {
 	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 	recommendation := Recommendation{RecommendationID: "after-close", AnalysisRunID: "run", StockCode: "sh600000", StockName: "Alpha", SignalAt: now}
-	quote := Quote{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 10, At: now}
+	quote := marketquote.Quote{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 10, At: now}
 	if err := service.EnqueueRecommendation(context.Background(), &recommendation, nil, quote); !errors.Is(err, ErrExecutionWindowClosed) {
 		t.Fatalf("after-close immediate admission error=%v", err)
 	}
@@ -89,7 +93,7 @@ func TestEventAdmissionHonorsCapitalDeploymentDeadlineInsideTradingSession(t *te
 	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, openCalendar{})
 	service.now = func() time.Time { return now }
 	recommendation := Recommendation{RecommendationID: "after-policy-cutoff", AnalysisRunID: "run", StockCode: "sh600000", StockName: "Alpha", SignalAt: decisionAt}
-	quote := Quote{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 10, At: decisionAt}
+	quote := marketquote.Quote{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 10, At: decisionAt}
 	err := service.EnqueueRecommendationBefore(context.Background(), &recommendation, nil, capitalDeploymentWindowDeadline(decisionAt), quote)
 	if !errors.Is(err, ErrExecutionWindowClosed) {
 		t.Fatalf("post-cutoff event admission error=%v", err)
@@ -125,8 +129,8 @@ func TestWaitOutsideRangeAndBuyOutsideRangeRemainReanalysisCandidates(t *testing
 	sector := `{"analysis":"sector","directions":["bank"],"candidates":[{"code":"sh600000","name":"Alpha"},{"code":"sz000001","name":"Bravo"}]}`
 	stock := `{"analysis":"stocks","shortlist":[{"stockName":"Alpha","stockCode":"sh600000","aiSummary":"A","mainRisk":"R","sourceRefs":"S1"},{"stockName":"Bravo","stockCode":"sz000001","aiSummary":"B","mainRisk":"R","sourceRefs":"S2"}]}`
 	final := `{"analysis":"wait","opportunities":[{"action":"wait","stockName":"Alpha","stockCode":"sh600000","priceLow":9,"priceHigh":10,"aiSummary":"A","timingReason":"pullback","mainRisk":"R","sourceRefs":"S1"},{"action":"buy_now","stockName":"Bravo","stockCode":"sz000001","priceLow":9,"priceHigh":10,"aiSummary":"B","timingReason":"breakout","mainRisk":"R","sourceRefs":"S2"}]}`
-	ai := &scriptedAI{results: []CompletionResult{{Content: "market"}, {Content: sector}, {Content: stock}, {Content: final}}}
-	quotes := &scriptedQuotes{quotes: []Quote{
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "market"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{
 		{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 12, At: now},
 		{Code: "sz000001", Name: "Bravo", Market: "SZ", Price: 12, At: now},
 	}}
@@ -171,7 +175,7 @@ func TestFailedSuccessorKeepsWaitAndSuccessfulSuccessorSupersedesIt(t *testing.T
 	sector := `{"analysis":"none","directions":[],"candidates":[]}`
 	stock := `{"analysis":"old wait invalid","shortlist":[]}`
 	final := `{"analysis":"no buy","opportunities":[]}`
-	successAI := &scriptedAI{results: []CompletionResult{{Content: "market"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	successAI := &scriptedAI{results: []sharedai.CompletionResult{{Content: "market"}, {Content: sector}, {Content: stock}, {Content: final}}}
 	successService := NewService(repo, successAI, &scriptedQuotes{}, openCalendar{})
 	successService.now = func() time.Time { return now.Add(time.Minute) }
 	run, err := NewAnalysisRunner(successService, fixedCollector{}).Run(context.Background(), AnalysisRequest{Mode: AnalysisModeEvent})
@@ -193,7 +197,7 @@ func TestSoftFailedStockBatchDoesNotSupersedeUnreviewedWait(t *testing.T) {
 		t.Fatal(err)
 	}
 	ai := &scriptedAI{
-		results: []CompletionResult{{Content: "market"}, {Content: `{"analysis":"none","directions":[],"candidates":[]}`}, {}, {Content: `{"analysis":"no buy","opportunities":[]}`}},
+		results: []sharedai.CompletionResult{{Content: "market"}, {Content: `{"analysis":"none","directions":[],"candidates":[]}`}, {}, {Content: `{"analysis":"no buy","opportunities":[]}`}},
 		errors:  []error{nil, nil, errors.New("stock model down"), nil},
 	}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{})
@@ -214,8 +218,8 @@ func TestExecutionFailureAfterBuyPersistsPartialSuccessInsteadOfFailedRun(t *tes
 	sector := `{"analysis":"sector","directions":["bank"],"candidates":[{"code":"sh600000","name":"Alpha"},{"code":"sz000001","name":"Bravo"}]}`
 	stock := `{"analysis":"stocks","shortlist":[{"stockName":"Alpha","stockCode":"sh600000","aiSummary":"A","mainRisk":"R","sourceRefs":"S1"},{"stockName":"Bravo","stockCode":"sz000001","aiSummary":"B","mainRisk":"R","sourceRefs":"S2"}]}`
 	final := `{"analysis":"mixed","opportunities":[{"action":"buy_now","stockName":"Alpha","stockCode":"sh600000","priceLow":9,"priceHigh":11,"aiSummary":"A","timingReason":"now","mainRisk":"R","sourceRefs":"S1"},{"action":"wait","stockName":"Bravo","stockCode":"sz000001","priceLow":9,"priceHigh":11,"aiSummary":"B","timingReason":"later","mainRisk":"R","sourceRefs":"S2"}]}`
-	ai := &scriptedAI{results: []CompletionResult{{Content: "market"}, {Content: sector}, {Content: stock}, {Content: final}}}
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 10, At: now}, {Code: "sz000001", Name: "Bravo", Market: "SZ", Price: 10, At: now}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: "market"}, {Content: sector}, {Content: stock}, {Content: final}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "Alpha", Market: "SH", Price: 10, At: now}, {Code: "sz000001", Name: "Bravo", Market: "SZ", Price: 10, At: now}}}
 	calendar := failAtCalendar{at: now.Add(30 * time.Minute)}
 	service := NewService(repo, ai, quotes, calendar)
 	service.now = func() time.Time { return now }

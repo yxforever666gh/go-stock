@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 
 	"github.com/stretchr/testify/assert"
@@ -65,12 +65,12 @@ func (p *stubFundamentalsProvider) FetchETFFundamentals(_ context.Context, value
 }
 
 type stubChartProvider struct {
-	result marketdata.ProviderResult[data.InstrumentID]
+	result marketdata.ProviderResult[instruments.InstrumentID]
 	calls  int
 }
 
 func (p *stubChartProvider) Name() string { return "unified-chart" }
-func (p *stubChartProvider) ResolveETFChart(context.Context, ETFIdentity) marketdata.ProviderResult[data.InstrumentID] {
+func (p *stubChartProvider) ResolveETFChart(context.Context, ETFIdentity) marketdata.ProviderResult[instruments.InstrumentID] {
 	p.calls++
 	return p.result
 }
@@ -190,8 +190,8 @@ func TestETFDetailCutAcrossProvidersAndChartInstrument(t *testing.T) {
 		Data: map[string]ETFFundamentals{"510300": {Code: "510300", NAV: fp(3.9), NAVDate: "2026-08-27", Shares: fp(250), Scale: fp(1000),
 			Holdings: []ETFHolding{{Code: "600519", Name: "贵州茅台", Weight: fp(5), AsOf: "2026/06/30"},
 				{Code: "600519", Name: "duplicate", Weight: fp(4)}, {Code: "601318", Name: "中国平安", Weight: fp(3), AsOf: "20260630"}}}}}}
-	chart := &stubChartProvider{result: marketdata.ProviderResult[data.InstrumentID]{Status: marketdata.StatusOK,
-		Data: data.InstrumentID{AssetType: "etf", Market: "SH", Code: "sh510300"}}}
+	chart := &stubChartProvider{result: marketdata.ProviderResult[instruments.InstrumentID]{Status: marketdata.StatusOK,
+		Data: instruments.InstrumentID{AssetType: "etf", Market: "SH", Code: "sh510300"}}}
 	service := NewService(nil, nil, identity, []ETFQuoteProvider{quote}, fund, nil, chart)
 
 	response := service.ETFDetail(context.Background(), "sh510300")

@@ -1,0 +1,6 @@
+# Large or generated reference data; pass an explicit path when it is needed.
+backend/data/words.txt
+build/*.json
+
+# External prompt references are not part of the application runtime.
+LLM_prompt_for_A_share/

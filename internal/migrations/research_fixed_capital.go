@@ -10,6 +10,7 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/internal/trading"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -208,7 +209,7 @@ func restoreFixedCapitalHistoricalBuy(tx *gorm.DB) error {
 		return err
 	}
 	if account.Cash+1e-8 < -cost.NetCashFlow {
-		return research.ErrInsufficientCash
+		return trading.ErrInsufficientCash
 	}
 	var closeSnapshot research.AccountValuationSnapshot
 	if err := tx.Where("snapshot_id = ?", "daily-close-2026-08-24").First(&closeSnapshot).Error; err != nil {
@@ -265,9 +266,9 @@ func restoreFixedCapitalHistoricalBuy(tx *gorm.DB) error {
 		return result.Error
 	}
 	if result.RowsAffected != 1 {
-		return research.ErrInsufficientCash
+		return trading.ErrInsufficientCash
 	}
-	closeValue := research.CalculateSellCost(fixedCapitalClosePrice, quantity).NetCashFlow
+	closeValue := trading.CalculateSellCost(fixedCapitalClosePrice, quantity).NetCashFlow
 	closeCash := closeSnapshot.Cash + cost.NetCashFlow
 	closePositionValue := closeSnapshot.PositionValue + closeValue
 	closeNAV := closeCash + closePositionValue
@@ -294,33 +295,33 @@ func restoreFixedCapitalHistoricalBuy(tx *gorm.DB) error {
 // published App 1.7.7 correction. Runtime SizeBuy intentionally gained a
 // 50,000-yuan per-order cap in App 2.7.0 and must not change old migration
 // output.
-func sizeFixedCapitalHistoricalBuy(code string, marketPrice, availableCash float64) (int64, research.CostBreakdown, error) {
-	lot, err := research.LotSize(code)
+func sizeFixedCapitalHistoricalBuy(code string, marketPrice, availableCash float64) (int64, trading.CostBreakdown, error) {
+	lot, err := trading.LotSize(code)
 	if err != nil {
-		return 0, research.CostBreakdown{}, err
+		return 0, trading.CostBreakdown{}, err
 	}
 	if availableCash <= 0 || marketPrice <= 0 {
-		return 0, research.CostBreakdown{}, research.ErrInsufficientCash
+		return 0, trading.CostBreakdown{}, trading.ErrInsufficientCash
 	}
 	const historicalTargetCashPerTrade = 50000.0
 	quantity := lot
-	cost := research.CalculateBuyCost(marketPrice, quantity)
+	cost := trading.CalculateBuyCost(marketPrice, quantity)
 	for -cost.NetCashFlow <= historicalTargetCashPerTrade {
 		quantity += lot
-		cost = research.CalculateBuyCost(marketPrice, quantity)
+		cost = trading.CalculateBuyCost(marketPrice, quantity)
 	}
 	if -cost.NetCashFlow <= availableCash+1e-8 {
 		return quantity, cost, nil
 	}
-	maxQuantity := int64(math.Floor(availableCash/(marketPrice*(1+research.SlippageRate))/float64(lot))) * lot
+	maxQuantity := int64(math.Floor(availableCash/(marketPrice*(1+trading.SlippageRate))/float64(lot))) * lot
 	for maxQuantity >= lot {
-		cost = research.CalculateBuyCost(marketPrice, maxQuantity)
+		cost = trading.CalculateBuyCost(marketPrice, maxQuantity)
 		if -cost.NetCashFlow <= availableCash+1e-8 {
 			return maxQuantity, cost, nil
 		}
 		maxQuantity -= lot
 	}
-	return 0, research.CostBreakdown{}, research.ErrMinimumOrder
+	return 0, trading.CostBreakdown{}, trading.ErrMinimumOrder
 }
 
 func fixedCapitalNextCheckAt(tx *gorm.DB) time.Time {

@@ -3,11 +3,13 @@ package data
 import (
 	"testing"
 	"time"
+
+	"go-stock/backend/instruments"
 )
 
 func TestNormalizeChartRequestDefaultsAndInstrumentRules(t *testing.T) {
 	now := time.Date(2026, 8, 28, 15, 0, 0, 0, cnLocation())
-	stock, err := ParseInstrumentID("600000", "stock", "SH")
+	stock, err := instruments.ParseInstrumentID("600000", "stock", "SH")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,7 +20,7 @@ func TestNormalizeChartRequestDefaultsAndInstrumentRules(t *testing.T) {
 	if request.Period != ChartPeriodDay || request.Adjustment != ChartAdjustmentQFQ || request.Instrument.Code != "sh600000" {
 		t.Fatalf("stock defaults=%+v", request)
 	}
-	etf, err := ParseInstrumentID("159915", "etf", "SZ")
+	etf, err := instruments.ParseInstrumentID("159915", "etf", "SZ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,14 +28,14 @@ func TestNormalizeChartRequestDefaultsAndInstrumentRules(t *testing.T) {
 	if err != nil || request.Adjustment != ChartAdjustmentNone {
 		t.Fatalf("ETF defaults=%+v err=%v", request, err)
 	}
-	index, err := ParseInstrumentID("sh000001", "index", "SH")
+	index, err := instruments.ParseInstrumentID("sh000001", "index", "SH")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := NormalizeChartRequest(ChartRequest{Instrument: index, Adjustment: ChartAdjustmentQFQ}, now); err == nil {
 		t.Fatal("index accepted an adjusted request")
 	}
-	if _, err := ParseInstrumentID("sh600000", "stock", "SZ"); err == nil {
+	if _, err := instruments.ParseInstrumentID("sh600000", "stock", "SZ"); err == nil {
 		t.Fatal("mismatched market was accepted")
 	}
 }

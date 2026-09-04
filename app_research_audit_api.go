@@ -5,9 +5,9 @@ import (
 	"errors"
 	"strings"
 
+	aicontract "go-stock/backend/ai"
 	"go-stock/backend/data"
 	"go-stock/backend/db"
-	"go-stock/backend/research"
 	"go-stock/backend/researchaudit"
 )
 
@@ -55,14 +55,14 @@ func (a *App) exportResearchAudit(ctx context.Context, ownerType, ownerID string
 	return service.Export(ctx, ownerType, ownerID)
 }
 
-type appReplayExecutor struct{ client *data.ResearchAIClient }
+type appReplayExecutor struct{ client aicontract.AIClient }
 
 func (executor appReplayExecutor) CompleteReplay(ctx context.Context, call researchaudit.ReplayCall) (researchaudit.ReplayCallResult, error) {
-	var attempts []research.ModelAttemptRecord
-	result, err := executor.client.Complete(ctx, research.CompletionRequest{Phase: "audit_replay_" + call.Phase, Prompt: call.Prompt, OnAttempt: func(record research.ModelAttemptRecord) {
+	var attempts []aicontract.ModelAttemptRecord
+	result, err := executor.client.Complete(ctx, aicontract.CompletionRequest{Phase: "audit_replay_" + call.Phase, Prompt: call.Prompt, OnAttempt: func(record aicontract.ModelAttemptRecord) {
 		attempts = append(attempts, record)
 	}})
-	view := researchaudit.ReplayCallResult{Content: result.Content, ModelName: result.Model, AttemptLog: attempts, ModelParameters: research.AuditModelParameters(attempts)}
+	view := researchaudit.ReplayCallResult{Content: result.Content, ModelName: result.Model, AttemptLog: attempts, ModelParameters: aicontract.AuditModelParameters(attempts)}
 	if len(attempts) > 0 {
 		last := attempts[len(attempts)-1]
 		view.ProviderName = last.ProviderName
@@ -87,7 +87,8 @@ func (a *App) createResearchReplay(ctx context.Context, request researchaudit.Cr
 	}
 	view := researchaudit.ReplayView{Replay: replay}
 	a.goTask(func(taskCtx context.Context) {
-		_, _ = service.ExecuteReplay(taskCtx, replay.ReplayID, appReplayExecutor{client: data.NewResearchReplayAIClient(replay.ModelConfigID)})
+		client := aicontract.NewResearchReplayClient(replay.ModelConfigID, data.ResearchAIClientOptions())
+		_, _ = service.ExecuteReplay(taskCtx, replay.ReplayID, appReplayExecutor{client: client})
 	})
 	return view, nil
 }

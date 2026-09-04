@@ -15,7 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -37,7 +37,7 @@ type HTTPDoer interface {
 // recommendations, simulated trades, positions, or accounts.
 func NewProductionService() *Service {
 	client := &http.Client{Timeout: 15 * time.Second}
-	return NewService(
+	service := NewService(
 		NewEastmoneyFundRankingProvider(client),
 		NewSinaFundRankingProvider(client),
 		NewExchangeETFIdentityProvider(client),
@@ -50,6 +50,8 @@ func NewProductionService() *Service {
 		NewSinaETFFundamentalsProvider(client),
 		UnifiedETFChartProvider{},
 	)
+	service.legacy = &legacyFundOperations{client: client}
+	return service
 }
 
 type EastmoneyFundRankingProvider struct {
@@ -590,12 +592,12 @@ func (p *SinaETFFundamentalsProvider) FetchETFFundamentals(ctx context.Context, 
 type UnifiedETFChartProvider struct{}
 
 func (UnifiedETFChartProvider) Name() string { return "unified_chart" }
-func (UnifiedETFChartProvider) ResolveETFChart(_ context.Context, identity ETFIdentity) marketdata.ProviderResult[data.InstrumentID] {
-	instrument, err := data.ParseInstrumentID(identity.Code, "etf", identity.Market)
+func (UnifiedETFChartProvider) ResolveETFChart(_ context.Context, identity ETFIdentity) marketdata.ProviderResult[instruments.InstrumentID] {
+	instrument, err := instruments.ParseInstrumentID(identity.Code, "etf", identity.Market)
 	if err != nil {
-		return marketdata.ProviderResult[data.InstrumentID]{Status: marketdata.StatusUnavailable, Err: err}
+		return marketdata.ProviderResult[instruments.InstrumentID]{Status: marketdata.StatusUnavailable, Err: err}
 	}
-	return marketdata.ProviderResult[data.InstrumentID]{Status: marketdata.StatusOK, Data: instrument,
+	return marketdata.ProviderResult[instruments.InstrumentID]{Status: marketdata.StatusOK, Data: instrument,
 		SourceRef: "/api/v1/instruments/" + instrument.Code + "/chart?assetType=etf&market=" + instrument.Market + "&adjustment=none"}
 }
 
@@ -714,7 +716,7 @@ func fundamentalsProviderResult(values map[string]ETFFundamentals, sourceRef str
 func identityCodes(values []ETFIdentity) []string {
 	result := make([]string, 0, len(values))
 	for _, value := range values {
-		if canonical, ok := data.NormalizeETFCode(value.Code); ok {
+		if canonical, ok := instruments.NormalizeETFCode(value.Code); ok {
 			result = append(result, canonical)
 		}
 	}

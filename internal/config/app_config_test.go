@@ -25,7 +25,6 @@ func TestLoadDefaults(t *testing.T) {
 		"GO_STOCK_DB_LOG_LEVEL",
 		"GO_STOCK_LOG_LEVEL",
 		"GO_STOCK_PYTHON_BIN",
-		"GO_STOCK_SELF_UPDATE_ENABLED",
 		"GO_STOCK_MINUTE_PROVIDER",
 		"GO_STOCK_MINUTE_COVER_TRADE_DAYS",
 		"GO_STOCK_MINUTE_FALLBACK_AKSHARE",
@@ -65,9 +64,6 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Python.Bin != "" {
 		t.Fatalf("unexpected python bin: %s", cfg.Python.Bin)
-	}
-	if cfg.Update.SelfUpdateEnabled {
-		t.Fatalf("expected self update disabled by default")
 	}
 	if cfg.Minute.Provider != DefaultMinuteProvider || cfg.Minute.CoverTradeDays != DefaultMinuteCoverTradeDays || cfg.Minute.FallbackTencent != DefaultMinuteFallbackTencent || cfg.Minute.TencentMinIntervalMS != DefaultTencentMinIntervalMS {
 		t.Fatalf("unexpected minute config: %+v", cfg.Minute)
@@ -140,7 +136,6 @@ func TestLoadOverridesAndFallbacks(t *testing.T) {
 	t.Setenv("GO_STOCK_DB_LOG_LEVEL", "warn")
 	t.Setenv("GO_STOCK_LOG_LEVEL", "info")
 	t.Setenv("GO_STOCK_PYTHON_BIN", "/tmp/python/bin/python3")
-	t.Setenv("GO_STOCK_SELF_UPDATE_ENABLED", "false")
 	t.Setenv("GO_STOCK_MINUTE_PROVIDER", "auto")
 	t.Setenv("GO_STOCK_MINUTE_COVER_TRADE_DAYS", "7")
 	t.Setenv("GO_STOCK_MINUTE_FALLBACK_AKSHARE", "true")
@@ -180,9 +175,6 @@ func TestLoadOverridesAndFallbacks(t *testing.T) {
 	if cfg.Python.Bin != "/tmp/python/bin/python3" {
 		t.Fatalf("unexpected python bin: %s", cfg.Python.Bin)
 	}
-	if cfg.Update.SelfUpdateEnabled {
-		t.Fatalf("expected self update disabled")
-	}
 	if cfg.Minute.Provider != "auto" || !cfg.Minute.FallbackAkshare || !cfg.Minute.FallbackTencent || cfg.Minute.CoverTradeDays != 7 || cfg.Minute.SinaMinIntervalMS != 1200 || cfg.Minute.TencentMinIntervalMS != 900 {
 		t.Fatalf("unexpected minute config: %+v", cfg.Minute)
 	}
@@ -220,7 +212,6 @@ func TestLoadNormalizesDiemengBaseURLVariants(t *testing.T) {
 
 func TestLoadInvalidValuesFallbackToDefaults(t *testing.T) {
 	resetRuntimeOverrideForTest(t)
-	t.Setenv("GO_STOCK_SELF_UPDATE_ENABLED", "maybe")
 	t.Setenv("GO_STOCK_MINUTE_PROVIDER", "broken")
 	t.Setenv("GO_STOCK_MINUTE_COVER_TRADE_DAYS", "99")
 	t.Setenv("GO_STOCK_MINUTE_FALLBACK_AKSHARE", "maybe")
@@ -240,9 +231,6 @@ func TestLoadInvalidValuesFallbackToDefaults(t *testing.T) {
 	}
 	if cfg.Diemeng.TimeoutSec != DefaultDiemengTimeoutSec || cfg.Diemeng.Level != DefaultDiemengLevel {
 		t.Fatalf("unexpected diemeng fallback config: %+v", cfg.Diemeng)
-	}
-	if cfg.Update.SelfUpdateEnabled {
-		t.Fatalf("unexpected self update fallback: %+v", cfg.Update)
 	}
 }
 

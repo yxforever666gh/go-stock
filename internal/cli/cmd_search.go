@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	"go-stock/internal/bootstrap"
 )
 
-func runSearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+type stockSearchService interface {
+	SearchStockWithFingerprint(string, string, int) map[string]any
+}
+
+func runSearch(args []string, g GlobalOptions, stdout, stderr io.Writer, stocks stockSearchService, fingerprints fingerprintResolver) error {
 	_ = stderr
 	fs := flag.NewFlagSet("search", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -37,16 +39,12 @@ func runSearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
 		pageSize = 5000
 	}
 
-	resolvedFingerprint, err := ResolveFingerprint(strings.TrimSpace(fingerprint))
+	resolvedFingerprint, err := ResolveFingerprint(strings.TrimSpace(fingerprint), fingerprints)
 	if err != nil {
 		return err
 	}
 
-	services, err := bootstrap.NewProductionServices()
-	if err != nil {
-		return err
-	}
-	res := services.Stock.SearchStockWithFingerprint(words, resolvedFingerprint, pageSize)
+	res := stocks.SearchStockWithFingerprint(words, resolvedFingerprint, pageSize)
 	if jsonOut {
 		body, err := marshalPrettyJSON(res)
 		if err != nil {

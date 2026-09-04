@@ -20,7 +20,7 @@ Set-StrictMode -Version Latest
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
 $FrontendRoot = Join-Path $ProjectRoot "frontend"
-$MainGoPackages = @(".", "./backend/...", "./internal/...", "./cmd/...")
+$MainGoPackages = @(".", "./backend/...", "./internal/...", "./cmd/...", "./tools/...")
 $NpmProgram = if ($IsWindows) { "npm.cmd" } else { "npm" }
 
 function Invoke-Step {
@@ -123,9 +123,8 @@ if ($SkipGoBuild -and $Tier -ne "release") {
 }
 
 $environmentNames = @(
-    "GO_STOCK_RUN_INTEGRATION",
-    "RUN_INTEGRATION_TESTS",
     "GO_STOCK_LIVE_EASTMONEY",
+    "GO_STOCK_LIVE_MARKET_NEWS",
     "GO_STOCK_DB_LOG_LEVEL",
     "GO_STOCK_DB_PATH",
     "GO_STOCK_MINUTE_DB_PATH"
@@ -149,9 +148,8 @@ New-Item -ItemType Directory -Force -Path $validationRun | Out-Null
 
 $overall = [Diagnostics.Stopwatch]::StartNew()
 try {
-    [Environment]::SetEnvironmentVariable("GO_STOCK_RUN_INTEGRATION", $null, "Process")
-    [Environment]::SetEnvironmentVariable("RUN_INTEGRATION_TESTS", $null, "Process")
     [Environment]::SetEnvironmentVariable("GO_STOCK_LIVE_EASTMONEY", $null, "Process")
+    [Environment]::SetEnvironmentVariable("GO_STOCK_LIVE_MARKET_NEWS", $null, "Process")
     [Environment]::SetEnvironmentVariable("GO_STOCK_DB_LOG_LEVEL", "silent", "Process")
     # Tests own their disposable fixtures. Clearing inherited application paths
     # preserves configuration fallback tests and prevents separate Go package
@@ -176,30 +174,27 @@ try {
                 "data" { Invoke-GoTest "data domain tests" @("./backend/data") }
                 "research" {
                     Invoke-GoTest "research domain tests" @("./backend/research")
-                    Invoke-GoTest "research data boundary tests" @("./backend/data") "Research"
-                    Invoke-GoTest "research application boundary tests" @(".") "Research"
+                    Invoke-GoTest "research boundary tests" @("./backend/data", ".") "Research"
                 }
                 "research2" {
                     Invoke-GoTest "research2 domain tests" @("./backend/research2")
-                    Invoke-GoTest "research2 data boundary tests" @("./backend/data") "Research2"
-                    Invoke-GoTest "research2 application boundary tests" @(".") "Research2"
+                    Invoke-GoTest "research2 boundary tests" @("./backend/data", ".") "Research2"
                 }
                 "migrations" { Invoke-GoTest "migration domain tests" @("./internal/migrations") }
                 "frontend" { Invoke-FrontendTests "frontend runtime tests" }
                 "api" {
                     Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
-                    Invoke-GoTest "API boundary tests" @(".") "(API|Route|Contract)"
+                    Invoke-GoTest "API boundary tests" @(".")
                 }
-                "tools" { Invoke-Step "network-audit unit tests" "go" @("test", "./...") (Join-Path $ProjectRoot "tools\network-audit") }
+                "tools" { Invoke-GoTest "tool build checks" @("./tools/...") }
             }
             Write-Host "Not run: release verification."
         }
         "release" {
             Invoke-GoTest "main Go tests" $MainGoPackages
-            Invoke-Step "network-audit unit tests" "go" @("test", "./...") (Join-Path $ProjectRoot "tools\network-audit")
             Invoke-Step "Go vet" "go" (@("vet") + $MainGoPackages) $ProjectRoot
             Invoke-Step "root go.mod check" "go" @("mod", "tidy", "-diff") $ProjectRoot
-            Invoke-Step "network-audit go.mod check" "go" @("mod", "tidy", "-diff") (Join-Path $ProjectRoot "tools\network-audit")
+            Invoke-Step "release schema transition tests" "pwsh" @("-NoProfile", "-File", (Join-Path $ScriptDir "release-schema-transition.test.ps1")) $ProjectRoot
             Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
             Invoke-FrontendTests "frontend runtime tests"
             Invoke-Step "frontend lint" $NpmProgram @("run", "lint") $FrontendRoot

@@ -45,7 +45,6 @@ type AppConfig struct {
 	Log     LogConfig     `json:"log"`
 	Runtime RuntimeConfig `json:"runtime"`
 	Python  PythonConfig  `json:"python"`
-	Update  UpdateConfig  `json:"update"`
 	Minute  MinuteConfig  `json:"minute"`
 	Akshare AkshareConfig `json:"akshare"`
 	Diemeng DiemengConfig `json:"diemeng"`
@@ -74,10 +73,6 @@ type RuntimeConfig struct {
 
 type PythonConfig struct {
 	Bin string `json:"bin,omitempty"`
-}
-
-type UpdateConfig struct {
-	SelfUpdateEnabled bool `json:"selfUpdateEnabled"`
 }
 
 type MinuteConfig struct {
@@ -131,9 +126,6 @@ func Load() AppConfig {
 		},
 		Python: PythonConfig{
 			Bin: strings.TrimSpace(os.Getenv("GO_STOCK_PYTHON_BIN")),
-		},
-		Update: UpdateConfig{
-			SelfUpdateEnabled: boolOrDefault("GO_STOCK_SELF_UPDATE_ENABLED", false),
 		},
 		Minute: MinuteConfig{
 			Provider:             enumOrDefault("GO_STOCK_MINUTE_PROVIDER", DefaultMinuteProvider, "public", "diemeng", "akshare", "auto", "sina", "tencent"),
@@ -252,9 +244,6 @@ func (c AppConfig) StartupSummary() string {
 		},
 		"log": map[string]any{
 			"level": c.Log.Level,
-		},
-		"update": map[string]any{
-			"selfUpdateEnabled": c.Update.SelfUpdateEnabled,
 		},
 		"minute": map[string]any{
 			"provider":             c.Minute.Provider,

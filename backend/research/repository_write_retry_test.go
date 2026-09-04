@@ -11,15 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"go-stock/internal/marketquote"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
-
-type sqliteCodeTestError struct{ code int }
-
-func (err *sqliteCodeTestError) Error() string { return fmt.Sprintf("sqlite code %d", err.code) }
-func (err *sqliteCodeTestError) Code() int     { return err.code }
 
 func openResearchWALTestDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
@@ -46,27 +43,6 @@ func migrateResearchWriteTestDB(t *testing.T, database *gorm.DB) {
 	}
 }
 
-func TestSQLiteBusyRecognitionIncludesExtendedCodes(t *testing.T) {
-	for _, code := range []int{5, 6, 261, 262, 517, 518, 773} {
-		if !isSQLiteBusy(&sqliteCodeTestError{code: code}) {
-			t.Fatalf("code %d was not recognized as retryable", code)
-		}
-	}
-	for _, err := range []error{
-		errors.New("SQLITE_BUSY_SNAPSHOT"),
-		errors.New("database is locked (5)"),
-		errors.New("database table is locked"),
-		errors.New("database is locked (517)"),
-	} {
-		if !isSQLiteBusy(err) {
-			t.Fatalf("error %q was not recognized as retryable", err)
-		}
-	}
-	if isSQLiteBusy(errors.New("unique constraint failed")) {
-		t.Fatal("non-locking error must not be retried")
-	}
-}
-
 func TestTransactionWithWriteRetryUsesAllFiveBackoffs(t *testing.T) {
 	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
@@ -74,12 +50,12 @@ func TestTransactionWithWriteRetryUsesAllFiveBackoffs(t *testing.T) {
 	}
 	var attempts atomic.Int32
 	err = transactionWithWriteRetry(context.Background(), database, func(*gorm.DB) error {
-		if attempts.Add(1) <= int32(len(writeRetryDelays)) {
-			return &sqliteCodeTestError{code: 517}
+		if attempts.Add(1) <= 5 {
+			return errors.New("database is locked (SQLITE_BUSY_SNAPSHOT)")
 		}
 		return nil
 	})
-	if err != nil || attempts.Load() != int32(len(writeRetryDelays)+1) {
+	if err != nil || attempts.Load() != 6 {
 		t.Fatalf("attempts=%d err=%v", attempts.Load(), err)
 	}
 }
@@ -172,7 +148,7 @@ func TestFiveConcurrentLifecycleWritesPreserveSequencesTradesAndCash(t *testing.
 				errorsCh <- fmt.Errorf("append decision %d: %w", index, err)
 				return
 			}
-			quote := Quote{Code: recommendation.StockCode, Name: recommendation.StockName, Market: "SH", Price: 10 + float64(index), At: now.Add(time.Duration(index) * time.Second)}
+			quote := marketquote.Quote{Code: recommendation.StockCode, Name: recommendation.StockName, Market: "SH", Price: 10 + float64(index), At: now.Add(time.Duration(index) * time.Second)}
 			if err := repo.Buy(ctx, recommendation.RecommendationID, quote, now.Add(15*time.Minute), now); err != nil {
 				errorsCh <- fmt.Errorf("buy %d: %w", index, err)
 			}

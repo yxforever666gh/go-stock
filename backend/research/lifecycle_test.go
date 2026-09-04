@@ -11,20 +11,24 @@ import (
 	"testing"
 	"time"
 
+	sharedai "go-stock/backend/ai"
+	"go-stock/internal/marketquote"
+	"go-stock/internal/trading"
+
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
 type scriptedAI struct {
-	results  []CompletionResult
+	results  []sharedai.CompletionResult
 	errors   []error
-	requests []CompletionRequest
+	requests []sharedai.CompletionRequest
 }
 
-func (m *scriptedAI) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
+func (m *scriptedAI) Complete(_ context.Context, request sharedai.CompletionRequest) (sharedai.CompletionResult, error) {
 	m.requests = append(m.requests, request)
 	i := len(m.requests) - 1
-	var result CompletionResult
+	var result sharedai.CompletionResult
 	var err error
 	if i < len(m.results) {
 		result = m.results[i]
@@ -42,29 +46,29 @@ func (m *scriptedAI) Complete(_ context.Context, request CompletionRequest) (Com
 }
 
 type scriptedQuotes struct {
-	quotes []Quote
+	quotes []marketquote.Quote
 	errors []error
 	calls  int
 	mu     sync.Mutex
 }
 
-func (m *scriptedQuotes) CurrentQuote(_ context.Context, requested string) (Quote, error) {
+func (m *scriptedQuotes) CurrentQuote(_ context.Context, requested string) (marketquote.Quote, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	i := m.calls
 	m.calls++
 	if i < len(m.errors) && m.errors[i] != nil {
-		return Quote{}, m.errors[i]
+		return marketquote.Quote{}, m.errors[i]
 	}
 	if len(m.quotes) == 0 {
-		return Quote{}, errors.New("no quote")
+		return marketquote.Quote{}, errors.New("no quote")
 	}
 	if i >= len(m.quotes) {
 		i = len(m.quotes) - 1
 	}
-	if requestedCode, ok := NormalizeMainlandCode(requested); ok {
+	if requestedCode, ok := trading.NormalizeMainlandCode(requested); ok {
 		for index := i; index < len(m.quotes); index++ {
-			if quoteCode, quoteOK := NormalizeMainlandCode(m.quotes[index].Code); quoteOK && quoteCode == requestedCode {
+			if quoteCode, quoteOK := trading.NormalizeMainlandCode(m.quotes[index].Code); quoteOK && quoteCode == requestedCode {
 				m.quotes[i], m.quotes[index] = m.quotes[index], m.quotes[i]
 				break
 			}
@@ -101,7 +105,7 @@ func (provider *scriptedContexts) CollectLifecycleContext(_ context.Context, req
 }
 
 func readyLifecycleDraft(now time.Time, status string) LifecycleObservationDraft {
-	return LifecycleObservationDraft{Status: status, Quote: Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now},
+	return LifecycleObservationDraft{Status: status, Quote: marketquote.Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now},
 		MinuteSummary: MinuteEvidenceSummary{TradingDate: now.Format("2006-01-02"), LatestAt: now, LatestPrice: 10, TotalBars: 30},
 		Sources: []LifecycleEvidenceSource{
 			{Name: "实时行情", Category: "quote", Status: "ok", CollectedAt: now, Content: "quote"},
@@ -116,11 +120,11 @@ func (openCalendar) IsTradingDay(context.Context, time.Time) (bool, error) { ret
 type advancingAI struct {
 	clock    *time.Time
 	finishAt time.Time
-	result   CompletionResult
-	requests []CompletionRequest
+	result   sharedai.CompletionResult
+	requests []sharedai.CompletionRequest
 }
 
-func (a *advancingAI) Complete(_ context.Context, request CompletionRequest) (CompletionResult, error) {
+func (a *advancingAI) Complete(_ context.Context, request sharedai.CompletionRequest) (sharedai.CompletionResult, error) {
 	a.requests = append(a.requests, request)
 	*a.clock = a.finishAt
 	result := a.result
@@ -200,7 +204,7 @@ func TestConcurrentRecommendationAdmissionNeverExceedsCash(t *testing.T) {
 			defer resultMu.Unlock()
 			if err == nil {
 				accepted++
-			} else if errors.Is(err, ErrInsufficientCash) {
+			} else if errors.Is(err, trading.ErrInsufficientCash) {
 				rejected++
 			} else {
 				t.Errorf("unexpected admission error: %v", err)
@@ -234,7 +238,7 @@ type concurrencyTrackingAI struct {
 	release <-chan struct{}
 }
 
-func (client *concurrencyTrackingAI) Complete(ctx context.Context, request CompletionRequest) (CompletionResult, error) {
+func (client *concurrencyTrackingAI) Complete(ctx context.Context, request sharedai.CompletionRequest) (sharedai.CompletionResult, error) {
 	client.mu.Lock()
 	client.active++
 	if client.active > client.maximum {
@@ -245,13 +249,13 @@ func (client *concurrencyTrackingAI) Complete(ctx context.Context, request Compl
 	client.started <- struct{}{}
 	select {
 	case <-ctx.Done():
-		return CompletionResult{}, ctx.Err()
+		return sharedai.CompletionResult{}, ctx.Err()
 	case <-client.release:
 	}
 	client.mu.Lock()
 	client.active--
 	client.mu.Unlock()
-	return CompletionResult{Content: `{"action":"持有","reason":"量价结构仍稳定","sourceRefs":[],"dataSufficiency":"充足"}`}, nil
+	return sharedai.CompletionResult{Content: `{"action":"持有","reason":"量价结构仍稳定","sourceRefs":[],"dataSufficiency":"充足"}`}, nil
 }
 
 func TestTenDueHoldingsRunAtMostFiveConcurrentlyWithoutDuplicateScans(t *testing.T) {
@@ -338,8 +342,8 @@ func seedOpenPosition(t *testing.T, repo *Repository, rec Recommendation, entry 
 func TestEnqueueRecommendationBuysImmediatelyAndAnchorsNextTradingDay0950(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
-	quote := Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}
-	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{quote}}, weekdayTradingCalendar{})
+	quote := marketquote.Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: now}
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []marketquote.Quote{quote}}, weekdayTradingCalendar{})
 	service.now = func() time.Time { return now }
 	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: quote.Code, StockName: quote.Name, SignalAt: now}
 	if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
@@ -363,11 +367,11 @@ func TestEnqueueRecommendationRejectsOneLotAbovePerTradeCap(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 21, 14, 35, 48, 0, shanghaiLocation)
-	quote := Quote{Code: "sz300308", Name: "中际旭创", Market: "SZ", Price: 941.41, At: now.Add(-6 * time.Second)}
+	quote := marketquote.Quote{Code: "sz300308", Name: "中际旭创", Market: "SZ", Price: 941.41, At: now.Add(-6 * time.Second)}
 	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{}, weekdayTradingCalendar{})
 	service.now = func() time.Time { return now }
 	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: quote.Code, StockName: quote.Name, SignalAt: now}
-	if err := service.EnqueueRecommendation(context.Background(), &rec, nil, quote); !errors.Is(err, ErrMinimumOrder) {
+	if err := service.EnqueueRecommendation(context.Background(), &rec, nil, quote); !errors.Is(err, trading.ErrMinimumOrder) {
 		t.Fatalf("err=%v, want ErrMinimumOrder", err)
 	}
 }
@@ -375,7 +379,7 @@ func TestEnqueueRecommendationRejectsOneLotAbovePerTradeCap(t *testing.T) {
 func TestAfterCloseBuyQueuesForNextOpenAndFailsOnlyOnce(t *testing.T) {
 	repo := researchTestRepo(t)
 	now := time.Date(2026, 8, 14, 15, 30, 0, 0, shanghaiLocation)
-	quotes := &scriptedQuotes{quotes: []Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: time.Date(2026, 8, 17, 9, 30, 0, 0, shanghaiLocation), LimitUp: true}}}
+	quotes := &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: time.Date(2026, 8, 17, 9, 30, 0, 0, shanghaiLocation), LimitUp: true}}}
 	service := NewService(repo, &scriptedAI{}, quotes, weekdayTradingCalendar{})
 	service.now = func() time.Time { return now }
 	rec := Recommendation{RecommendationID: newID(), AnalysisRunID: seedRun(t, repo, now), StockCode: "sh600000", StockName: "浦发银行", SignalAt: now}
@@ -407,7 +411,7 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 8, 14, 10, 0, 0, 0, shanghaiLocation)
-	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []marketquote.Quote{
 		{Code: "sh600000", Name: "甲", Market: "SH", Price: 40, At: now}, {Code: "sz000001", Name: "乙", Market: "SZ", Price: 40, At: now},
 		{Code: "sh600001", Name: "丙", Market: "SH", Price: 40, At: now}, {Code: "sh600002", Name: "丁", Market: "SH", Price: 40, At: now},
 	}}, weekdayTradingCalendar{})
@@ -417,7 +421,7 @@ func TestDirectBuyCashCompetitionUsesSignalOrder(t *testing.T) {
 	for index, code := range []string{"sh600000", "sz000001", "sh600001", "sh600002"} {
 		rec := Recommendation{RecommendationID: newID(), AnalysisRunID: runID, StockCode: code, StockName: []string{"甲", "乙", "丙", "丁"}[index], SignalAt: now.Add(time.Duration(index) * time.Millisecond)}
 		if err := service.EnqueueRecommendation(context.Background(), &rec, nil); err != nil {
-			if index == 3 && errors.Is(err, ErrInsufficientCash) {
+			if index == 3 && errors.Is(err, trading.ErrInsufficientCash) {
 				statuses = append(statuses, "rejected_cash")
 				continue
 			}
@@ -474,7 +478,7 @@ func TestListRecommendationsUsesNetCashAmountsAndPerSharePrices(t *testing.T) {
 		byID[row.RecommendationID] = row
 	}
 	openRow := byID[openRecommendation.RecommendationID]
-	wantCurrent := CalculateSellCost(11, 100).NetCashFlow
+	wantCurrent := trading.CalculateSellCost(11, 100).NetCashFlow
 	if openRow.BuyAmount != 1005 || math.Abs(openRow.CurrentAmount-wantCurrent) > 0.001 || openRow.SellAmount != 0 {
 		t.Fatalf("open amounts=%+v wantCurrent=%.4f", openRow, wantCurrent)
 	}
@@ -495,7 +499,7 @@ func TestListRecommendationsUsesNetCashAmountsAndPerSharePrices(t *testing.T) {
 		t.Fatalf("closed net yield=%f", closedRow.NetYieldRate)
 	}
 
-	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{{
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []marketquote.Quote{{
 		Code: openRecommendation.StockCode, Name: openRecommendation.StockName, Market: "SH", Price: 11, At: now,
 	}}}, weekdayTradingCalendar{})
 	openDetail, err := service.Detail(context.Background(), openRecommendation.RecommendationID)
@@ -527,7 +531,7 @@ func TestHoldingFallbackUsesOnlyStockHistoryAndFixedNextSlot(t *testing.T) {
 	now := time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)
 	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -3), now, "response-old")
 	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -3))
-	ai := &scriptedAI{results: []CompletionResult{{}, {Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`, ResponseID: "response-new"}}, errors: []error{errors.New("relay rejects previous_response_id"), nil}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{}, {Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`, ResponseID: "response-new"}}, errors: []error{errors.New("relay rejects previous_response_id"), nil}}
 	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}}
 	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, contexts)
 	service.now = func() time.Time { return now }
@@ -555,7 +559,7 @@ func TestMigratedPositionNominalWeekendDueRunsAtStrictMonday0950(t *testing.T) {
 	now := time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)
 	rec := seedRecommendation(t, repo, "active", entry, nominalSaturday, "")
 	seedOpenPosition(t, repo, rec, entry)
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`}}}
 	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}}
 	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, contexts)
 	service.now = func() time.Time { return now }
@@ -635,7 +639,7 @@ func TestLateHoldingResponseCrossingCloseIsDeferred(t *testing.T) {
 	now := time.Date(2026, 8, 17, 14, 45, 0, 0, shanghaiLocation)
 	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -3), now, "")
 	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -3))
-	ai := &advancingAI{clock: &now, finishAt: time.Date(2026, 8, 17, 15, 5, 0, 0, shanghaiLocation), result: CompletionResult{Content: `{"action":"卖出","reason":"走弱"}`, ResponseID: "late-response"}}
+	ai := &advancingAI{clock: &now, finishAt: time.Date(2026, 8, 17, 15, 5, 0, 0, shanghaiLocation), result: sharedai.CompletionResult{Content: `{"action":"卖出","reason":"走弱"}`, ResponseID: "late-response"}}
 	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
@@ -653,7 +657,7 @@ func TestStaleOverdueSellCheckRunsImmediatelyWithoutReplayingIntervals(t *testin
 	now := due.Add(3 * time.Minute)
 	rec := seedRecommendation(t, repo, "active", due.AddDate(0, 0, -1), due, "")
 	seedOpenPosition(t, repo, rec, due.AddDate(0, 0, -1))
-	ai := &scriptedAI{results: []CompletionResult{{Content: `{"action":"持有","reason":"恢复后立即复查","sourceRefs":[],"dataSufficiency":"充足"}`}}}
+	ai := &scriptedAI{results: []sharedai.CompletionResult{{Content: `{"action":"持有","reason":"恢复后立即复查","sourceRefs":[],"dataSufficiency":"充足"}`}}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
@@ -695,7 +699,7 @@ func TestHoldingSuccessReanchorsFromActualCompletion(t *testing.T) {
 	finishAt := now.Add(7 * time.Minute)
 	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
 	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -1))
-	ai := &advancingAI{clock: &now, finishAt: finishAt, result: CompletionResult{Content: `{"action":"持有","reason":"量价稳定","sourceRefs":[],"dataSufficiency":"充足"}`}}
+	ai := &advancingAI{clock: &now, finishAt: finishAt, result: sharedai.CompletionResult{Content: `{"action":"持有","reason":"量价稳定","sourceRefs":[],"dataSufficiency":"充足"}`}}
 	service := NewService(repo, ai, &scriptedQuotes{}, openCalendar{}, &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}})
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
@@ -738,13 +742,13 @@ func TestAccountOverviewUsesNetSellValue(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = repo.DB().Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 90000.0).Error
-	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []Quote{{Code: position.StockCode, Name: position.StockName, Market: "SH", Price: 11, At: now}}}, openCalendar{})
+	service := NewService(repo, &scriptedAI{}, &scriptedQuotes{quotes: []marketquote.Quote{{Code: position.StockCode, Name: position.StockName, Market: "SH", Price: 11, At: now}}}, openCalendar{})
 	service.now = func() time.Time { return now }
 	overview, err := service.AccountOverview(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPositionValue := CalculateSellCost(11, 1000).NetCashFlow
+	wantPositionValue := trading.CalculateSellCost(11, 1000).NetCashFlow
 	if math.Abs(overview.PositionValue-wantPositionValue) > 1e-8 || math.Abs(overview.NetAssetValue-(90000+wantPositionValue)) > 1e-8 {
 		t.Fatalf("overview=%+v", overview)
 	}

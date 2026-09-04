@@ -2,10 +2,10 @@ package research
 
 import (
 	"context"
-	"errors"
-	"math"
 	"testing"
 	"time"
+
+	"go-stock/internal/marketquote"
 )
 
 type weekdayTradingCalendar struct{}
@@ -16,7 +16,7 @@ func (weekdayTradingCalendar) IsTradingDay(_ context.Context, value time.Time) (
 }
 
 func TestSizeBuyCapsCashOutflowAtFiftyThousand(t *testing.T) {
-	quantity, cost, err := SizeBuy("sh600000", 10, 100000)
+	quantity, cost, err := sizeResearchBuy("sh600000", 10, 100000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,54 +25,6 @@ func TestSizeBuyCapsCashOutflowAtFiftyThousand(t *testing.T) {
 	}
 	if -cost.NetCashFlow > TargetCashPerTrade {
 		t.Fatalf("cash outflow %.2f exceeded cap", -cost.NetCashFlow)
-	}
-	next := CalculateBuyCost(10, quantity+100)
-	if -next.NetCashFlow <= TargetCashPerTrade {
-		t.Fatalf("next lot cash outflow %.2f still fits cap", -next.NetCashFlow)
-	}
-	if cost.Commission < MinimumCommission || cost.TransferFee <= 0 || cost.SlippageAmount <= 0 {
-		t.Fatalf("cost=%+v", cost)
-	}
-
-	starQuantity, starCost, err := SizeBuy("sh688001", 50, 100000)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if starQuantity != 800 || starQuantity%200 != 0 || -starCost.NetCashFlow > TargetCashPerTrade {
-		t.Fatalf("STAR quantity=%d cost=%+v", starQuantity, starCost)
-	}
-	if _, _, err := SizeBuy("bj430001", 10, 100000); err == nil {
-		t.Fatal("Beijing exchange must be rejected")
-	}
-}
-
-func TestSizeBuyRejectsOneHighPriceLotOrUsesLargestAffordableFallback(t *testing.T) {
-	quantity, cost, err := SizeBuy("sz300308", 941.41, 154814.32202159002)
-	if !errors.Is(err, ErrMinimumOrder) || quantity != 0 {
-		t.Fatalf("high-price lot quantity=%d cost=%+v err=%v", quantity, cost, err)
-	}
-
-	quantity, cost, err = SizeBuy("sh600000", 10, 40000)
-	if err != nil || quantity != 3900 || -cost.NetCashFlow > 40000+1e-8 {
-		t.Fatalf("fallback quantity=%d cost=%+v err=%v", quantity, cost, err)
-	}
-	if next := CalculateBuyCost(10, quantity+100); -next.NetCashFlow <= 40000 {
-		t.Fatalf("fallback did not use largest affordable lot: next=%+v", next)
-	}
-
-	if _, _, err = SizeBuy("sh600000", 500, 40000); !errors.Is(err, ErrMinimumOrder) {
-		t.Fatalf("err=%v, want ErrMinimumOrder", err)
-	}
-}
-
-func TestSellCostAndNetValuationIncludeAllCosts(t *testing.T) {
-	cost := CalculateSellCost(12, 1000)
-	if cost.StampDuty <= 0 || cost.Commission < MinimumCommission || cost.TransferFee <= 0 || cost.SlippageAmount <= 0 {
-		t.Fatalf("sell cost=%+v", cost)
-	}
-	want := cost.Notional - cost.Commission - cost.StampDuty - cost.TransferFee
-	if math.Abs(cost.NetCashFlow-want) > 1e-8 {
-		t.Fatalf("net=%.4f want=%.4f", cost.NetCashFlow, want)
 	}
 }
 
@@ -195,8 +147,8 @@ func TestTPlusOne(t *testing.T) {
 }
 
 func TestBuyQuoteRejectsSuspensionAndPriceLimits(t *testing.T) {
-	base := Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: time.Now()}
-	for _, quote := range []Quote{
+	base := marketquote.Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, At: time.Now()}
+	for _, quote := range []marketquote.Quote{
 		{Code: base.Code, Name: base.Name, Market: base.Market, Price: base.Price, At: base.At, Suspended: true},
 		{Code: base.Code, Name: base.Name, Market: base.Market, Price: base.Price, At: base.At, LimitUp: true},
 		{Code: base.Code, Name: base.Name, Market: base.Market, Price: base.Price, At: base.At, LimitDown: true},

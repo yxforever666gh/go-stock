@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,43 @@ import (
 	"go-stock/internal/releaseinfo"
 	"go-stock/internal/service"
 )
+
+type startupStockCounter struct {
+	service.StockService
+	master atomic.Int32
+	index  atomic.Int32
+}
+
+func (s *startupStockCounter) RefreshStockBaseInfo(context.Context) (models.StockMasterRefreshResult, error) {
+	s.master.Add(1)
+	return models.StockMasterRefreshResult{}, nil
+}
+
+func (s *startupStockCounter) RefreshIndexBaseInfo() {
+	s.index.Add(1)
+}
+
+func TestStartupBasicInfoRunsMasterAndIndexExactlyOnce(t *testing.T) {
+	stock := &startupStockCounter{}
+	app := NewAppWithServices(service.AppServices{Stock: stock})
+	app.startMaintenanceRuntime(&models.SettingConfig{Settings: &models.Settings{UpdateBasicInfoOnStart: true}})
+	if !app.runtime.Shutdown(time.Second) {
+		t.Fatal("startup tasks did not finish")
+	}
+	if stock.master.Load() != 1 || stock.index.Load() != 1 {
+		t.Fatalf("startup refresh counts = master %d index %d; want 1 each", stock.master.Load(), stock.index.Load())
+	}
+
+	disabled := &startupStockCounter{}
+	app = NewAppWithServices(service.AppServices{Stock: disabled})
+	app.startMaintenanceRuntime(&models.SettingConfig{Settings: &models.Settings{}})
+	if !app.runtime.Shutdown(time.Second) {
+		t.Fatal("disabled startup tasks did not finish")
+	}
+	if disabled.master.Load() != 0 || disabled.index.Load() != 0 {
+		t.Fatalf("disabled refresh counts = master %d index %d; want 0", disabled.master.Load(), disabled.index.Load())
+	}
+}
 
 func TestMarketNewsPollingSupportsResearchAndHasSafeMinimumInterval(t *testing.T) {
 	if marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{}}) {

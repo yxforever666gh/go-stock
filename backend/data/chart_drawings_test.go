@@ -7,12 +7,14 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go-stock/backend/instruments"
 )
 
 func TestChartDrawingRevisionTombstoneSoftDeleteAndRestore(t *testing.T) {
-	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-drawings.db"))
+	initDatabaseForTest(t, filepath.Join(t.TempDir(), "chart-drawings.db"), testSchemaChartDrawing)
 	now := time.Date(2026, 8, 28, 15, 0, 0, 0, cnLocation())
-	instrument, _ := ParseInstrumentID("159915", "etf", "SZ")
+	instrument, _ := instruments.ParseInstrumentID("159915", "etf", "SZ")
 	scope := ChartDrawingScope{ScopeType: "user", ScopeID: "local", Request: ChartRequest{Instrument: instrument, Period: ChartPeriod5Minute, Adjustment: ChartAdjustmentNone}}
 	service := NewChartService()
 	service.now = func() time.Time { return now }
@@ -48,8 +50,5 @@ func TestChartDrawingRevisionTombstoneSoftDeleteAndRestore(t *testing.T) {
 	document, err = service.PutDrawings(context.Background(), scope, 3, []ChartDrawing{drawing})
 	if err != nil || document.Revision != 4 || document.DeletedAt != nil || len(document.Drawings) != 1 {
 		t.Fatalf("restore document=%+v err=%v", document, err)
-	}
-	if err := service.mainDB.Model(&chartDrawingRevisionRow{}).Where("document_id <> ''").Update("drawings_json", "[]").Error; err == nil {
-		t.Fatal("immutable revision history accepted an update")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 )
 
@@ -55,7 +56,7 @@ func evidenceInstrumentParams[T any](w http.ResponseWriter, r *http.Request, emp
 		writeJSON(w, http.StatusBadRequest, badMarketEvidence(empty, "validation", "invalid_asset_type", "assetType 必须是 stock、index 或 etf"))
 		return "", "", false
 	}
-	code, ok := data.NormalizeInstrumentID(r.PathValue("code"), assetType)
+	code, ok := instruments.NormalizeInstrumentID(r.PathValue("code"), assetType)
 	if !ok {
 		writeJSON(w, http.StatusBadRequest, badMarketEvidence(empty, "validation", "invalid_code", "code 与 assetType 不匹配；ETF 支持沪市 51/56/58、深市 15，指数支持 sh000xxx/sz399xxx"))
 		return "", "", false

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"go-stock/internal/bootstrap"
 	cliports "go-stock/internal/cli/ports"
 )
 
@@ -19,16 +18,18 @@ func ResolveAIForCommand(ctx context.Context, resolver CommandAIResolver, opts A
 	return resolver.ResolveCommandAI(ctx, opts)
 }
 
-func ResolveFingerprint(flagValue string) (string, error) {
+type fingerprintResolver interface {
+	ResolveFingerprint() (string, error)
+}
+
+func ResolveFingerprint(flagValue string, resolver fingerprintResolver) (string, error) {
 	if flagValue != "" {
 		return flagValue, nil
 	}
-	services, err := bootstrap.NewProductionServices()
-	if err != nil {
-		return "", err
-	}
-	if fingerprint, err := services.Config.ResolveFingerprint(); err == nil && fingerprint != "" {
-		return fingerprint, nil
+	if resolver != nil {
+		if fingerprint, err := resolver.ResolveFingerprint(); err == nil && fingerprint != "" {
+			return fingerprint, nil
+		}
 	}
 	return "", errors.New("缺少 qgqp_b_id，请通过 --qgqp-b-id 传入或先写入 settings.qgqp_b_id")
 }

@@ -31,7 +31,6 @@ const activeKey = ref('stock')
 const containerRef = ref({})
 const realtimeProfit = ref(0)
 const groupList = ref([])
-const officialStatement = ref('')
 const appVersion = ref('')
 const menuOptions = ref([])
 const shuttingDown = ref(false)
@@ -42,35 +41,15 @@ watch(() => route.name, name => {
   if (['stock', 'market', 'fund', 'research', 'research2'].includes(String(name || ''))) activeKey.value = String(name)
 }, {immediate: true})
 
-function toggleFullscreen(e) {
+function toggleFullscreen() {
   activeKey.value = 'full'
-  //console.log(e)
   if (isFullscreen.value) {
     WindowUnfullscreen()
-    //e.target.innerHTML = '全屏'
   } else {
     WindowFullscreen()
-    // e.target.innerHTML = '取消全屏'
   }
   isFullscreen.value = !isFullscreen.value
 }
-
-// const drag = ref(false)
-// const lastPos= ref({x:0,y:0})
-// function toggleStartMoveWindow(e) {
-//   drag.value=!drag.value
-//   lastPos.value={x:e.clientX,y:e.clientY}
-// }
-// function dragstart(e) {
-//   if (drag.value) {
-//     let x=e.clientX-lastPos.value.x
-//     let y=e.clientY-lastPos.value.y
-//     WindowGetPosition().then((pos) => {
-//       WindowSetPosition(pos.x+x,pos.y+y)
-//     })
-//   }
-// }
-// window.addEventListener('mousemove', dragstart)
 
 onBeforeUnmount(() => {
   cleanupRuntimeEvents()
@@ -123,10 +102,6 @@ onBeforeMount(() => {
 
   GetVersionInfo().then(result => {
     appVersion.value = result.version || ''
-    if (result.officialStatement) {
-      content.value = result.officialStatement + '\n\n' + content.value
-      officialStatement.value = result.officialStatement
-    }
   })
 
   GetGroupList().then(result => {
@@ -140,7 +115,7 @@ onBeforeMount(() => {
 })
 
 onMounted(() => {
-  WindowSetTitle(`go-stock：AI赋能股票分析✨ ${officialStatement.value} [数据来源于网络，仅供参考；投资有风险，入市需谨慎]`)
+  WindowSetTitle('go-stock：AI赋能股票分析✨ [数据来源于网络，仅供参考；投资有风险，入市需谨慎]')
   contentStyle.value = 'max-height: calc(92vh);overflow: hidden'
   GetConfig().then((res) => {
     syncFeatureFlags(res)

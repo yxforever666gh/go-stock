@@ -6,6 +6,7 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/internal/releaseinfo"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -18,6 +19,29 @@ func openMigrationTestDB(t *testing.T) *gorm.DB {
 		t.Fatal(err)
 	}
 	return database
+}
+
+func currentSchemaVersions() (int, int) {
+	manifest := releaseinfo.Manifest()
+	return manifest.MainSchemaVersion, manifest.MinuteSchemaVersion
+}
+
+func assertCurrentSchemaVersions(t *testing.T, mainStatus, minuteStatus DatabaseStatus) {
+	t.Helper()
+	expectedMain, expectedMinute := currentSchemaVersions()
+	if mainStatus.CurrentVersion != expectedMain || minuteStatus.CurrentVersion != expectedMinute {
+		t.Fatalf("schema versions main=%d minute=%d, want main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion, expectedMain, expectedMinute)
+	}
+}
+
+func TestReleaseManifestMatchesMigrationRegistries(t *testing.T) {
+	expectedMain, expectedMinute := currentSchemaVersions()
+	if len(mainMigrations) == 0 || mainMigrations[len(mainMigrations)-1].id != expectedMain {
+		t.Fatalf("main migration registry does not end at manifest schema %d", expectedMain)
+	}
+	if len(minuteMigrations) == 0 || minuteMigrations[len(minuteMigrations)-1].id != expectedMinute {
+		t.Fatalf("minute migration registry does not end at manifest schema %d", expectedMinute)
+	}
 }
 
 func TestSchema3UpgradePreservesHistoricalTablesAndDropsGuards(t *testing.T) {
@@ -449,9 +473,7 @@ func TestEmptyDatabasesUpgradeDirectlyToSchema17AndMinute3(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 26 || minuteStatus.CurrentVersion != 3 {
-		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
-	}
+	assertCurrentSchemaVersions(t, mainStatus, minuteStatus)
 }
 
 func TestPublished151BaselineUpgradesDirectlyToSchema17(t *testing.T) {
@@ -481,7 +503,8 @@ func TestPublished151BaselineUpgradesDirectlyToSchema17(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.CurrentVersion != 26 || len(status.Pending) != 0 {
+	expectedMain, _ := currentSchemaVersions()
+	if status.CurrentVersion != expectedMain || len(status.Pending) != 0 {
 		t.Fatalf("upgraded status=%+v", status)
 	}
 	if database.Migrator().HasTable("ai_recommend_stocks") {
@@ -511,5 +534,14 @@ func TestPublishedMinuteMigrationChecksumsRemainFrozen(t *testing.T) {
 		if got := item.checksum(); got != want[item.id] {
 			t.Fatalf("minute migration %d checksum = %s, want %s", item.id, got, want[item.id])
 		}
+	}
+}
+
+func TestMigrationVerifierDoesNotAffectChecksum(t *testing.T) {
+	withoutVerifier := migration{id: 999, name: "checksum_contract", description: "fixture", definition: func() string { return "definition" }}
+	withVerifier := withoutVerifier
+	withVerifier.verify = func(*gorm.DB) error { return nil }
+	if withoutVerifier.checksum() != withVerifier.checksum() {
+		t.Fatal("migration verifier changed the published checksum contract")
 	}
 }

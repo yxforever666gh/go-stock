@@ -11,33 +11,19 @@ import (
 	"time"
 	"unicode/utf8"
 
+	sharedai "go-stock/backend/ai"
+	"go-stock/internal/marketquote"
+	"go-stock/internal/recommendationchart"
+	"go-stock/internal/trading"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
 func newID() string { return uuid.NewString() }
 
-type CompletionRequest struct {
-	RecommendationID   string
-	Phase              string
-	Prompt             string
-	Messages           []LifecycleMessage
-	PreviousResponseID string
-	OnAttempt          func(ModelAttemptRecord)
-}
-
-type CompletionResult struct {
-	Content    string
-	ResponseID string
-	Model      string
-}
-
-type AIClient interface {
-	Complete(context.Context, CompletionRequest) (CompletionResult, error)
-}
-
 type QuoteProvider interface {
-	CurrentQuote(context.Context, string) (Quote, error)
+	CurrentQuote(context.Context, string) (marketquote.Quote, error)
 }
 
 type TradingCalendar interface {
@@ -53,10 +39,10 @@ func (WeekdayCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, e
 
 type Service struct {
 	repository      *Repository
-	ai              AIClient
+	ai              sharedai.AIClient
 	quotes          QuoteProvider
 	contextProvider LifecycleContextProvider
-	chartEngine     *RecommendationChartEngine
+	chartEngine     *recommendationchart.Engine
 	calendar        TradingCalendar
 	reviewSchedule  SellReviewSchedule
 	now             func() time.Time
@@ -68,7 +54,7 @@ type Service struct {
 	chartMu         sync.Mutex
 }
 
-func NewService(repository *Repository, ai AIClient, quotes QuoteProvider, calendar TradingCalendar, providers ...LifecycleContextProvider) *Service {
+func NewService(repository *Repository, ai sharedai.AIClient, quotes QuoteProvider, calendar TradingCalendar, providers ...LifecycleContextProvider) *Service {
 	if calendar == nil {
 		calendar = WeekdayCalendar{}
 	}
@@ -113,9 +99,9 @@ func (s *Service) IsTradingDay(ctx context.Context, value time.Time) (bool, erro
 // SetRecommendationChartProvider installs the minute-cache adapter used by
 // the research chart endpoints. It is separate from the lifecycle collector:
 // a cached chart read must never trigger an upstream request.
-func (s *Service) SetRecommendationChartProvider(provider RecommendationChartProvider) {
+func (s *Service) SetRecommendationChartProvider(provider recommendationchart.Provider) {
 	s.chartMu.Lock()
-	s.chartEngine = NewRecommendationChartEngine(provider, s.calendar, func() time.Time { return s.now() })
+	s.chartEngine = recommendationchart.NewEngine(provider, s.calendar, func() time.Time { return s.now() })
 	s.chartMu.Unlock()
 }
 
@@ -154,15 +140,15 @@ func (s *Service) recommendationCapacity(ctx context.Context) (RecommendationCap
 // single direct buy immediately or schedules that attempt for the next valid
 // trading session. The same serial lock is shared with the lifecycle scanner so
 // account competition is deterministic.
-func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, signalQuotes ...Quote) error {
+func (s *Service) EnqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, signalQuotes ...marketquote.Quote) error {
 	return s.enqueueRecommendation(ctx, recommendation, initial, time.Time{}, signalQuotes...)
 }
 
-func (s *Service) EnqueueRecommendationBefore(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...Quote) error {
+func (s *Service) EnqueueRecommendationBefore(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...marketquote.Quote) error {
 	return s.enqueueRecommendation(ctx, recommendation, initial, executionDeadline, signalQuotes...)
 }
 
-func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...Quote) error {
+func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...marketquote.Quote) error {
 	s.serial.Lock()
 	defer s.serial.Unlock()
 	now := s.now()
@@ -182,19 +168,19 @@ func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Rec
 		return err
 	}
 	if capacity.DeployableCash < TargetCashPerTrade-1e-8 {
-		return ErrInsufficientCash
+		return trading.ErrInsufficientCash
 	}
-	var signalQuote *Quote
+	var signalQuote *marketquote.Quote
 	if len(signalQuotes) > 0 && !next.After(now) {
 		candidate := signalQuotes[0]
 		if err := validateBuyQuoteAt(now, candidate); err != nil {
 			return err
 		}
-		quoteCode, ok := NormalizeMainlandCode(candidate.Code)
+		quoteCode, ok := trading.NormalizeMainlandCode(candidate.Code)
 		if !ok || quoteCode != recommendation.StockCode || !sameStockName(candidate.Name, recommendation.StockName) {
 			return errors.New("buy quote does not match recommendation")
 		}
-		_, cost, sizeErr := SizeBuy(recommendation.StockCode, candidate.Price, capacity.DeployableCash)
+		_, cost, sizeErr := sizeResearchBuy(recommendation.StockCode, candidate.Price, capacity.DeployableCash)
 		if sizeErr != nil {
 			return sizeErr
 		}
@@ -393,7 +379,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	if err != nil {
 		return err
 	}
-	request := CompletionRequest{RecommendationID: recommendation.RecommendationID, Phase: "holding", Prompt: prompt, PreviousResponseID: recommendation.PreviousResponseID}
+	request := sharedai.CompletionRequest{RecommendationID: recommendation.RecommendationID, Phase: "holding", Prompt: prompt, PreviousResponseID: recommendation.PreviousResponseID}
 	if recommendation.PreviousResponseID == "" {
 		// The first remote response chain is seeded from this recommendation's
 		// locally persisted context, never from the shared final-decision call.
@@ -483,12 +469,12 @@ func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation
 	return s.attemptBuyWithQuote(ctx, recommendation, now, nil)
 }
 
-func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recommendation, now time.Time, providedQuote *Quote) error {
+func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recommendation, now time.Time, providedQuote *marketquote.Quote) error {
 	nextSell, err := s.firstSellCheck(ctx, now)
 	if err != nil {
 		return err
 	}
-	var quote Quote
+	var quote marketquote.Quote
 	if providedQuote != nil {
 		quote = *providedQuote
 	} else {
@@ -502,13 +488,13 @@ func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recom
 		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
 			"一次性买入校验失败: "+err.Error(), now, &quote)
 	}
-	quoteCode, quoteCodeOK := NormalizeMainlandCode(quote.Code)
+	quoteCode, quoteCodeOK := trading.NormalizeMainlandCode(quote.Code)
 	if !quoteCodeOK || quoteCode != recommendation.StockCode || !sameStockName(quote.Name, recommendation.StockName) {
 		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
 			"一次性买入行情与推荐股票不匹配", now, &quote)
 	}
 	if err := s.repository.Buy(ctx, recommendation.RecommendationID, quote, nextSell, now); err != nil {
-		if errors.Is(err, ErrInsufficientCash) || errors.Is(err, ErrMinimumOrder) {
+		if errors.Is(err, trading.ErrInsufficientCash) || errors.Is(err, trading.ErrMinimumOrder) {
 			return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_cash", "错过—资金不足", err.Error(), now, &quote)
 		}
 		return err
@@ -608,7 +594,7 @@ func enrichPositionValue(position *Position) {
 		position.EstimatedSellFees = position.SellFees
 		position.NetSellValue = position.ExitPrice*float64(position.Quantity) - position.SellFees
 	} else if position.CurrentPrice > 0 {
-		sell := CalculateSellCost(position.CurrentPrice, position.Quantity)
+		sell := trading.CalculateSellCost(position.CurrentPrice, position.Quantity)
 		position.EstimatedSellFees = sell.TotalFees
 		position.NetSellValue = sell.NetCashFlow
 		position.NetPnL = sell.NetCashFlow - invested
@@ -728,21 +714,22 @@ func marshalSourceRefs(sourceRefs []string) string {
 	return string(value)
 }
 
-func compressMessages(messages []LifecycleMessage, max int) []LifecycleMessage {
-	if len(messages) <= max {
-		return messages
+func compressMessages(messages []LifecycleMessage, max int) []sharedai.Message {
+	if len(messages) > max {
+		messages = append(messages[:1:1], messages[len(messages)-(max-1):]...)
 	}
-	result := make([]LifecycleMessage, 0, max)
-	result = append(result, messages[0])
-	result = append(result, messages[len(messages)-(max-1):]...)
+	result := make([]sharedai.Message, 0, len(messages))
+	for _, message := range messages {
+		result = append(result, sharedai.Message{RecommendationID: message.RecommendationID, Role: message.Role, Content: message.Content})
+	}
 	return result
 }
 
-func validateBuyQuote(quote Quote) error {
+func validateBuyQuote(quote marketquote.Quote) error {
 	if quote.Price <= 0 || quote.Suspended || quote.LimitUp || quote.LimitDown {
 		return errors.New("quote is not tradable")
 	}
-	if _, ok := NormalizeMainlandCode(quote.Code); !ok {
+	if _, ok := trading.NormalizeMainlandCode(quote.Code); !ok {
 		return errors.New("quote is not a Shanghai/Shenzhen A share")
 	}
 	if strings.TrimSpace(quote.Name) == "" {
@@ -751,7 +738,7 @@ func validateBuyQuote(quote Quote) error {
 	return nil
 }
 
-func validateBuyQuoteAt(now time.Time, quote Quote) error {
+func validateBuyQuoteAt(now time.Time, quote marketquote.Quote) error {
 	if err := validateBuyQuote(quote); err != nil {
 		return err
 	}
@@ -769,14 +756,14 @@ func validateBuyQuoteAt(now time.Time, quote Quote) error {
 	return nil
 }
 
-func validateSellQuoteAt(now time.Time, recommendation *Recommendation, quote Quote) error {
+func validateSellQuoteAt(now time.Time, recommendation *Recommendation, quote marketquote.Quote) error {
 	if quote.Price <= 0 || quote.Suspended || quote.LimitDown {
 		return errors.New("停牌、跌停或行情不可交易")
 	}
 	if quote.At.IsZero() {
 		return errors.New("卖出行情缺少有效时间")
 	}
-	quoteCode, ok := NormalizeMainlandCode(quote.Code)
+	quoteCode, ok := trading.NormalizeMainlandCode(quote.Code)
 	if !ok || recommendation == nil || quoteCode != recommendation.StockCode || !sameStockName(quote.Name, recommendation.StockName) {
 		return errors.New("卖出行情与持仓股票不匹配")
 	}

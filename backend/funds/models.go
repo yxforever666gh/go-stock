@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 )
 
@@ -154,11 +154,11 @@ type ETFHolding struct {
 
 type ETFDetail struct {
 	ETFRankingItem
-	TrackingIndex   string            `json:"trackingIndex"`
-	ManagementFee   *float64          `json:"managementFee"`
-	ListDate        string            `json:"listDate,omitempty"`
-	Holdings        []ETFHolding      `json:"holdings"`
-	ChartInstrument data.InstrumentID `json:"chartInstrument"`
+	TrackingIndex   string                   `json:"trackingIndex"`
+	ManagementFee   *float64                 `json:"managementFee"`
+	ListDate        string                   `json:"listDate,omitempty"`
+	Holdings        []ETFHolding             `json:"holdings"`
+	ChartInstrument instruments.InstrumentID `json:"chartInstrument"`
 }
 
 // ETFIdentity is exchange-authoritative identity and listing metadata. It is
@@ -222,7 +222,7 @@ type ETFFundamentalsProvider interface {
 
 type ETFChartProvider interface {
 	Name() string
-	ResolveETFChart(context.Context, ETFIdentity) marketdata.ProviderResult[data.InstrumentID]
+	ResolveETFChart(context.Context, ETFIdentity) marketdata.ProviderResult[instruments.InstrumentID]
 }
 
 var ErrProviderRateLimited = errors.New("provider rate limited")

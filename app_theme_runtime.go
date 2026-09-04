@@ -16,7 +16,7 @@ import (
 const themeLifecycleCronSpec = "0 10 15 * * 1-5"
 
 type themeLifecycleCollector interface {
-	CollectAndFreeze(context.Context, time.Time) (data.ThemeLifecycleRunResult, error)
+	CollectAndFreeze(context.Context, time.Time) (themes.ThemeLifecycleRunResult, error)
 }
 
 type themeLifecycleFactory func() (themeLifecycleCollector, error)
@@ -41,9 +41,9 @@ func (a *App) configureThemeLifecycleRuntime(mainDB, minuteDB *gorm.DB) {
 		adapters := data.NewExistingThemeSourceAdapters(data.ExistingThemeSourceOptions{
 			Market: data.NewMarketEvidenceServiceWithMinuteDB(minuteDB),
 		})
-		sources := data.NewThemeSourceAggregator(0, adapters...)
+		sources := themes.NewThemeSourceAggregator(0, adapters...)
 		sources.Now = clock
-		return data.NewThemeLifecycleRuntime(sources, service, repository, clock), nil
+		return themes.NewThemeLifecycleRuntime(sources, service, repository, clock), nil
 	}
 
 	runtime, err := a.themeFactory()

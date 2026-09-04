@@ -7,11 +7,9 @@ import (
 	"fmt"
 	"io"
 	"strings"
-
-	"go-stock/internal/bootstrap"
 )
 
-func runAI(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
+func runAI(args []string, g GlobalOptions, stdout, stderr io.Writer, resolver CommandAIResolver) error {
 	fs := flag.NewFlagSet("ai", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 
@@ -52,10 +50,6 @@ func runAI(args []string, g GlobalOptions, stdout, stderr io.Writer) error {
 		return errors.New("请同时提供 --stock-code 与 --stock-name")
 	}
 
-	resolver, err := bootstrap.NewProductionCommandAIResolver()
-	if err != nil {
-		return err
-	}
 	openAI, err := ResolveAIForCommand(context.Background(), resolver, AIOptions{
 		AIConfigID:  aiConfigID,
 		BaseURL:     strings.TrimSpace(baseURL),

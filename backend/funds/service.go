@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 )
 
@@ -20,6 +20,7 @@ type Service struct {
 	etfPrimary   ETFFundamentalsProvider
 	etfFallback  ETFFundamentalsProvider
 	etfChart     ETFChartProvider
+	legacy       *legacyFundOperations
 	now          func() time.Time
 }
 
@@ -149,7 +150,7 @@ func (s *Service) ETFSearch(ctx context.Context, q string, limit int) marketdata
 }
 
 func (s *Service) ETFDetail(ctx context.Context, code string) marketdata.DataEnvelope[ETFDetail] {
-	canonical, ok := data.NormalizeETFCode(code)
+	canonical, ok := instruments.NormalizeETFCode(code)
 	if !ok {
 		return s.etfDetailFailure("validation", fmt.Errorf("invalid ETF code %q", code))
 	}
@@ -193,7 +194,7 @@ func (s *Service) ETFDetail(ctx context.Context, code string) marketdata.DataEnv
 			detail.ManagementFee = cloneFloat(values.ManagementFee)
 		}
 	}
-	chartResult := marketdata.ProviderResult[data.InstrumentID]{}
+	chartResult := marketdata.ProviderResult[instruments.InstrumentID]{}
 	if s.etfChart != nil {
 		chartResult = s.etfChart.ResolveETFChart(ctx, identity)
 		provenance.sources = append(provenance.sources, providerState(s.etfChart.Name(), chartResult))
@@ -204,7 +205,7 @@ func (s *Service) ETFDetail(ctx context.Context, code string) marketdata.DataEnv
 		}
 	}
 	if detail.ChartInstrument.Code == "" {
-		instrument, parseErr := data.ParseInstrumentID(identity.Code, "etf", identity.Market)
+		instrument, parseErr := instruments.ParseInstrumentID(identity.Code, "etf", identity.Market)
 		if parseErr != nil {
 			provenance.errors = append(provenance.errors, marketdata.DataError{Provider: "instrument", Code: "invalid_identity", Message: parseErr.Error()})
 		} else {
@@ -366,7 +367,7 @@ func hasProviderData[T any](dataValue T) bool {
 		return len(value) > 0
 	case map[string]ETFFundamentals:
 		return len(value) > 0
-	case data.InstrumentID:
+	case instruments.InstrumentID:
 		return value.Code != ""
 	default:
 		return false
@@ -502,7 +503,7 @@ func normalizeETFIdentities(items []ETFIdentity) []ETFIdentity {
 	result := make([]ETFIdentity, 0, len(items))
 	seen := make(map[string]struct{}, len(items))
 	for _, item := range items {
-		canonical, ok := data.NormalizeETFCode(item.Code)
+		canonical, ok := instruments.NormalizeETFCode(item.Code)
 		if !ok {
 			continue
 		}
@@ -545,7 +546,7 @@ func normalizeETFQuotes(values map[string]ETFQuote) map[string]ETFQuote {
 		if code == "" {
 			code = key
 		}
-		canonical, ok := data.NormalizeETFCode(code)
+		canonical, ok := instruments.NormalizeETFCode(code)
 		if !ok {
 			continue
 		}
@@ -567,7 +568,7 @@ func normalizeETFFundamentals(values map[string]ETFFundamentals) map[string]ETFF
 		if code == "" {
 			code = key
 		}
-		canonical, ok := data.NormalizeETFCode(code)
+		canonical, ok := instruments.NormalizeETFCode(code)
 		if !ok {
 			continue
 		}

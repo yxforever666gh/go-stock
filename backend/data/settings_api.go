@@ -11,7 +11,6 @@ import (
 	appconfig "go-stock/internal/config"
 	"os"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -139,7 +138,6 @@ func UpdateConfig(s *SettingConfig) string {
 		"update_basic_info_on_start":       s.UpdateBasicInfoOnStart,
 		"refresh_interval":                 s.RefreshInterval,
 		"tushare_token":                    s.TushareToken,
-		"check_update":                     s.CheckUpdate,
 		"crawl_time_out":                   s.CrawlTimeOut,
 		"k_days":                           s.KDays,
 		"enable_danmu":                     s.EnableDanmu,
@@ -454,36 +452,6 @@ func ensureSettingsRecord(tx *gorm.DB) (*Settings, error) {
 	return settings, nil
 }
 
-func NormalizeAIAnalysisTimes(input string) ([]string, error) {
-	replacer := strings.NewReplacer("，", ",", "；", ",", ";", ",", "\n", ",", "\t", ",")
-	raw := replacer.Replace(strings.TrimSpace(input))
-	if raw == "" {
-		return nil, nil
-	}
-
-	seen := make(map[string]struct{})
-	times := make([]string, 0)
-	for _, item := range strings.Split(raw, ",") {
-		text := strings.TrimSpace(item)
-		if text == "" {
-			continue
-		}
-		if !strictAnalysisTimeRegexp.MatchString(text) {
-			return nil, fmt.Errorf("AI 分析时间格式无效：%s", text)
-		}
-		if _, exists := seen[text]; exists {
-			continue
-		}
-		seen[text] = struct{}{}
-		times = append(times, text)
-	}
-	sort.Strings(times)
-	if len(times) == 0 {
-		return []string{}, nil
-	}
-	return times, nil
-}
-
 func NormalizeAIReviewSchedule(start string, interval int) (string, int, error) {
 	start = strings.TrimSpace(start)
 	if start == "" {
@@ -743,52 +711,4 @@ func SelectPrimaryAIConfig(aiConfigs []*AIConfig) *AIConfig {
 		}
 	}
 	return nil
-}
-
-// SelectPrimaryAIConfigID returns the preferred AI config ID, or 0 if none.
-func SelectPrimaryAIConfigID(setting *SettingConfig) int {
-	if setting == nil {
-		return 0
-	}
-	cfg := SelectPrimaryAIConfig(setting.AiConfigs)
-	if cfg == nil {
-		return 0
-	}
-	return int(cfg.ID)
-}
-
-// ResolveAIFallbackOrder returns the ordered AI config IDs used for failover.
-// When a specific config is requested, it is tried first and the remaining
-// configs are appended in current saved order without duplicates.
-func ResolveAIFallbackOrder(setting *SettingConfig, requestedAIConfigID int) []int {
-	if setting == nil || len(setting.AiConfigs) == 0 {
-		return nil
-	}
-
-	enabled := EnabledAIConfigs(setting.AiConfigs)
-	ordered := make([]int, 0, len(enabled))
-	seen := make(map[int]struct{}, len(enabled))
-	appendID := func(id int) {
-		if id <= 0 {
-			return
-		}
-		if _, ok := seen[id]; ok {
-			return
-		}
-		seen[id] = struct{}{}
-		ordered = append(ordered, id)
-	}
-
-	if requestedAIConfigID > 0 {
-		for _, cfg := range enabled {
-			if int(cfg.ID) == requestedAIConfigID {
-				appendID(requestedAIConfigID)
-				break
-			}
-		}
-	}
-	for _, cfg := range enabled {
-		appendID(int(cfg.ID))
-	}
-	return ordered
 }

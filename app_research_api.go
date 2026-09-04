@@ -11,6 +11,8 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/backend/researchapp"
+	"go-stock/internal/recommendationchart"
 )
 
 const (
@@ -27,7 +29,7 @@ const (
 func (a *App) replaceResearchRuntime(configID int) error {
 	factory := a.researchFactory
 	if factory == nil {
-		factory = data.NewResearchRuntime
+		factory = newResearchRuntime
 	}
 	runtime, err := factory(configID)
 	if err != nil {
@@ -39,7 +41,7 @@ func (a *App) replaceResearchRuntime(configID int) error {
 	return nil
 }
 
-func (a *App) getResearchRuntime() (*data.ResearchRuntime, error) {
+func (a *App) getResearchRuntime() (*researchapp.Runtime, error) {
 	a.researchRuntimeMu.RLock()
 	runtime := a.researchRuntime
 	a.researchRuntimeMu.RUnlock()
@@ -271,7 +273,7 @@ func (a *App) processCapitalDeployment(startup bool) {
 	}
 }
 
-func (a *App) startClaimedCapitalDeployment(runtime *data.ResearchRuntime, selected *models.AIConfig, claim research.AnalysisTriggerClaim, reanalysisInterval time.Duration) {
+func (a *App) startClaimedCapitalDeployment(runtime *researchapp.Runtime, selected *models.AIConfig, claim research.AnalysisTriggerClaim, reanalysisInterval time.Duration) {
 	a.aiAnalysisRunMu.Lock()
 	if a.aiAnalysisRunning {
 		a.aiAnalysisRunMu.Unlock()
@@ -545,13 +547,13 @@ func (a *App) getAIRecommendation(ctx context.Context, recommendationID string) 
 	return runtime.Service.Detail(ctx, recommendationID)
 }
 
-func (a *App) getAIRecommendationChart(ctx context.Context, recommendationID string, refresh bool) (research.RecommendationChart, error) {
+func (a *App) getAIRecommendationChart(ctx context.Context, recommendationID string, refresh bool) (recommendationchart.Chart, error) {
 	if strings.TrimSpace(recommendationID) == "" {
-		return research.RecommendationChart{}, errors.New("recommendationId is required")
+		return recommendationchart.Chart{}, errors.New("recommendationId is required")
 	}
 	runtime, err := a.getResearchRuntime()
 	if err != nil {
-		return research.RecommendationChart{}, err
+		return recommendationchart.Chart{}, err
 	}
 	return runtime.Service.RecommendationChart(ctx, recommendationID, refresh)
 }

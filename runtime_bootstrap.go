@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	log "go-stock/backend/logger"
-	"go-stock/internal/bootstrap"
 	appconfig "go-stock/internal/config"
 )
 
@@ -14,10 +13,6 @@ func normalizeWebListenAddr(raw string) string {
 		return value
 	}
 	return appconfig.DefaultWebListenAddr
-}
-
-func ensureRuntimeDirs(cfg appconfig.AppConfig) {
-	bootstrap.EnsureRuntimeDirs(cfg)
 }
 
 func logStartupConfig(cfg appconfig.AppConfig) {

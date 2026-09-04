@@ -89,8 +89,8 @@ func InitAnalyzeSentiment() {
 	}
 	seg.CalcToken()
 
-	stocks := &[]StockBasic{}
-	db.Dao.Model(&StockBasic{}).Find(stocks)
+	stocks := &[]models.StockBasic{}
+	db.Dao.Model(&models.StockBasic{}).Find(stocks)
 	for _, stock := range *stocks {
 		if strutil.Trim(stock.Name) == "" {
 			continue

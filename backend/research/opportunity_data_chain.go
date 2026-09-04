@@ -8,6 +8,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-stock/internal/marketquote"
+	"go-stock/internal/researchevidence"
+	"go-stock/internal/trading"
 )
 
 const (
@@ -17,7 +21,7 @@ const (
 )
 
 type decisionQuoteSnapshot struct {
-	quote  Quote
+	quote  marketquote.Quote
 	err    error
 	status string
 	reason string
@@ -40,7 +44,7 @@ func (r *AnalysisRunner) collectDecisionQuotes(ctx context.Context, at time.Time
 	result := make(map[string]decisionQuoteSnapshot, len(rows))
 	if r == nil || r.service == nil || r.service.quotes == nil {
 		for _, row := range rows {
-			if code, ok := NormalizeMainlandCode(row.StockCode); ok && allowed[code] {
+			if code, ok := trading.NormalizeMainlandCode(row.StockCode); ok && allowed[code] {
 				result[code] = decisionQuoteSnapshot{status: "unavailable", reason: "decision quote provider is unavailable"}
 			}
 		}
@@ -54,7 +58,7 @@ func (r *AnalysisRunner) collectDecisionQuotes(ctx context.Context, at time.Time
 		if row.Action == OpportunityActionReject {
 			continue
 		}
-		code, ok := NormalizeMainlandCode(row.StockCode)
+		code, ok := trading.NormalizeMainlandCode(row.StockCode)
 		if !ok || !allowed[code] {
 			continue
 		}
@@ -85,7 +89,7 @@ func (r *AnalysisRunner) collectDecisionQuotes(ctx context.Context, at time.Time
 		if row.Action == OpportunityActionReject {
 			continue
 		}
-		code, ok := NormalizeMainlandCode(row.StockCode)
+		code, ok := trading.NormalizeMainlandCode(row.StockCode)
 		if !ok || !allowed[code] {
 			continue
 		}
@@ -122,7 +126,7 @@ func opportunityRowsForExecution(rows []finalOpportunityRow) []finalOpportunityR
 	return result
 }
 
-func classifyDecisionQuote(now time.Time, code, name string, quote Quote, quoteErr error) decisionQuoteSnapshot {
+func classifyDecisionQuote(now time.Time, code, name string, quote marketquote.Quote, quoteErr error) decisionQuoteSnapshot {
 	result := decisionQuoteSnapshot{quote: quote, status: "ok"}
 	if quoteErr != nil {
 		result.status, result.reason = "unavailable", quoteErr.Error()
@@ -132,7 +136,7 @@ func classifyDecisionQuote(now time.Time, code, name string, quote Quote, quoteE
 		result.status, result.reason = "unavailable", "decision quote is missing a valid price or timestamp"
 		return result
 	}
-	quoteCode, ok := NormalizeMainlandCode(quote.Code)
+	quoteCode, ok := trading.NormalizeMainlandCode(quote.Code)
 	if !ok || quoteCode != code || !sameStockName(name, quote.Name) {
 		result.status, result.reason = "invalid", "decision quote does not match the candidate"
 		return result
@@ -149,14 +153,14 @@ func classifyDecisionQuote(now time.Time, code, name string, quote Quote, quoteE
 	return result
 }
 
-func mergeWaitCandidates(waits []BuyOpportunity, candidates []StockCandidate, limit int) []StockCandidate {
+func mergeWaitCandidates(waits []BuyOpportunity, candidates []researchevidence.StockCandidate, limit int) []researchevidence.StockCandidate {
 	if limit <= 0 {
-		return []StockCandidate{}
+		return []researchevidence.StockCandidate{}
 	}
-	result := make([]StockCandidate, 0, limit)
+	result := make([]researchevidence.StockCandidate, 0, limit)
 	seen := make(map[string]bool, len(waits)+len(candidates))
-	appendCandidate := func(candidate StockCandidate) {
-		code, ok := NormalizeMainlandCode(candidate.Code)
+	appendCandidate := func(candidate researchevidence.StockCandidate) {
+		code, ok := trading.NormalizeMainlandCode(candidate.Code)
 		if !ok || seen[code] || len(result) >= limit {
 			return
 		}
@@ -165,7 +169,7 @@ func mergeWaitCandidates(waits []BuyOpportunity, candidates []StockCandidate, li
 		result = append(result, candidate)
 	}
 	for _, opportunity := range waits {
-		appendCandidate(StockCandidate{Code: opportunity.StockCode, Name: opportunity.StockName})
+		appendCandidate(researchevidence.StockCandidate{Code: opportunity.StockCode, Name: opportunity.StockName})
 	}
 	for _, candidate := range candidates {
 		appendCandidate(candidate)
@@ -204,8 +208,8 @@ func effectivePromptCutoff(collectedThrough, explicit time.Time) time.Time {
 	return collectedThrough
 }
 
-func sourcesAvailableAtCutoff(sources []SourceDocument, cutoff time.Time, requireAvailableAt bool) []SourceDocument {
-	result := append([]SourceDocument(nil), sources...)
+func sourcesAvailableAtCutoff(sources []researchevidence.SourceDocument, cutoff time.Time, requireAvailableAt bool) []researchevidence.SourceDocument {
+	result := append([]researchevidence.SourceDocument(nil), sources...)
 	for index := range result {
 		source := &result[index]
 		if source.AvailableAt == nil {
@@ -231,7 +235,7 @@ func sourcesAvailableAtCutoff(sources []SourceDocument, cutoff time.Time, requir
 	return result
 }
 
-func validateStockPromptMarketTime(source SourceDocument, cutoff time.Time) error {
+func validateStockPromptMarketTime(source researchevidence.SourceDocument, cutoff time.Time) error {
 	name := strings.ToLower(source.SourceName)
 	if !strings.Contains(name, "实时行情") && !strings.Contains(name, "分钟k") {
 		return nil

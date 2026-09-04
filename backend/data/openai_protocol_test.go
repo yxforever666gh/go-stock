@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"go-stock/backend/ai"
 )
 
 func TestCompleteResearchStreamProtocols(t *testing.T) {
@@ -55,7 +57,7 @@ func TestCompleteResearchStreamProtocols(t *testing.T) {
 			defer server.Close()
 			states := make([]string, 0)
 			content, responseID, model, err := testOpenAI(server.URL, test.protocol).CompleteResearchStream(
-				context.Background(), []map[string]any{{"role": "user", "content": "ping"}}, "", func(event AIStreamActivity) {
+				context.Background(), []map[string]any{{"role": "user", "content": "ping"}}, "", func(event ai.StreamActivity) {
 					states = append(states, event.State)
 				})
 			if err != nil {

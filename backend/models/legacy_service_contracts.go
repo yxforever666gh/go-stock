@@ -21,7 +21,7 @@ type Settings struct {
 	RefreshInterval             int64   `json:"refreshInterval"`
 	OpenAiEnable                bool    `json:"-"`
 	Prompt                      string  `json:"-"`
-	CheckUpdate                 bool    `json:"checkUpdate"`
+	CheckUpdate                 bool    `json:"-"`
 	QuestionTemplate            string  `json:"-"`
 	CrawlTimeOut                int64   `json:"crawlTimeOut"`
 	KDays                       int64   `json:"kDays"`

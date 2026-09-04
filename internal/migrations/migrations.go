@@ -63,6 +63,7 @@ type migration struct {
 	definition        func() string
 	publishedChecksum string
 	apply             func(*gorm.DB) error
+	verify            func(*gorm.DB) error
 }
 
 func (m migration) checksum() string {
@@ -96,18 +97,21 @@ var mainMigrations = []migration{
 		description: "App 1.6.0 creates isolated AI-analysis, lifecycle, account, trade and position tables and removes all legacy strategy guard triggers without deleting history.",
 		definition:  mainMigrationV3Definition,
 		apply:       applyResearchV160Schema,
+		verify:      verifyMainSchema3Runtime,
 	},
 	{
 		id: 4, name: "ai_config_model_switch_fallback_order",
 		description: "App 1.6.0 adds a per-model call switch while retaining ai_config.sort as the single fallback order.",
 		definition:  func() string { return "ai_config.disabled NOT NULL DEFAULT 0\nai_config.sort is fallback order" },
 		apply:       applyAIConfigModelSwitchFallbackOrder,
+		verify:      verifyMainSchema4Runtime,
 	},
 	{
 		id: 5, name: "research_model_attempt_diagnostics",
 		description: "App 1.6.2 persists sanitized, structured model-attempt diagnostics for each research analysis run.",
 		definition:  func() string { return "research_v160_analysis_runs.model_attempt_log_json TEXT NOT NULL DEFAULT '[]'" },
 		apply:       applyResearchModelAttemptDiagnostics,
+		verify:      verifyMainSchema5Runtime,
 	},
 	{
 		id: 6, name: "research_four_hour_activation_recovery",
@@ -128,7 +132,8 @@ var mainMigrations = []migration{
 				"research_v160_decision_events.data_status VARCHAR(32)",
 			}, "\n")
 		},
-		apply: applyResearchLifecycleObservationEvidence,
+		apply:  applyResearchLifecycleObservationEvidence,
+		verify: verifyMainSchema7Runtime,
 	},
 	{
 		id: 8, name: "research_direct_buy_and_fixed_sell_schedule",
@@ -141,13 +146,15 @@ var mainMigrations = []migration{
 				"preserve historical activation fields, messages, observations and decisions",
 			}, "\n")
 		},
-		apply: applyResearchDirectBuyStrategy,
+		apply:  applyResearchDirectBuyStrategy,
+		verify: verifyMainSchema8Runtime,
 	},
 	{
 		id: 9, name: "archive_legacy_strategy_runtime",
 		description: "App 1.6.6 removes archived pre-1.6 strategy and yield tables after an externally verified permanent database archive has been created.",
 		definition:  func() string { return strings.Join(legacyStrategyTables, "\n") },
 		apply:       applyLegacyStrategyArchiveCleanup,
+		verify:      verifyMainSchema9Runtime,
 	},
 	{
 		id: 10, name: "research_multi_position_funding_performance",
@@ -161,7 +168,8 @@ var mainMigrations = []migration{
 				"initial contribution sequence 0 amount 100000; four future scheduled deposits of 100000; target 500000",
 			}, "\n")
 		},
-		apply: applyResearchMultiPositionFunding,
+		apply:  applyResearchMultiPositionFunding,
+		verify: verifyMainSchema10Runtime,
 	},
 	{
 		id: 11, name: "settings_provider_order_and_review_schedule",
@@ -173,7 +181,8 @@ var mainMigrations = []migration{
 				"settings.ai_review_interval_minutes INTEGER NOT NULL DEFAULT 15",
 			}, "\n")
 		},
-		apply: applySettingsProviderOrderAndReviewSchedule,
+		apply:  applySettingsProviderOrderAndReviewSchedule,
+		verify: verifyMainSchema11Runtime,
 	},
 	{
 		id: 12, name: "research_fixed_capital_unlimited_positions",
@@ -186,7 +195,8 @@ var mainMigrations = []migration{
 				"deterministic recommendation, trade, lifecycle messages and correction decision",
 			}, "\n")
 		},
-		apply: applyResearchFixedCapitalAndHistoricalBuy,
+		apply:  applyResearchFixedCapitalAndHistoricalBuy,
+		verify: verifyMainSchema12Runtime,
 	},
 	{
 		id: 13, name: "research2_overnight_strength_strategy",
@@ -201,7 +211,8 @@ var mainMigrations = []migration{
 				"research2_account_snapshots",
 			}, "\n")
 		},
-		apply: applyResearch2OvernightStrengthStrategy,
+		apply:  applyResearch2OvernightStrengthStrategy,
+		verify: verifyMainSchema13Runtime,
 	},
 	{
 		id: 14, name: "research2_report_email",
@@ -213,79 +224,92 @@ var mainMigrations = []migration{
 				"eligible statuses: success, no_recommendation, missed_window",
 			}, "\n")
 		},
-		apply: applyResearch2ReportEmail,
+		apply:  applyResearch2ReportEmail,
+		verify: verifyMainSchema14Runtime,
 	},
 	{
 		id: 15, name: "research_evidence_and_market_cache",
 		description: "App 2.0.0 adds immutable research evidence sets, nullable future-run version links and an opt-in evidence switch without rewriting historical research or account state.",
 		definition:  mainMigrationV15Definition,
 		apply:       applyResearchEvidenceSchema,
+		verify:      verifyMainSchema15Runtime,
 	},
 	{
 		id: 16, name: "chart_drawing_documents",
 		description: "App 2.1.0 adds isolated current chart-drawing documents and immutable revision history without rewriting any research, account or trading data.",
 		definition:  mainMigrationV16Definition,
 		apply:       applyChartDrawingSchema,
+		verify:      verifyMainSchema16Runtime,
 	},
 	{
 		id: 17, name: "market_themes_and_catalysts",
 		description: "App 2.2.0 adds normalized market themes, immutable daily snapshots, catalyst claims, constituents and evidence links without rewriting historical research, account or trading data.",
 		definition:  mainMigrationV17Definition,
 		apply:       applyThemeCatalystSchema,
+		verify:      verifyMainSchema17Runtime,
 	},
 	{
 		id: 18, name: "research_audit_and_replay",
 		description: "App 2.3.0 adds immutable prompt and payload audit archives plus controlled replay state without rewriting historical research, account, trading, drawing or theme data.",
 		definition:  mainMigrationV18Definition,
 		apply:       applyResearchAuditSchema,
+		verify:      verifyMainSchema18Runtime,
 	},
 	{
 		id: 19, name: "controlled_knowledge_and_memory",
 		description: "App 2.4.0 adds immutable knowledge versions, explicit user approval state, FTS5 retrieval and auditable memory candidates without rewriting historical research, account or trading data.",
 		definition:  mainMigrationV19Definition,
 		apply:       applyKnowledgeSchema,
+		verify:      verifyMainSchema19Runtime,
 	},
 	{
 		id: 20, name: "fund_rankings_and_exchange_traded_funds",
 		description: "App 2.5.0 adds fund and ETF ranking caches, ETF detail snapshots and an isolated ETF watchlist without rewriting historical research, recommendation, account or trading data.",
 		definition:  mainMigrationV20Definition,
 		apply:       applyFundETFSchema,
+		verify:      verifyMainSchema20Runtime,
 	},
 	{
 		id: 21, name: "event_driven_capital_deployment",
 		description: "App 2.7.0 replaces fixed-time research with durable event-driven capital deployment, structured buy opportunities and database leases without rewriting historical research, recommendation, account or trading rows.",
 		definition:  mainMigrationV21Definition,
 		apply:       applyEventDrivenCapitalDeploymentSchema,
+		verify:      verifyMainSchema21Runtime,
 	},
 	{
 		id: 22, name: "research2_live_valuation",
 		description: "Removes Research Center 2 recommendation ranks and stores the latest valid quote for live position valuation without rewriting realized returns or trading history.",
 		definition:  mainMigrationV22Definition,
 		apply:       applyResearch2LiveValuationSchema,
+		verify:      verifyMainSchema22Runtime,
 	},
 	{
 		id: 23, name: "research2_trailing5_evidence_and_execution",
 		description: "Adds Research Center 2 trailing-five-minute evidence quality and execution provenance without rewriting schema 22 analysis, trade, account or return history.",
 		definition:  mainMigrationV23Definition,
 		apply:       applyResearch2Trailing5Schema,
+		verify:      verifyMainSchema23Runtime,
 	},
 	{
 		id: 24, name: "research2_analysis_attempts",
 		description: "Allows multiple immutable Research Center 2 analysis attempts per trading date while preserving every historical run as attempt 1.",
 		definition:  mainMigrationV24Definition,
 		apply:       applyResearch2AnalysisAttemptSchema,
+		verify:      verifyMainSchema24Runtime,
 	},
 	{
 		id: 25, name: "research1_data_chain_v3_provenance",
 		description: "Adds Research Center 1 data-profile, requested-action, quote-state, wait-reanalysis and lifecycle-policy provenance while preserving account, trade, position and return history.",
 		definition:  mainMigrationV25Definition,
 		apply:       applyResearch1DataChainV3Schema,
+		verify:      verifyMainSchema25Runtime,
 	},
 	{
 		id: 26, name: "research2_execution_chains",
 		description: "Adds Research Center 2 primary/standby execution-chain and execution-audit metadata without rewriting account, trade or realized-return history.",
 		definition:  mainMigrationV26Definition,
 		apply:       applyResearch2ExecutionChainSchema,
+		verify:      verifyMainSchema26Runtime,
 	},
 }
 
@@ -336,17 +360,26 @@ var minuteMigrations = []migration{
 		publishedChecksum: "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec",
 		apply:             func(tx *gorm.DB) error { return tx.Exec(minuteBarSchemaSQL).Error },
 	},
-	{id: 2, name: "lock_minute_bar_schema_definition", description: "App 1.5.1 locks the complete minute_bar DDL without rewriting the published baseline migration.", publishedChecksum: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0", definition: func() string { return minuteBarSchemaSQL }, apply: func(tx *gorm.DB) error {
-		if err := tx.Exec(minuteBarSchemaSQL).Error; err != nil {
-			return err
-		}
-		return verifyMinuteSchema(tx)
-	}},
+	{
+		id:                2,
+		name:              "lock_minute_bar_schema_definition",
+		description:       "App 1.5.1 locks the complete minute_bar DDL without rewriting the published baseline migration.",
+		publishedChecksum: "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0",
+		definition:        func() string { return minuteBarSchemaSQL },
+		apply: func(tx *gorm.DB) error {
+			if err := tx.Exec(minuteBarSchemaSQL).Error; err != nil {
+				return err
+			}
+			return verifyMinuteSchema(tx)
+		},
+		verify: verifyMinuteSchema,
+	},
 	{
 		id: 3, name: "market_evidence_cache",
 		description: "App 2.0.0 adds typed multi-period bars, auction snapshots and trade ticks to the isolated minute cache.",
 		definition:  minuteMigrationV3Definition,
 		apply:       applyMarketEvidenceCacheSchema,
+		verify:      verifyMinuteSchema3Runtime,
 	},
 }
 
@@ -792,129 +825,14 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	if !strings.EqualFold(strings.TrimSpace(result.QuickCheck), "ok") {
 		return result, fmt.Errorf("%s quick_check returned %q", name, result.QuickCheck)
 	}
-	if name == "main" && expected >= 3 {
-		if err := verifyMainSchema3Runtime(database); err != nil {
-			return result, err
+	for _, item := range migrations {
+		if item.id > expected {
+			break
 		}
-	}
-	if name == "main" && expected >= 4 {
-		if err := verifyMainSchema4Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 5 {
-		if err := verifyMainSchema5Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 7 {
-		if err := verifyMainSchema7Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 8 {
-		if err := verifyMainSchema8Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 9 {
-		if err := verifyMainSchema9Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 10 {
-		if err := verifyMainSchema10Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 11 {
-		if err := verifyMainSchema11Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 12 {
-		if err := verifyMainSchema12Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 13 {
-		if err := verifyMainSchema13Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 14 {
-		if err := verifyMainSchema14Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 15 {
-		if err := verifyMainSchema15Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 16 {
-		if err := verifyMainSchema16Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 17 {
-		if err := verifyMainSchema17Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 18 {
-		if err := verifyMainSchema18Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 19 {
-		if err := verifyMainSchema19Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 20 {
-		if err := verifyMainSchema20Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 21 {
-		if err := verifyMainSchema21Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 22 {
-		if err := verifyMainSchema22Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 23 {
-		if err := verifyMainSchema23Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 24 {
-		if err := verifyMainSchema24Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 25 {
-		if err := verifyMainSchema25Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "main" && expected >= 26 {
-		if err := verifyMainSchema26Runtime(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "minute" && expected >= 2 {
-		if err := verifyMinuteSchema(database); err != nil {
-			return result, err
-		}
-	}
-	if name == "minute" && expected >= 3 {
-		if err := verifyMinuteSchema3Runtime(database); err != nil {
-			return result, err
+		if item.verify != nil {
+			if err := item.verify(database); err != nil {
+				return result, err
+			}
 		}
 	}
 	return result, nil

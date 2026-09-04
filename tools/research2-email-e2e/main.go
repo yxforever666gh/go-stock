@@ -12,11 +12,12 @@ import (
 	"strings"
 	"time"
 
+	"go-stock/backend/ai"
 	"go-stock/backend/data"
 	"go-stock/backend/db"
-	"go-stock/backend/research"
 	"go-stock/backend/research2"
 	"go-stock/internal/migrations"
+	"go-stock/internal/researchevidence"
 
 	"gorm.io/gorm"
 )
@@ -120,7 +121,7 @@ func (c historicalCollector) Collect(_ context.Context, cutoff time.Time) (resea
 	if len(eligible) == 0 {
 		return research2.Evidence{}, errors.New("historical evidence has no eligible candidate")
 	}
-	candidates := make([]research.StockCandidate, 0, len(eligible))
+	candidates := make([]researchevidence.StockCandidate, 0, len(eligible))
 	var prompt strings.Builder
 	fmt.Fprintf(&prompt, "数据源：本机分钟线历史缓存（只读隔离副本）\n交易日：%s\n证据截止：%s\n覆盖股票：%d；上涨：%d；下跌：%d。\n", c.date, cutoff.Format("2006-01-02 15:04:05"), len(values), up, down)
 	prompt.WriteString("当前隔离回放没有可靠的截止前新闻催化证据；不得编造催化，证据不足时应明确空仓。\n\n")
@@ -131,7 +132,7 @@ func (c historicalCollector) Collect(_ context.Context, cutoff time.Time) (resea
 		if strings.HasSuffix(item.Code, ".SZ") {
 			code, prefix = strings.TrimSuffix(item.Code, ".SZ"), "sz"
 		}
-		candidates = append(candidates, research.StockCandidate{Code: prefix + code, Name: item.Name})
+		candidates = append(candidates, researchevidence.StockCandidate{Code: prefix + code, Name: item.Name})
 		fmt.Fprintf(&prompt, "|%s%s|%s|%.2f|%.2f|%.2f|%.2f|%.2f|%.0f|%.0f|%d|\n", prefix, code, item.Name, item.Open, item.Close, (item.Close/item.Open-1)*100, item.High, item.Low, item.Volume, item.Amount, item.Bars)
 	}
 	status, _ := json.Marshal([]map[string]any{{"sourceId": "local-minute-replay", "sourceName": "本机分钟线历史缓存", "category": "market_stock", "collectedAt": cutoff, "status": "ok", "stockCount": len(values)}})
@@ -187,7 +188,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	runner := research2.NewRunner(repository, data.NewResearchAIClient(int(setting.AIAnalysisConfigID)), historicalCollector{mainDB: db.Dao, minuteDB: db.MinuteDao, date: tradingDate}, fixedCalendar{})
+	client := ai.NewResearchClient(int(setting.AIAnalysisConfigID), data.ResearchAIClientOptions())
+	runner := research2.NewRunner(repository, client, historicalCollector{mainDB: db.Dao, minuteDB: db.MinuteDao, date: tradingDate}, fixedCalendar{})
 	fixedNow := cutoff.Add(2 * time.Minute)
 	runner.ConfigureReplayClock(func() time.Time { return fixedNow }, func(context.Context, time.Time) error { return nil })
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)

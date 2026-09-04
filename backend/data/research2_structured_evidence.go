@@ -14,8 +14,9 @@ import (
 
 	"go-stock/backend/marketdata"
 	"go-stock/backend/models"
-	"go-stock/backend/research"
 	"go-stock/backend/research2"
+	"go-stock/internal/researchevidence"
+	"go-stock/internal/trading"
 
 	"gorm.io/gorm"
 )
@@ -224,14 +225,14 @@ func research2ClosedWindowEnd(startedAt, snapshotAt time.Time) time.Time {
 }
 
 type research2CandidateWindow struct {
-	Candidate research.StockCandidate
+	Candidate researchevidence.StockCandidate
 	Row       research2MarketRow
 	Bars      []minuteBar
 	Source    string
 	Error     error
 }
 
-func collectResearch2CandidateWindows(ctx context.Context, provider research2MinuteWindowProvider, candidates []research.StockCandidate, rows []research2MarketRow, start, cutoff time.Time) []research2CandidateWindow {
+func collectResearch2CandidateWindows(ctx context.Context, provider research2MinuteWindowProvider, candidates []researchevidence.StockCandidate, rows []research2MarketRow, start, cutoff time.Time) []research2CandidateWindow {
 	byCode := make(map[string]research2MarketRow, len(rows))
 	for _, row := range rows {
 		byCode[research2CanonicalCode(row.Code)] = row
@@ -397,7 +398,7 @@ func research2FloatPointer(value float64) *float64 {
 }
 
 func research2CanonicalCode(value string) string {
-	if normalized, ok := research.NormalizeMainlandCode(value); ok {
+	if normalized, ok := trading.NormalizeMainlandCode(value); ok {
 		return normalized
 	}
 	digits := strings.TrimSpace(value)
@@ -420,7 +421,7 @@ func research2MarketBreadth(rows []research2MarketRow) BreadthData {
 	return data
 }
 
-func research2EnvelopeDocument[T any](name, sourceID, category string, envelope marketdata.DataEnvelope[T]) research.SourceDocument {
+func research2EnvelopeDocument[T any](name, sourceID, category string, envelope marketdata.DataEnvelope[T]) researchevidence.SourceDocument {
 	document := marketEnvelopeDocument(name, sourceID, envelope)
 	document.Category = category
 	if envelope.Status == marketdata.StatusEmpty {
@@ -449,7 +450,7 @@ func research2EnvelopeAvailableAt[T any](envelope marketdata.DataEnvelope[T]) *t
 	return nil
 }
 
-func research2SourceEntity(document research.SourceDocument) string {
+func research2SourceEntity(document researchevidence.SourceDocument) string {
 	text := strings.ToLower(strings.Join([]string{document.SourceID, document.SourceName}, " "))
 	for _, prefix := range []string{"sh", "sz"} {
 		for index := 0; index+8 <= len(text); index++ {
@@ -471,7 +472,7 @@ func research2SourceEntity(document research.SourceDocument) string {
 	return ""
 }
 
-func stabilizeResearch2Document(document research.SourceDocument) research.SourceDocument {
+func stabilizeResearch2Document(document researchevidence.SourceDocument) researchevidence.SourceDocument {
 	if strings.TrimSpace(document.SourceID) == "" {
 		base := strings.ToLower(strings.TrimSpace(document.Category + ":" + document.SourceName))
 		base = strings.NewReplacer(" ", "-", "/", "-", "\\", "-", ":", "-").Replace(base)
@@ -480,7 +481,7 @@ func stabilizeResearch2Document(document research.SourceDocument) research.Sourc
 	return document
 }
 
-func research2DocumentIsEmpty(document research.SourceDocument) bool {
+func research2DocumentIsEmpty(document researchevidence.SourceDocument) bool {
 	if strings.TrimSpace(document.Error) != "" {
 		return false
 	}
@@ -495,7 +496,7 @@ func research2DocumentIsEmpty(document research.SourceDocument) bool {
 	return research2JSONValueEmpty(value)
 }
 
-func research2DocumentEmptyKind(document research.SourceDocument) string {
+func research2DocumentEmptyKind(document researchevidence.SourceDocument) string {
 	if strings.TrimSpace(document.Error) != "" {
 		return ""
 	}
@@ -514,7 +515,7 @@ func research2DocumentEmptyKind(document research.SourceDocument) string {
 	return ""
 }
 
-func research2DocumentEmbeddedStatus(document research.SourceDocument) string {
+func research2DocumentEmbeddedStatus(document researchevidence.SourceDocument) string {
 	var payload map[string]any
 	if json.Unmarshal([]byte(document.Content), &payload) != nil {
 		return ""
@@ -583,7 +584,7 @@ func research2JSONValueEmpty(value any) bool {
 	}
 }
 
-func normalizeResearch2DocumentAvailability(document research.SourceDocument, cutoff time.Time) research.SourceDocument {
+func normalizeResearch2DocumentAvailability(document researchevidence.SourceDocument, cutoff time.Time) researchevidence.SourceDocument {
 	if strings.TrimSpace(document.Content) == "" || (document.AvailableAt != nil && !document.AvailableAt.After(cutoff)) {
 		return document
 	}
@@ -726,7 +727,7 @@ func parseResearch2EvidenceTime(value any) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func research2CompactDocumentSummary(document research.SourceDocument) string {
+func research2CompactDocumentSummary(document researchevidence.SourceDocument) string {
 	if strings.TrimSpace(document.Error) != "" || research2DocumentIsEmpty(document) {
 		return ""
 	}
@@ -870,12 +871,12 @@ func research2ListingDates(ctx context.Context, database *gorm.DB) map[string]in
 	return result
 }
 
-func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, startedAt time.Time) (research2.Evidence, error) {
+func (c *research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, startedAt time.Time) (research2.Evidence, error) {
 	return c.collectStructuredEvidenceWithExclusions(ctx, startedAt, nil)
 }
 
-func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx context.Context, startedAt time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
-	if c == nil || c.sources == nil || c.stocks == nil || c.minuteWindows == nil || c.evidence == nil ||
+func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx context.Context, startedAt time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
+	if c == nil || c.sources == nil || c.stocks == nil || c.minuteWindows == nil ||
 		(c.market == nil && (c.collectBreadth == nil || c.collectFlows == nil)) {
 		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collector is unavailable")
 	}
@@ -889,9 +890,9 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 	marketSnapshot, marketErr := fetch(marketCtx, startedAt)
 	cancelMarket()
 	if marketErr != nil {
-		document := research.SourceDocument{SourceID: "research2:market:full", SourceName: "全市场候选快照", Category: "market",
+		document := researchevidence.SourceDocument{SourceID: "research2:market:full", SourceName: "全市场候选快照", Category: "market",
 			CollectedAt: c.research2Now(), Error: marketErr.Error()}
-		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), Documents: []research.SourceDocument{document}, Degraded: true,
+		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), Documents: []researchevidence.SourceDocument{document}, Degraded: true,
 			DegradedReasons: []string{"full_market_unavailable"}}, fmt.Errorf("全市场列表不可用: %w", marketErr)
 	}
 	sourceReported := marketSnapshot.Reported
@@ -936,20 +937,20 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		if marketSnapshot.Reported <= 0 {
 			detail += "，且来源未提供可信总数"
 		}
-		document := research.SourceDocument{SourceID: "research2:market:full", SourceName: marketSnapshot.SourceName, SourceRef: marketSnapshot.SourceRef,
+		document := researchevidence.SourceDocument{SourceID: "research2:market:full", SourceName: marketSnapshot.SourceName, SourceRef: marketSnapshot.SourceRef,
 			Category: "market", CollectedAt: marketSnapshot.CollectedAt, Error: detail}
-		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), CoveragePct: coverage * 100, Documents: []research.SourceDocument{document},
+		return research2.Evidence{CutoffAt: startedAt, WindowStartAt: startedAt.Truncate(time.Minute).Add(-5 * time.Minute), CoveragePct: coverage * 100, Documents: []researchevidence.SourceDocument{document},
 			Degraded: true, DegradedReasons: []string{"full_market_time_unverifiable"}}, errors.New(detail)
 	}
 	fullMarketPayload, _ := json.Marshal(map[string]any{
 		"sourceId": marketSnapshot.SourceID, "source": marketSnapshot.SourceName, "asOf": marketSnapshot.AsOf,
 		"sourceReported": sourceReported, "eligibleReported": marketSnapshot.Reported, "observed": observed, "coveragePct": coverage * 100, "rows": marketSnapshot.Rows,
 	})
-	fullMarketDocument := research.SourceDocument{SourceID: "research2:market:full", SourceName: marketSnapshot.SourceName, SourceRef: marketSnapshot.SourceRef,
+	fullMarketDocument := researchevidence.SourceDocument{SourceID: "research2:market:full", SourceName: marketSnapshot.SourceName, SourceRef: marketSnapshot.SourceRef,
 		Category: "market", CollectedAt: marketSnapshot.CollectedAt, AvailableAt: &availableAt, Content: string(fullMarketPayload)}
 	if coverage < research2MinimumCoverage {
 		fullMarketDocument.Error = fmt.Sprintf("全市场覆盖率 %.2f%% 低于95%%（%d/%d）", coverage*100, observed, marketSnapshot.Reported)
-		return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: []research.SourceDocument{fullMarketDocument},
+		return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: []researchevidence.SourceDocument{fullMarketDocument},
 			Degraded: true, DegradedReasons: []string{"market_coverage_below_95pct"}}, errors.New(fullMarketDocument.Error)
 	}
 
@@ -971,7 +972,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 
 	type documentsResult struct {
 		kind      string
-		documents []research.SourceDocument
+		documents []researchevidence.SourceDocument
 		err       error
 	}
 	documentResults := make(chan documentsResult, 6)
@@ -1011,7 +1012,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		envelopeResults <- marketEnvelopeResult{kind: "concept", flows: collectFlows(collectionCtx, marketdata.ProviderRequest{Scope: "concept", Sort: "netamount", Limit: 20, CutoffAt: cutoff})}
 	}()
 
-	documents := []research.SourceDocument{fullMarketDocument}
+	documents := []researchevidence.SourceDocument{fullMarketDocument}
 	degradedReasons := make([]string, 0)
 	for range 3 {
 		var result documentsResult
@@ -1023,7 +1024,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		}
 		if result.err != nil {
 			degradedReasons = append(degradedReasons, result.kind+"_auxiliary_collection_failed")
-			documents = append(documents, research.SourceDocument{SourceID: "research2:aux:" + result.kind, SourceName: result.kind + "辅助资料",
+			documents = append(documents, researchevidence.SourceDocument{SourceID: "research2:aux:" + result.kind, SourceName: result.kind + "辅助资料",
 				Category: result.kind, CollectedAt: c.research2Now(), Error: result.err.Error()})
 		}
 		documents = append(documents, result.documents...)
@@ -1069,7 +1070,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 	}
 
 	compactCandidates := make([]research2CompactCandidate, 0, len(windows))
-	eligibleCandidates := make([]research.StockCandidate, 0, len(windows))
+	eligibleCandidates := make([]researchevidence.StockCandidate, 0, len(windows))
 	referencePrices := make(map[string]float64, len(windows))
 	for _, window := range windows {
 		compact := buildResearch2CompactCandidate(window, cutoff)
@@ -1079,7 +1080,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 			quoteAt = compact.Quote.At
 		}
 		quotePayload, _ := json.Marshal(map[string]any{"entityId": compact.EntityID, "quote": compact.Quote, "missing": compact.Missing})
-		quoteDocument := research.SourceDocument{SourceID: "research2:quote:" + compact.Code, SourceName: "截止点行情 " + compact.Code,
+		quoteDocument := researchevidence.SourceDocument{SourceID: "research2:quote:" + compact.Code, SourceName: "截止点行情 " + compact.Code,
 			SourceRef: marketSnapshot.SourceRef, Category: "stock", CollectedAt: c.research2Now(), AvailableAt: &quoteAt, Content: string(quotePayload)}
 		if compact.Quote == nil {
 			quoteDocument.Error = "截止点有效行情不可用"
@@ -1090,7 +1091,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		}
 		minutePayload, _ := json.Marshal(map[string]any{"entityId": compact.EntityID, "windowStartAt": windowStart, "cutoffAt": cutoff,
 			"source": window.Source, "bars": window.Bars, "metrics": compact.Metrics})
-		minuteDocument := research.SourceDocument{SourceID: "research2:minutes:" + compact.Code, SourceName: "五分钟未复权行情 " + compact.Code,
+		minuteDocument := researchevidence.SourceDocument{SourceID: "research2:minutes:" + compact.Code, SourceName: "五分钟未复权行情 " + compact.Code,
 			SourceRef: window.Source, Category: "stock", CollectedAt: c.research2Now(), AvailableAt: &minuteAvailableAt, Content: string(minutePayload)}
 		if window.Error != nil {
 			minuteDocument.Error = window.Error.Error()
@@ -1111,7 +1112,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 	if freezeAt.Before(cutoff) {
 		freezeAt = cutoff
 	}
-	frozenDocuments := make([]research.SourceDocument, 0, len(documents)+1)
+	frozenDocuments := make([]researchevidence.SourceDocument, 0, len(documents)+1)
 	statuses := make([]map[string]any, 0, len(documents)+1)
 	compactSources := make([]research2CompactSource, 0, len(documents))
 	usedIDs := make(map[string]int)
@@ -1150,9 +1151,9 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		return research2.Evidence{CutoffAt: cutoff, WindowStartAt: windowStart, CoveragePct: coverage * 100, Documents: frozenDocuments, Degraded: true,
 			DegradedReasons: append(degradedReasons, "compact_snapshot_marshal_failed")}, marshalErr
 	}
-	compactDocument := research.SourceDocument{SourceID: "research2:compact:v4", SourceName: "研究中心2紧凑结构化快照", Category: "snapshot",
+	compactDocument := researchevidence.SourceDocument{SourceID: "research2:compact:v4", SourceName: "研究中心2紧凑结构化快照", Category: "snapshot",
 		CollectedAt: freezeAt, AvailableAt: &freezeAt, Content: string(compactPayload)}
-	frozenDocuments = append([]research.SourceDocument{compactDocument}, frozenDocuments...)
+	frozenDocuments = append([]researchevidence.SourceDocument{compactDocument}, frozenDocuments...)
 	statuses = append([]map[string]any{{"sourceId": compactDocument.SourceID, "sourceName": compactDocument.SourceName, "category": compactDocument.Category,
 		"availableAt": freezeAt, "collectedAt": compactDocument.CollectedAt, "status": marketdata.StatusOK}}, statuses...)
 	statusJSON, _ := json.Marshal(statuses)
@@ -1162,14 +1163,14 @@ func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		CandidateReferencePrices: referencePrices}, nil
 }
 
-func (c *Research2EvidenceCollector) research2Now() time.Time {
+func (c *research2EvidenceCollector) research2Now() time.Time {
 	if c != nil && c.now != nil {
 		return c.now().In(shanghaiDataLocation())
 	}
 	return time.Now().In(shanghaiDataLocation())
 }
 
-func (c *Research2EvidenceCollector) fetchResearch2FullMarketSnapshot(ctx context.Context, _ time.Time) (research2FullMarketSnapshot, error) {
+func (c *research2EvidenceCollector) fetchResearch2FullMarketSnapshot(ctx context.Context, _ time.Time) (research2FullMarketSnapshot, error) {
 	rows, reported, err := c.fetchFullMarketWithReported(ctx)
 	if err == nil && len(rows) > 0 {
 		collectedAt := c.research2Now()

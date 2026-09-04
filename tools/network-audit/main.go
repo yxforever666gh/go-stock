@@ -4,9 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-
-	"go-stock/internal/bootstrap"
-	"go-stock/internal/cli"
 )
 
 func main() {
@@ -17,13 +14,13 @@ func main() {
 	jsonOut := fs.Bool("json", false, "输出 JSON")
 	_ = fs.Parse(os.Args[1:])
 
-	resolvedDBPath, err := cli.Bootstrap(*dataDir, *dbPath)
+	resolvedDBPath, err := initializeAuditStorage(*dataDir, *dbPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	options := auditOptions{DataDir: *dataDir, DBPath: resolvedDBPath, JSON: *jsonOut}
-	provider := bootstrap.NewProductionMarketAuditProvider()
+	options := auditOptions{DBPath: resolvedDBPath}
+	provider := newProductionMarketAuditProvider()
 	if err := runNetworkAuditWithProvider(provider, *jsonOut, *reportDir, options, os.Stdout, os.Stderr, forceNoProxyEnv()); err != nil {
 		fmt.Fprintf(os.Stderr, "执行失败: %v\n", err)
 		os.Exit(1)

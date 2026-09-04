@@ -1,28 +1,12 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	log "go-stock/backend/logger"
 	"os"
 	"runtime/debug"
 	"strings"
 )
-
-func (a *App) updateBasicInfo() {
-	config := a.services.Config.GetConfig()
-	if config == nil {
-		return
-	}
-	if config.UpdateBasicInfoOnStart {
-		a.goTask(func(ctx context.Context) {
-			if _, err := a.services.Stock.RefreshStockBaseInfo(ctx); err != nil {
-				log.SugaredLogger.Warnf("refresh stock master on startup: %v", err)
-			}
-		})
-		a.goTask(func(context.Context) { a.services.Stock.RefreshIndexBaseInfo() })
-	}
-}
 
 func checkDir(dir string) {
 	if strings.TrimSpace(dir) == "" {
@@ -32,9 +16,6 @@ func checkDir(dir string) {
 	if os.IsNotExist(err) {
 		_ = os.MkdirAll(dir, os.ModePerm)
 		log.SugaredLogger.Info("create dir: " + dir)
-	}
-	if BuildKey == "" {
-		BuildKey = "cc1e0d684e32f176c56ff1fcf384dcd9"
 	}
 }
 

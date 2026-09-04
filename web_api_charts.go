@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-stock/backend/data"
+	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
 )
 
@@ -99,7 +100,7 @@ func instrumentDrawingScopeValues(w http.ResponseWriter, code, assetType, market
 	if strings.TrimSpace(assetType) == "" {
 		assetType = "stock"
 	}
-	instrument, err := data.ParseInstrumentID(code, assetType, market)
+	instrument, err := instruments.ParseInstrumentID(code, assetType, market)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return data.ChartDrawingScope{}, false
@@ -117,7 +118,7 @@ func instrumentChartRequest(w http.ResponseWriter, r *http.Request, includeRange
 	if assetType == "" {
 		assetType = "stock"
 	}
-	instrument, err := data.ParseInstrumentID(r.PathValue("code"), assetType, r.URL.Query().Get("market"))
+	instrument, err := instruments.ParseInstrumentID(r.PathValue("code"), assetType, r.URL.Query().Get("market"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return data.ChartRequest{}, false

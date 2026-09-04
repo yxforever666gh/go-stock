@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-stock/backend/db"
+	"go-stock/backend/instruments"
 )
 
 func TestResearchChartProviderLoadCachedRejectsAdjustedBars(t *testing.T) {
@@ -37,7 +38,7 @@ func TestResearchChartProviderLoadCachedRejectsAdjustedBars(t *testing.T) {
 func TestResearchChartProviderReadsOnlyUnifiedStockOneMinuteNoneScope(t *testing.T) {
 	initMinuteCacheTestDB(t, "chart-provider-unified-cache.db")
 	start := time.Date(2026, 8, 19, 9, 30, 0, 0, cnLocation())
-	instrument, err := ParseInstrumentID("sh601899", "stock", "SH")
+	instrument, err := instruments.ParseInstrumentID("sh601899", "stock", "SH")
 	if err != nil {
 		t.Fatal(err)
 	}

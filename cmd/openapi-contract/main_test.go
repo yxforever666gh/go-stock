@@ -52,6 +52,23 @@ func TestGenerateTypeScriptSupportsOpenAPI31NullUnion(t *testing.T) {
 	}
 }
 
+func TestDiscoverGoRouteFilesExcludesTestsAndSorts(t *testing.T) {
+	tempDir := t.TempDir()
+	for _, name := range []string{"web_api_z.go", "web_api_a.go", "web_api_a_test.go", "other.go"} {
+		if err := os.WriteFile(filepath.Join(tempDir, name), []byte("package sample\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := discoverGoRouteFiles(filepath.Join(tempDir, "web_api*.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{filepath.Join(tempDir, "web_api_a.go"), filepath.Join(tempDir, "web_api_z.go")}
+	if strings.Join(files, "|") != strings.Join(want, "|") {
+		t.Fatalf("route files = %v, want %v", files, want)
+	}
+}
+
 func TestValidateGoRoutesRejectsContractDrift(t *testing.T) {
 	tempDir := t.TempDir()
 	filename := filepath.Join(tempDir, "routes.go")

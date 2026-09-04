@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"go-stock/internal/marketquote"
 )
 
 const (
@@ -26,7 +28,7 @@ type LifecycleContextRequest struct {
 }
 
 type LifecycleObservationDraft struct {
-	Quote           Quote
+	Quote           marketquote.Quote
 	MinuteSummary   MinuteEvidenceSummary
 	Sources         []LifecycleEvidenceSource
 	Status          string
