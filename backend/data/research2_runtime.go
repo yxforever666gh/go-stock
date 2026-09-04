@@ -56,7 +56,7 @@ func NewResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*R
 	collector := &Research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
-		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV6,
+		evidence:      marketdata.NewRepository(mainDB), evidenceProfile: research2EvidenceProfileV7,
 		themes: newThemeEvidenceReader(mainDB),
 	}
 	market := &Research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
@@ -274,11 +274,21 @@ func research2DocumentStatus(document research.SourceDocument, cutoff time.Time,
 }
 
 func (c *Research2EvidenceCollector) CollectForRun(ctx context.Context, runID string, startedAt time.Time) (evidence research2.Evidence, err error) {
+	return c.collectForRun(ctx, runID, startedAt, nil)
+}
+
+func (c *Research2EvidenceCollector) CollectForRunWithExclusions(ctx context.Context, runID string, startedAt time.Time, excludedCodes map[string]struct{}) (evidence research2.Evidence, err error) {
+	return c.collectForRun(ctx, runID, startedAt, excludedCodes)
+}
+
+func (c *Research2EvidenceCollector) collectForRun(ctx context.Context, runID string, startedAt time.Time, excludedCodes map[string]struct{}) (evidence research2.Evidence, err error) {
 	if c == nil || c.evidence == nil || strings.TrimSpace(c.evidenceProfile) == "" {
-		return c.Collect(ctx, startedAt)
+		return c.collectStructuredEvidenceWithExclusions(ctx, startedAt, excludedCodes)
 	}
-	collect := c.Collect
-	if c.collectEvidence != nil {
+	collect := func(ctx context.Context, cutoff time.Time) (research2.Evidence, error) {
+		return c.collectStructuredEvidenceWithExclusions(ctx, cutoff, excludedCodes)
+	}
+	if len(excludedCodes) == 0 && c.collectEvidence != nil {
 		collect = c.collectEvidence
 	}
 	evidence, collectErr := collect(ctx, startedAt)
@@ -582,20 +592,28 @@ func (c *Research2EvidenceCollector) fetchFullMarketRequest(ctx context.Context,
 }
 
 func selectResearch2Candidates(rows []research2MarketRow, limit int, asOf time.Time) []research.StockCandidate {
+	return selectResearch2CandidatesWithExclusions(rows, limit, asOf, nil)
+}
+
+func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}) []research.StockCandidate {
+	excluded := normalizeResearch2ExcludedCodes(excludedCodes)
 	eligible := make([]research2MarketRow, 0, len(rows))
 	for _, row := range rows {
 		name := strings.ToUpper(strings.TrimSpace(row.Name))
 		code := strings.TrimSpace(row.Code)
-		if row.Price <= 0 || row.Volume <= 0 || row.Amount <= 0 || row.ChangeRate <= 0 || strings.Contains(name, "ST") || strings.Contains(name, "退") {
+		if row.Price <= 0 || row.PreClose <= 0 || math.IsNaN(row.PreClose) || math.IsInf(row.PreClose, 0) || row.Volume <= 0 || row.Amount <= 0 || row.ChangeRate <= 0 || strings.Contains(name, "ST") || strings.Contains(name, "退") {
 			continue
 		}
 		if !(strings.HasPrefix(code, "60") || strings.HasPrefix(code, "00")) {
 			continue
 		}
+		if _, blocked := excluded[research2CanonicalCode(code)]; blocked {
+			continue
+		}
 		if !listedForResearch2Sessions(row.ListingDate, asOf, 10, IsCNOpenTradeDayStrict) {
 			continue
 		}
-		if row.PreClose > 0 && row.Price >= math.Floor(row.PreClose*1.1*100+0.5)/100-0.001 {
+		if _, _, blocked := research2.IsInsideLimitBuffer(row.Price, row.PreClose, research2.SelectionLimitDistancePct); blocked {
 			continue
 		}
 		if -research.CalculateBuyCost(row.Price, research2.LotSize).NetCashFlow > research2.InitialCash {
@@ -618,6 +636,17 @@ func selectResearch2Candidates(rows []research2MarketRow, limit int, asOf time.T
 			prefix = "sh"
 		}
 		result = append(result, research.StockCandidate{Code: prefix + row.Code, Name: row.Name})
+	}
+	return result
+}
+
+func normalizeResearch2ExcludedCodes(source map[string]struct{}) map[string]struct{} {
+	result := make(map[string]struct{}, len(source))
+	for code := range source {
+		canonical := research2CanonicalCode(code)
+		if normalized, ok := research.NormalizeMainlandCode(canonical); ok {
+			result[normalized] = struct{}{}
+		}
 	}
 	return result
 }
@@ -692,7 +721,7 @@ func (p *Research2MarketProvider) PriceAt(ctx context.Context, code string, targ
 		if err != nil {
 			return research2.PriceSnapshot{}, err
 		}
-		return research2.PriceSnapshot{Code: quote.Code, Name: quote.Name, Price: quote.Price, At: quote.At, Suspended: quote.Suspended, LimitUp: quote.LimitUp, LimitDown: quote.LimitDown, Source: "tencent_realtime"}, nil
+		return research2.PriceSnapshot{Code: quote.Code, Name: quote.Name, Price: quote.Price, PreviousClose: quote.PreviousClose, At: quote.At, Suspended: quote.Suspended, LimitUp: quote.LimitUp, LimitDown: quote.LimitDown, Source: "tencent_realtime"}, nil
 	}
 	start, end := target.Add(-time.Minute), target.Add(2*time.Minute)
 	bars, source, err := fetchMinuteBarsWithTencentContext(ctx, code, start, end)
@@ -718,6 +747,7 @@ func (p *Research2MarketProvider) PriceAt(ctx context.Context, code string, targ
 	result := research2.PriceSnapshot{Code: code, Price: research2BarPrice(bar), At: bar.TradeTime, Source: source}
 	if quote, quoteErr := p.quotes.CurrentQuote(ctx, code); quoteErr == nil && math.Abs(quote.At.Sub(target).Minutes()) <= 5 {
 		result.Name = quote.Name
+		result.PreviousClose = quote.PreviousClose
 		result.Suspended = quote.Suspended
 		result.LimitUp = quote.LimitUp
 		result.LimitDown = quote.LimitDown
@@ -758,7 +788,7 @@ func (p *Research2MarketProvider) Metrics(ctx context.Context, item research2.Re
 	if quote, quoteErr := p.quotes.CurrentQuote(ctx, item.StockCode); quoteErr == nil {
 		sellDayPreviousClose = quote.PreviousClose
 	}
-	limitPrice := math.Floor(sellDayPreviousClose*1.1*100+0.5) / 100
+	limitPrice := research2.MainBoardLimitPrice(sellDayPreviousClose)
 	for _, bar := range bars {
 		if item.TargetSellAt != nil && !bar.TradeTime.After(*item.TargetSellAt) && bar.High >= item.BuyPrice*1.05 {
 			result.HitFiveBeforeSell = true

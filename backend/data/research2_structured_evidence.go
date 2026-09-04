@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	research2EvidenceProfileV6 = "research2-trailing5-v6"
+	research2EvidenceProfileV7 = "research2-trailing5-v7"
 	research2MinimumCoverage   = 0.95
 	research2MinimumMinuteBars = 4
 	research2QuoteFreshness    = 3 * time.Minute
@@ -871,6 +871,10 @@ func research2ListingDates(ctx context.Context, database *gorm.DB) map[string]in
 }
 
 func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, startedAt time.Time) (research2.Evidence, error) {
+	return c.collectStructuredEvidenceWithExclusions(ctx, startedAt, nil)
+}
+
+func (c *Research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx context.Context, startedAt time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
 	if c == nil || c.sources == nil || c.stocks == nil || c.minuteWindows == nil || c.evidence == nil ||
 		(c.market == nil && (c.collectBreadth == nil || c.collectFlows == nil)) {
 		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collector is unavailable")
@@ -962,7 +966,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 		candidateRows = append(candidateRows, row)
 	}
-	selected := selectResearch2Candidates(candidateRows, 12, cutoff)
+	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes)
 	windows := collectResearch2CandidateWindows(collectionCtx, c.minuteWindows, selected, marketSnapshot.Rows, windowStart, windowEnd)
 
 	type documentsResult struct {
@@ -1139,7 +1143,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}
-	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV6, WindowStartAt: windowStart, WindowEndAt: windowEnd, CutoffAt: cutoff, FreezeAt: freezeAt,
+	compactSnapshot := research2CompactSnapshot{Version: research2EvidenceProfileV7, WindowStartAt: windowStart, WindowEndAt: windowEnd, CutoffAt: cutoff, FreezeAt: freezeAt,
 		Market: compactMarket, Candidates: compactCandidates, Sources: compactSources, Degraded: len(degradedReasons) > 0, DegradedReasons: degradedReasons}
 	compactPayload, marshalErr := json.Marshal(compactSnapshot)
 	if marshalErr != nil {
@@ -1153,7 +1157,7 @@ func (c *Research2EvidenceCollector) collectStructuredEvidence(ctx context.Conte
 		"availableAt": freezeAt, "collectedAt": compactDocument.CollectedAt, "status": marketdata.StatusOK}}, statuses...)
 	statusJSON, _ := json.Marshal(statuses)
 	return research2.Evidence{Prompt: string(compactPayload), SourceStatusJSON: string(statusJSON), Candidates: eligibleCandidates,
-		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV6, CutoffAt: cutoff, FreezeAt: freezeAt, WindowStartAt: windowStart, WindowEndAt: windowEnd,
+		Documents: frozenDocuments, EvidenceProfileVersion: research2EvidenceProfileV7, CutoffAt: cutoff, FreezeAt: freezeAt, WindowStartAt: windowStart, WindowEndAt: windowEnd,
 		CoveragePct: compactMarket.CoveragePct, Degraded: compactSnapshot.Degraded, DegradedReasons: degradedReasons,
 		CandidateReferencePrices: referencePrices}, nil
 }

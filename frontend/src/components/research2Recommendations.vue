@@ -14,7 +14,7 @@ const detail = ref(null)
 const visible = ref(false)
 
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
-const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
+const statusLabels = {buy_pending: '待买入', standby: '备选待命', standby_not_used: '备选未启用', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
 const statusType = status => status === 'closed' ? 'success' : status === 'analysis_only' ? 'default' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
@@ -31,6 +31,7 @@ async function show(row) {
 
 const defaultColumns = [
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
+  {title: '主备', key: 'selectionRole', width: 100, render: row => row.selectionRole === 'standby' ? `备选 #${row.selectionRank || '--'}` : row.selectionRole === 'primary' ? `主选 #${row.selectionRank || '--'}` : '--'},
   {title: '股票', key: 'stockCode', minWidth: 170, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
   {title: '最终分', key: 'finalScore', width: 90, render: row => formatNumber(row.finalScore, 1)},
   {title: '参考价', key: 'referencePrice', width: 95, render: row => formatPrice(row.referencePrice)},
@@ -40,7 +41,7 @@ const defaultColumns = [
   {title: '收益率', key: 'netYieldRate', width: 100, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate)}, {default: () => formatPercent(row.netYieldRate)}) : '--'},
   {title: '状态', key: 'status', width: 110, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
 ]
-const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research2-recommendations:column-order:v1')
+const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research2-recommendations:column-order:v2')
 
 async function refresh() {
   loading.value = true
@@ -56,7 +57,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">任务可在交易日 [09:50,13:00) 启动；报告在 13:00 前生成才进入模拟执行，13:00 起生成的“仅分析”推荐保留评分与研究依据，但不会进入模拟买卖或收益统计。</n-alert>
+    <n-alert type="info" :bordered="false">任务可在交易日 [09:55,13:00) 启动；每轮最多3只主选和3只备选，执行时距涨停不足1%的股票不成交，并由备选按排名递补。报告在 13:00 前生成才进入模拟执行，13:00 起生成的“仅分析”推荐不会进入模拟买卖或收益统计。</n-alert>
     <n-flex justify="space-between" align="center">
       <n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用；当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
@@ -76,9 +77,15 @@ onMounted(refresh)
               <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>
               <n-descriptions-item label="评分">{{formatNumber(detail.recommendation.finalScore,1)}}</n-descriptions-item>
               <n-descriptions-item label="状态">{{statusLabels[detail.recommendation.status] || detail.recommendation.status}}</n-descriptions-item>
+              <n-descriptions-item label="主备角色">{{detail.recommendation.selectionRole === 'standby' ? '备选' : detail.recommendation.selectionRole === 'primary' ? '主选' : '--'}} #{{detail.recommendation.selectionRank || '--'}}</n-descriptions-item>
+              <n-descriptions-item label="执行报价">{{formatPrice(detail.recommendation.executionQuotePrice)}} / {{dateTime(detail.recommendation.executionQuoteAt)}}</n-descriptions-item>
+              <n-descriptions-item label="涨停距离">{{detail.recommendation.executionLimitDistancePct === null || detail.recommendation.executionLimitDistancePct === undefined ? '--' : `${formatNumber(detail.recommendation.executionLimitDistancePct, 3)}%`}}</n-descriptions-item>
+              <n-descriptions-item v-if="detail.recommendation.executionFailureCode" label="不成交原因" :span="3">{{detail.recommendation.executionFailureCode}}；{{detail.recommendation.failureReason}}</n-descriptions-item>
+              <n-descriptions-item v-if="detail.recommendation.promotionReason" label="递补说明" :span="3">{{detail.recommendation.promotionReason}}</n-descriptions-item>
               <n-descriptions-item label="计划分析">{{dateTime(detail.analysis.scheduledFor)}}</n-descriptions-item>
               <n-descriptions-item label="实际启动">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>
               <n-descriptions-item label="证据窗口">{{dateTime(detail.analysis.evidenceWindowStartAt)}} — {{dateTime(detail.analysis.evidenceCutoffAt)}}</n-descriptions-item>
+              <n-descriptions-item label="补位链">{{detail.analysis.executionChain ? `${detail.analysis.executionChain.status}（${detail.analysis.executionChain.filledSlots}/${detail.analysis.executionChain.targetSlots}）` : '--'}}</n-descriptions-item>
               <n-descriptions-item label="报告生成">{{dateTime(detail.analysis.generatedAt)}}</n-descriptions-item>
               <n-descriptions-item label="目标 / 实际买入">{{dateTime(detail.recommendation.targetBuyAt)}} / {{dateTime(detail.recommendation.buyAt)}}</n-descriptions-item>
               <n-descriptions-item label="目标 / 实际卖出">{{dateTime(detail.recommendation.targetSellAt)}} / {{dateTime(detail.recommendation.sellAt)}}</n-descriptions-item>

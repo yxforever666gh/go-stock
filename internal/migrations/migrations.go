@@ -281,6 +281,12 @@ var mainMigrations = []migration{
 		definition:  mainMigrationV25Definition,
 		apply:       applyResearch1DataChainV3Schema,
 	},
+	{
+		id: 26, name: "research2_execution_chains",
+		description: "Adds Research Center 2 primary/standby execution-chain and execution-audit metadata without rewriting account, trade or realized-return history.",
+		definition:  mainMigrationV26Definition,
+		apply:       applyResearch2ExecutionChainSchema,
+	},
 }
 
 var legacyStrategyTables = []string{
@@ -893,6 +899,11 @@ func verifiedStatus(database *gorm.DB, name string, migrations []migration, expe
 	}
 	if name == "main" && expected >= 25 {
 		if err := verifyMainSchema25Runtime(database); err != nil {
+			return result, err
+		}
+	}
+	if name == "main" && expected >= 26 {
+		if err := verifyMainSchema26Runtime(database); err != nil {
 			return result, err
 		}
 	}

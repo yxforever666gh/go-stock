@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Go-Stock Local Web API
-  version: 2.7.11
+  version: 2.8.0
   description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
 servers:
   - url: http://127.0.0.1:34115
@@ -1815,6 +1815,12 @@ components:
         runId: {type: string}
         tradingDate: {type: string, format: date}
         attemptNo: {type: integer, minimum: 1}
+        chainId: {type: string}
+        parentRunId: {type: string}
+        triggerSource: {type: string}
+        requestedSlots: {type: integer, minimum: 0}
+        primaryCount: {type: integer, minimum: 0}
+        standbyCount: {type: integer, minimum: 0}
         scheduledFor: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         evidenceWindowStartAt: {type: string, format: date-time, nullable: true}
@@ -1838,6 +1844,7 @@ components:
         emailSentAt: {type: string, format: date-time, nullable: true}
         emailAttemptCount: {type: integer}
         emailLastError: {type: string}
+        executionChain: {$ref: "#/components/schemas/Research2ExecutionChain"}
     Research2AnalysisRunSummary:
       type: object
       required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, recommendationCount, onTime]
@@ -1845,6 +1852,12 @@ components:
         runId: {type: string}
         tradingDate: {type: string, format: date}
         attemptNo: {type: integer, minimum: 1}
+        chainId: {type: string}
+        parentRunId: {type: string}
+        triggerSource: {type: string}
+        requestedSlots: {type: integer, minimum: 0}
+        primaryCount: {type: integer, minimum: 0}
+        standbyCount: {type: integer, minimum: 0}
         scheduledFor: {type: string, format: date-time}
         startedAt: {type: string, format: date-time}
         evidenceWindowStartAt: {type: string, format: date-time, nullable: true}
@@ -1865,6 +1878,24 @@ components:
         emailSentAt: {type: string, format: date-time, nullable: true}
         emailAttemptCount: {type: integer}
         emailLastError: {type: string}
+        executionChain: {$ref: "#/components/schemas/Research2ExecutionChain"}
+    Research2ExecutionChain:
+      type: object
+      required: [chainId, tradingDate, scheduledFor, status, targetSlots, filledSlots, startedAt, createdAt, updatedAt]
+      properties:
+        chainId: {type: string}
+        tradingDate: {type: string, format: date}
+        scheduledFor: {type: string, format: date-time}
+        status: {type: string, enum: [running, completed, cutoff, exhausted, capital_blocked, disabled, failed]}
+        targetSlots: {type: integer, minimum: 0}
+        filledSlots: {type: integer, minimum: 0}
+        rootRunId: {type: string}
+        latestRunId: {type: string}
+        stopReason: {type: string}
+        startedAt: {type: string, format: date-time}
+        completedAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
     ResearchAuditRunState:
       type: object
       required: [status, payloadCount, lastError, createdAt, updatedAt]
@@ -2075,6 +2106,10 @@ components:
       properties:
         recommendationId: {type: string}
         analysisRunId: {type: string}
+        selectionRole: {type: string}
+        selectionRank: {type: integer, minimum: 0}
+        replacesRecommendationId: {type: string}
+        promotionReason: {type: string}
         stockCode: {type: string}
         stockName: {type: string}
         signalAt: {type: string, format: date-time}
@@ -2095,9 +2130,14 @@ components:
         mainRisk: {type: string}
         cancelConditions: {type: string}
         sourceRefs: {type: string}
-        status: {type: string, enum: [buy_pending, active, sell_pending, closed, analysis_only, missed_cash, missed_untradable, missed_window, cancelled_price]}
+        status: {type: string, enum: [buy_pending, active, sell_pending, closed, analysis_only, missed_cash, missed_untradable, missed_window, cancelled_price, standby, standby_not_used]}
         late: {type: boolean}
         targetBuyAt: {type: string, format: date-time}
+        executionFailureCode: {type: string}
+        executionQuotePrice: {type: number}
+        executionQuoteAt: {type: string, format: date-time}
+        executionLimitPrice: {type: number}
+        executionLimitDistancePct: {type: number, nullable: true}
         buyAt: {type: string, format: date-time}
         buyMarketPrice: {type: number}
         buyPrice: {type: number}

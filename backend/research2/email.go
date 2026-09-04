@@ -137,7 +137,15 @@ func ValidateEmailConfig(config EmailConfig) (EmailConfig, []string, error) {
 }
 
 func (s *EmailService) Queue(ctx context.Context, run AnalysisRun, config EmailConfig) (bool, error) {
-	if s == nil || s.repository == nil || !config.Enabled || !EligibleEmailStatus(run.Status) {
+	return s.queue(ctx, run, config, false)
+}
+
+func (s *EmailService) QueueFinal(ctx context.Context, run AnalysisRun, config EmailConfig) (bool, error) {
+	return s.queue(ctx, run, config, true)
+}
+
+func (s *EmailService) queue(ctx context.Context, run AnalysisRun, config EmailConfig, allowFailed bool) (bool, error) {
+	if s == nil || s.repository == nil || !config.Enabled || (!EligibleEmailStatus(run.Status) && !(allowFailed && run.Status == "failed")) {
 		return false, nil
 	}
 	normalized, recipients, err := ValidateEmailConfig(config)
@@ -160,6 +168,8 @@ func reportEmailContent(run AnalysisRun) (string, string) {
 		suffix = "无推荐"
 	} else if run.Status == "missed_window" {
 		suffix = "错过交易窗口"
+	} else if run.Status == "failed" {
+		suffix = "补位失败"
 	}
 	attemptNo := normalizedAttemptNo(run.AttemptNo)
 	subject := fmt.Sprintf("[go-stock][研究中心2] %s 第%d次尝试 %s", run.TradingDate, attemptNo, suffix)

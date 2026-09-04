@@ -292,10 +292,10 @@ WHERE strategy_version IS NOT NULL OR evidence_profile_version IS NOT NULL OR ev
 	if err != nil {
 		t.Fatal(err)
 	}
-	if mainStatus.CurrentVersion != 25 || minuteStatus.CurrentVersion != 3 {
+	if mainStatus.CurrentVersion != 26 || minuteStatus.CurrentVersion != 3 {
 		t.Fatalf("schema versions main=%d minute=%d", mainStatus.CurrentVersion, minuteStatus.CurrentVersion)
 	}
-	if len(mainStatus.Records) < 11 || mainStatus.Records[len(mainStatus.Records)-11].ID != 15 || mainStatus.Records[len(mainStatus.Records)-10].ID != 16 || mainStatus.Records[len(mainStatus.Records)-9].ID != 17 || mainStatus.Records[len(mainStatus.Records)-8].ID != 18 || mainStatus.Records[len(mainStatus.Records)-7].ID != 19 || mainStatus.Records[len(mainStatus.Records)-6].ID != 20 || mainStatus.Records[len(mainStatus.Records)-5].ID != 21 || mainStatus.Records[len(mainStatus.Records)-4].ID != 22 || mainStatus.Records[len(mainStatus.Records)-3].ID != 23 || mainStatus.Records[len(mainStatus.Records)-2].ID != 24 || mainStatus.Records[len(mainStatus.Records)-1].ID != 25 {
-		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 25: %+v", mainStatus.Records)
+	if len(mainStatus.Records) < 12 || mainStatus.Records[len(mainStatus.Records)-12].ID != 15 || mainStatus.Records[len(mainStatus.Records)-11].ID != 16 || mainStatus.Records[len(mainStatus.Records)-10].ID != 17 || mainStatus.Records[len(mainStatus.Records)-9].ID != 18 || mainStatus.Records[len(mainStatus.Records)-8].ID != 19 || mainStatus.Records[len(mainStatus.Records)-7].ID != 20 || mainStatus.Records[len(mainStatus.Records)-6].ID != 21 || mainStatus.Records[len(mainStatus.Records)-5].ID != 22 || mainStatus.Records[len(mainStatus.Records)-4].ID != 23 || mainStatus.Records[len(mainStatus.Records)-3].ID != 24 || mainStatus.Records[len(mainStatus.Records)-2].ID != 25 || mainStatus.Records[len(mainStatus.Records)-1].ID != 26 {
+		t.Fatalf("schema 14 fixture did not advance through migrations 15 to 26: %+v", mainStatus.Records)
 	}
 }

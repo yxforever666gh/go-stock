@@ -28,7 +28,7 @@ func TestResearch2TransactionRetriesSQLiteBusy(t *testing.T) {
 	}
 }
 
-func TestCreateRunAttemptAllowsAtMostSixAttempts(t *testing.T) {
+func TestCreateRunAttemptContinuesPastSixFailedAttempts(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	now := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghai())
@@ -90,12 +90,12 @@ func TestCreateRunAttemptAllowsAtMostSixAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	latest, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
-	if err != nil || created || latest.RunID != sixth.RunID {
-		t.Fatalf("latest=%+v created=%v err=%v", latest, created, err)
+	seventh, created, err := repository.CreateRunAttempt(ctx, newRun(uuid.NewString()), true)
+	if err != nil || !created || seventh.AttemptNo != 7 || seventh.RunID == sixth.RunID {
+		t.Fatalf("seventh=%+v created=%v err=%v", seventh, created, err)
 	}
 	lookup, exists, err := repository.RunForDate(ctx, "2026-09-03")
-	if err != nil || !exists || lookup.RunID != sixth.RunID {
+	if err != nil || !exists || lookup.RunID != seventh.RunID {
 		t.Fatalf("lookup=%+v exists=%v err=%v", lookup, exists, err)
 	}
 }

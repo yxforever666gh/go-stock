@@ -1,8 +1,9 @@
 SHELL := /bin/bash
 
-GO_PACKAGES := $(shell go list ./... | grep -v '/frontend/node_modules/')
+GO_PACKAGES := . ./backend/... ./internal/... ./cmd/...
+POWERSHELL ?= pwsh
 
-.PHONY: ci test test-go test-tools test-frontend test-go-race test-integration lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web
+.PHONY: ci verify-fast verify-domain verify-release test test-go test-tools test-frontend test-go-race test-integration lint lint-go lint-frontend openapi-generate openapi-check build-web build-frontend build-web-binary dev dev-web run-web
 
 test: test-go test-tools test-frontend
 
@@ -19,7 +20,8 @@ test-go-race:
 	go test -race $(GO_PACKAGES)
 
 test-integration:
-	RUN_INTEGRATION_TESTS=1 go test $(GO_PACKAGES)
+	@echo "Integration tests are disabled until live network and production database access are isolated."
+	@exit 1
 
 lint: lint-go lint-frontend
 
@@ -44,7 +46,17 @@ build-web: build-frontend
 build-frontend:
 	cd frontend && npm run build
 
-ci: openapi-check test lint build-web
+verify-fast:
+	$(POWERSHELL) -NoProfile -File scripts/verify.ps1 -Tier fast $(VERIFY_ARGS)
+
+verify-domain:
+	@test -n "$(DOMAIN)" || (echo "DOMAIN is required: data|research|research2|migrations|frontend|api|tools"; exit 2)
+	$(POWERSHELL) -NoProfile -File scripts/verify.ps1 -Tier domain -Domain $(DOMAIN)
+
+verify-release:
+	$(POWERSHELL) -NoProfile -File scripts/verify.ps1 -Tier release
+
+ci: verify-release
 
 dev: dev-web
 

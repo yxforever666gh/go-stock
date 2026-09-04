@@ -1029,6 +1029,7 @@ export type Research2AccountSnapshot = {
 
 export type Research2AnalysisRun = {
   attemptNo: number
+  chainId?: string
   degraded?: boolean | null
   emailAttemptCount?: number
   emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
@@ -1039,25 +1040,32 @@ export type Research2AnalysisRun = {
   evidenceProfileVersion?: string
   evidenceSetId?: string
   evidenceWindowStartAt: string | null
+  executionChain?: Research2ExecutionChain
   failureReason?: string
   generatedAt?: string
   modelAttemptLogJson: string
   modelName?: string
   onTime: boolean
+  parentRunId?: string
+  primaryCount?: number
   providerName?: string
   recommendationCount: number
   reportMarkdown: string
+  requestedSlots?: number
   runId: string
   scheduledFor: string
   sourceStatusJson: string
+  standbyCount?: number
   startedAt: string
   status: "running" | "success" | "no_recommendation" | "failed" | "skipped_non_trading_day" | "missed_window"
   strategyVersion?: string
   tradingDate: string
+  triggerSource?: string
 }
 
 export type Research2AnalysisRunSummary = {
   attemptNo: number
+  chainId?: string
   degraded?: boolean | null
   emailAttemptCount?: number
   emailDeliveryStatus?: "pending" | "sending" | "retry_wait" | "sent" | "failed" | "cancelled"
@@ -1068,18 +1076,40 @@ export type Research2AnalysisRunSummary = {
   evidenceProfileVersion?: string
   evidenceSetId?: string
   evidenceWindowStartAt: string | null
+  executionChain?: Research2ExecutionChain
   failureReason?: string
   generatedAt?: string
   modelName?: string
   onTime: boolean
+  parentRunId?: string
+  primaryCount?: number
   providerName?: string
   recommendationCount: number
+  requestedSlots?: number
   runId: string
   scheduledFor: string
+  standbyCount?: number
   startedAt: string
   status: string
   strategyVersion?: string
   tradingDate: string
+  triggerSource?: string
+}
+
+export type Research2ExecutionChain = {
+  chainId: string
+  completedAt?: string
+  createdAt: string
+  filledSlots: number
+  latestRunId?: string
+  rootRunId?: string
+  scheduledFor: string
+  startedAt: string
+  status: "running" | "completed" | "cutoff" | "exhausted" | "capital_blocked" | "disabled" | "failed"
+  stopReason?: string
+  targetSlots: number
+  tradingDate: string
+  updatedAt: string
 }
 
 export type Research2Performance = Research2AccountOverview & {
@@ -1109,6 +1139,11 @@ export type Research2Recommendation = {
   currentPrice?: number
   currentPriceAt?: string
   estimatedLotCost?: number
+  executionFailureCode?: string
+  executionLimitDistancePct?: number | null
+  executionLimitPrice?: number
+  executionQuoteAt?: string
+  executionQuotePrice?: number
   failureReason?: string
   finalScore: number
   freshCatalyst?: string
@@ -1122,19 +1157,23 @@ export type Research2Recommendation = {
   netPnl: number
   netYieldRate: number
   oldBackground?: string
+  promotionReason?: string
   quantData?: string
   quantity: number
   recommendationId: string
   referencePrice: number
+  replacesRecommendationId?: string
   riskDeduction?: number
   sectorScore?: number
+  selectionRank?: number
+  selectionRole?: string
   sellAt?: string
   sellFees?: number
   sellMarketPrice?: number
   sellPrice?: number
   signalAt: string
   sourceRefs?: string
-  status: "buy_pending" | "active" | "sell_pending" | "closed" | "analysis_only" | "missed_cash" | "missed_untradable" | "missed_window" | "cancelled_price"
+  status: "buy_pending" | "active" | "sell_pending" | "closed" | "analysis_only" | "missed_cash" | "missed_untradable" | "missed_window" | "cancelled_price" | "standby" | "standby_not_used"
   stockCode: string
   stockName: string
   stockScore?: number

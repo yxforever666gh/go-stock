@@ -148,7 +148,7 @@ func research2TestRepository(t *testing.T) *Repository {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = database.AutoMigrate(&AnalysisRun{}, &Recommendation{}, &Trade{}, &Account{}, &AccountSnapshot{}); err != nil {
+	if err = database.AutoMigrate(&AnalysisRun{}, &ExecutionChain{}, &Recommendation{}, &Trade{}, &Account{}, &AccountSnapshot{}); err != nil {
 		t.Fatal(err)
 	}
 	repository := NewRepository(database)
@@ -231,7 +231,7 @@ func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	if !collector.cutoff.Equal(started) || !run.EvidenceCutoffAt.Equal(actualCutoff) || run.EvidenceWindowStartAt == nil || !run.EvidenceWindowStartAt.Equal(wantStart) {
 		t.Fatalf("cutoff=%v run=%+v", collector.cutoff, run)
 	}
-	if run.StrategyVersion != "research2-trailing5-v8" || run.AttemptNo != 1 {
+	if run.StrategyVersion != "research2-trailing5-v9" || run.AttemptNo != 1 {
 		t.Fatalf("strategyVersion=%q", run.StrategyVersion)
 	}
 }
@@ -274,8 +274,9 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 		started time.Time
 		accept  bool
 	}{
-		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 49, 59, 0, loc)},
-		{name: "open", started: time.Date(2026, 8, 27, 9, 50, 0, 0, loc), accept: true},
+		{name: "old start", started: time.Date(2026, 8, 27, 9, 50, 0, 0, loc)},
+		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 54, 59, 0, loc)},
+		{name: "open", started: time.Date(2026, 8, 27, 9, 55, 0, 0, loc), accept: true},
 		{name: "11:30 remains open", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc), accept: true},
 		{name: "last second", started: time.Date(2026, 8, 27, 12, 59, 59, 0, loc), accept: true},
 		{name: "close", started: time.Date(2026, 8, 27, 13, 0, 0, 0, loc)},
@@ -390,7 +391,7 @@ func TestBuildPromptUsesCompactInjectedEvidenceWithoutReportOrBuyRange(t *testin
 			t.Fatalf("prompt contains forbidden %q: %s", forbidden, prompt)
 		}
 	}
-	for _, required := range []string{"research2-trailing5-v8", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
+	for _, required := range []string{"research2-trailing5-v9", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q: %s", required, prompt)
 		}
@@ -526,7 +527,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	if err := repository.DB().Where("run_id = ?", run.RunID).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v8" {
+	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v9" {
 		t.Fatalf("failed run lost evidence association: %+v", stored)
 	}
 	if !strings.Contains(stored.SourceStatusJSON, "fixture") {
@@ -596,7 +597,7 @@ func TestValidateRecommendationsUsesScoreAndCodePriority(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("warnings=%v", warnings)
 	}
-	want := []string{"sh600000", "sz000001", "sz000002"}
+	want := []string{"sh600000", "sz000001", "sz000002", "sz000003"}
 	if len(items) != len(want) {
 		t.Fatalf("items=%+v", items)
 	}

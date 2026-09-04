@@ -2,7 +2,7 @@
 
 ![go-stock social preview](./docs/assets/social-preview.png)
 
-## 当前版本：App 2.7.11
+## 当前版本：App 2.8.0
 
 Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 研究工具。本版本修复研究中心2午休证据窗口、证据冻结状态和报告邮件兼容性问题。
 
@@ -19,7 +19,7 @@ Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的本地股票行情与 AI 
 5. 等待候选不预留现金。若完成后仍有资金缺口，30 分钟后重新执行完整分析；跨越交易窗口的结论作废并于下一交易日重新分析。
 6. 每分钟生命周期扫描、每只持仓从实际复查完成时间独立计算的 15 分钟复查及收盘账户快照继续运行；研究中心2的隔夜强势策略不受影响。
 
-研究中心2的任务启动窗口为交易日 `[09:50,13:00)`，使用最近5个已闭合交易分钟作为核心证据窗口；午休期间启动时使用上午最后5个已闭合交易分钟，即 11:25—11:30。报告在 13:00 前生成时，推荐按报告后的第一笔有效行情模拟买入，下一交易日按 10:00 目标分钟模拟卖出；13:00 起生成的推荐统一标记为 `analysis_only`（仅分析），保留报告、评分和审计依据，但不会创建成交或计入策略收益。当前策略版本为 `research2-trailing5-v8`，证据版本为 `research2-trailing5-v6`；证据采集与冻结会保留正常返回状态，不把有效内容误标成空数据或不可用。其 12,000 元账户、推荐、成交与收益完全独立，实际可买标的按 1—3 只等额分配现金并以 100 股整手向下取整。
+研究中心2的任务启动窗口为交易日 `[09:55,13:00)`：09:55正常运行使用09:50—09:55的五个已闭合交易分钟，之后恢复或补位使用实际启动点之前最近5个已闭合交易分钟；午休期间使用上午最后5个交易分钟。每轮最多保留3只主选和3只备选，选股时距涨停不足1.5%、执行时距涨停不足1%的标的不可成交，主选失败后按排名递补；当日仍不足三笔时继续补位至13:00。当前策略版本为 `research2-trailing5-v9`，证据版本为 `research2-trailing5-v7`；其 12,000 元账户、推荐、成交与收益完全独立，现金按尚缺席位预留并以 100 股整手向下取整。
 
 旧策略、cohort、冻结回放、runtime guard、preflight、策略审计、旧收益重算和 AI 智能体均已退出运行链路。1.6.6 将旧策略表永久压缩归档后移出活动库，运行链不再读取或写入这些历史数据。
 
@@ -116,13 +116,21 @@ go run .
 
 ## 验证
 
+日常开发默认只运行与改动直接相关的快速验证：
+
 ```powershell
-go test ./...
-go vet ./...
-go run ./cmd/openapi-contract
-cd frontend
-npm run ci
+.\scripts\verify.ps1 -Tier fast -GoPackage ./backend/research2
+.\scripts\verify.ps1 -Tier fast -FrontendTest src/components/research2-trailing5.test.mjs
 ```
+
+跨越一个完整领域时运行领域验证；只有正式发布或明确要求完整门禁时才运行发布验证：
+
+```powershell
+.\scripts\verify.ps1 -Tier domain -Domain research2
+.\scripts\verify.ps1 -Tier release
+```
+
+`fast`、`domain` 和 `release` 验证均关闭真实网络和集成测试开关；普通测试必须自行使用临时 fixture。真实来源、浏览器、邮件和生产数据库验证不属于日常开发入口。详细范围与停止条件见 [`AGENTS.md`](./AGENTS.md)。
 
 ## 许可证
 

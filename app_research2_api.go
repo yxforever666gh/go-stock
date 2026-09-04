@@ -7,11 +7,18 @@ import (
 	"time"
 
 	"go-stock/backend/data"
+	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
 	"go-stock/backend/research2"
 	"go-stock/internal/service"
+)
+
+const (
+	research2AnalysisCronSpec    = "0 55 9 * * 1-5"
+	research2AnalysisStartHour   = 9
+	research2AnalysisStartMinute = 55
 )
 
 func (a *App) ensureResearch2Runtime(configID int) (*data.Research2Runtime, error) {
@@ -53,6 +60,22 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 		}
 		a.deleteCronEntry(key)
 	}
+	if setting != nil && setting.Settings != nil && !setting.Research2AutoEnabled {
+		a.research2RuntimeMu.RLock()
+		existing := a.research2Runtime
+		a.research2RuntimeMu.RUnlock()
+		if existing != nil && existing.Repository != nil {
+			now := time.Now().In(research2Location())
+			chains, err := existing.Repository.DisableRunningExecutionChains(a.ctx, now.Format("2006-01-02"), now)
+			if err != nil {
+				logger.SugaredLogger.Errorf("关闭研究中心2补位链失败: %v", err)
+			} else {
+				for _, chain := range chains {
+					a.queueResearch2FinalEmail(existing, setting, chain)
+				}
+			}
+		}
+	}
 	a.resetResearch2Runtime()
 	if setting == nil || setting.Settings == nil {
 		return
@@ -76,8 +99,12 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 		key, spec string
 		run       func()
 	}{
-		{research2AnalysisEntryKey, "0 50 9 * * 1-5", func() { a.runResearch2Analysis(time.Now()) }},
-		{research2TradingEntryKey, "5 * 9-15 * * 1-5", func() { a.processResearch2Trades(time.Now()) }},
+		{research2AnalysisEntryKey, research2AnalysisCronSpec, func() { a.runResearch2Analysis(time.Now()) }},
+		{research2TradingEntryKey, "5 * 9-15 * * 1-5", func() {
+			now := time.Now()
+			a.processResearch2Trades(now)
+			go a.resumeResearch2ExecutionChain(now)
+		}},
 		{research2MetricsEntryKey, "0 5 15 * * 1-5", func() { a.finalizeResearch2Metrics(time.Now()) }},
 	}
 	for _, registration := range registrations {
@@ -93,6 +120,22 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 
 func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 	local := now.In(research2Location())
+	if db.Dao != nil {
+		repository := research2.NewRepository(db.Dao)
+		expired, expireErr := repository.ExpireStaleExecutionChains(a.ctx, local.Format("2006-01-02"), local)
+		if expireErr != nil {
+			logger.SugaredLogger.Errorf("结束研究中心2跨日补位链失败: %v", expireErr)
+		} else if setting := data.GetSettingConfig(); setting != nil && setting.Settings != nil && setting.Research2EmailEnabled {
+			email := research2.NewEmailService(repository, nil)
+			for _, chain := range expired {
+				if run, runErr := repository.ExecutionChainEmailRun(a.ctx, chain.ChainID); runErr == nil {
+					if _, queueErr := email.QueueFinal(a.ctx, run, research2EmailConfig(setting)); queueErr != nil {
+						logger.SugaredLogger.Errorf("研究中心2跨日最终邮件入队失败: %v", queueErr)
+					}
+				}
+			}
+		}
+	}
 	if !withinResearch2RecoveryWindow(local) {
 		return
 	}
@@ -100,9 +143,18 @@ func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 	if err != nil || !tradeDay {
 		return
 	}
+	runtime, runtimeErr := a.ensureResearch2Runtime(configID)
+	if runtimeErr != nil {
+		logger.SugaredLogger.Errorf("恢复研究中心2运行时初始化失败: %v", runtimeErr)
+		return
+	}
+	if recoverErr := runtime.Repository.RecoverInterruptedRunsForDate(a.ctx, local.Format("2006-01-02"), local); recoverErr != nil {
+		logger.SugaredLogger.Errorf("恢复研究中心2中断运行失败: %v", recoverErr)
+		return
+	}
 	// Runner atomically decides whether this is attempt 1, an eligible retry,
 	// or a no-op returning the latest terminal run.
-	scheduled := time.Date(local.Year(), local.Month(), local.Day(), 9, 50, 0, 0, research2Location())
+	scheduled := research2ScheduledRoot(local)
 	a.runResearch2Analysis(scheduled)
 	a.processResearch2Trades(local)
 }
@@ -121,21 +173,102 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
 		return
 	}
-	run, err := runtime.Runner.Run(a.ctx, scheduledFor)
-	if err != nil {
-		if errors.Is(err, research2.ErrOutsideAnalysisStartWindow) {
+	chainID, parentRunID := "", ""
+	for {
+		var run research2.AnalysisRun
+		if chainID == "" {
+			run, err = runtime.Runner.Run(a.ctx, scheduledFor)
+		} else {
+			run, err = runtime.Runner.RunRefill(a.ctx, time.Now(), chainID, parentRunID)
+		}
+		if err != nil {
+			if errors.Is(err, research2.ErrOutsideAnalysisStartWindow) {
+				return
+			}
+			logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
+			if run.ChainID != "" {
+				if failedChain, chainErr := runtime.Repository.ExecutionChain(a.ctx, run.ChainID); chainErr == nil && failedChain.Status != "running" {
+					a.queueResearch2FinalEmail(runtime, setting, failedChain)
+				}
+			}
 			return
 		}
-		logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
+		// Complete the time-sensitive simulated trade path before deciding whether
+		// the durable chain needs an immediate replacement round.
+		a.processResearch2Trades(time.Now())
+		if run.ChainID == "" {
+			return
+		}
+		chain, chainErr := runtime.Repository.RefreshExecutionChainFilled(a.ctx, run.ChainID)
+		if chainErr != nil {
+			logger.SugaredLogger.Errorf("刷新研究中心2补位链失败: %v", chainErr)
+			return
+		}
+		if chain.Status != "running" {
+			a.queueResearch2FinalEmail(runtime, setting, chain)
+			return
+		}
+		ready, readyErr := runtime.Repository.ExecutionChainsReadyForRefill(a.ctx, time.Now())
+		if readyErr != nil {
+			logger.SugaredLogger.Errorf("检查研究中心2补位任务失败: %v", readyErr)
+			return
+		}
+		refill := false
+		for _, candidate := range ready {
+			if candidate.ChainID == chain.ChainID {
+				refill = true
+				break
+			}
+		}
+		if !refill {
+			return
+		}
+		chainID, parentRunID = chain.ChainID, chain.LatestRunID
+	}
+}
+
+func (a *App) resumeResearch2ExecutionChain(now time.Time) {
+	setting := data.GetSettingConfig()
+	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
 		return
 	}
-	// Complete the time-sensitive simulated trade path before making the report
-	// visible to the asynchronous SMTP worker.
-	a.processResearch2Trades(time.Now())
-	if runtime.Email != nil && setting.Research2EmailEnabled {
-		if _, queueErr := runtime.Email.Queue(a.ctx, run, research2EmailConfig(setting)); queueErr != nil {
-			logger.SugaredLogger.Errorf("研究中心2报告邮件入队失败: %v", queueErr)
+	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	if err != nil {
+		logger.SugaredLogger.Errorf("恢复研究中心2补位链失败: %v", err)
+		return
+	}
+	chain, exists, err := runtime.Repository.ExecutionChainForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
+	if err != nil || !exists {
+		return
+	}
+	if chain.Status != "running" {
+		a.queueResearch2FinalEmail(runtime, setting, chain)
+		return
+	}
+	if !now.In(research2Location()).Before(time.Date(now.In(research2Location()).Year(), now.In(research2Location()).Month(), now.In(research2Location()).Day(), 13, 0, 0, 0, research2Location())) {
+		if err = runtime.Repository.ExpireExecutionChainsAtCutoff(a.ctx, now); err != nil {
+			logger.SugaredLogger.Errorf("结束研究中心2补位链失败: %v", err)
+			return
 		}
+		chain, _ = runtime.Repository.ExecutionChain(a.ctx, chain.ChainID)
+		a.queueResearch2FinalEmail(runtime, setting, chain)
+		return
+	}
+	a.runResearch2Analysis(research2ScheduledRoot(now))
+}
+
+func (a *App) queueResearch2FinalEmail(runtime *data.Research2Runtime, setting *models.SettingConfig, chain research2.ExecutionChain) {
+	if runtime == nil || runtime.Email == nil || setting == nil || setting.Settings == nil || !setting.Research2EmailEnabled || chain.Status == "running" {
+		return
+	}
+	run, err := runtime.Repository.ExecutionChainEmailRun(a.ctx, chain.ChainID)
+	if err != nil {
+		logger.SugaredLogger.Errorf("生成研究中心2补位汇总失败: %v", err)
+		return
+	}
+	if _, err = runtime.Email.QueueFinal(a.ctx, run, research2EmailConfig(setting)); err != nil {
+		logger.SugaredLogger.Errorf("研究中心2最终报告邮件入队失败: %v", err)
+		return
 	}
 	go a.processResearch2Emails()
 }
@@ -143,7 +276,12 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 func withinResearch2RecoveryWindow(value time.Time) bool {
 	local := value.In(research2Location())
 	minutes := local.Hour()*60 + local.Minute()
-	return minutes >= 9*60+50 && minutes < 13*60
+	return minutes >= research2AnalysisStartHour*60+research2AnalysisStartMinute && minutes < 13*60
+}
+
+func research2ScheduledRoot(value time.Time) time.Time {
+	local := value.In(research2Location())
+	return time.Date(local.Year(), local.Month(), local.Day(), research2AnalysisStartHour, research2AnalysisStartMinute, 0, 0, research2Location())
 }
 
 func research2EmailConfig(setting *models.SettingConfig) research2.EmailConfig {

@@ -494,7 +494,7 @@ onBeforeUnmount(() => message.destroyAll())
           <n-grid :cols="24" :x-gap="24">
             <n-form-item-gi v-if="settingsScope === 'research2'" :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
               <n-switch v-model:value="formValue.research2AutoEnabled" @update:value="handleImmediateFieldChange"/>
-              <n-text depth="3" style="margin-left: 12px">启动窗口为交易日 [09:50,13:00)，使用最近5个已闭合交易分钟，午休启动固定使用 11:25—11:30；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐标记为“仅分析”且不计收益。</n-text>
+              <n-text depth="3" style="margin-left: 12px">启动窗口为交易日 [09:55,13:00)，使用最近5个已闭合交易分钟；09:55对应09:50—09:55，午休启动固定使用 11:25—11:30。每轮最多3主选+3备选，不可成交时自动递补并持续到13:00；报告在 13:00 前生成才进入模拟执行，13:00 起只保留分析。</n-text>
             </n-form-item-gi>
             <n-form-item-gi :span="24" label="实验市场证据：" path="experimentalEvidenceEnabled">
               <n-switch v-model:value="formValue.experimentalEvidenceEnabled" @update:value="handleImmediateFieldChange"/>

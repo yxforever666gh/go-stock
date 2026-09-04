@@ -19,6 +19,9 @@ async function show(row) { visible.value = true; detail.value = null; try { deta
 const columns = [
   {title: '交易日', key: 'tradingDate', width: 110},
   {title: '批次', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
+  {title: '触发', key: 'triggerSource', width: 125, render: row => row.triggerSource || '--'},
+  {title: '主/备', key: 'selectionCounts', width: 90, render: row => `${row.primaryCount || 0}/${row.standbyCount || 0}`},
+  {title: '补位链', key: 'executionChain', width: 145, render: row => row.executionChain ? `${row.executionChain.status} ${row.executionChain.filledSlots}/${row.executionChain.targetSlots}` : '--'},
   {title: '计划时间', key: 'scheduledFor', width: 170, render: row => dateTime(row.scheduledFor)},
   {title: '实际启动', key: 'startedAt', width: 170, render: row => dateTime(row.startedAt)},
   {title: '窗口开始', key: 'evidenceWindowStartAt', width: 170, render: row => dateTime(row.evidenceWindowStartAt)},
@@ -40,7 +43,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:50,13:00)，使用最近5个已闭合交易分钟；午休启动固定使用 11:25—11:30。报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析且不计收益。</n-alert>
+    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:55,13:00)，使用最近5个已闭合交易分钟；09:55正常运行对应09:50—09:55，午休启动固定使用 11:25—11:30。主备执行仍不足三笔时立即补位；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
   </n-space>
@@ -53,6 +56,10 @@ onMounted(refresh)
               <template #final-result>
                 <n-descriptions bordered :column="3" style="margin-bottom:12px">
                   <n-descriptions-item label="分析批次">第{{detail.attemptNo || 1}}次</n-descriptions-item>
+                  <n-descriptions-item label="补位触发">{{detail.triggerSource || '--'}}</n-descriptions-item>
+                  <n-descriptions-item label="请求席位 / 主备">{{detail.requestedSlots || 0}} / {{detail.primaryCount || 0}}+{{detail.standbyCount || 0}}</n-descriptions-item>
+                  <n-descriptions-item label="补位链状态">{{detail.executionChain ? `${detail.executionChain.status}（${detail.executionChain.filledSlots}/${detail.executionChain.targetSlots}）` : '--'}}</n-descriptions-item>
+                  <n-descriptions-item v-if="detail.executionChain?.stopReason" label="补位结束原因" :span="3">{{detail.executionChain.stopReason}}</n-descriptions-item>
                   <n-descriptions-item label="计划时间">{{dateTime(detail.scheduledFor)}}</n-descriptions-item>
                   <n-descriptions-item label="实际启动">{{dateTime(detail.startedAt)}}</n-descriptions-item>
                   <n-descriptions-item label="报告生成">{{dateTime(detail.generatedAt)}}</n-descriptions-item>

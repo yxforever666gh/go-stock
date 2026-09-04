@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"go-stock/backend/research2"
 )
 
 func TestRetryResearch2EvidenceWriteRetriesSQLiteBusy(t *testing.T) {
@@ -149,6 +151,36 @@ func TestListedForResearch2SessionsRequiresTenOpenDays(t *testing.T) {
 	}
 	if listedForResearch2Sessions(20260820, asOf, 10, weekdays) {
 		t.Fatal("a stock with fewer than ten sessions must be excluded")
+	}
+}
+
+func TestSelectResearch2CandidatesExcludesStocksInsideLimitBufferAndHonorsBoundary(t *testing.T) {
+	asOf := time.Date(2026, 9, 4, 10, 0, 0, 0, shanghaiDataLocation())
+	previousClose := 10.03
+	limitPrice := research2.MainBoardLimitPrice(previousClose)
+	if limitPrice != 11.03 {
+		t.Fatalf("limit price=%v want 11.03", limitPrice)
+	}
+	row := func(code string, price float64) research2MarketRow {
+		return research2MarketRow{Code: code, Name: "候选" + code, Price: price, PreClose: previousClose,
+			ChangeRate: (price/previousClose - 1) * 100, ChangeValid: true, Volume: 100000, Amount: 10000000,
+			Turnover: 3, ListingDate: 20200101, Timestamp: asOf.Unix()}
+	}
+	boundaryPrice := limitPrice * (1 - research2.SelectionLimitDistancePct/100)
+	rows := []research2MarketRow{
+		row("600001", limitPrice),
+		row("600002", limitPrice*0.99),
+		row("600003", boundaryPrice),
+		row("600004", limitPrice*0.98),
+		{Code: "600005", Name: "缺前收", Price: 10, PreClose: 0, ChangeRate: 1, ChangeValid: true, Volume: 100000, Amount: 10000000, Turnover: 3, ListingDate: 20200101, Timestamp: asOf.Unix()},
+	}
+	selected := selectResearch2Candidates(rows, 10, asOf)
+	if len(selected) != 2 || selected[0].Code != "sh600003" || selected[1].Code != "sh600004" {
+		t.Fatalf("near-limit filter or 1.5%% boundary is wrong: %+v", selected)
+	}
+	selected = selectResearch2CandidatesWithExclusions(rows, 10, asOf, map[string]struct{}{"SH600003": {}})
+	if len(selected) != 1 || selected[0].Code != "sh600004" {
+		t.Fatalf("candidate exclusions were not normalized/applied: %+v", selected)
 	}
 }
 

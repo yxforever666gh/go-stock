@@ -32,7 +32,7 @@ test('research center 2 recommendations use live valuation, draggable columns an
   const contract = await read('../../services/api-types.generated.ts')
 
   assert.match(recommendations, /useDraggableDataTableColumns/)
-  assert.match(recommendations, /go-stock:research2-recommendations:column-order:v1/)
+  assert.match(recommendations, /go-stock:research2-recommendations:column-order:v2/)
   assert.match(recommendations, /title: '当前价'/)
   assert.doesNotMatch(recommendations, /title: '排名'|title: '目标买入'|title: '操作'|title: '买入区间'|title: '净收益'/)
   assert.match(recommendations, /await GetResearch2Account\(\)[\s\S]*ListResearch2Recommendations/)

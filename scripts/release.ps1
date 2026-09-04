@@ -55,12 +55,6 @@ function Invoke-Checked {
     if ($exitCode -ne 0) { throw "$Failure (exit $exitCode)" }
 }
 
-function Get-GoPackages {
-    $packages = @(& go list ./...)
-    if ($LASTEXITCODE -ne 0) { throw "Cannot list Go packages" }
-    return @($packages | Where-Object { $_ -notmatch '/frontend/node_modules/' })
-}
-
 function Get-SHA256 {
     param([Parameter(Mandatory = $true)][string]$Path)
     if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { throw "Missing file: $Path" }
@@ -154,14 +148,8 @@ function Invoke-Build {
     $dirty = (& git -C $ProjectRoot status --porcelain)
     if ($LASTEXITCODE -ne 0) { throw "Cannot inspect git worktree" }
     if ($dirty) { throw "Release builds require a clean git worktree" }
+    Invoke-Checked "pwsh" @("-NoProfile", "-File", (Join-Path $ScriptDir "verify.ps1"), "-Tier", "release", "-SkipGoBuild") "Release verification failed"
     New-Item -ItemType Directory -Force -Path $context.ReleaseDir | Out-Null
-    $goPackages = @(Get-GoPackages)
-    Invoke-Checked "go" (@("test") + $goPackages) "Go tests failed"
-    Invoke-Checked "go" (@("vet") + $goPackages) "Go vet failed"
-    Invoke-Checked "go" @("run", "./cmd/openapi-contract") "OpenAPI contract check failed"
-    Push-Location (Join-Path $ProjectRoot "frontend")
-    try { Invoke-Checked "npm" @("run", "ci") "Frontend verification failed" }
-    finally { Pop-Location }
     $buildTime = [DateTime]::UtcNow.ToString("o")
     $ldflags = "-s -w -X go-stock/internal/releaseinfo.Commit=$($context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
     Invoke-Checked "go" @("build", "-trimpath", "-ldflags", $ldflags, "-o", $context.Binary, ".") "Release build failed"

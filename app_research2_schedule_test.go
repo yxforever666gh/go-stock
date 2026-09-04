@@ -15,8 +15,9 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 		at   time.Time
 		want bool
 	}{
-		{name: "before", at: time.Date(2026, 9, 3, 9, 49, 59, 0, location), want: false},
-		{name: "start", at: time.Date(2026, 9, 3, 9, 50, 0, 0, location), want: true},
+		{name: "old start", at: time.Date(2026, 9, 3, 9, 50, 0, 0, location), want: false},
+		{name: "before", at: time.Date(2026, 9, 3, 9, 54, 59, 0, location), want: false},
+		{name: "start", at: time.Date(2026, 9, 3, 9, 55, 0, 0, location), want: true},
 		{name: "during", at: time.Date(2026, 9, 3, 10, 14, 0, 0, location), want: true},
 		{name: "morning close", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: true},
 		{name: "last second", at: time.Date(2026, 9, 3, 12, 59, 59, 0, location), want: true},
@@ -31,6 +32,18 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 	}
 }
 
+func TestResearch2AnalysisCronAndScheduledRootUse0955(t *testing.T) {
+	if research2AnalysisCronSpec != "0 55 9 * * 1-5" {
+		t.Fatalf("analysis cron=%q want 09:55 on weekdays", research2AnalysisCronSpec)
+	}
+	location := research2Location()
+	root := research2ScheduledRoot(time.Date(2026, 9, 3, 12, 34, 56, 0, location))
+	want := time.Date(2026, 9, 3, 9, 55, 0, 0, location)
+	if !root.Equal(want) {
+		t.Fatalf("scheduled root=%s want=%s", root, want)
+	}
+}
+
 func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T) {
 	location := research2Location()
 	created := 0
@@ -42,7 +55,8 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 		},
 	}
 	for _, at := range []time.Time{
-		time.Date(2026, 9, 3, 9, 49, 59, 0, location),
+		time.Date(2026, 9, 3, 9, 50, 0, 0, location),
+		time.Date(2026, 9, 3, 9, 54, 59, 0, location),
 		time.Date(2026, 9, 3, 13, 0, 0, 0, location),
 		time.Date(2026, 9, 5, 10, 0, 0, 0, location),
 	} {

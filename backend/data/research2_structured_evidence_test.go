@@ -12,6 +12,7 @@ import (
 
 	"go-stock/backend/marketdata"
 	"go-stock/backend/research"
+	"go-stock/backend/research2"
 )
 
 type research2StructuredSourceFixture struct {
@@ -114,7 +115,7 @@ func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []rese
 	sources := &research2StructuredSourceFixture{cutoff: cutoff}
 	return &Research2EvidenceCollector{
 		sources: sources, stocks: &StockDataApi{}, minuteWindows: research2MinuteFixture{count: minuteCount},
-		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV6,
+		evidence: research2EvidenceTestRepository(t), evidenceProfile: research2EvidenceProfileV7,
 		now: func() time.Time { return cutoff.Add(5 * time.Second) },
 		fetchSnapshot: func(context.Context, time.Time) (research2FullMarketSnapshot, error) {
 			return research2FullMarketSnapshot{Rows: rows, Reported: reported, SourceID: "fixture-market", SourceName: "测试全市场",
@@ -174,6 +175,62 @@ func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testin
 	}
 	if !foundArchived {
 		t.Fatal("full evidence archive omitted filtered stock documents")
+	}
+}
+
+func TestResearch2StructuredEvidenceExcludesTodayNearLimitCandidate(t *testing.T) {
+	cutoff := time.Date(2026, 9, 4, 10, 14, 0, 0, shanghaiDataLocation())
+	rows := research2StructuredRows(cutoff, 20)
+	rows[0].PreClose = 10.03
+	limitPrice := research2.MainBoardLimitPrice(rows[0].PreClose)
+	rows[0].Price = limitPrice * 0.99
+	rows[0].ChangeRate = (rows[0].Price/rows[0].PreClose - 1) * 100
+	rows[0].High = limitPrice
+	collector := newResearch2StructuredCollector(t, cutoff, rows, len(rows), 5)
+	evidence, err := collector.Collect(context.Background(), cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.EvidenceProfileVersion != research2EvidenceProfileV7 {
+		t.Fatalf("evidence profile=%q want %q", evidence.EvidenceProfileVersion, research2EvidenceProfileV7)
+	}
+	assertResearch2CandidateAbsent(t, evidence, "sh600001")
+}
+
+func TestResearch2CollectForRunWithExclusionsRemovesCodeBeforePromptConstruction(t *testing.T) {
+	cutoff := time.Date(2026, 9, 4, 10, 14, 0, 0, shanghaiDataLocation())
+	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 20), 20, 5)
+	evidence, err := collector.CollectForRunWithExclusions(context.Background(), "run-with-exclusions", cutoff, map[string]struct{}{"SH600001": {}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertResearch2CandidateAbsent(t, evidence, "sh600001")
+	fixture, ok := collector.sources.(*research2StructuredSourceFixture)
+	if !ok {
+		t.Fatal("unexpected source fixture type")
+	}
+	for _, candidate := range fixture.candidates {
+		if candidate.Code == "sh600001" {
+			t.Fatalf("excluded code reached per-stock source collection: %+v", fixture.candidates)
+		}
+	}
+}
+
+func assertResearch2CandidateAbsent(t *testing.T, evidence research2.Evidence, excludedCode string) {
+	t.Helper()
+	for _, candidate := range evidence.Candidates {
+		if candidate.Code == excludedCode {
+			t.Fatalf("excluded candidate remained recommendable: %+v", evidence.Candidates)
+		}
+	}
+	var compact research2CompactSnapshot
+	if err := json.Unmarshal([]byte(evidence.Prompt), &compact); err != nil {
+		t.Fatalf("compact prompt is not JSON: %v", err)
+	}
+	for _, candidate := range compact.Candidates {
+		if candidate.Code == excludedCode {
+			t.Fatalf("excluded candidate remained in compact prompt: %+v", compact.Candidates)
+		}
 	}
 }
 

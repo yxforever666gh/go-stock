@@ -63,8 +63,13 @@ func TestEmailQueueEligibilityAndIdempotence(t *testing.T) {
 	if created, err = service.Queue(context.Background(), eligibleRun("failed"), validEmailConfig()); err != nil || created {
 		t.Fatalf("failed run must not queue: created=%v err=%v", created, err)
 	}
+	failedFinal := eligibleRun("failed")
+	failedFinal.RunID = "00000000-0000-0000-0000-000000000002"
+	if created, err = service.QueueFinal(context.Background(), failedFinal, validEmailConfig()); err != nil || !created {
+		t.Fatalf("terminal failed chain must queue its final summary: created=%v err=%v", created, err)
+	}
 	var count int64
-	if err = repository.db.Model(&EmailDelivery{}).Count(&count).Error; err != nil || count != 1 {
+	if err = repository.db.Model(&EmailDelivery{}).Count(&count).Error; err != nil || count != 2 {
 		t.Fatalf("delivery count=%d err=%v", count, err)
 	}
 }

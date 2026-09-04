@@ -88,7 +88,10 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 			run.AttemptNo = 1
 		case err != nil:
 			return err
-		case !allowRetry || latest.AttemptNo >= 6 || (latest.Status != "failed" &&
+		case latest.Status == "running":
+			selected = latest
+			return nil
+		case !allowRetry || (run.TriggerSource != "untradable_refill" && latest.Status != "failed" &&
 			!(latest.Status == "no_recommendation" && latest.StrategyVersion != run.StrategyVersion)):
 			selected = latest
 			return nil
@@ -172,10 +175,15 @@ func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]Analysi
 	if err != nil {
 		return nil, err
 	}
+	chains, err := r.executionChainMap(ctx, rows)
+	if err != nil {
+		return nil, err
+	}
 	items := make([]AnalysisRunSummary, 0, len(rows))
 	for _, row := range rows {
 		delivery := deliveries[row.RunID]
-		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, AttemptNo: row.AttemptNo, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError})
+		chain := chains[row.ChainID]
+		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, AttemptNo: row.AttemptNo, ChainID: row.ChainID, ParentRunID: row.ParentRunID, TriggerSource: row.TriggerSource, RequestedSlots: row.RequestedSlots, PrimaryCount: row.PrimaryCount, StandbyCount: row.StandbyCount, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError, ExecutionChain: chain})
 	}
 	return items, nil
 }
@@ -194,7 +202,41 @@ func (r *Repository) GetRun(ctx context.Context, id string) (AnalysisRun, error)
 	} else if !errors.Is(deliveryErr, gorm.ErrRecordNotFound) {
 		return item, deliveryErr
 	}
+	if strings.TrimSpace(item.ChainID) != "" {
+		var chain ExecutionChain
+		if chainErr := r.db.WithContext(ctx).Where("chain_id = ?", item.ChainID).First(&chain).Error; chainErr == nil {
+			item.ExecutionChain = &chain
+		} else if !errors.Is(chainErr, gorm.ErrRecordNotFound) {
+			return item, chainErr
+		}
+	}
 	return item, err
+}
+
+func (r *Repository) executionChainMap(ctx context.Context, runs []AnalysisRun) (map[string]*ExecutionChain, error) {
+	result := make(map[string]*ExecutionChain)
+	ids := make([]string, 0, len(runs))
+	seen := make(map[string]struct{}, len(runs))
+	for _, run := range runs {
+		if id := strings.TrimSpace(run.ChainID); id != "" {
+			if _, exists := seen[id]; !exists {
+				seen[id] = struct{}{}
+				ids = append(ids, id)
+			}
+		}
+	}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var chains []ExecutionChain
+	if err := r.db.WithContext(ctx).Where("chain_id IN ?", ids).Find(&chains).Error; err != nil {
+		return nil, err
+	}
+	for index := range chains {
+		chain := chains[index]
+		result[chain.ChainID] = &chain
+	}
+	return result, nil
 }
 
 func (r *Repository) emailDeliveryMap(ctx context.Context, runs []AnalysisRun) (map[string]EmailDelivery, error) {
@@ -293,12 +335,19 @@ func (r *Repository) DueRecommendations(ctx context.Context, now time.Time, stat
 		Select("research2_recommendations.*").
 		Joins("JOIN research2_analysis_runs ON research2_analysis_runs.run_id = research2_recommendations.analysis_run_id AND research2_analysis_runs.status = ?", "success").
 		Where("research2_recommendations.status IN ?", statuses)
-	if len(statuses) == 1 && statuses[0] == "buy_pending" {
+	buyStatuses := len(statuses) > 0
+	for _, status := range statuses {
+		if status != "buy_pending" && status != "standby" {
+			buyStatuses = false
+			break
+		}
+	}
+	if buyStatuses {
 		query = query.Where("research2_recommendations.target_buy_at <= ?", now)
 	} else {
 		query = query.Where("research2_recommendations.target_sell_at IS NOT NULL AND research2_recommendations.target_sell_at <= ?", now)
 	}
-	err := query.Order("research2_recommendations.analysis_run_id ASC, research2_recommendations.final_score DESC, research2_recommendations.stock_code ASC, research2_recommendations.id ASC").Find(&items).Error
+	err := query.Order("research2_recommendations.analysis_run_id ASC, CASE WHEN research2_recommendations.selection_rank > 0 THEN research2_recommendations.selection_rank ELSE 999999 END ASC, research2_recommendations.final_score DESC, research2_recommendations.stock_code ASC, research2_recommendations.id ASC").Find(&items).Error
 	return items, err
 }
 
@@ -317,6 +366,35 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockResearch2AccountForWrite(tx); err != nil {
 			return err
+		}
+		var recommendation Recommendation
+		if err := tx.Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").First(&recommendation).Error; err != nil {
+			return err
+		}
+		tradeDay := trade.TradedAt.In(shanghai())
+		dayStart := time.Date(tradeDay.Year(), tradeDay.Month(), tradeDay.Day(), 0, 0, 0, 0, shanghai())
+		var dailyBuys int64
+		if err := tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&dailyBuys).Error; err != nil {
+			return err
+		}
+		if dailyBuys >= DailyTargetSlots {
+			return errors.New("research2 daily buy limit is already reached")
+		}
+		var run AnalysisRun
+		if err := tx.Where("run_id = ?", recommendation.AnalysisRunID).First(&run).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		var chain ExecutionChain
+		if strings.TrimSpace(run.ChainID) != "" {
+			if err := tx.Exec("UPDATE research2_execution_chains SET filled_slots = filled_slots WHERE chain_id = ?", run.ChainID).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("chain_id = ?", run.ChainID).First(&chain).Error; err != nil {
+				return err
+			}
+			if chain.Status != "running" || chain.FilledSlots >= chain.TargetSlots {
+				return errors.New("research2 daily execution target is already closed")
+			}
 		}
 		var account Account
 		if err := tx.First(&account, 1).Error; err != nil {
@@ -340,7 +418,21 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 		if err := tx.Create(&trade).Error; err != nil {
 			return err
 		}
-		return tx.Model(&account).Update("cash", account.Cash-cost).Error
+		if err := tx.Model(&account).Update("cash", account.Cash-cost).Error; err != nil {
+			return err
+		}
+		if strings.TrimSpace(run.ChainID) != "" {
+			newFilledSlots := int(dailyBuys) + 1
+			updates := map[string]any{"filled_slots": newFilledSlots}
+			if newFilledSlots >= chain.TargetSlots {
+				now := trade.TradedAt
+				updates["status"], updates["stop_reason"], updates["completed_at"] = "completed", "已完成当日三笔买入", now
+			}
+			if err := tx.Model(&ExecutionChain{}).Where("chain_id = ? AND filled_slots = ?", run.ChainID, chain.FilledSlots).Updates(updates).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

@@ -13,7 +13,7 @@ test('research2 report exposes trailing-five evidence timing, attempt and qualit
     assert.match(report, new RegExp(token))
     assert.match(generated, new RegExp(token))
 	}
-	assert.match(report, /最近5个已闭合交易分钟/)
+  assert.match(report, /最近5个已闭合交易分钟/)
   assert.match(report, /分析批次/)
   assert.doesNotMatch(report, /09:55 冻结证据/)
   assert.match(settings, /最近5个已闭合交易分钟/)
@@ -22,11 +22,20 @@ test('research2 report exposes trailing-five evidence timing, attempt and qualit
   assert.match(report, /午休启动固定使用 11:25—11:30/)
   assert.match(settings, /午休启动固定使用 11:25—11:30/)
   for (const source of [report, recommendations, settings]) {
-    assert.match(source, /\[09:50,13:00\)/)
+    assert.match(source, /\[09:55,13:00\)/)
     assert.match(source, /13:00 前生成/)
     assert.match(source, /13:00 起/)
     assert.doesNotMatch(source, /报告[^。；]*11:30[^。；]*完成/)
   }
+})
+
+test('research2 exposes primary, standby and execution-chain provenance', () => {
+  for (const token of ['selectionRole', 'selectionRank', 'executionFailureCode', 'executionLimitDistancePct', 'executionChain']) {
+    assert.match(recommendations + report, new RegExp(token))
+    assert.match(generated, new RegExp(token))
+  }
+  assert.match(recommendations, /3只主选和3只备选/)
+  assert.match(recommendations, /距涨停不足1%/)
 })
 
 test('research2 degraded evidence uses a bounded summary instead of failure detail', () => {

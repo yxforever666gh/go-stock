@@ -54,7 +54,7 @@ type App struct {
 
 const aiLifecycleEntryKey = "AIAnalysisLifecycleDue"
 const aiDeploymentEntryKey = "AICapitalDeploymentDue"
-const research2AnalysisEntryKey = "Research2Analysis0950"
+const research2AnalysisEntryKey = "Research2Analysis0955"
 const research2TradingEntryKey = "Research2TradingMinute"
 const research2MetricsEntryKey = "Research2Metrics1505"
 const research2EmailEntryKey = "Research2EmailDelivery"

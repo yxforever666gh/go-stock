@@ -115,7 +115,7 @@ func TestResearch2CollectForRunCreatesBatchWithActualCutoff(t *testing.T) {
 	startedAt := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
 	actualCutoff := startedAt.Add(4 * time.Second)
 	collector := &Research2EvidenceCollector{
-		evidence: repository, evidenceProfile: research2EvidenceProfileV6,
+		evidence: repository, evidenceProfile: research2EvidenceProfileV7,
 		collectEvidence: func(context.Context, time.Time) (research2.Evidence, error) {
 			return research2.Evidence{CutoffAt: actualCutoff, Documents: []research.SourceDocument{{
 				SourceID: "market", SourceName: "市场快照", Category: "market", AvailableAt: &actualCutoff, CollectedAt: actualCutoff,
@@ -134,7 +134,7 @@ func TestResearch2CollectForRunCreatesBatchWithActualCutoff(t *testing.T) {
 	if !evidence.CutoffAt.Equal(actualCutoff) || !batch.CutoffAt.Equal(actualCutoff) {
 		t.Fatalf("actual cutoff not persisted: evidence=%s batch=%s", evidence.CutoffAt, batch.CutoffAt)
 	}
-	if batch.EvidenceProfileVersion != research2EvidenceProfileV6 || batch.Status != marketdata.StatusFrozen {
+	if batch.EvidenceProfileVersion != research2EvidenceProfileV7 || batch.Status != marketdata.StatusFrozen {
 		t.Fatalf("unexpected frozen batch: %+v", batch)
 	}
 	items, err := repository.Items(context.Background(), evidence.EvidenceSetID)
