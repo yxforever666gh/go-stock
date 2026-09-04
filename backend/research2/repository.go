@@ -17,6 +17,11 @@ import (
 
 type Repository struct{ db *gorm.DB }
 
+var (
+	ErrDailyBuyLimitReached   = errors.New("research2 daily buy limit is already reached")
+	ErrExecutionChainClosed  = errors.New("research2 daily execution target is already closed")
+)
+
 // SQLite ignores SELECT FOR UPDATE. Acquire the single-writer lock explicitly
 // before reading the research2 cash balance so concurrent schedulers cannot
 // race the read/modify/write transaction.
@@ -378,7 +383,7 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 			return err
 		}
 		if dailyBuys >= DailyTargetSlots {
-			return errors.New("research2 daily buy limit is already reached")
+			return ErrDailyBuyLimitReached
 		}
 		var run AnalysisRun
 		if err := tx.Where("run_id = ?", recommendation.AnalysisRunID).First(&run).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -393,7 +398,7 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 				return err
 			}
 			if chain.Status != "running" || chain.FilledSlots >= chain.TargetSlots {
-				return errors.New("research2 daily execution target is already closed")
+				return ErrExecutionChainClosed
 			}
 		}
 		var account Account

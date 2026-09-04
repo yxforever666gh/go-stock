@@ -356,7 +356,15 @@ func TestProductionCutoffCancelsMorningRetryBeforeBuyingAtThirteen(t *testing.T)
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	service := NewTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
+	if err := service.ProcessDue(context.Background(), time.Date(2026, 9, 4, 11, 30, 5, 0, shanghai())); err != nil {
+		t.Fatal(err)
+	}
+	deferred, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
+	if err != nil || !deferred.Recommendation.TargetBuyAt.Equal(time.Date(2026, 9, 4, 13, 0, 0, 0, shanghai())) {
+		t.Fatalf("morning retry was not deferred for final classification: %+v err=%v", deferred.Recommendation, err)
+	}
+	if err := service.ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -441,6 +449,13 @@ func TestExecutionChainConcurrentBuysNeverExceedThree(t *testing.T) {
 	chain, err = repository.RefreshExecutionChainFilled(context.Background(), chain.ChainID)
 	if err != nil || chain.Status != "completed" || chain.FilledSlots != DailyTargetSlots {
 		t.Fatalf("chain=%+v err=%v", chain, err)
+	}
+	if err = NewTradingService(repository, chainMarket{}, testCalendar{}).ProcessDue(context.Background(), now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var pending int64
+	if err = database.Model(&Recommendation{}).Where("analysis_run_id = ? AND status = ?", run.RunID, "buy_pending").Count(&pending).Error; err != nil || pending != 0 {
+		t.Fatalf("completed chain retained %d pending primaries err=%v", pending, err)
 	}
 	var trades int64
 	if err = database.Model(&Trade{}).Where("side = ?", "buy").Count(&trades).Error; err != nil || trades != DailyTargetSlots {

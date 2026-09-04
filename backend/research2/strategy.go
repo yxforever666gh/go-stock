@@ -474,19 +474,22 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 		}
 		return run, err
 	}
-	if auditStarted {
-		auditCtx, cancelAudit := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancelAudit()
-		if err = r.audit.Complete(auditCtx, researchaudit.OwnerResearch2, run.RunID); err != nil {
-			return run, err
-		}
-	}
 	if len(items) == 0 && chain.Status == "running" {
 		reason := strings.TrimSpace(run.FailureReason)
 		if reason == "" {
 			reason = "本轮没有形成满足评分和证据约束的推荐"
 		}
 		if err = r.repository.CompleteExecutionChain(context.Background(), chain.ChainID, "exhausted", reason, generated); err != nil {
+			if auditStarted {
+				_ = r.audit.Fail(context.Background(), researchaudit.OwnerResearch2, run.RunID, err)
+			}
+			return run, err
+		}
+	}
+	if auditStarted {
+		auditCtx, cancelAudit := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancelAudit()
+		if err = r.audit.Complete(auditCtx, researchaudit.OwnerResearch2, run.RunID); err != nil {
 			return run, err
 		}
 	}
@@ -1156,6 +1159,10 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 						if markErr := s.repository.MarkStandbyNotUsed(ctx, item.RecommendationID); markErr != nil {
 							return markErr
 						}
+					} else if item.Status == "buy_pending" {
+						if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "当日三笔买入目标已完成，剩余候选不再执行"); markErr != nil {
+							return markErr
+						}
 					}
 				}
 				continue
@@ -1169,7 +1176,8 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 		pendingPrimaryCount := 0
 		for _, item := range group {
 			executionCutoff := time.Date(now.Year(), now.Month(), now.Day(), 13, 0, 0, 0, shanghai())
-			if strings.TrimSpace(run.ChainID) != "" && !now.Before(executionCutoff) && item.TargetBuyAt.Before(executionCutoff) {
+			lunchStart := time.Date(now.Year(), now.Month(), now.Day(), 11, 30, 0, 0, shanghai())
+			if strings.TrimSpace(run.ChainID) != "" && !now.Before(executionCutoff) && item.SignalAt.Before(lunchStart) {
 				if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "上午未完成的买入已到13:00截止，不延迟追单"); markErr != nil {
 					return markErr
 				}
@@ -1311,6 +1319,12 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			}
 			trade := Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: tradeAt, MarketPrice: snapshots[item.RecommendationID].Price, ExecutionPrice: cost.ExecutionPrice, Quantity: quantity, Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount, NetCashFlow: cost.NetCashFlow, PriceSource: snapshots[item.RecommendationID].Source, ExecutionMode: "live_after_signal"}
 			if err = s.repository.RecordBuy(ctx, item.RecommendationID, trade, sellAt); err != nil {
+				if errors.Is(err, ErrDailyBuyLimitReached) || errors.Is(err, ErrExecutionChainClosed) {
+					if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "当日三笔买入目标已完成，当前候选不再执行"); markErr != nil {
+						return errors.Join(err, markErr)
+					}
+					continue
+				}
 				return err
 			}
 			bought++
