@@ -1,7 +1,6 @@
 <script setup>
-import * as echarts from 'echarts'
 import {NTag, NText} from 'naive-ui'
-import {computed, h, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch} from 'vue'
+import {computed, h, ref, toRef, watch} from 'vue'
 import {useMarketDataResource} from '../composables/useMarketDataResource.js'
 import {GetMarketHotWords, GlobalStockIndexes} from '../services/market-api.js'
 import EvidenceStatusBar from './EvidenceStatusBar.vue'
@@ -10,6 +9,7 @@ import {
   formatDocumentShare,
   hotWordTrend,
   normalizeHotWordsPayload,
+  sentimentScale,
 } from './market-hot-words-model.js'
 
 const props = defineProps({
@@ -21,10 +21,7 @@ const active = toRef(props, 'active')
 const hours = 24
 const baselineDays = 7
 const limit = 30
-const gaugeElement = ref(null)
 const expandedRowKeys = ref([])
-let gaugeChart = null
-let resizeObserver = null
 
 const {data, envelope, error, loading, refresh} = useMarketDataResource({
   active,
@@ -46,7 +43,7 @@ const {data: indexesData} = useMarketDataResource({
 
 const payload = computed(() => normalizeHotWordsPayload(data.value))
 const rows = computed(() => payload.value.items)
-const sentimentScore = computed(() => Math.min(100, Math.max(-100, payload.value.sentiment.score)))
+const sentiment = computed(() => sentimentScale(payload.value.sentiment.score))
 const baselineAvailable = computed(() => payload.value.baseline.available)
 const mainIndex = computed(() => {
   const source = indexesData.value || {}
@@ -132,67 +129,11 @@ function rowProps(row) {
   }
 }
 
-function renderGauge() {
-  if (!gaugeChart || gaugeChart.isDisposed()) return
-  const textColor = props.darkTheme ? '#d6d6d6' : '#465568'
-  gaugeChart.setOption({
-    animation: true,
-    backgroundColor: 'transparent',
-    series: [{
-      type: 'gauge',
-      startAngle: 180,
-      endAngle: 0,
-      center: ['50%', '72%'],
-      radius: '92%',
-      min: -100,
-      max: 100,
-      splitNumber: 4,
-      axisLine: {lineStyle: {width: 8, color: [[0.25, '#18a058'], [0.5, '#36adcf'], [0.75, '#f0a020'], [1, '#d03050']]}},
-      pointer: {length: '56%', width: 7, itemStyle: {color: 'auto'}},
-      axisTick: {distance: -13, length: 6, lineStyle: {color: 'auto', width: 1}},
-      splitLine: {distance: -17, length: 14, lineStyle: {color: 'auto', width: 2}},
-      axisLabel: {
-        color: textColor,
-        distance: -41,
-        fontSize: 12,
-        formatter: value => ({'-100': '冰点', '-50': '谨慎', '0': '中性', '50': '乐观', '100': '极热'}[String(value)] || ''),
-      },
-      title: {offsetCenter: [0, '-5%'], color: textColor, fontSize: 15},
-      detail: {
-        valueAnimation: true,
-        offsetCenter: [0, '-30%'],
-        color: 'inherit',
-        fontSize: 28,
-        formatter: value => value.toFixed(1),
-      },
-      data: [{value: sentimentScore.value, name: payload.value.sentiment.label || '市场情绪'}],
-    }],
-  }, true)
-}
-
-watch([sentimentScore, () => payload.value.sentiment.label, () => props.darkTheme], async () => {
-  await nextTick()
-  renderGauge()
-})
-
 watch(rows, nextRows => {
   const keys = new Set(nextRows.map(row => row._key))
   expandedRowKeys.value = expandedRowKeys.value.filter(key => keys.has(key))
 })
 
-onMounted(() => {
-  if (!gaugeElement.value) return
-  gaugeChart = echarts.init(gaugeElement.value)
-  resizeObserver = new ResizeObserver(() => gaugeChart?.resize())
-  resizeObserver.observe(gaugeElement.value)
-  renderGauge()
-})
-
-onBeforeUnmount(() => {
-  resizeObserver?.disconnect()
-  if (gaugeChart && !gaugeChart.isDisposed()) gaugeChart.dispose()
-  gaugeChart = null
-})
 </script>
 
 <template>
@@ -228,9 +169,20 @@ onBeforeUnmount(() => {
       <n-grid cols="1 l:24" responsive="screen" :x-gap="14" :y-gap="12">
         <n-gi span="1 l:6">
           <n-card size="small" title="市场情绪强弱" class="sentiment-card">
-            <div ref="gaugeElement" class="sentiment-gauge"/>
+            <div class="sentiment-scale">
+              <div class="sentiment-reading" :class="`sentiment-${sentiment.tone}`">
+                <strong>{{ sentiment.score.toFixed(1) }}</strong>
+                <span>{{ payload.sentiment.label || '市场情绪' }}</span>
+              </div>
+              <div class="sentiment-pointer-lane" aria-hidden="true">
+                <span class="sentiment-pointer" :style="{left: `${sentiment.position}%`}"/>
+              </div>
+              <div class="sentiment-band" aria-hidden="true"/>
+              <div class="sentiment-labels">
+                <span>冰点</span><span>谨慎</span><span>中性</span><span>乐观</span><span>极热</span>
+              </div>
+            </div>
             <n-flex justify="center" :wrap="true" :size="8">
-              <n-tag :bordered="false" type="info">{{ payload.sentiment.label }}</n-tag>
               <n-text depth="3">样本 {{ payload.currentDocumentCount }} 篇</n-text>
             </n-flex>
           </n-card>
@@ -284,9 +236,85 @@ onBeforeUnmount(() => {
   height: 100%;
 }
 
-.sentiment-gauge {
-  width: 100%;
-  height: 300px;
+.sentiment-scale {
+  padding: 22px 8px 30px;
+}
+
+.sentiment-reading {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.sentiment-reading strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.sentiment-reading span {
+  font-size: 14px;
+}
+
+.sentiment-ice { color: #18a058; }
+.sentiment-cautious { color: #36adcf; }
+.sentiment-optimistic { color: #f0a020; }
+.sentiment-hot { color: #d03050; }
+
+.sentiment-pointer-lane {
+  position: relative;
+  height: 25px;
+  margin-top: 8px;
+}
+
+.sentiment-pointer {
+  position: absolute;
+  bottom: 0;
+  width: 2px;
+  height: 19px;
+  color: var(--n-text-color, #334155);
+  background: currentColor;
+  transform: translateX(-50%);
+}
+
+.sentiment-pointer::after {
+  position: absolute;
+  bottom: -1px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border: 6px solid transparent;
+  border-top: 8px solid currentColor;
+  content: '';
+  transform: translate(-50%, 85%);
+}
+
+.sentiment-band {
+  height: 14px;
+  border: 1px solid rgba(128, 128, 128, 0.24);
+  border-radius: 5px;
+  background: linear-gradient(to right, #18a058 0 25%, #36adcf 25% 50%, #f0a020 50% 75%, #d03050 75% 100%);
+}
+
+.sentiment-labels {
+  position: relative;
+  height: 18px;
+  margin-top: 9px;
+  color: var(--n-text-color-3, #6b7280);
+  font-size: 12px;
+}
+
+.sentiment-labels span { position: absolute; white-space: nowrap; }
+.sentiment-labels span:first-child { left: 0; }
+.sentiment-labels span:nth-child(2) { left: 25%; transform: translateX(-50%); }
+.sentiment-labels span:nth-child(3) { left: 50%; transform: translateX(-50%); }
+.sentiment-labels span:nth-child(4) { left: 75%; transform: translateX(-50%); }
+.sentiment-labels span:last-child { right: 0; }
+
+@media (max-width: 700px) {
+  .sentiment-scale { padding-inline: 2px; }
+  .sentiment-labels { font-size: 11px; }
 }
 
 .hot-words-empty {

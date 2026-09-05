@@ -38,6 +38,7 @@ export const API_PATHS = {
   getMarginTrading: "/api/v1/market/margin",
   getMarketBreadth: "/api/v1/market/breadth",
   getMarketDictionary: "/api/v1/market/dictionary",
+  getMarketFundFlowTimeline: "/api/v1/market/fund-flows/{code}/timeline",
   getReadiness: "/readyz",
   getRecommendation: "/api/v1/research/recommendations/{id}",
   getRecommendationChart: "/api/v1/research/recommendations/{id}/chart",
@@ -560,12 +561,37 @@ export type FundFlowEnvelope = DataEnvelope & {
 }
 
 export type FundFlowRow = {
-  changePct: number
+  changePct?: number | null
   code: string
-  inAmount: number
+  inAmount?: number | null
+  largeNetAmount?: number | null
+  mainNetRatio?: number | null
+  mediumNetAmount?: number | null
   name: string
   netAmount: number
-  outAmount: number
+  outAmount?: number | null
+  smallNetAmount?: number | null
+  superLargeNetAmount?: number | null
+}
+
+export type FundFlowTimelineData = {
+  code: string
+  name?: string
+  points: Array<FundFlowTimelinePoint>
+  tradingDate?: string
+}
+
+export type FundFlowTimelineEnvelope = DataEnvelope & {
+  data: FundFlowTimelineData
+}
+
+export type FundFlowTimelinePoint = {
+  at: string
+  largeNetAmount: number
+  mainNetAmount: number
+  mediumNetAmount: number
+  smallNetAmount: number
+  superLargeNetAmount: number
 }
 
 export type FundRankingEnvelope = DataEnvelope & {

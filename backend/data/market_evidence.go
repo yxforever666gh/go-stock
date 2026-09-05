@@ -38,12 +38,33 @@ type BreadthData struct {
 }
 
 type FundFlowRow struct {
-	Code      string  `json:"code"`
-	Name      string  `json:"name"`
-	NetAmount float64 `json:"netAmount"`
-	InAmount  float64 `json:"inAmount"`
-	OutAmount float64 `json:"outAmount"`
-	ChangePct float64 `json:"changePct"`
+	Code                string   `json:"code"`
+	Name                string   `json:"name"`
+	NetAmount           float64  `json:"netAmount"`
+	InAmount            *float64 `json:"inAmount"`
+	OutAmount           *float64 `json:"outAmount"`
+	ChangePct           *float64 `json:"changePct"`
+	MainNetRatio        *float64 `json:"mainNetRatio"`
+	SuperLargeNetAmount *float64 `json:"superLargeNetAmount"`
+	LargeNetAmount      *float64 `json:"largeNetAmount"`
+	MediumNetAmount     *float64 `json:"mediumNetAmount"`
+	SmallNetAmount      *float64 `json:"smallNetAmount"`
+}
+
+type FundFlowTimelinePoint struct {
+	At                  time.Time `json:"at"`
+	MainNetAmount       float64   `json:"mainNetAmount"`
+	SuperLargeNetAmount float64   `json:"superLargeNetAmount"`
+	LargeNetAmount      float64   `json:"largeNetAmount"`
+	MediumNetAmount     float64   `json:"mediumNetAmount"`
+	SmallNetAmount      float64   `json:"smallNetAmount"`
+}
+
+type FundFlowTimelineData struct {
+	Code        string                  `json:"code"`
+	Name        string                  `json:"name,omitempty"`
+	TradingDate string                  `json:"tradingDate,omitempty"`
+	Points      []FundFlowTimelinePoint `json:"points"`
 }
 
 type FuturesPositionRow struct {
@@ -135,6 +156,7 @@ type marketEvidenceURLs struct {
 	breadthTencent    string
 	fundFlowEastmoney string
 	fundFlowSina      string
+	fundFlowTimeline  string
 	margin            string
 	marginSecurity    string
 	marginSSE         string
@@ -159,8 +181,9 @@ func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceServ
 			breadth:           "https://push2.eastmoney.com/api/qt/clist/get",
 			breadthDelay:      "https://push2delay.eastmoney.com/api/qt/clist/get",
 			breadthTencent:    "http://qt.gtimg.cn/",
-			fundFlowEastmoney: "https://data.eastmoney.com/dataapi/bkzj/getbkzj",
+			fundFlowEastmoney: "https://push2delay.eastmoney.com/api/qt/clist/get",
 			fundFlowSina:      "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk",
+			fundFlowTimeline:  "https://push2delay.eastmoney.com/api/qt/stock/fflow/kline/get",
 			margin:            "https://datacenter-web.eastmoney.com/api/data/v1/get",
 			marginSecurity:    "https://datacenter.eastmoney.com/securities/api/data/v1/get",
 			marginSSE:         "https://query.sse.com.cn/commonSoaQuery.do",
@@ -199,6 +222,19 @@ func (s *MarketEvidenceService) FundFlows(ctx context.Context, request marketdat
 		Fallback: &sinaFundFlowProvider{service: s},
 	}
 	return withEvidenceProfile(collector.Collect(ctx, request))
+}
+
+func (s *MarketEvidenceService) FundFlowTimeline(ctx context.Context, request marketdata.ProviderRequest) marketdata.DataEnvelope[FundFlowTimelineData] {
+	envelope := withEvidenceProfile(marketdata.ProviderChainCollector[FundFlowTimelineData]{Providers: []marketdata.Provider[FundFlowTimelineData]{
+		&eastmoneyFundFlowTimelineProvider{service: s},
+	}}.Collect(ctx, request))
+	if envelope.Data.Points == nil {
+		envelope.Data.Points = []FundFlowTimelinePoint{}
+	}
+	if envelope.Data.Code == "" {
+		envelope.Data.Code, _ = NormalizeFundFlowBoardCode(request.Code)
+	}
+	return envelope
 }
 
 func (s *MarketEvidenceService) FuturesPositions(ctx context.Context, request marketdata.ProviderRequest) marketdata.DataEnvelope[FuturesPositionsData] {
@@ -302,21 +338,24 @@ func (p unavailableProvider[T]) Collect(_ context.Context, _ marketdata.Provider
 
 type eastmoneyFundFlowProvider struct{ service *MarketEvidenceService }
 
-func (p *eastmoneyFundFlowProvider) Name() string { return "eastmoney" }
+func (p *eastmoneyFundFlowProvider) Name() string { return "eastmoney-delay" }
 
 func (p *eastmoneyFundFlowProvider) Collect(ctx context.Context, request marketdata.ProviderRequest) marketdata.ProviderResult[[]FundFlowRow] {
 	now := p.service.now()
-	if request.Date != "" && request.Date != now.In(shanghaiDataLocation()).Format("2006-01-02") {
-		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowEastmoney, errors.New("东方财富板块资金流公开接口不支持历史日期"))
-	}
-	boardCode := "m:90+s:4"
+	boardCode := "m:90 s:4"
 	if request.Scope == "concept" {
-		boardCode = "m:90+t:3"
+		boardCode = "m:90 t:3"
 	}
+	sortField, complete := eastmoneyFundFlowSortField(request.Sort)
 	response, err := p.service.client.R().SetContext(ctx).
 		SetHeader("Referer", "https://data.eastmoney.com/bkzj/").
 		SetHeader("User-Agent", marketEvidenceUserAgent()).
-		SetQueryParams(map[string]string{"key": "f62", "code": boardCode}).
+		SetQueryParams(map[string]string{
+			"pn": "1", "pz": strconv.Itoa(request.Limit), "po": "1", "np": "1", "fltt": "2", "invt": "2",
+			"fid": sortField, "fs": boardCode, "stat": "1",
+			"fields": "f12,f14,f2,f3,f62,f184,f66,f69,f72,f75,f78,f81,f84,f87,f204,f205,f124",
+			"ut":     "8dec03ba335b81bf4ebdf7b29ec27d15",
+		}).
 		Get(p.service.urls.fundFlowEastmoney)
 	if err != nil {
 		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowEastmoney, err)
@@ -324,35 +363,64 @@ func (p *eastmoneyFundFlowProvider) Collect(ctx context.Context, request marketd
 	if response.StatusCode() >= 400 {
 		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowEastmoney, fmt.Errorf("HTTP %d", response.StatusCode()))
 	}
-	rows, err := parseEastmoneyFundFlows(response.Body())
+	rows, asOf, err := parseEastmoneyFundFlows(response.Body())
 	if err != nil {
 		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowEastmoney, err)
 	}
-	if request.Limit > 0 && len(rows) > request.Limit {
-		rows = rows[:request.Limit]
+	if request.Date != "" && (asOf.IsZero() || request.Date != asOf.In(shanghaiDataLocation()).Format("2006-01-02")) {
+		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowEastmoney,
+			fmt.Errorf("东方财富板块资金流公开接口只提供最新交易日 %s", asOf.In(shanghaiDataLocation()).Format("2006-01-02")))
 	}
 	available := p.service.now()
 	status, warning := marketdata.StatusOK, ""
-	if request.Sort != "" && request.Sort != "netamount" {
-		status, warning = marketdata.StatusPartial, "东方财富主源只保证主力净流入排序，已尝试新浪备用源满足所选排序"
+	if !complete {
+		status, warning = marketdata.StatusPartial, "东方财富不提供流入或流出总额，已尝试新浪备用源满足旧排序"
+	} else if asOf.IsZero() {
+		status, warning = marketdata.StatusPartial, "东方财富板块资金流缺少可验证的行情时间"
 	}
-	return marketdata.ProviderResult[[]FundFlowRow]{Status: status, AsOf: now, AvailableAt: &available, Data: rows, SourceRef: p.service.urls.fundFlowEastmoney, Warning: warning}
+	return marketdata.ProviderResult[[]FundFlowRow]{Status: status, AsOf: asOf, AvailableAt: &available, Data: rows, SourceRef: p.service.urls.fundFlowEastmoney, Warning: warning}
 }
 
-func parseEastmoneyFundFlows(body []byte) ([]FundFlowRow, error) {
+func eastmoneyFundFlowSortField(sortBy string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(sortBy)) {
+	case "", "netamount":
+		return "f62", true
+	case "main_ratio":
+		return "f184", true
+	case "super_large_netamount":
+		return "f66", true
+	case "large_netamount":
+		return "f72", true
+	case "medium_netamount":
+		return "f78", true
+	case "small_netamount":
+		return "f84", true
+	case "change_pct", "avg_changeratio":
+		return "f3", true
+	case "inamount", "outamount":
+		return "f62", false
+	default:
+		return "f62", false
+	}
+}
+
+func parseEastmoneyFundFlows(body []byte) ([]FundFlowRow, time.Time, error) {
 	var payload struct {
-		Data struct {
+		Data *struct {
 			Diff json.RawMessage `json:"diff"`
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+		return nil, time.Time{}, err
+	}
+	if payload.Data == nil {
+		return nil, time.Time{}, errors.New("empty Eastmoney fund-flow response")
 	}
 	var values []map[string]any
 	if err := json.Unmarshal(payload.Data.Diff, &values); err != nil {
 		var keyed map[string]map[string]any
 		if keyedErr := json.Unmarshal(payload.Data.Diff, &keyed); keyedErr != nil {
-			return nil, fmt.Errorf("decode fund-flow rows: %w", err)
+			return nil, time.Time{}, fmt.Errorf("decode fund-flow rows: %w", err)
 		}
 		keys := make([]string, 0, len(keyed))
 		for key := range keyed {
@@ -364,13 +432,29 @@ func parseEastmoneyFundFlows(body []byte) ([]FundFlowRow, error) {
 		}
 	}
 	rows := make([]FundFlowRow, 0, len(values))
+	var asOf time.Time
 	for _, value := range values {
-		rows = append(rows, FundFlowRow{Code: anyString(value["f12"]), Name: anyString(value["f14"]), NetAmount: floatAny(value, "f62"), ChangePct: floatAny(value, "f3")})
+		code, name := anyString(value["f12"]), anyString(value["f14"])
+		netAmount, netOK := anyFloat(value["f62"])
+		if code == "" || name == "" || !netOK {
+			continue
+		}
+		rows = append(rows, FundFlowRow{
+			Code: code, Name: name, NetAmount: netAmount, ChangePct: floatAnyPointer(value, "f3"), MainNetRatio: floatAnyPointer(value, "f184"),
+			SuperLargeNetAmount: floatAnyPointer(value, "f66"), LargeNetAmount: floatAnyPointer(value, "f72"),
+			MediumNetAmount: floatAnyPointer(value, "f78"), SmallNetAmount: floatAnyPointer(value, "f84"),
+		})
+		if timestamp, ok := anyFloat(value["f124"]); ok && timestamp > 0 {
+			candidate := time.Unix(int64(timestamp), 0).In(shanghaiDataLocation())
+			if candidate.After(asOf) {
+				asOf = candidate
+			}
+		}
 	}
 	if len(rows) == 0 {
-		return nil, errors.New("empty Eastmoney fund-flow response")
+		return nil, time.Time{}, errors.New("empty Eastmoney fund-flow response")
 	}
-	return rows, nil
+	return rows, asOf, nil
 }
 
 type sinaFundFlowProvider struct{ service *MarketEvidenceService }
@@ -378,8 +462,8 @@ type sinaFundFlowProvider struct{ service *MarketEvidenceService }
 func (p *sinaFundFlowProvider) Name() string { return "sina" }
 func (p *sinaFundFlowProvider) Collect(ctx context.Context, request marketdata.ProviderRequest) marketdata.ProviderResult[[]FundFlowRow] {
 	now := p.service.now()
-	if request.Date != "" && request.Date != now.In(shanghaiDataLocation()).Format("2006-01-02") {
-		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowSina, errors.New("新浪板块资金流公开接口不支持历史日期"))
+	if request.Date != "" {
+		return providerFailure[[]FundFlowRow](now, p.service.urls.fundFlowSina, errors.New("新浪板块资金流公开接口不提供可验证的交易日期"))
 	}
 	category := "0"
 	if request.Scope == "concept" {
@@ -408,7 +492,8 @@ func (p *sinaFundFlowProvider) Collect(ctx context.Context, request marketdata.P
 		rows = rows[:request.Limit]
 	}
 	available := p.service.now()
-	return marketdata.ProviderResult[[]FundFlowRow]{Status: marketdata.StatusOK, AsOf: now, AvailableAt: &available, Data: rows, SourceRef: endpoint.String()}
+	return marketdata.ProviderResult[[]FundFlowRow]{Status: marketdata.StatusPartial, AvailableAt: &available, Data: rows, SourceRef: endpoint.String(),
+		Warning: "新浪板块资金流不提供可验证的交易日期，仅作为旧版流入/流出字段的降级来源"}
 }
 
 func parseSinaFundFlows(body []byte) ([]FundFlowRow, error) {
@@ -418,16 +503,124 @@ func parseSinaFundFlows(body []byte) ([]FundFlowRow, error) {
 	}
 	rows := make([]FundFlowRow, 0, len(values))
 	for _, value := range values {
+		netAmount, ok := anyFloat(firstAny(value, "netamount", "net_amount"))
+		if !ok {
+			continue
+		}
+		changePct := floatAnyPointer(value, "avg_changeratio", "changeratio", "changepercent")
+		if changePct != nil {
+			converted := *changePct * 100
+			changePct = &converted
+		}
 		rows = append(rows, FundFlowRow{
 			Code: anyString(firstAny(value, "category", "code", "symbol")), Name: anyString(firstAny(value, "name", "categoryname")),
-			NetAmount: floatAny(value, "netamount", "net_amount"), InAmount: floatAny(value, "inamount", "in_amount"),
-			OutAmount: floatAny(value, "outamount", "out_amount"), ChangePct: floatAny(value, "avg_changeratio", "changeratio", "changepercent"),
+			NetAmount: netAmount, InAmount: floatAnyPointer(value, "inamount", "in_amount"),
+			OutAmount: floatAnyPointer(value, "outamount", "out_amount"), ChangePct: changePct,
 		})
 	}
 	if rows == nil {
 		rows = []FundFlowRow{}
 	}
 	return rows, nil
+}
+
+type eastmoneyFundFlowTimelineProvider struct{ service *MarketEvidenceService }
+
+func (p *eastmoneyFundFlowTimelineProvider) Name() string { return "eastmoney-delay" }
+
+func (p *eastmoneyFundFlowTimelineProvider) Collect(ctx context.Context, request marketdata.ProviderRequest) marketdata.ProviderResult[FundFlowTimelineData] {
+	now := p.service.now()
+	code, ok := NormalizeFundFlowBoardCode(request.Code)
+	if !ok {
+		return providerFailure[FundFlowTimelineData](now, p.service.urls.fundFlowTimeline, errors.New("资金流代码必须是 BK 加四位数字"))
+	}
+	response, err := p.service.client.R().SetContext(ctx).
+		SetHeader("Referer", "https://data.eastmoney.com/bkzj/").
+		SetHeader("User-Agent", marketEvidenceUserAgent()).
+		SetQueryParams(map[string]string{
+			"lmt": "0", "klt": "1", "secid": "90." + code, "fields1": "f1,f2,f3,f7",
+			"fields2": "f51,f52,f53,f54,f55,f56", "ut": "b2884a393a59ad64002292a3e90d46a5",
+		}).Get(p.service.urls.fundFlowTimeline)
+	if err != nil {
+		return providerFailure[FundFlowTimelineData](now, p.service.urls.fundFlowTimeline, err)
+	}
+	if response.StatusCode() >= 400 {
+		return providerFailure[FundFlowTimelineData](now, p.service.urls.fundFlowTimeline, fmt.Errorf("HTTP %d", response.StatusCode()))
+	}
+	data, asOf, err := parseEastmoneyFundFlowTimeline(response.Body(), code)
+	if err != nil {
+		return providerFailure[FundFlowTimelineData](now, p.service.urls.fundFlowTimeline, err)
+	}
+	available := p.service.now()
+	return marketdata.ProviderResult[FundFlowTimelineData]{Status: marketdata.StatusOK, AsOf: asOf, AvailableAt: &available, Data: data, SourceRef: p.service.urls.fundFlowTimeline}
+}
+
+func NormalizeFundFlowBoardCode(value string) (string, bool) {
+	code := strings.ToUpper(strings.TrimSpace(value))
+	if len(code) != 6 || !strings.HasPrefix(code, "BK") {
+		return "", false
+	}
+	for _, digit := range code[2:] {
+		if digit < '0' || digit > '9' {
+			return "", false
+		}
+	}
+	return code, true
+}
+
+func parseEastmoneyFundFlowTimeline(body []byte, expectedCode string) (FundFlowTimelineData, time.Time, error) {
+	var payload struct {
+		RC   int `json:"rc"`
+		Data *struct {
+			Code   string   `json:"code"`
+			Name   string   `json:"name"`
+			KLines []string `json:"klines"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return FundFlowTimelineData{}, time.Time{}, err
+	}
+	code, ok := NormalizeFundFlowBoardCode(expectedCode)
+	if payload.RC != 0 || payload.Data == nil || !ok || !strings.EqualFold(payload.Data.Code, code) {
+		return FundFlowTimelineData{}, time.Time{}, errors.New("东方财富资金时间线返回无效或代码不匹配")
+	}
+	pointsByTime := make(map[int64]FundFlowTimelinePoint, len(payload.Data.KLines))
+	for index, line := range payload.Data.KLines {
+		fields := strings.Split(line, ",")
+		if len(fields) < 6 {
+			return FundFlowTimelineData{}, time.Time{}, fmt.Errorf("资金时间线第%d行字段不足", index+1)
+		}
+		at, err := time.ParseInLocation("2006-01-02 15:04", strings.TrimSpace(fields[0]), shanghaiDataLocation())
+		if err != nil {
+			return FundFlowTimelineData{}, time.Time{}, fmt.Errorf("资金时间线第%d行时间无效: %w", index+1, err)
+		}
+		values := make([]float64, 5)
+		for valueIndex := range values {
+			parsed, ok := parseFloat(fields[valueIndex+1])
+			if !ok {
+				return FundFlowTimelineData{}, time.Time{}, fmt.Errorf("资金时间线第%d行数值无效", index+1)
+			}
+			values[valueIndex] = parsed
+		}
+		pointsByTime[at.Unix()] = FundFlowTimelinePoint{At: at, MainNetAmount: values[0], SmallNetAmount: values[1], MediumNetAmount: values[2], LargeNetAmount: values[3], SuperLargeNetAmount: values[4]}
+	}
+	points := make([]FundFlowTimelinePoint, 0, len(pointsByTime))
+	for _, point := range pointsByTime {
+		points = append(points, point)
+	}
+	sort.Slice(points, func(i, j int) bool { return points[i].At.Before(points[j].At) })
+	if len(points) == 0 {
+		return FundFlowTimelineData{}, time.Time{}, errors.New("东方财富资金时间线为空")
+	}
+	latestDate := points[len(points)-1].At.Format("2006-01-02")
+	filtered := points[:0]
+	for _, point := range points {
+		if point.At.Format("2006-01-02") == latestDate {
+			filtered = append(filtered, point)
+		}
+	}
+	data := FundFlowTimelineData{Code: code, Name: strings.TrimSpace(payload.Data.Name), TradingDate: latestDate, Points: filtered}
+	return data, filtered[len(filtered)-1].At, nil
 }
 
 type futuresMeta struct{ name, indexCode string }
@@ -1030,6 +1223,13 @@ func firstAny(value map[string]any, keys ...string) any {
 func floatAny(value map[string]any, keys ...string) float64 {
 	item, _ := anyFloat(firstAny(value, keys...))
 	return item
+}
+func floatAnyPointer(value map[string]any, keys ...string) *float64 {
+	item, ok := anyFloat(firstAny(value, keys...))
+	if !ok {
+		return nil
+	}
+	return &item
 }
 func anyString(value any) string {
 	if value == nil {

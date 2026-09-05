@@ -233,11 +233,19 @@ paths:
       operationId: listMarketFundFlows
       parameters:
         - {name: scope, in: query, required: true, schema: {type: string, enum: [sector, concept]}}
-        - {name: date, in: query, schema: {type: string, format: date}}
-        - {name: sort, in: query, schema: {type: string}}
+        - {name: date, in: query, deprecated: true, description: Compatibility parameter; the public source only serves its latest trading day., schema: {type: string, format: date}}
+        - {name: sort, in: query, schema: {type: string, enum: [netamount, main_ratio, super_large_netamount, large_netamount, medium_netamount, small_netamount, change_pct, inamount, outamount, avg_changeratio]}}
         - {name: limit, in: query, schema: {type: integer}}
       responses:
         "200": {description: Sector or concept fund-flow evidence, content: {application/json: {schema: {$ref: "#/components/schemas/FundFlowEnvelope"}}}}
+        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+  /api/v1/market/fund-flows/{code}/timeline:
+    get:
+      operationId: getMarketFundFlowTimeline
+      parameters:
+        - {name: code, in: path, required: true, schema: {type: string, pattern: '^BK[0-9]{4}$'}}
+      responses:
+        "200": {description: Latest trading-session minute fund-flow timeline for a sector or concept, content: {application/json: {schema: {$ref: "#/components/schemas/FundFlowTimelineEnvelope"}}}}
         "400": {$ref: "#/components/responses/MarketDataBadRequest"}
   /api/v1/market/futures/positions:
     get:
@@ -953,14 +961,37 @@ components:
         items: {type: array, items: {$ref: "#/components/schemas/HotWordItem"}}
     FundFlowRow:
       type: object
-      required: [code, name, netAmount, inAmount, outAmount, changePct]
+      required: [code, name, netAmount]
       properties:
         code: {type: string}
         name: {type: string}
         netAmount: {type: number}
-        inAmount: {type: number}
-        outAmount: {type: number}
-        changePct: {type: number}
+        inAmount: {type: number, nullable: true, deprecated: true}
+        outAmount: {type: number, nullable: true, deprecated: true}
+        changePct: {type: number, nullable: true}
+        mainNetRatio: {type: number, nullable: true}
+        superLargeNetAmount: {type: number, nullable: true}
+        largeNetAmount: {type: number, nullable: true}
+        mediumNetAmount: {type: number, nullable: true}
+        smallNetAmount: {type: number, nullable: true}
+    FundFlowTimelinePoint:
+      type: object
+      required: [at, mainNetAmount, superLargeNetAmount, largeNetAmount, mediumNetAmount, smallNetAmount]
+      properties:
+        at: {type: string, format: date-time}
+        mainNetAmount: {type: number}
+        superLargeNetAmount: {type: number}
+        largeNetAmount: {type: number}
+        mediumNetAmount: {type: number}
+        smallNetAmount: {type: number}
+    FundFlowTimelineData:
+      type: object
+      required: [code, points]
+      properties:
+        code: {type: string}
+        name: {type: string}
+        tradingDate: {type: string, format: date}
+        points: {type: array, items: {$ref: "#/components/schemas/FundFlowTimelinePoint"}}
     FuturesPositionRow:
       type: object
       required: [tradeDate, settlePrice, longPosition, longChange, shortPosition, shortChange, netPosition, indexClose, indexChange, basis]
@@ -1059,6 +1090,12 @@ components:
         - type: object
           required: [data]
           properties: {data: {type: array, items: {$ref: "#/components/schemas/FundFlowRow"}}}
+    FundFlowTimelineEnvelope:
+      allOf:
+        - {$ref: "#/components/schemas/DataEnvelope"}
+        - type: object
+          required: [data]
+          properties: {data: {$ref: "#/components/schemas/FundFlowTimelineData"}}
     FuturesPositionsEnvelope:
       allOf:
         - {$ref: "#/components/schemas/DataEnvelope"}

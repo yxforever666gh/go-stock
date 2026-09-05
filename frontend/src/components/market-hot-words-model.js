@@ -74,8 +74,14 @@ export function normalizeHotWordsPayload(value = {}) {
 }
 
 export function formatDocumentShare(value) {
-  const number = nullableNumber(value)
-  return number === null ? '--' : `${(number * 100).toFixed(number < 0.001 ? 2 : 1)}%`
+	const number = nullableNumber(value)
+	return number === null ? '--' : `${(number * 100).toFixed(number < 0.001 ? 2 : 1)}%`
+}
+
+export function sentimentScale(value) {
+	const score = Math.min(100, Math.max(-100, nullableNumber(value) ?? 0))
+	const tone = score < -50 ? 'ice' : (score < 0 ? 'cautious' : (score < 50 ? 'optimistic' : 'hot'))
+	return {score, position: (score + 100) / 2, tone}
 }
 
 export function hotWordTrend(item, baselineAvailable) {

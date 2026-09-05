@@ -54,7 +54,12 @@ func registerMarketEvidenceRoutes(mux *http.ServeMux, _ *App) {
 		if sortBy == "" {
 			sortBy = "netamount"
 		}
-		allowedSort := map[string]bool{"netamount": true, "inamount": true, "outamount": true, "avg_changeratio": true}
+		allowedSort := map[string]bool{
+			"netamount": true, "main_ratio": true, "super_large_netamount": true, "large_netamount": true,
+			"medium_netamount": true, "small_netamount": true, "change_pct": true,
+			// Compatibility for callers of the pre-2.9.1 Sina-shaped contract.
+			"inamount": true, "outamount": true, "avg_changeratio": true,
+		}
 		if !allowedSort[sortBy] {
 			writeJSON(w, http.StatusBadRequest, badMarketEvidence([]data.FundFlowRow{}, "validation", "invalid_sort", "sort 不受支持"))
 			return
@@ -65,6 +70,15 @@ func registerMarketEvidenceRoutes(mux *http.ServeMux, _ *App) {
 			return
 		}
 		writeJSON(w, http.StatusOK, service.FundFlows(r.Context(), marketdata.ProviderRequest{Scope: scope, Date: date, Sort: sortBy, Limit: limit}))
+	})
+	mux.HandleFunc("GET /api/v1/market/fund-flows/{code}/timeline", func(w http.ResponseWriter, r *http.Request) {
+		code, ok := data.NormalizeFundFlowBoardCode(r.PathValue("code"))
+		if !ok {
+			writeJSON(w, http.StatusBadRequest, badMarketEvidence(data.FundFlowTimelineData{Points: []data.FundFlowTimelinePoint{}},
+				"validation", "invalid_code", "code 必须是 BK 加四位数字"))
+			return
+		}
+		writeJSON(w, http.StatusOK, service.FundFlowTimeline(r.Context(), marketdata.ProviderRequest{Code: code}))
 	})
 	mux.HandleFunc("GET /api/v1/market/futures/positions", func(w http.ResponseWriter, r *http.Request) {
 		symbol := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("symbol")))

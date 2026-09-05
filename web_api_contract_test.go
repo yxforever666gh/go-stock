@@ -36,6 +36,7 @@ func TestWebV1RoutesRegisteredAndLegacyRoutesRemoved(t *testing.T) {
 		{http.MethodGet, "/api/v1/market/hot/words"},
 		{http.MethodGet, "/api/v1/market/breadth"},
 		{http.MethodGet, "/api/v1/market/fund-flows"},
+		{http.MethodGet, "/api/v1/market/fund-flows/BK0001/timeline"},
 		{http.MethodGet, "/api/v1/market/futures/positions"},
 		{http.MethodGet, "/api/v1/market/margin"},
 		{http.MethodGet, "/api/v1/instruments/sh600000/auction"},

@@ -27,14 +27,14 @@ function optionalBreadthValue(keys, options = {}) {
 }
 
 const metrics = computed(() => [
-  {label: '全市场', value: breadthValue(['total', 'totalCount', 'sampleCount']), type: 'info'},
-  {label: '上涨', value: breadthValue(['advances', 'advanceCount', 'upCount', 'advancers']), type: 'error'},
-  {label: '下跌', value: breadthValue(['declines', 'declineCount', 'downCount', 'decliners']), type: 'success'},
-  {label: '平盘', value: breadthValue(['flat', 'flatCount', 'unchangedCount']), type: 'default'},
-  {label: '涨停', value: breadthValue(['limitUps', 'limitUpCount', 'upLimitCount']), type: 'error'},
-  {label: '跌停', value: breadthValue(['limitDowns', 'limitDownCount', 'downLimitCount']), type: 'success'},
-  {label: '日内新高', value: optionalBreadthValue(['newHighs', 'newHighCount']), type: 'error', unit: '只'},
-  {label: '日内新低', value: optionalBreadthValue(['newLows', 'newLowCount']), type: 'success', unit: '只'},
+  {label: '全市场', value: breadthValue(['total', 'totalCount', 'sampleCount']), type: 'info', unit: '只'},
+  {label: '上涨', value: breadthValue(['advances', 'advanceCount', 'upCount', 'advancers']), tone: 'rise'},
+  {label: '下跌', value: breadthValue(['declines', 'declineCount', 'downCount', 'decliners']), tone: 'fall'},
+  {label: '平盘', value: breadthValue(['flat', 'flatCount', 'unchangedCount']), type: 'default', unit: '只'},
+  {label: '涨停', value: breadthValue(['limitUps', 'limitUpCount', 'upLimitCount']), tone: 'rise'},
+  {label: '跌停', value: breadthValue(['limitDowns', 'limitDownCount', 'downLimitCount']), tone: 'fall'},
+  {label: '日内新高', value: optionalBreadthValue(['newHighs', 'newHighCount']), tone: 'rise'},
+  {label: '日内新低', value: optionalBreadthValue(['newLows', 'newLowCount']), tone: 'fall'},
   {label: '涨跌中位数', value: optionalBreadthValue(['medianChangePct', 'medianChangePercent'], {digits: 2, signed: true}), type: 'info', unit: '%'},
 ])
 
@@ -51,8 +51,8 @@ const riseRatio = computed(() => {
     <EvidenceStatusBar :envelope="envelope" :error="error" :loading="loading" @refresh="refresh"/>
     <n-grid :cols="9" :x-gap="10" :y-gap="10" responsive="screen">
       <n-gi v-for="item in metrics" :key="item.label">
-        <n-statistic :label="item.label" :value="item.value">
-          <template #suffix><n-tag size="tiny" :type="item.type" :bordered="false">{{ item.unit || '只' }}</n-tag></template>
+        <n-statistic :label="item.label" :value="item.value" :class="item.tone ? `breadth-${item.tone}` : ''">
+          <template v-if="item.unit" #suffix><n-tag size="tiny" :type="item.type" :bordered="false">{{ item.unit }}</n-tag></template>
         </n-statistic>
       </n-gi>
     </n-grid>
@@ -77,5 +77,15 @@ const riseRatio = computed(() => {
 
 .breadth-scale :deep(.n-progress) {
   flex: 1;
+}
+
+.breadth-rise :deep(.n-statistic__label),
+.breadth-rise :deep(.n-statistic-value__content) {
+  color: #d03050;
+}
+
+.breadth-fall :deep(.n-statistic__label),
+.breadth-fall :deep(.n-statistic-value__content) {
+  color: #18a058;
 }
 </style>

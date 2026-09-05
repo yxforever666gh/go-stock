@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -22,9 +23,10 @@ func TestMarketEvidenceParsers(t *testing.T) {
 	if breadth.NewHighs != nil || breadth.NewLows != nil || breadth.MedianChangePct != 0 {
 		t.Fatalf("unexpected breadth derived fields: %#v", breadth)
 	}
-	flows, err := parseEastmoneyFundFlows([]byte(`{"data":{"diff":[{"f12":"BK001","f14":"半导体","f62":12345,"f3":1.5}]}}`))
-	if err != nil || len(flows) != 1 || flows[0].NetAmount != 12345 {
-		t.Fatalf("flows=%#v err=%v", flows, err)
+	flows, asOf, err := parseEastmoneyFundFlows([]byte(`{"data":{"diff":[{"f12":"BK0001","f14":"半导体","f62":12345,"f184":2.5,"f66":9000,"f72":3345,"f78":-2000,"f84":-10345,"f3":1.5,"f124":1788498000}]}}`))
+	if err != nil || len(flows) != 1 || flows[0].NetAmount != 12345 || flows[0].ChangePct == nil || *flows[0].ChangePct != 1.5 ||
+		flows[0].SuperLargeNetAmount == nil || *flows[0].SuperLargeNetAmount != 9000 || asOf.Format("2006-01-02") != "2026-09-04" {
+		t.Fatalf("flows=%#v asOf=%s err=%v", flows, asOf, err)
 	}
 	futures, err := parseEastmoneyFutures([]byte(`{"success":true,"result":{"data":[{"TRADE_DATE":"2026-08-27 00:00:00","SETTLE_PRICE":4000.5,"TOTAL_LONG_POSITION":100,"LP_CHANGE_TOTAL":2,"TOTAL_SHORT_POSITION":120,"SP_CHANGE_TOTAL":-3,"NET_POSITION":-20,"CLOSE_PRICE":3990,"CLOSE_PRICE_CHANGE":10,"BASIS":10.5}]}}`), "2026-08-27")
 	if err != nil || len(futures) != 1 || futures[0].NetPosition != -20 || futures[0].Basis != 10.5 {
@@ -33,6 +35,89 @@ func TestMarketEvidenceParsers(t *testing.T) {
 	trades, err := parseEastmoneyTrades([]byte(`{"data":{"details":["09:25:00,10.00,2,1,1","09:30:01,10.10,3,1,2"]}}`))
 	if err != nil || len(trades) != 2 || trades[0].Amount != 2000 || trades[1].Side != "sell" {
 		t.Fatalf("trades=%#v err=%v", trades, err)
+	}
+}
+
+func TestEastmoneyFundFlowParserSupportsKeyedRowsAndTimeline(t *testing.T) {
+	rows, _, err := parseEastmoneyFundFlows([]byte(`{"data":{"diff":{"0":{"f12":"BK0001","f14":"半导体","f62":10,"f3":"-1.25","f124":1788498000}}}}`))
+	if err != nil || len(rows) != 1 || rows[0].ChangePct == nil || *rows[0].ChangePct != -1.25 {
+		t.Fatalf("rows=%#v err=%v", rows, err)
+	}
+	timeline, asOf, err := parseEastmoneyFundFlowTimeline([]byte(`{"rc":0,"data":{"code":"BK0001","name":"半导体","klines":["2026-09-04 13:01,10,-2,-3,4,6","2026-09-04 11:30,8,-1,-2,3,5","2026-09-04 13:01,11,-2,-3,4,7"]}}`), "bk0001")
+	if err != nil || timeline.TradingDate != "2026-09-04" || len(timeline.Points) != 2 || timeline.Points[0].At.Hour() != 11 ||
+		timeline.Points[1].MainNetAmount != 11 || timeline.Points[1].SuperLargeNetAmount != 7 || timeline.Points[1].LargeNetAmount != 4 ||
+		timeline.Points[1].MediumNetAmount != -3 || timeline.Points[1].SmallNetAmount != -2 || !asOf.Equal(timeline.Points[1].At) {
+		t.Fatalf("timeline=%#v asOf=%s err=%v", timeline, asOf, err)
+	}
+	if _, _, err := parseEastmoneyFundFlowTimeline([]byte(`{"rc":0,"data":{"code":"BK9999","klines":[]}}`), "BK0001"); err == nil {
+		t.Fatal("mismatched timeline code was accepted")
+	}
+}
+
+func TestFundFlowTimelineRejectsMalformedAndEmptyResponses(t *testing.T) {
+	for _, body := range []string{
+		`{`,
+		`{"rc":1,"data":{"code":"BK0001","klines":[]}}`,
+		`{"rc":0,"data":null}`,
+		`{"rc":0,"data":{"code":"BK0001","klines":[]}}`,
+		`{"rc":0,"data":{"code":"BK0001","klines":["2026-09-04 09:30,1,2"]}}`,
+		`{"rc":0,"data":{"code":"BK0001","klines":["bad-date,1,2,3,4,5"]}}`,
+		`{"rc":0,"data":{"code":"BK0001","klines":["2026-09-04 09:30,1,-,3,4,5"]}}`,
+	} {
+		if _, _, err := parseEastmoneyFundFlowTimeline([]byte(body), "BK0001"); err == nil {
+			t.Errorf("invalid response accepted: %s", body)
+		}
+	}
+}
+
+func TestEastmoneyFundFlowProviderRequestsCompleteFieldsAndUsesQuoteTime(t *testing.T) {
+	var query url.Values
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		query = request.URL.Query()
+		_, _ = w.Write([]byte(`{"data":{"diff":[{"f12":"BK0001","f14":"半导体","f62":123,"f184":1,"f66":80,"f72":43,"f78":-20,"f84":-103,"f3":2.5,"f124":1788498000}]}}`))
+	}))
+	defer server.Close()
+	service := &MarketEvidenceService{client: resty.New(), now: func() time.Time { return time.Date(2026, 9, 5, 10, 0, 0, 0, shanghaiDataLocation()) }, urls: marketEvidenceURLs{fundFlowEastmoney: server.URL}}
+	result := (&eastmoneyFundFlowProvider{service: service}).Collect(context.Background(), marketdata.ProviderRequest{Scope: "concept", Sort: "large_netamount", Limit: 20})
+	if result.Status != marketdata.StatusOK || result.AsOf.IsZero() || query.Get("fid") != "f72" || query.Get("fs") != "m:90 t:3" {
+		t.Fatalf("result=%#v query=%v", result, query)
+	}
+	for _, field := range []string{"f3", "f62", "f184", "f66", "f72", "f78", "f84", "f124"} {
+		if !containsCommaSeparatedField(query.Get("fields"), field) {
+			t.Fatalf("fields=%q missing %s", query.Get("fields"), field)
+		}
+	}
+}
+
+func TestFundFlowTimelineFailureKeepsStableEnvelopeShape(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"rc":0,"data":{"code":"BK9999","klines":[]}}`))
+	}))
+	defer server.Close()
+	service := &MarketEvidenceService{
+		client: resty.New(),
+		now:    func() time.Time { return time.Date(2026, 9, 5, 10, 0, 0, 0, shanghaiDataLocation()) },
+		urls:   marketEvidenceURLs{fundFlowTimeline: server.URL},
+	}
+	result := service.FundFlowTimeline(context.Background(), marketdata.ProviderRequest{Code: "bk0001"})
+	if result.Status != marketdata.StatusUnavailable || result.Data.Code != "BK0001" || result.Data.Points == nil || len(result.Data.Points) != 0 {
+		t.Fatalf("result=%#v", result)
+	}
+}
+
+func TestSinaFundFlowFallbackDoesNotInventQuoteTime(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"category":"BK0001","name":"半导体","netamount":"123","inamount":"200","outamount":"77","avg_changeratio":"0.015"}]`))
+	}))
+	defer server.Close()
+	service := &MarketEvidenceService{
+		client: resty.New(),
+		now:    func() time.Time { return time.Date(2026, 9, 5, 10, 0, 0, 0, shanghaiDataLocation()) },
+		urls:   marketEvidenceURLs{fundFlowSina: server.URL},
+	}
+	result := (&sinaFundFlowProvider{service: service}).Collect(context.Background(), marketdata.ProviderRequest{Scope: "sector", Sort: "netamount", Limit: 20})
+	if result.Status != marketdata.StatusPartial || !result.AsOf.IsZero() || len(result.Data) != 1 || result.Data[0].ChangePct == nil || *result.Data[0].ChangePct != 1.5 {
+		t.Fatalf("result=%#v", result)
 	}
 }
 

@@ -28,6 +28,8 @@ export const GetMarketHotWords = ({hours = 24, baselineDays = 7, limit = 30} = {
   requestDataEnvelope(withQuery(API_PATHS.listMarketHotWords, {hours, baselineDays, limit}))
 export const GetMarketFundFlows = ({scope, date, sort = 'netamount', limit = 100} = {}) =>
   requestDataEnvelope(withQuery(API_PATHS.listMarketFundFlows, {scope, date, sort, limit}))
+export const GetMarketFundFlowTimeline = code =>
+  requestDataEnvelope(withPath(API_PATHS.getMarketFundFlowTimeline, {code}))
 export const GetMarketFuturesPositions = ({symbol = 'IF', date} = {}) =>
   requestDataEnvelope(withQuery(API_PATHS.listFuturesPositions, {symbol, date}))
 export const GetMarketMargin = ({scope = 'market', code, date} = {}) =>

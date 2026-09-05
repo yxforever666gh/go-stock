@@ -5,6 +5,7 @@ import {
   formatDocumentShare,
   hotWordTrend,
   normalizeHotWordsPayload,
+  sentimentScale,
 } from './market-hot-words-model.js'
 
 test('hot words payload normalizes ranking fields and limits representative news', () => {
@@ -39,6 +40,13 @@ test('hot words payload normalizes ranking fields and limits representative news
   assert.equal(payload.items[0].confidence, 'high')
   assert.deepEqual(payload.items[0].sources, ['财联社', '新浪财经'])
   assert.equal(payload.items[0].representativeNews.length, 3)
+})
+
+test('sentiment scale clamps values and maps them onto the horizontal band', () => {
+  assert.deepEqual([-100, -50, 0, 50, 100].map(value => sentimentScale(value).position), [0, 25, 50, 75, 100])
+  assert.equal(sentimentScale(-200).score, -100)
+  assert.equal(sentimentScale(200).score, 100)
+  assert.deepEqual([-75, -25, 25, 75].map(value => sentimentScale(value).tone), ['ice', 'cautious', 'optimistic', 'hot'])
 })
 
 test('trend presentation distinguishes fallback, new words, growth and burst ratio', () => {

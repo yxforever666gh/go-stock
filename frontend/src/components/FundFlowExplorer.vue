@@ -2,11 +2,19 @@
 import * as echarts from 'echarts'
 import {NText} from 'naive-ui'
 import {computed, h, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch} from 'vue'
-import {GetMarketFundFlows} from '../services/market-api.js'
+import {GetMarketFundFlows, GetMarketFundFlowTimeline} from '../services/market-api.js'
 import {useMarketDataResource} from '../composables/useMarketDataResource.js'
-import {dateValue, historyFrom, itemCode, itemName, numberValue, rowsFrom} from '../market-tabs/market-data.js'
-import {shanghaiDate} from '../market-tabs/market-session.js'
 import EvidenceStatusBar from './EvidenceStatusBar.vue'
+import {
+  compareOptional,
+  formatFlowAmount,
+  formatFlowPercent,
+  fundFlowSortOptions,
+  fundFlowTone,
+  fundFlowTradingDate,
+  limitedFundFlowSelection,
+  normalizeFundFlowRows,
+} from './fund-flow-model.js'
 
 const props = defineProps({
   active: {type: Boolean, default: false},
@@ -15,46 +23,52 @@ const props = defineProps({
 })
 
 const active = toRef(props, 'active')
-const selectedDate = ref(shanghaiDate())
 const sort = ref('netamount')
 const limit = ref(100)
-const requestKey = computed(() => ['fund-flow', props.scope, selectedDate.value, sort.value, limit.value].join('|'))
+const requestKey = computed(() => ['fund-flow', props.scope, sort.value, limit.value].join('|'))
 const selectedCodes = ref([])
 const chartElement = ref(null)
+const timelineEnvelopes = ref([])
+const timelineLoading = ref(false)
+const timelineError = ref('')
 let chart = null
 let resizeObserver = null
+let timelineVersion = 0
+let selectionInitialized = false
 
 const {data, envelope, error, loading, refresh} = useMarketDataResource({
   active,
   fallbackData: {rows: []},
   intervalMs: 60000,
-  loader: () => GetMarketFundFlows({scope: props.scope, date: selectedDate.value, sort: sort.value, limit: limit.value}),
+  loader: () => GetMarketFundFlows({scope: props.scope, sort: sort.value, limit: limit.value}),
   requestKey,
 })
 
-const rows = computed(() => rowsFrom(data.value).map((row, index) => ({
-  ...row,
-  _key: itemCode(row, index),
-  _name: itemName(row),
-  _netInflow: numberValue(row, ['netAmount', 'netInflow', 'net_inflow', 'mainNetInflow', 'main_net_inflow']),
-  _inAmount: numberValue(row, ['inAmount', 'inflow', 'in_amount']),
-  _outAmount: numberValue(row, ['outAmount', 'outflow', 'out_amount']),
-  _changePercent: numberValue(row, ['changePercent', 'changePct', 'change_rate', 'pctChange']),
-})))
+const rows = computed(() => normalizeFundFlowRows(data.value))
+
+function amountColumn(title, key, width = 138) {
+  return {
+    title, key, width, sorter: (left, right) => compareOptional(left[key], right[key]),
+    render: row => h(NText, {type: fundFlowTone(row[key])}, {default: () => formatFlowAmount(row[key])}),
+  }
+}
 
 const columns = computed(() => [
   {type: 'selection', multiple: true, width: 42},
   {title: '代码', key: '_key', width: 110},
   {title: props.scope === 'sector' ? '板块' : '概念', key: '_name', minWidth: 150, ellipsis: {tooltip: true}},
+  amountColumn('主力净流入', '_netInflow'),
   {
-    title: '净流入', key: '_netInflow', width: 130, sorter: (left, right) => left._netInflow - right._netInflow,
-    render: row => h(NText, {type: row._netInflow >= 0 ? 'error' : 'success'}, {default: () => formatAmount(row._netInflow)}),
+    title: '主力净占比', key: '_mainNetRatio', width: 125, sorter: (left, right) => compareOptional(left._mainNetRatio, right._mainNetRatio),
+    render: row => h(NText, {type: fundFlowTone(row._mainNetRatio)}, {default: () => formatFlowPercent(row._mainNetRatio)}),
   },
-  {title: '流入', key: '_inAmount', width: 130, sorter: (left, right) => left._inAmount - right._inAmount, render: row => formatAmount(row._inAmount)},
-  {title: '流出', key: '_outAmount', width: 130, sorter: (left, right) => left._outAmount - right._outAmount, render: row => formatAmount(row._outAmount)},
+  amountColumn('超大单净流入', '_superLargeNetAmount'),
+  amountColumn('大单净流入', '_largeNetAmount'),
+  amountColumn('中单净流入', '_mediumNetAmount'),
+  amountColumn('小单净流入', '_smallNetAmount'),
   {
-    title: '涨跌幅', key: '_changePercent', width: 110, sorter: (left, right) => left._changePercent - right._changePercent,
-    render: row => h(NText, {type: row._changePercent >= 0 ? 'error' : 'success'}, {default: () => `${row._changePercent >= 0 ? '+' : ''}${row._changePercent.toFixed(2)}%`}),
+    title: '涨跌幅', key: '_changePercent', width: 110, sorter: (left, right) => compareOptional(left._changePercent, right._changePercent),
+    render: row => h(NText, {type: fundFlowTone(row._changePercent)}, {default: () => formatFlowPercent(row._changePercent)}),
   },
 ])
 
@@ -62,54 +76,104 @@ const selectedRows = computed(() => {
   const selected = new Set(selectedCodes.value)
   return rows.value.filter(row => selected.has(row._key))
 })
+const actualTradingDate = computed(() => fundFlowTradingDate(envelope.value, timelineEnvelopes.value))
+const hasTimeline = computed(() => timelineEnvelopes.value.some(item => item.data?.points?.length))
 
-function formatAmount(value) {
-  const number = Number(value)
-  if (!Number.isFinite(number)) return '--'
-  if (Math.abs(number) >= 100000000) return `${(number / 100000000).toFixed(2)} 亿`
-  if (Math.abs(number) >= 10000) return `${(number / 10000).toFixed(2)} 万`
-  return number.toFixed(2)
-}
-
-function pointValue(point) {
-  return numberValue(point, ['netAmount', 'netInflow', 'net_inflow', 'value', 'amount'])
+function updateSelectedCodes(keys) {
+  selectionInitialized = true
+  selectedCodes.value = limitedFundFlowSelection(keys)
 }
 
 function renderChart() {
   if (!chart || chart.isDisposed()) return
-  const allTimes = [...new Set(selectedRows.value.flatMap(row => historyFrom(row).map(dateValue)).filter(Boolean))].sort()
+  const timelines = timelineEnvelopes.value.filter(item => Array.isArray(item.data?.points) && item.data.points.length)
+  const allTimes = [...new Set(timelines.flatMap(item => item.data.points.map(point => String(point.at || ''))).filter(Boolean))].sort()
   if (!allTimes.length) {
     chart.clear()
     return
   }
   const textColor = props.darkTheme ? '#c8c8c8' : '#4b5563'
-  const series = selectedRows.value.map(row => {
-    const values = new Map(historyFrom(row).map(point => [dateValue(point), pointValue(point)]))
-    return {name: row._name, type: 'line', showSymbol: false, smooth: true, data: allTimes.map(time => values.get(time) ?? null)}
+  const series = timelines.map(item => {
+    const values = new Map(item.data.points.map(point => [String(point.at || ''), Number(point.mainNetAmount)]))
+    return {
+      name: item.data.name || item.data.code,
+      type: 'line',
+      showSymbol: false,
+      smooth: false,
+      tooltip: {valueFormatter: formatFlowAmount},
+      data: allTimes.map(time => values.get(time) ?? null),
+    }
   })
   chart.setOption({
     animation: false,
     tooltip: {trigger: 'axis', confine: true, axisPointer: {type: 'cross'}},
     legend: {type: 'scroll', top: 0, textStyle: {color: textColor}},
-    grid: {left: 72, right: 34, top: 54, bottom: 54},
-    xAxis: {type: 'category', boundaryGap: false, data: allTimes, axisLabel: {color: textColor, hideOverlap: true}},
-    yAxis: {type: 'value', scale: true, axisLabel: {color: textColor, formatter: formatAmount}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.35}}},
+    grid: {left: 12, right: 24, top: 54, bottom: 54, containLabel: true},
+    xAxis: {type: 'category', boundaryGap: false, data: allTimes, axisLabel: {color: textColor, hideOverlap: true, formatter: value => String(value).slice(11, 16)}},
+    yAxis: {type: 'value', scale: true, name: '主力净流入', axisLabel: {color: textColor, formatter: formatFlowAmount}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.35}}},
     dataZoom: [{type: 'inside', start: 0, end: 100}, {type: 'slider', height: 20, bottom: 8}],
     series,
   }, true)
 }
 
+async function refreshTimelines() {
+  const version = ++timelineVersion
+  const codes = selectedRows.value.map(row => row._key).filter(code => /^BK\d{4}$/i.test(code)).slice(0, 6)
+  timelineEnvelopes.value = []
+  timelineError.value = ''
+  if (!codes.length) {
+    timelineLoading.value = false
+    renderChart()
+    return
+  }
+  timelineLoading.value = true
+  const results = await Promise.allSettled(codes.map(code => GetMarketFundFlowTimeline(code)))
+  if (version !== timelineVersion) return
+  const successful = []
+  const failures = []
+  for (const result of results) {
+    if (result.status === 'fulfilled' && ['ok', 'partial', 'stale'].includes(result.value?.status) && result.value?.data?.points?.length) {
+      successful.push(result.value)
+    } else {
+      const reason = result.status === 'rejected' ? result.reason : result.value?.errors?.[0]
+      failures.push(reason?.message || String(reason || '资金时间线不可用'))
+    }
+  }
+  timelineEnvelopes.value = successful
+  timelineError.value = [...new Set(failures)].join('；')
+  timelineLoading.value = false
+  await nextTick()
+  renderChart()
+}
+
+async function refreshAll() {
+  timelineVersion += 1
+  timelineEnvelopes.value = []
+  timelineError.value = ''
+  timelineLoading.value = true
+  renderChart()
+  if (!await refresh()) {
+    timelineLoading.value = false
+    timelineError.value = error.value || '排行刷新失败，请重试'
+  }
+}
+
 watch(rows, nextRows => {
+  if (!nextRows.length) selectionInitialized = false
   const available = new Set(nextRows.map(row => row._key))
   const retained = selectedCodes.value.filter(code => available.has(code))
-  if (retained.length) selectedCodes.value = retained
+  if (selectionInitialized) selectedCodes.value = retained
   else {
-    const inflow = [...nextRows].filter(row => row._netInflow >= 0).sort((a, b) => b._netInflow - a._netInflow).slice(0, 3)
-    const outflow = [...nextRows].filter(row => row._netInflow < 0).sort((a, b) => a._netInflow - b._netInflow).slice(0, 3)
-    selectedCodes.value = [...inflow, ...outflow].map(row => row._key)
+    selectedCodes.value = [...nextRows]
+      .filter(row => row._netInflow !== null)
+      .sort((left, right) => right._netInflow - left._netInflow)
+      .slice(0, 3)
+      .map(row => row._key)
   }
+  if (nextRows.length) selectionInitialized = true
 }, {deep: true})
-watch([selectedRows, () => props.darkTheme], async () => { await nextTick(); renderChart() }, {deep: true})
+watch(selectedRows, () => { void refreshTimelines() }, {deep: true})
+watch([timelineEnvelopes, () => props.darkTheme], async () => { await nextTick(); renderChart() }, {deep: true})
 onMounted(() => {
   if (!chartElement.value) return
   chart = echarts.init(chartElement.value)
@@ -119,6 +183,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  timelineVersion += 1
   resizeObserver?.disconnect()
   if (chart && !chart.isDisposed()) chart.dispose()
   chart = null
@@ -128,28 +193,35 @@ onBeforeUnmount(() => {
 <template>
   <section class="fund-flow-explorer">
     <n-flex align="center" :wrap="true" class="flow-toolbar">
-      <n-date-picker v-model:formatted-value="selectedDate" type="date" value-format="yyyy-MM-dd" :is-date-disabled="ts => ts > Date.now()" style="width: 150px"/>
-      <n-select v-model:value="sort" :options="[{label:'净流入',value:'netamount'},{label:'流入',value:'inamount'},{label:'流出',value:'outamount'},{label:'平均涨跌幅',value:'avg_changeratio'}]" style="width: 140px"/>
+      <n-tag :bordered="false" type="info">最新交易日 {{ actualTradingDate }}</n-tag>
+      <n-select v-model:value="sort" :options="fundFlowSortOptions" style="width: 160px"/>
       <n-select v-model:value="limit" :options="[20,50,100].map(value => ({label:`${value} 条`,value}))" style="width: 110px"/>
-      <n-text depth="3">勾选表格行可叠加比较日内资金曲线</n-text>
+      <n-text depth="3">勾选表格行可叠加比较日内主力净流入，最多显示 6 条</n-text>
     </n-flex>
-    <EvidenceStatusBar :envelope="envelope" :error="error" :loading="loading" @refresh="refresh"/>
-    <n-grid :cols="2" :x-gap="12" responsive="screen">
+    <EvidenceStatusBar :envelope="envelope" :error="error" :loading="loading" @refresh="refreshAll"/>
+    <n-grid cols="1 l:2" :x-gap="12" :y-gap="12" responsive="screen">
       <n-gi>
         <n-data-table
-          v-model:checked-row-keys="selectedCodes"
+          :checked-row-keys="selectedCodes"
+          @update:checked-row-keys="updateSelectedCodes"
           :columns="columns"
           :data="rows"
           :loading="loading && !rows.length"
           :row-key="row => row._key"
           :max-height="560"
-          :scroll-x="780"
+          :scroll-x="1320"
           striped
         />
       </n-gi>
       <n-gi>
-        <div ref="chartElement" class="flow-chart"/>
-        <n-empty v-if="!loading && !selectedRows.some(row => historyFrom(row).length)" description="当前响应暂无资金时间线" class="flow-empty"/>
+        <n-spin :show="timelineLoading" description="正在加载资金时间线">
+          <div ref="chartElement" class="flow-chart"/>
+          <n-empty
+            v-if="!timelineLoading && !hasTimeline"
+            :description="selectedCodes.length ? (timelineError || '所选项目暂无资金时间线') : '请勾选左侧项目查看资金时间线'"
+            class="flow-empty"
+          />
+        </n-spin>
       </n-gi>
     </n-grid>
   </section>
