@@ -937,7 +937,6 @@ func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]Minut
 		url = fmt.Sprintf("https://web.ifzq.gtimg.cn/appstock/app/UsMinute/query?code=%s", stockCode)
 	}
 	logger.SugaredLogger.Infof("GetStockMinutePriceData url:%s", url)
-	res := make(map[string]interface{})
 	resp, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
 		SetHeader("Host", "web.ifzq.gtimg.cn").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
@@ -950,44 +949,68 @@ func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]Minut
 		logger.SugaredLogger.Errorf("err:%s", err.Error())
 		return minuteDatas, date
 	}
-	//logger.SugaredLogger.Infof("resp:%s", resp.Body())
-	if err := json.Unmarshal(resp.Body(), &res); err != nil {
-		logger.SugaredLogger.Errorf("GetStockMinutePriceData json.Unmarshal err:%v", err)
+	parsed, parsedDate, parseErr := parseTencentMinuteResponse(resp.Body(), stockCode)
+	if parseErr != nil {
+		logger.SugaredLogger.Errorf("GetStockMinutePriceData parse err:%v", parseErr)
 		return minuteDatas, date
 	}
-	code, _ := convertor.ToInt(res["code"])
-	if res["data"] != nil && code == 0 {
-		data := res["data"].(map[string]interface{})
-		if stockData, ok := data[stockCode]; ok {
-			m := stockData.(map[string]interface{})
-			if d, ok := m["data"]; ok {
-				if m2, ok := d.(map[string]any); ok {
-					minutePriceData := m2["data"]
-					datas := minutePriceData.([]any)
-					for _, item := range datas {
-						minuteDataSplit := strutil.SplitEx(strutil.ReplaceWithMap(item.(string), map[string]string{
-							"\r\n": " ",
-						}), " ", true)
-						price, _ := convertor.ToFloat(minuteDataSplit[1])
-						volume, _ := convertor.ToFloat(minuteDataSplit[2])
-						amount := float64(0)
-						if len(minuteDataSplit) >= 4 {
-							amount, _ = convertor.ToFloat(minuteDataSplit[3])
-						}
-						minuteData := &MinuteData{
-							Time:   minuteDataSplit[0][0:2] + ":" + minuteDataSplit[0][2:4],
-							Price:  price,
-							Volume: volume,
-							Amount: amount,
-						}
-						*minuteDatas = append(*minuteDatas, *minuteData)
-					}
-					date = m2["date"].(string)
-				}
+	return &parsed, parsedDate
+}
+
+func parseTencentMinuteResponse(body []byte, stockCode string) ([]MinuteData, string, error) {
+	var response map[string]any
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, "", err
+	}
+	code, err := convertor.ToInt(response["code"])
+	if err != nil || code != 0 {
+		return nil, "", fmt.Errorf("unexpected response code %v", response["code"])
+	}
+	data, ok := response["data"].(map[string]any)
+	if !ok {
+		return nil, "", errors.New("minute response data is not an object")
+	}
+	stock, ok := data[stockCode].(map[string]any)
+	if !ok {
+		return nil, "", errors.New("minute response is missing the requested stock")
+	}
+	payload, ok := stock["data"].(map[string]any)
+	if !ok {
+		return nil, "", errors.New("minute response payload is not an object")
+	}
+	date, ok := payload["date"].(string)
+	if !ok || strings.TrimSpace(date) == "" {
+		return nil, "", errors.New("minute response is missing its trading date")
+	}
+	items, ok := payload["data"].([]any)
+	if !ok {
+		return nil, "", errors.New("minute response rows are not an array")
+	}
+	rows := make([]MinuteData, 0, len(items))
+	for index, item := range items {
+		line, ok := item.(string)
+		if !ok {
+			return nil, "", fmt.Errorf("minute row %d is not text", index)
+		}
+		fields := strutil.SplitEx(strutil.ReplaceWithMap(line, map[string]string{"\r\n": " "}), " ", true)
+		if len(fields) < 3 || len(fields[0]) < 4 {
+			return nil, "", fmt.Errorf("minute row %d is malformed", index)
+		}
+		price, priceErr := convertor.ToFloat(fields[1])
+		volume, volumeErr := convertor.ToFloat(fields[2])
+		if priceErr != nil || volumeErr != nil {
+			return nil, "", fmt.Errorf("minute row %d has invalid price or volume", index)
+		}
+		amount := float64(0)
+		if len(fields) >= 4 {
+			amount, err = convertor.ToFloat(fields[3])
+			if err != nil {
+				return nil, "", fmt.Errorf("minute row %d has invalid amount", index)
 			}
 		}
+		rows = append(rows, MinuteData{Time: fields[0][:2] + ":" + fields[0][2:4], Price: price, Volume: volume, Amount: amount})
 	}
-	return minuteDatas, date
+	return rows, date, nil
 }
 
 func (receiver StockDataApi) GetKLineData(stockCode string, kLineType string, days int64) *[]models.KLineData {

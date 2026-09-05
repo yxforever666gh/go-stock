@@ -176,12 +176,13 @@ func (s *Service) ProcessScheduledSnapshot(ctx context.Context, now time.Time) (
 		return false, err
 	}
 	date := local.Format("2006-01-02")
-	var existing int64
-	if err := s.repository.db.WithContext(ctx).Model(&AccountValuationSnapshot{}).Where("snapshot_id = ?", "daily-close-"+date).Count(&existing).Error; err != nil {
-		return false, err
-	}
-	if existing != 0 {
+	var existing AccountValuationSnapshot
+	existingErr := s.repository.db.WithContext(ctx).Where("snapshot_id = ?", "daily-close-"+date).First(&existing).Error
+	if existingErr == nil && existing.ValuationStatus == "complete" {
 		return false, nil
+	}
+	if existingErr != nil && !errors.Is(existingErr, gorm.ErrRecordNotFound) {
+		return false, existingErr
 	}
 	allFresh := s.refreshAccountQuotes(ctx, local, false)
 	applied := false
@@ -190,12 +191,13 @@ func (s *Service) ProcessScheduledSnapshot(ctx context.Context, now time.Time) (
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
-		existing = 0
-		if err := tx.Model(&AccountValuationSnapshot{}).Where("snapshot_id = ?", "daily-close-"+date).Count(&existing).Error; err != nil {
-			return err
-		}
-		if existing != 0 {
+		var stored AccountValuationSnapshot
+		storedErr := tx.Where("snapshot_id = ?", "daily-close-"+date).First(&stored).Error
+		if storedErr == nil && stored.ValuationStatus == "complete" {
 			return nil
+		}
+		if storedErr != nil && !errors.Is(storedErr, gorm.ErrRecordNotFound) {
+			return storedErr
 		}
 		account, positionValue, status, err := storedAccountValuation(tx)
 		if err != nil {
@@ -211,7 +213,16 @@ func (s *Service) ProcessScheduledSnapshot(ctx context.Context, now time.Time) (
 		nav := account.Cash + positionValue
 		unitValue := safeUnitValue(nav, units)
 		snapshot := newAccountSnapshot("daily_close", date, local, account.Cash, positionValue, nav, contribution, unitValue, status, "daily-close-"+date)
-		if err := tx.Create(&snapshot).Error; err != nil {
+		if storedErr == nil {
+			if err := tx.Model(&stored).Updates(map[string]any{
+				"valued_at": snapshot.ValuedAt, "cash": snapshot.Cash, "position_value": snapshot.PositionValue,
+				"net_asset_value": snapshot.NetAssetValue, "cumulative_net_contribution": snapshot.CumulativeNetContribution,
+				"unit_value": snapshot.UnitValue, "time_weighted_return": snapshot.TimeWeightedReturn,
+				"valuation_status": snapshot.ValuationStatus,
+			}).Error; err != nil {
+				return err
+			}
+		} else if err := tx.Create(&snapshot).Error; err != nil {
 			return err
 		}
 		applied = true
@@ -256,29 +267,31 @@ func (s *Service) AccountPerformance(ctx context.Context) (AccountPerformance, e
 	current := AccountPerformancePoint{ValuedAt: overview.ValuedAt, TradingDate: ShanghaiTime(overview.ValuedAt).Format("2006-01-02"),
 		SnapshotType: "current", Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue,
 		CumulativeNetContribution: overview.CumulativeNetContribution, UnitValue: result.UnitValue,
-		TimeWeightedReturn: overview.TimeWeightedReturn, ValuationStatus: "live"}
+		TimeWeightedReturn: overview.TimeWeightedReturn, ValuationStatus: overview.ValuationStatus}
 	result.Curve = appendOrReplaceCurrentPoint(result.Curve, current)
 	result.Metrics, err = s.performanceMetrics(ctx, overview, result.Curve)
 	return result, err
 }
 
 func (s *Service) accountOverview(ctx context.Context, refreshQuotes bool) (AccountOverview, error) {
-	account, err := s.repository.Account(ctx)
-	if err != nil {
-		return AccountOverview{}, err
-	}
-	positions, err := s.repository.OpenPositions(ctx)
-	if err != nil {
-		return AccountOverview{}, err
-	}
-	value := 0.0
+	s.serial.Lock()
+	defer s.serial.Unlock()
+
 	now := s.now()
+	allFresh := !refreshQuotes
 	if refreshQuotes && s.quotes != nil {
+		positions, err := s.repository.OpenPositions(ctx)
+		if err != nil {
+			return AccountOverview{}, err
+		}
+		allFresh = true
 		// Ten holdings should not turn one account request into ten serial
 		// upstream waits. Five workers match lifecycle concurrency while every
 		// request remains cancellable through the caller's context.
 		semaphore := make(chan struct{}, 5)
 		var wait sync.WaitGroup
+		var refreshMu sync.Mutex
+		var refreshErr error
 		for index := range positions {
 			index := index
 			wait.Add(1)
@@ -291,14 +304,54 @@ func (s *Service) accountOverview(ctx context.Context, refreshQuotes bool) (Acco
 					return
 				}
 				quote, quoteErr := s.quotes.CurrentQuote(ctx, positions[index].StockCode)
-				if quoteErr == nil && quote.Price > 0 {
+				if quoteErr == nil && quote.Price > 0 && s.validLiveAccountQuote(ctx, quote.At, now) {
 					positions[index].CurrentPrice, positions[index].CurrentPriceAt = quote.Price, &quote.At
-					_ = s.repository.UpdatePositionQuote(ctx, positions[index].ID, quote)
+					if updateErr := s.repository.UpdatePositionQuote(ctx, positions[index].ID, quote); updateErr != nil {
+						refreshMu.Lock()
+						refreshErr = errors.Join(refreshErr, updateErr)
+						allFresh = false
+						refreshMu.Unlock()
+					}
+					return
 				}
+				refreshMu.Lock()
+				allFresh = false
+				refreshMu.Unlock()
 			}()
 		}
 		wait.Wait()
+		if refreshErr != nil {
+			return AccountOverview{}, refreshErr
+		}
+	} else if refreshQuotes {
+		allFresh = false
 	}
+
+	var account SimulatedAccount
+	var positions []Position
+	contribution, units := 0.0, 0.0
+	var pending int64
+	err := s.repository.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&account, 1).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("status = ?", "open").Order("entry_at ASC, id ASC").Find(&positions).Error; err != nil {
+			return err
+		}
+		contribution, units = account.InitialCash, account.InitialCash
+		if tx.Migrator().HasTable(&AccountCashFlow{}) {
+			var err error
+			if contribution, units, err = fundingLedger(tx); err != nil {
+				return err
+			}
+		}
+		return tx.Model(&Recommendation{}).Where("status IN ?", []string{"buy_pending", "pending"}).Count(&pending).Error
+	})
+	if err != nil {
+		return AccountOverview{}, err
+	}
+
+	value := 0.0
 	for index := range positions {
 		if positions[index].CurrentPrice <= 0 {
 			positions[index].CurrentPrice = positions[index].EntryPrice
@@ -307,26 +360,51 @@ func (s *Service) accountOverview(ctx context.Context, refreshQuotes bool) (Acco
 		value += positions[index].NetSellValue
 	}
 	nav := account.Cash + value
-	contribution, units := account.InitialCash, account.InitialCash
-	if s.repository.db.Migrator().HasTable(&AccountCashFlow{}) {
-		if contribution, units, err = fundingLedger(s.repository.db.WithContext(ctx)); err != nil {
-			return AccountOverview{}, err
-		}
-	}
 	unitValue := safeUnitValue(nav, units)
 	twr := unitValue - 1
 	netProfit := nav - contribution
 	capitalReturn := safeRate(netProfit, contribution)
-	var pending int64
-	if err := s.repository.db.WithContext(ctx).Model(&Recommendation{}).Where("status IN ?", []string{"buy_pending", "pending"}).Count(&pending).Error; err != nil {
-		return AccountOverview{}, err
+	valuationStatus := "stored"
+	if refreshQuotes {
+		valuationStatus = "live"
+		if !allFresh {
+			valuationStatus = "partial"
+		}
 	}
 	return AccountOverview{
 		InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: value, NetAssetValue: nav,
 		CumulativeNetContribution: contribution, CurrentPositions: len(positions), PendingBuys: int(pending),
 		NetProfit: netProfit, NetYieldRate: twr, TimeWeightedReturn: twr, CumulativeCapitalReturn: capitalReturn,
-		ValuedAt: now, Positions: positions,
+		ValuedAt: now, ValuationStatus: valuationStatus, Positions: positions,
 	}, nil
+}
+
+func (s *Service) validLiveAccountQuote(ctx context.Context, quoteAt, valuedAt time.Time) bool {
+	if quoteAt.IsZero() {
+		return false
+	}
+	quoteLocal, valueLocal := ShanghaiTime(quoteAt), ShanghaiTime(valuedAt)
+	if quoteLocal.After(valueLocal.Add(decisionQuoteFutureSkew)) {
+		return false
+	}
+	quoteDate, valueDate := quoteLocal.Format("2006-01-02"), valueLocal.Format("2006-01-02")
+	if quoteDate != valueDate {
+		beforeOpen := valueLocal.Hour() < 9 || (valueLocal.Hour() == 9 && valueLocal.Minute() < 30)
+		return beforeOpen && s.validValuationQuote(ctx, quoteAt, valuedAt, true)
+	}
+	if IsTradingSession(valueLocal) {
+		return valueLocal.Sub(quoteLocal) <= stockPromptMarketMaxLag
+	}
+	minutes := valueLocal.Hour()*60 + valueLocal.Minute()
+	quoteMinutes := quoteLocal.Hour()*60 + quoteLocal.Minute()
+	switch {
+	case minutes >= 11*60+30 && minutes < 13*60:
+		return quoteMinutes >= 11*60+25
+	case minutes >= 15*60:
+		return quoteMinutes >= 14*60+30
+	default:
+		return valueLocal.Sub(quoteLocal) <= 45*time.Minute
+	}
 }
 
 func (s *Service) nextContributionAt(ctx context.Context, after time.Time) *time.Time {

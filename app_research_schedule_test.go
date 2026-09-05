@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"go-stock/backend/research"
+
+	"github.com/robfig/cron/v3"
 )
 
 func TestNextCapitalDeploymentWindow(t *testing.T) {
@@ -50,5 +52,24 @@ func TestCapitalDeploymentWindowCutoff(t *testing.T) {
 	}
 	if research.IsCapitalDeploymentAnalysisWindow(time.Date(2026, 8, 17, 14, 25, 1, 0, location)) {
 		t.Fatal("after 14:25 must defer to the next trading day")
+	}
+}
+
+func TestResearchSnapshotCronRetriesEveryFiveMinutesAfter1505(t *testing.T) {
+	parser := cron.NewParser(cron.Second | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	schedule, err := parser.Parse(researchSnapshotCronSpec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 4, 15, 4, 59, 0, time.Local)
+	first := schedule.Next(base)
+	second := schedule.Next(first)
+	if first.Hour() != 15 || first.Minute() != 5 || first.Second() != 0 || second.Minute() != 10 {
+		t.Fatalf("first=%s second=%s", first, second)
+	}
+	afterWindow := time.Date(2026, 9, 4, 15, 55, 0, 0, time.Local)
+	next := schedule.Next(afterWindow)
+	if next.Day() != 5 || next.Hour() != 15 || next.Minute() != 5 {
+		t.Fatalf("next=%s", next)
 	}
 }

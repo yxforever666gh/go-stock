@@ -139,6 +139,9 @@ func TestEndToEndAnalysisDirectBuyTPlusOneSaleAndNetYield(t *testing.T) {
 		if payload.ProviderName != "provider" || payload.ModelName != "model" || !strings.Contains(payload.ModelParametersJSON, `"actualConfigId":1`) {
 			t.Fatalf("actual fallback identity missing: %+v", payload.Payload)
 		}
+		if payload.CutoffAt == nil || payload.CutoffAt.After(current) {
+			t.Fatalf("audit cutoff claimed future visibility: %+v", payload.Payload)
+		}
 	}
 	items, _ := repo.ListRecommendations(context.Background(), 10, 0)
 	active, _ := repo.Recommendation(context.Background(), items[0].RecommendationID)

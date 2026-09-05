@@ -150,6 +150,43 @@ func (s *Service) RecoverExpiredAnalysisLeases(ctx context.Context, now time.Tim
 	return s.repository.RecoverExpiredAnalysisLeases(ctx, now)
 }
 
+func (s *Service) NormalizeQueuedAnalysisTriggerWindows(ctx context.Context) (int64, error) {
+	var triggers []AnalysisTrigger
+	if err := s.repository.db.WithContext(ctx).Where("status = ?", TriggerStatusQueued).Find(&triggers).Error; err != nil {
+		return 0, err
+	}
+	type triggerWindowUpdate struct {
+		id          uint
+		availableAt time.Time
+	}
+	updates := make([]triggerWindowUpdate, 0, len(triggers))
+	for _, trigger := range triggers {
+		normalized, err := nextOpportunityReanalysisAt(ctx, s.calendar, trigger.AvailableAt)
+		if err != nil {
+			return 0, err
+		}
+		if normalized.Equal(trigger.AvailableAt) {
+			continue
+		}
+		updates = append(updates, triggerWindowUpdate{id: trigger.ID, availableAt: normalized})
+	}
+	var changed int64
+	err := transactionWithWriteRetry(ctx, s.repository.db, func(tx *gorm.DB) error {
+		changed = 0
+		for _, update := range updates {
+			result := tx.Model(&AnalysisTrigger{}).
+				Where("id = ? AND status = ?", update.id, TriggerStatusQueued).
+				Updates(map[string]any{"available_at": update.availableAt, "coalesce_until": update.availableAt})
+			if result.Error != nil {
+				return result.Error
+			}
+			changed += result.RowsAffected
+		}
+		return nil
+	})
+	return changed, err
+}
+
 // ClaimAnalysisTriggerBatch atomically claims every mature trigger currently
 // eligible for one full run and reserves that queued AnalysisRun. The run row
 // is the database-level singleton guard shared across runtimes/processes.

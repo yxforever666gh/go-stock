@@ -310,3 +310,24 @@ func TestExpiredAnalysisLeaseRecoversAcrossRuntimeReplacementAndIsIdempotent(t *
 		t.Fatalf("retry=%+v claimed=%t err=%v", retried, claimed, retryErr)
 	}
 }
+
+func TestNormalizeQueuedAnalysisTriggerWindowsMovesAfterCloseRetry(t *testing.T) {
+	service, database := fundingTestService(t, "2026-08-18")
+	fridayAfterClose := time.Date(2026, 9, 4, 16, 5, 0, 0, shanghaiLocation)
+	trigger := AnalysisTrigger{TriggerID: "after-close", Source: TriggerSourceCapitalGap, SourceKey: "after-close",
+		Status: TriggerStatusQueued, AvailableAt: fridayAfterClose, CoalesceUntil: fridayAfterClose}
+	if err := database.Create(&trigger).Error; err != nil {
+		t.Fatal(err)
+	}
+	changed, err := service.NormalizeQueuedAnalysisTriggerWindows(context.Background())
+	if err != nil || changed != 1 {
+		t.Fatalf("changed=%d err=%v", changed, err)
+	}
+	var stored AnalysisTrigger
+	if err := database.Where("trigger_id = ?", trigger.TriggerID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := ShanghaiTime(stored.AvailableAt).Format("2006-01-02 15:04"); got != "2026-09-07 09:35" {
+		t.Fatalf("availableAt=%s", got)
+	}
+}

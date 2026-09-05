@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-stock/backend/research"
+	"go-stock/backend/researchaudit"
 	"go-stock/internal/researchevidence"
 
 	"github.com/glebarez/sqlite"
@@ -56,5 +57,35 @@ func TestNewRuntimeOwnsResearchServiceGraph(t *testing.T) {
 func TestNewRuntimeRejectsMissingStorage(t *testing.T) {
 	if _, err := NewRuntime(nil, Dependencies{}, Options{}); err == nil {
 		t.Fatal("missing main storage was accepted")
+	}
+}
+
+func TestReconcileInterruptedAuditsClosesFailedRunState(t *testing.T) {
+	database, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = database.AutoMigrate(&research.SimulatedAccount{}, &research.AnalysisRun{}, &researchaudit.PromptVersion{}, &researchaudit.Payload{}, &researchaudit.RunState{}); err != nil {
+		t.Fatal(err)
+	}
+	recorder := researchaudit.NewRecorder(researchaudit.NewRepository(database))
+	runtime, err := NewRuntime(database, Dependencies{Audit: recorder}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := research.AnalysisRun{RunID: "interrupted", Status: "failed", FailureReason: "analysis lease expired", ModelAttemptLogJSON: "[]", DataProfileVersion: research.CurrentDataProfileVersion}
+	if err := database.Create(&run).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := recorder.Begin(context.Background(), researchaudit.OwnerResearch1, run.RunID); err != nil {
+		t.Fatal(err)
+	}
+	count, err := runtime.ReconcileInterruptedAudits(context.Background())
+	if err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	audit, err := recorder.Audit(context.Background(), researchaudit.OwnerResearch1, run.RunID)
+	if err != nil || audit.Status != researchaudit.StatusFailed {
+		t.Fatalf("audit=%+v err=%v", audit, err)
 	}
 }

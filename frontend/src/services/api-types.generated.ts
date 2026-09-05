@@ -146,6 +146,7 @@ export type AccountOverview = {
   positionValue: number
   positions: Array<Position>
   timeWeightedReturn: number
+  valuationStatus: "live" | "partial" | "stored"
   valuedAt: string
 }
 

@@ -18,6 +18,7 @@ type Runtime struct {
 	Repository *research.Repository
 	Service    *research.Service
 	Runner     *research.AnalysisRunner
+	Audit      *researchaudit.Recorder
 }
 
 // Dependencies contains provider capabilities, not concrete data-layer
@@ -78,7 +79,37 @@ func NewRuntime(mainDB *gorm.DB, dependencies Dependencies, options Options) (*R
 			runner.ConfigureKnowledge(dependencies.Knowledge)
 		}
 	}
-	return &Runtime{Repository: repository, Service: service, Runner: runner}, nil
+	return &Runtime{Repository: repository, Service: service, Runner: runner, Audit: dependencies.Audit}, nil
+}
+
+func (runtime *Runtime) ReconcileInterruptedAudits(ctx context.Context) (int, error) {
+	if runtime == nil || runtime.Repository == nil || runtime.Audit == nil {
+		return 0, nil
+	}
+	type interruptedRun struct {
+		RunID         string
+		FailureReason string
+	}
+	var runs []interruptedRun
+	err := runtime.Repository.DB().WithContext(ctx).
+		Table("research_v160_analysis_runs AS runs").
+		Select("runs.run_id, runs.failure_reason").
+		Joins("JOIN research_audit_run_states AS audit ON audit.owner_type = ? AND audit.owner_id = runs.run_id", researchaudit.OwnerResearch1).
+		Where("runs.status = ? AND audit.status = ?", "failed", researchaudit.StatusCapturing).
+		Find(&runs).Error
+	if err != nil {
+		return 0, err
+	}
+	for _, run := range runs {
+		reason := run.FailureReason
+		if reason == "" {
+			reason = "analysis interrupted before audit completion"
+		}
+		if err := runtime.Audit.Fail(ctx, researchaudit.OwnerResearch1, run.RunID, errors.New(reason)); err != nil {
+			return 0, err
+		}
+	}
+	return len(runs), nil
 }
 
 func activeSources(dependencies Dependencies, experimental bool) researchevidence.SourceCollector {

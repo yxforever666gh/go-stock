@@ -361,7 +361,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	}
 	if r.audit != nil {
 		r.auditSequence = 0
-		r.auditCutoff = researchEvidenceCutoff(now, request.EvidenceCutoffAt)
+		r.auditCutoff = effectivePromptCutoff(now, request.EvidenceCutoffAt)
 		if err := r.audit.Begin(ctx, researchaudit.OwnerResearch1, run.RunID); err != nil {
 			return finishFailure(fmt.Errorf("启动研究审计: %w", err))
 		}
@@ -428,6 +428,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	}
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
+	r.auditCutoff = effectivePromptCutoff(marketStageAt, request.EvidenceCutoffAt)
 	marketResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "market_analysis", Prompt: marketStagePrompt(marketStageAt, filterSources(allSources, "market"))})
 	if err != nil {
 		return finishFailure(fmt.Errorf("大盘层失败: %w", err))
@@ -468,6 +469,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	}
 	allSources = dedupeSources(append(allSources, sectorSources...))
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
+	r.auditCutoff = effectivePromptCutoff(sectorStageAt, request.EvidenceCutoffAt)
 	sectorResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "sector_analysis", Prompt: appendKnowledgeContext(sectorStagePrompt(sectorStageAt, run.MarketReport, filterSources(allSources, "sector"), recentHistoryContext), knowledgeContext)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("板块层失败: %w", err))
@@ -516,6 +518,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 		}
 		allSources = dedupeSources(append(allSources, stockSources...))
 		run.SourceStatusJSON = sourceStatusJSON(allSources)
+		r.auditCutoff = effectivePromptCutoff(stockStageAt, request.EvidenceCutoffAt)
 		batchResult, callErr := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "stock_analysis", Prompt: appendKnowledgeContext(stockStagePrompt(stockStageAt, run.MarketReport, run.SectorReport, batch, stockSources, recentHistoryContext), knowledgeContext)})
 		if callErr != nil {
 			allSources = append(allSources, failedSource("stock", fmt.Sprintf("个股分析批次%d", start/10+1), r.service.now(), callErr))
@@ -562,6 +565,7 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	maxBuyNow := maxImmediateForCapacity(capacity, configuredMaxImmediate)
 	maxWait := 5
 	finalStageAt := r.service.now()
+	r.auditCutoff = effectivePromptCutoff(finalStageAt, request.EvidenceCutoffAt)
 	finalResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "final_decision", Prompt: appendKnowledgeContext(finalStagePrompt(finalStageAt, run.MarketReport, run.SectorReport, run.StockReport, shortlist, maxBuyNow, maxWait, recentHistoryContext), knowledgeContext)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("决策层失败: %w", err))

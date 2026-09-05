@@ -423,6 +423,7 @@ type AccountOverview struct {
 	TimeWeightedReturn        float64    `json:"timeWeightedReturn"`
 	CumulativeCapitalReturn   float64    `json:"cumulativeCapitalReturn"`
 	ValuedAt                  time.Time  `json:"valuedAt"`
+	ValuationStatus           string     `json:"valuationStatus"`
 	Positions                 []Position `json:"positions"`
 }
 

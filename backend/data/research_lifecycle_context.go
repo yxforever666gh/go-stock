@@ -128,6 +128,11 @@ func (collector *ResearchLifecycleContextCollector) collectMinute(ctx context.Co
 	}
 	resultCh := make(chan result, 1)
 	go func() {
+		defer func() {
+			if recover() != nil {
+				resultCh <- result{}
+			}
+		}()
 		rows, date := collector.stocks.GetStockMinutePriceData(code)
 		value := result{date: date}
 		if rows != nil {
@@ -423,7 +428,9 @@ func newLifecycleSource(id, name, category string, now time.Time, value any, sou
 		return source
 	}
 	content := truncateResearchSourceJSON(string(data), 8000)
-	if string(data) == "null" || string(data) == "[]" || string(data) == "{}" || len(data) == 0 {
+	var decoded any
+	empty := len(data) == 0 || (json.Unmarshal(data, &decoded) == nil && research2JSONValueEmpty(decoded))
+	if empty {
 		if source.Status != "failed" {
 			source.Status = "empty"
 		}

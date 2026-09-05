@@ -151,3 +151,11 @@ func TestLifecycleSourceFingerprintDeduplicatesOptionalContent(t *testing.T) {
 		t.Fatalf("second=%+v first=%+v", second, first)
 	}
 }
+
+func TestLifecycleSourceMarksNestedEmptyPayloadAsEmpty(t *testing.T) {
+	now := time.Date(2026, 9, 4, 10, 0, 0, 0, shanghaiDataLocation())
+	source := newLifecycleSource("source-empty", "全球指数", "market", now, map[string]any{"data": []any{}}, nil, false, nil)
+	if source.Status != "empty" {
+		t.Fatalf("source=%+v", source)
+	}
+}

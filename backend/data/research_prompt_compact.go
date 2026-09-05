@@ -18,6 +18,10 @@ type compactDailyBar [6]any
 type compactMinuteBar [4]any
 
 func compactResearchPromptValue(name string, value any) string {
+	return compactResearchPromptValueAt(name, value, time.Time{})
+}
+
+func compactResearchPromptValueAt(name string, value any, collectedAt time.Time) string {
 	lower := strings.ToLower(name)
 	var compact any
 	switch {
@@ -26,7 +30,7 @@ func compactResearchPromptValue(name string, value any) string {
 	case strings.Contains(lower, "日k"):
 		compact = compactDailyKLine(value)
 	case strings.Contains(lower, "分钟k"):
-		compact = compactMinuteKLine(value)
+		compact = compactMinuteKLine(value, collectedAt)
 	default:
 		limit := 10
 		if strings.Contains(lower, "新闻") || strings.Contains(lower, "公告") || strings.Contains(lower, "研报") {
@@ -123,7 +127,7 @@ func kLineReturn(rows []models.KLineData, horizon int) (float64, bool) {
 	return end/start - 1, true
 }
 
-func compactMinuteKLine(value any) any {
+func compactMinuteKLine(value any, collectedAt time.Time) any {
 	payload, ok := value.(map[string]any)
 	if !ok {
 		return compactGenericPromptValue(value, 31)
@@ -134,8 +138,20 @@ func compactMinuteKLine(value any) any {
 	}
 	ordered := append([]MinuteData(nil), (*rows)...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Time < ordered[j].Time })
-	result := map[string]any{"order": "newest_first", "barCount": len(ordered), "bars": []compactMinuteBar{}}
 	tradingDate, _ := payload["source"].(string)
+	if tradingDate != "" && !collectedAt.IsZero() {
+		date := compactTradingDate(tradingDate)
+		cutoff := research.ShanghaiTime(collectedAt).Truncate(time.Minute)
+		filtered := ordered[:0]
+		for _, row := range ordered {
+			at, err := time.ParseInLocation("2006-01-02 15:04", date+" "+strings.TrimSpace(row.Time), cutoff.Location())
+			if err == nil && !at.After(cutoff) {
+				filtered = append(filtered, row)
+			}
+		}
+		ordered = filtered
+	}
+	result := map[string]any{"order": "newest_first", "barCount": len(ordered), "bars": []compactMinuteBar{}}
 	if tradingDate != "" {
 		result["tradingDate"] = tradingDate
 	}

@@ -63,6 +63,7 @@ const research2TradingEntryKey = "Research2TradingMinute"
 const research2MetricsEntryKey = "Research2Metrics1505"
 const research2EmailEntryKey = "Research2EmailDelivery"
 const themeLifecycleEntryKey = "ThemeLifecycle1510"
+const researchSnapshotCronSpec = "0 5-55/5 15 * * *"
 
 func NewAppWithServices(services service.AppServices) *App {
 	cacheSize := 512 * 1024

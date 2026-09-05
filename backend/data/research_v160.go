@@ -228,8 +228,8 @@ func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now
 				}},
 				{"东方财富公告 " + code, func() any { return collector.news.StockNotice(digits) }},
 				{"东方财富研报 " + code, func() any { return collector.news.StockResearchReportAt(digits, 30, now) }},
-				{"东方财富财务 " + code, func() any { return collector.stocks.GetStockFinancialInfo(digits) }},
-				{"东方财富概念 " + code, func() any { return collector.stocks.GetStockConceptInfo(digits) }},
+				{"东方财富财务 " + code, func() any { return collector.stocks.GetStockFinancialInfo(code) }},
+				{"东方财富概念 " + code, func() any { return collector.stocks.GetStockConceptInfo(code) }},
 				{"Sina资金流 " + code, func() any { return collector.news.GetStockMoneyTrendByDay(code, 10) }},
 				{"巨潮互动易 " + code, func() any { return collector.news.InteractiveAnswer(1, 30, candidate.Name) }},
 			}
@@ -365,7 +365,7 @@ func researchDocument(name, category string, now time.Time, value any) researche
 	}
 	document.Error = semanticResearchSourceError(data)
 	if category == "stock" {
-		document.PromptContent = compactResearchPromptValue(name, value)
+		document.PromptContent = compactResearchPromptValueAt(name, value, now)
 		document.Content = document.PromptContent
 		if freshnessErr := validateCompactStockSourceAt(name, document.PromptContent, now); freshnessErr != nil {
 			document.Error = appendSourceDocumentError(document.Error, freshnessErr.Error())
@@ -415,6 +415,7 @@ func semanticResearchSourceError(data []byte) string {
 		}
 		return truncateResearchError(strings.Join(parts, ": "))
 	}
+	explicitNoError := false
 	if raw, exists := fields["error"]; exists && string(raw) != "null" {
 		var sourceError string
 		if json.Unmarshal(raw, &sourceError) == nil {
@@ -423,6 +424,9 @@ func semanticResearchSourceError(data []byte) string {
 			}
 		} else {
 			var errorFlag bool
+			if json.Unmarshal(raw, &errorFlag) == nil && !errorFlag {
+				explicitNoError = true
+			}
 			if json.Unmarshal(raw, &errorFlag) != nil || errorFlag {
 				return truncateResearchError(strings.TrimSpace(string(raw)))
 			}
@@ -439,6 +443,12 @@ func semanticResearchSourceError(data []byte) string {
 		return format("来源状态失败")
 	case "stale":
 		return format("来源数据已过期")
+	case "empty":
+		return ""
+	}
+	var value any
+	if !explicitNoError && json.Unmarshal(data, &value) == nil && research2JSONValueEmpty(value) {
+		return "来源返回空数据"
 	}
 	return ""
 }

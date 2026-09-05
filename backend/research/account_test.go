@@ -250,6 +250,28 @@ func TestAccountOverviewRefreshesTenHoldingsWithBoundedConcurrency(t *testing.T)
 	}
 }
 
+func TestAccountOverviewRejectsStaleMarksAndReportsPartialValuation(t *testing.T) {
+	service, database := fundingTestService(t, "2026-08-18")
+	entry := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiLocation)
+	storedAt := entry
+	position := Position{RecommendationID: "live-mark", StockCode: "sh600000", StockName: "浦发银行", Market: "SH",
+		Quantity: 100, EntryAt: entry, EntryPrice: 10, CurrentPrice: 10, CurrentPriceAt: &storedAt, Status: "open"}
+	if err := database.Create(&position).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 19, 10, 30, 0, 0, shanghaiLocation)
+	service.now = func() time.Time { return now }
+	service.quotes = &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "浦发银行", Price: 20, At: now.Add(-10 * time.Minute)}}}
+	overview, err := service.AccountOverview(context.Background())
+	if err != nil || overview.ValuationStatus != "partial" || overview.Positions[0].CurrentPrice != 10 {
+		t.Fatalf("overview=%+v err=%v", overview, err)
+	}
+	var stored Position
+	if err := database.First(&stored, position.ID).Error; err != nil || stored.CurrentPrice != 10 {
+		t.Fatalf("stored=%+v err=%v", stored, err)
+	}
+}
+
 func TestProcessScheduledSnapshotIsIdempotentAndPerformanceUsesTWR(t *testing.T) {
 	service, database := fundingTestService(t, "2026-08-18")
 	if err := database.Model(&SimulatedAccount{}).Where("id = ?", 1).Update("cash", 105000.0).Error; err != nil {
@@ -273,6 +295,34 @@ func TestProcessScheduledSnapshotIsIdempotentAndPerformanceUsesTWR(t *testing.T)
 	}
 	if performance.Metrics.SampleLevel != "样本不足" || performance.Metrics.IndustryConcentration != nil {
 		t.Fatalf("metrics=%+v", performance.Metrics)
+	}
+}
+
+func TestProcessScheduledSnapshotRetriesAndUpgradesPartialSnapshot(t *testing.T) {
+	service, database := fundingTestService(t, "2026-08-18")
+	now := time.Date(2026, 8, 19, 15, 5, 0, 0, shanghaiLocation)
+	entry := now.Add(-24 * time.Hour)
+	storedAt := entry
+	position := Position{RecommendationID: "snapshot-retry", StockCode: "sh600000", StockName: "浦发银行", Market: "SH",
+		Quantity: 100, EntryAt: entry, EntryPrice: 10, CurrentPrice: 10, CurrentPriceAt: &storedAt, Status: "open"}
+	if err := database.Create(&position).Error; err != nil {
+		t.Fatal(err)
+	}
+	service.quotes = &scriptedQuotes{errors: []error{errors.New("temporary quote failure")}}
+	if applied, err := service.ProcessScheduledSnapshot(context.Background(), now); err != nil || !applied {
+		t.Fatalf("partial snapshot applied=%v err=%v", applied, err)
+	}
+	var partial AccountValuationSnapshot
+	if err := database.Where("snapshot_id = ?", "daily-close-2026-08-19").First(&partial).Error; err != nil || partial.ValuationStatus != "partial" {
+		t.Fatalf("partial=%+v err=%v", partial, err)
+	}
+	service.quotes = &scriptedQuotes{quotes: []marketquote.Quote{{Code: "sh600000", Name: "浦发银行", Price: 20, At: now.Add(5 * time.Minute)}}}
+	if applied, err := service.ProcessScheduledSnapshot(context.Background(), now.Add(5*time.Minute)); err != nil || !applied {
+		t.Fatalf("retry applied=%v err=%v", applied, err)
+	}
+	var complete AccountValuationSnapshot
+	if err := database.Where("snapshot_id = ?", "daily-close-2026-08-19").First(&complete).Error; err != nil || complete.ValuationStatus != "complete" || complete.PositionValue <= partial.PositionValue {
+		t.Fatalf("complete=%+v partial=%+v err=%v", complete, partial, err)
 	}
 }
 

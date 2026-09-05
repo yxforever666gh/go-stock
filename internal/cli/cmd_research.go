@@ -57,6 +57,10 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 		return errors.New("timeout 不能小于 0")
 	}
 
+	// Web startup initializes the shared sentiment dictionary before any news
+	// refresh. The standalone research command must establish the same runtime
+	// precondition because its source collector refreshes news concurrently.
+	data.InitAnalyzeSentiment()
 	setting := data.GetSettingConfig()
 	if setting == nil || setting.Settings == nil {
 		return errors.New("AI 分析设置不存在")

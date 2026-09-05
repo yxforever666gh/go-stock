@@ -128,9 +128,9 @@ func (a *App) registerResearchLifecycleScanner() {
 
 func (a *App) ensureResearchAccountCrons() {
 	if _, exists := a.getCronEntry(researchSnapshotEntryKey); !exists {
-		entryID, err := a.cron.AddFunc("0 * 15 * * *", func() { a.processScheduledResearchSnapshot() })
+		entryID, err := a.cron.AddFunc(researchSnapshotCronSpec, func() { a.processScheduledResearchSnapshot() })
 		if err != nil {
-			a.recordSchedulerRegistrationError(researchSnapshotEntryKey, "0 * 15 * * *", err)
+			a.recordSchedulerRegistrationError(researchSnapshotEntryKey, researchSnapshotCronSpec, err)
 		} else {
 			a.setCronEntry(researchSnapshotEntryKey, entryID)
 			a.goTask(func(context.Context) { a.processScheduledResearchSnapshot() })
@@ -215,6 +215,18 @@ func (a *App) processCapitalDeployment(startup bool) {
 		return
 	} else if recovered > 0 {
 		logger.SugaredLogger.Infof("资金补位已恢复过期租约: %d", recovered)
+	}
+	if reconciled, reconcileErr := runtime.ReconcileInterruptedAudits(ctx); reconcileErr != nil {
+		logger.SugaredLogger.Errorf("资金补位中断审计闭合失败: %v", reconcileErr)
+		return
+	} else if reconciled > 0 {
+		logger.SugaredLogger.Infof("资金补位已闭合中断审计: %d", reconciled)
+	}
+	if normalized, normalizeErr := runtime.Service.NormalizeQueuedAnalysisTriggerWindows(ctx); normalizeErr != nil {
+		logger.SugaredLogger.Errorf("资金补位排队窗口规范失败: %v", normalizeErr)
+		return
+	} else if normalized > 0 {
+		logger.SugaredLogger.Infof("资金补位已规范排队窗口: %d", normalized)
 	}
 	setting := a.services.Config.GetConfig()
 	if setting == nil || setting.Settings == nil || !setting.AICapitalDeploymentEnabled {

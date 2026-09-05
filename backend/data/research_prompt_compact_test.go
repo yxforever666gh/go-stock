@@ -46,6 +46,22 @@ func TestCompactResearchMinutePromptKeepsLatestThirtyOneAndWindows(t *testing.T)
 	}
 }
 
+func TestCompactResearchMinutePromptDropsProviderFutureLabel(t *testing.T) {
+	rows := []MinuteData{
+		{Time: "13:03", Price: 10, Volume: 100},
+		{Time: "13:04", Price: 10.1, Volume: 110},
+		{Time: "13:05", Price: 10.2, Volume: 120},
+	}
+	collectedAt := time.Date(2026, 9, 4, 13, 4, 33, 0, shanghaiDataLocation())
+	content := compactResearchPromptValueAt("Tencent分钟K sh600000", map[string]any{"source": "20260904", "rows": &rows}, collectedAt)
+	if !strings.Contains(content, `"asOf":"2026-09-04T13:04:00+08:00"`) || strings.Contains(content, `["13:05"`) {
+		t.Fatalf("future-labelled minute bar was not removed: %s", content)
+	}
+	if err := validateCompactStockSourceAt("Tencent分钟K sh600000", content, collectedAt); err != nil {
+		t.Fatalf("filtered minute evidence was rejected: %v", err)
+	}
+}
+
 func TestCompactResearchOptionalListsKeepNewestWholeRecords(t *testing.T) {
 	rows := make([]map[string]any, 0, 8)
 	for index := 1; index <= 8; index++ {
@@ -76,5 +92,25 @@ func TestResearchDocumentRejectsStaleInternalRealtimeTimestamp(t *testing.T) {
 	document = researchDocument("Sina/Tencent实时行情 sh600000", "stock", now, &rows)
 	if document.Error != "" || !strings.Contains(document.Content, `"asOf":"2026-09-03T14:19:30+08:00"`) {
 		t.Fatalf("fresh internal quote was rejected: %+v", document)
+	}
+}
+
+func TestSemanticResearchSourceErrorRejectsNestedEmptyPayload(t *testing.T) {
+	for _, payload := range []string{`{"data":[]}`, `{"common":[],"america":[],"europe":[],"asia":[],"other":[]}`} {
+		if got := semanticResearchSourceError([]byte(payload)); got != "来源返回空数据" {
+			t.Fatalf("payload=%s error=%q", payload, got)
+		}
+	}
+}
+
+func TestParseTencentMinuteResponseRejectsMalformedRowsWithoutPanic(t *testing.T) {
+	valid := []byte(`{"code":0,"data":{"sh600000":{"data":{"date":"20260904","data":["0930 10.1 100 101000"]}}}}`)
+	rows, date, err := parseTencentMinuteResponse(valid, "sh600000")
+	if err != nil || date != "20260904" || len(rows) != 1 || rows[0].Time != "09:30" {
+		t.Fatalf("rows=%+v date=%q err=%v", rows, date, err)
+	}
+	malformed := []byte(`{"code":0,"data":{"sh600000":{"data":{"date":"20260904","data":["bad"]}}}}`)
+	if _, _, err := parseTencentMinuteResponse(malformed, "sh600000"); err == nil {
+		t.Fatal("malformed minute row was accepted")
 	}
 }

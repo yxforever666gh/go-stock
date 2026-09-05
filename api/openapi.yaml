@@ -1730,7 +1730,7 @@ components:
         trades: {type: array, items: {$ref: "#/components/schemas/RecommendationChartTrade"}}
     AccountOverview:
       type: object
-      required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, currentPositions, pendingBuys, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, positions]
+      required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, currentPositions, pendingBuys, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, valuationStatus, positions]
       properties:
         initialCash: {type: number}
         cash: {type: number}
@@ -1744,6 +1744,7 @@ components:
         timeWeightedReturn: {type: number, description: Unitized time-weighted return excluding external contributions.}
         cumulativeCapitalReturn: {type: number, description: Net profit divided by cumulative net contribution.}
         valuedAt: {type: string, format: date-time}
+        valuationStatus: {type: string, enum: [live, partial, stored]}
         positions: {type: array, items: {$ref: "#/components/schemas/Position"}}
     AccountCashFlow:
       type: object
