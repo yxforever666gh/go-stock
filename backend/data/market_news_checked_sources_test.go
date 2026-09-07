@@ -123,6 +123,45 @@ func TestLegacyMarketSourceGettersExposeErrorsWithoutPanicking(t *testing.T) {
 			t.Fatalf("legacy list failure must return an empty list: %+v", rows)
 		}
 	}
+	if rows := api.StockNotice("600000"); rows == nil || len(rows) != 0 {
+		t.Fatalf("legacy notice failure must return an empty list: %+v", rows)
+	}
+	if answers := api.InteractiveAnswer(1, 20, "公司"); answers == nil || len(answers.Results) != 0 {
+		t.Fatalf("legacy interaction failure must return an empty object: %+v", answers)
+	}
+}
+
+func TestCheckedMarketSourcesKeepNoticeCodesAndInteractionForm(t *testing.T) {
+	client := resty.New().SetTransport(checkedMarketRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := `{"data":{"list":[]}}`
+		if request.URL.Host == "np-anotice-stock.eastmoney.com" {
+			if request.Method != http.MethodGet || request.URL.Query().Get("stock_list") != "000001,600000" {
+				t.Errorf("unexpected notice request: %s %s", request.Method, request.URL)
+			}
+		} else {
+			if request.Method != http.MethodPost || request.URL.Host != "irm.cninfo.com.cn" {
+				t.Errorf("unexpected interaction request: %s %s", request.Method, request.URL)
+			}
+			if err := request.ParseForm(); err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range map[string]string{"pageNo": "2", "pageSize": "30", "searchTypes": "11", "highLight": "true", "keyWord": "中国平安 & 银行"} {
+				if request.Form.Get(key) != value {
+					t.Errorf("form %s=%q, want %q", key, request.Form.Get(key), value)
+				}
+			}
+			body = `{"results":[]}`
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
+			Body: io.NopCloser(strings.NewReader(body)), Request: request}, nil
+	}))
+	api := MarketNewsApi{client: client}
+	if _, err := api.stockNotice(context.Background(), "sz000001,600000.SH"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := api.interactiveAnswer(context.Background(), 2, 30, "中国平安 & 银行"); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func checkedMarketSources() []struct {
@@ -158,6 +197,17 @@ func checkedMarketSources() []struct {
 		{"stock money", `[]`, `[{"netamount":"1"}]`, func(ctx context.Context, api MarketNewsApi) (int, error) {
 			rows, err := api.stockMoneyTrendByDay(ctx, "sh600000", 10)
 			return len(rows), err
+		}},
+		{"notice", `{"data":{"list":[]}}`, `{"data":{"list":[{"title":"notice"}]}}`, func(ctx context.Context, api MarketNewsApi) (int, error) {
+			rows, err := api.stockNotice(ctx, "600000")
+			return len(rows), err
+		}},
+		{"interaction", `{"results":[]}`, `{"results":[{"mainContent":"question"}]}`, func(ctx context.Context, api MarketNewsApi) (int, error) {
+			answers, err := api.interactiveAnswer(ctx, 1, 20, "公司")
+			if err != nil {
+				return 0, err
+			}
+			return len(answers.Results), nil
 		}},
 	}
 }

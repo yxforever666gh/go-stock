@@ -901,6 +901,12 @@ func (m MarketNewsApi) stockMoneyTrendByDay(ctx context.Context, stockCode strin
 }
 
 func (m MarketNewsApi) fetchMarketJSON(ctx context.Context, endpoint, referer string, timeout time.Duration, target any) error {
+	return m.requestMarketJSON(ctx, timeout, target, func(request *resty.Request) (*resty.Response, error) {
+		return request.SetHeader("Referer", referer).Get(endpoint)
+	})
+}
+
+func (m MarketNewsApi) requestMarketJSON(ctx context.Context, timeout time.Duration, target any, send func(*resty.Request) (*resty.Response, error)) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -913,8 +919,7 @@ func (m MarketNewsApi) fetchMarketJSON(ctx context.Context, endpoint, referer st
 	if client == nil {
 		client = newFetchRestyClient()
 	}
-	response, err := client.R().SetContext(ctx).
-		SetHeader("Referer", referer).SetHeader("User-Agent", stringsBuilderUserAgent()).Get(endpoint)
+	response, err := send(client.R().SetContext(ctx).SetHeader("User-Agent", stringsBuilderUserAgent()))
 	if err != nil {
 		return fmt.Errorf("market source request failed: %w", err)
 	}
@@ -1144,8 +1149,17 @@ func (m MarketNewsApi) stockResearchReportAtTimes(stockCode string, days int, en
 }
 
 func (m MarketNewsApi) StockNotice(stock_list string) []any {
+	rows, err := m.stockNotice(context.Background(), stock_list)
+	if err != nil {
+		logger.SugaredLogger.Errorf("StockNotice: %v", err)
+		return []any{}
+	}
+	return rows
+}
+
+func (m MarketNewsApi) stockNotice(ctx context.Context, stockList string) ([]any, error) {
 	var stockCodes []string
-	for _, stockCode := range strings.Split(stock_list, ",") {
+	for _, stockCode := range strings.Split(stockList, ",") {
 		if strutil.ContainsAny(stockCode, []string{"."}) {
 			stockCode = strings.Split(stockCode, ".")[0]
 			stockCodes = append(stockCodes, stockCode)
@@ -1161,29 +1175,20 @@ func (m MarketNewsApi) StockNotice(stock_list string) []any {
 		}
 	}
 
-	url := "https://np-anotice-stock.eastmoney.com/api/security/ann?page_size=50&page_index=1&ann_type=SHA%2CCYB%2CSZA%2CBJA%2CINV&client_source=web&f_node=0&stock_list=" + strings.Join(stockCodes, ",")
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(15)*time.Second).R().
-		SetHeader("Host", "np-anotice-stock.eastmoney.com").
-		SetHeader("Referer", "https://data.eastmoney.com/notices/hsa/5.html").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0").
-		Get(url)
+	endpoint := "https://np-anotice-stock.eastmoney.com/api/security/ann?page_size=50&page_index=1&ann_type=SHA%2CCYB%2CSZA%2CBJA%2CINV&client_source=web&f_node=0&stock_list=" + url.QueryEscape(strings.Join(stockCodes, ","))
 	respMap := map[string]any{}
-
-	if err != nil {
-		return []any{}
-	}
-	if err := json.Unmarshal(resp.Body(), &respMap); err != nil {
-		return []any{}
+	if err := m.fetchMarketJSON(ctx, endpoint, "https://data.eastmoney.com/notices/hsa/5.html", 15*time.Second, &respMap); err != nil {
+		return nil, err
 	}
 	data, ok := respMap["data"].(map[string]any)
 	if !ok {
-		return []any{}
+		return nil, errors.New("stock notice response has no data object")
 	}
 	list, ok := data["list"].([]any)
 	if !ok {
-		return []any{}
+		return nil, errors.New("stock notice response has no list array")
 	}
-	return list
+	return list, nil
 }
 
 func (m MarketNewsApi) EMDictCode(code string, cache *freecache.Cache) []any {
@@ -1724,36 +1729,34 @@ func (m MarketNewsApi) ReutersNew() *models.ReutersNews {
 }
 
 func (m MarketNewsApi) InteractiveAnswer(page int, pageSize int, keyWord string) *models.InteractiveAnswer {
-	client := newFetchRestyClient()
-	url := fmt.Sprintf("https://irm.cninfo.com.cn/newircs/index/search?_t=%d", time.Now().Unix())
-	answers := &models.InteractiveAnswer{}
-	logger.SugaredLogger.Infof("请求url:%s", url)
-	resp, err := client.SetTimeout(time.Duration(5)*time.Second).R().
-		SetHeader("Host", "irm.cninfo.com.cn").
-		SetHeader("Origin", "https://irm.cninfo.com.cn").
-		SetHeader("Referer", "https://irm.cninfo.com.cn/views/interactiveAnswer").
-		SetHeader("handleError", "true").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0").
-		SetFormData(map[string]string{
-			"pageNo":      convertor.ToString(page),
-			"pageSize":    convertor.ToString(pageSize),
-			"searchTypes": "11",
-			"highLight":   "true",
-			"keyWord":     keyWord,
-		}).
-		SetResult(answers).
-		Post(url)
+	answers, err := m.interactiveAnswer(context.Background(), page, pageSize, keyWord)
 	if err != nil {
-		logger.SugaredLogger.Errorf("InteractiveAnswer-err:%+v", err)
-		return answers
+		logger.SugaredLogger.Errorf("InteractiveAnswer: %v", err)
+		return &models.InteractiveAnswer{}
 	}
-	if resp == nil {
-		logger.SugaredLogger.Errorf("InteractiveAnswer err: response is nil")
-		return answers
-	}
-	logger.SugaredLogger.Debugf("InteractiveAnswer-resp:%s", resp.Body())
 	return answers
+}
 
+func (m MarketNewsApi) interactiveAnswer(ctx context.Context, page, pageSize int, keyWord string) (*models.InteractiveAnswer, error) {
+	endpoint := fmt.Sprintf("https://irm.cninfo.com.cn/newircs/index/search?_t=%d", time.Now().Unix())
+	answers := &models.InteractiveAnswer{}
+	err := m.requestMarketJSON(ctx, 5*time.Second, answers, func(request *resty.Request) (*resty.Response, error) {
+		return request.SetHeader("Origin", "https://irm.cninfo.com.cn").
+			SetHeader("Referer", "https://irm.cninfo.com.cn/views/interactiveAnswer").
+			SetHeader("handleError", "true").
+			SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:142.0) Gecko/20100101 Firefox/142.0").
+			SetFormData(map[string]string{
+				"pageNo": strconv.Itoa(page), "pageSize": strconv.Itoa(pageSize),
+				"searchTypes": "11", "highLight": "true", "keyWord": keyWord,
+			}).Post(endpoint)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if answers.Results == nil {
+		return nil, errors.New("interactive answer response has no results array")
+	}
+	return answers, nil
 }
 
 func (m MarketNewsApi) CailianpressWeb(searchWords string) *models.CailianpressWeb {
