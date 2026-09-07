@@ -394,7 +394,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 		result, err = s.ai.Complete(ctx, request)
 	}
 	if err != nil {
-		return err
+		return &lifecycleOperationError{status: "model_error", err: err}
 	}
 	assistantMessage := LifecycleMessage{
 		RecommendationID: recommendation.RecommendationID, Role: "assistant", Phase: "holding", Content: result.Content,
@@ -405,7 +405,7 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	}
 	decision, err := parseLifecycleDecision(result.Content, allowed, observation)
 	if err != nil {
-		return err
+		return &lifecycleOperationError{status: "model_error", err: err}
 	}
 	decisionAt := s.now()
 	trading, tradingErr := s.calendar.IsTradingDay(ctx, decisionAt)
@@ -428,24 +428,20 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 			SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status, DecisionPolicyVersion: CurrentDecisionPolicyVersion,
 		})
 	}
-	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{
-		"previous_response_id": result.ResponseID, "last_decision": decision.Action, "last_decision_at": decisionAt,
-	}); err != nil {
-		return err
-	}
 	event := DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID, DecisionType: decision.Action, DecidedAt: decisionAt,
 		AIResponse: result.Content, Reason: decision.Reason, SourceRefs: marshalSourceRefs(decision.SourceRefs), DataStatus: observation.Status, DecisionPolicyVersion: CurrentDecisionPolicyVersion}
-	if err := s.repository.AppendDecision(ctx, &event); err != nil {
+	next, err := s.nextSellCheck(ctx, decisionAt)
+	if err != nil {
+		return err
+	}
+	if err := s.repository.RecordLifecycleDecision(ctx, &event, result.ResponseID, next); err != nil {
 		return err
 	}
 	switch decision.Action {
 	case "持有":
-		next, nextErr := s.nextSellCheck(ctx, decisionAt)
-		if nextErr != nil {
-			return nextErr
-		}
-		return s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next})
+		return nil
 	case "卖出":
+		recommendation.Status = "sell_pending"
 		return s.trySell(ctx, recommendation, decisionAt)
 	default:
 		return errors.New("unreachable lifecycle action")
@@ -470,11 +466,8 @@ func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation
 }
 
 func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recommendation, now time.Time, providedQuote *marketquote.Quote) error {
-	nextSell, err := s.firstSellCheck(ctx, now)
-	if err != nil {
-		return err
-	}
 	var quote marketquote.Quote
+	var err error
 	if providedQuote != nil {
 		quote = *providedQuote
 	} else {
@@ -483,6 +476,18 @@ func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recom
 			return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
 				"一次性买入行情读取失败: "+err.Error(), now, nil)
 		}
+	}
+	now = s.now()
+	isTradingDay, err := s.calendar.IsTradingDay(ctx, now)
+	if err != nil {
+		return err
+	}
+	if !isTradingDay || !IsTradingSession(now) {
+		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易", "成交行情返回时已休市", now, &quote)
+	}
+	nextSell, err := s.firstSellCheck(ctx, now)
+	if err != nil {
+		return err
 	}
 	if err := validateBuyQuoteAt(now, quote); err != nil {
 		return s.repository.FailBuy(ctx, recommendation.RecommendationID, "missed_untradable", "错过—不可交易",
@@ -512,7 +517,15 @@ func (s *Service) trySell(ctx context.Context, recommendation *Recommendation, n
 	}
 	quote, err := s.quotes.CurrentQuote(ctx, recommendation.StockCode)
 	if err != nil {
+		return &lifecycleOperationError{status: "quote_error", err: err}
+	}
+	now = s.now()
+	trading, err := s.calendar.IsTradingDay(ctx, now)
+	if err != nil {
 		return err
+	}
+	if !trading || !IsTradingSession(now) {
+		return s.deferSell(ctx, recommendation.RecommendationID, now, "成交行情返回时已休市")
 	}
 	if err := validateSellQuoteAt(now, recommendation, quote); err != nil {
 		return s.deferSell(ctx, recommendation.RecommendationID, now, err.Error())
@@ -549,9 +562,22 @@ func (s *Service) recordError(ctx context.Context, recommendation Recommendation
 	if err := s.repository.UpdateRecommendation(ctx, recommendation.RecommendationID, map[string]any{"next_check_at": next}); err != nil {
 		return err
 	}
+	status := "storage_error"
+	var operationErr *lifecycleOperationError
+	if errors.As(processErr, &operationErr) {
+		status = operationErr.status
+	}
 	return s.repository.AppendDecision(ctx, &DecisionEvent{EventID: newID(), RecommendationID: recommendation.RecommendationID,
-		DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error(), DataStatus: "model_error", DecisionPolicyVersion: CurrentDecisionPolicyVersion})
+		DecisionType: "错误重试", DecidedAt: now, Reason: processErr.Error(), DataStatus: status, DecisionPolicyVersion: CurrentDecisionPolicyVersion})
 }
+
+type lifecycleOperationError struct {
+	status string
+	err    error
+}
+
+func (err *lifecycleOperationError) Error() string { return err.err.Error() }
+func (err *lifecycleOperationError) Unwrap() error { return err.err }
 
 func (s *Service) deferBuyProcessingError(ctx context.Context, recommendationID string, now time.Time, processErr error) error {
 	next, err := NextTradingSessionOpen(ctx, s.calendar, now.Add(time.Minute))

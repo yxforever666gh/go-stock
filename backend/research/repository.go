@@ -477,6 +477,29 @@ func (r *Repository) AppendDecision(ctx context.Context, event *DecisionEvent) e
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(event).Error })
 }
 
+// RecordLifecycleDecision persists the accepted intent and its audit event
+// together, before any external execution quote is requested.
+func (r *Repository) RecordLifecycleDecision(ctx context.Context, event *DecisionEvent, responseID string, next time.Time) error {
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
+		updates := map[string]any{"previous_response_id": responseID, "last_decision": event.DecisionType,
+			"last_decision_at": event.DecidedAt, "next_check_at": next}
+		if event.DecisionType == "卖出" {
+			updates["status"] = "sell_pending"
+		}
+		result := tx.Model(&Recommendation{}).Where("recommendation_id = ? AND status = ?", event.RecommendationID, "active").Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return errors.New("recommendation is no longer awaiting a holding decision")
+		}
+		return tx.Create(event).Error
+	})
+}
+
 func (r *Repository) AppendObservation(ctx context.Context, observation *LifecycleObservation) error {
 	if observation.ObservationID == "" {
 		observation.ObservationID = newID()
