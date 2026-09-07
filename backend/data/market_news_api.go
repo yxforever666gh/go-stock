@@ -38,6 +38,10 @@ type MarketNewsApi struct {
 	client *resty.Client
 }
 
+// Exported market getters retain the existing marketapp/CLI response shapes.
+// Research callers use the checked context-aware methods below. Remove these
+// compatibility adapters only after those remaining APIs carry explicit errors.
+
 type NewsWindowStatus string
 
 const (

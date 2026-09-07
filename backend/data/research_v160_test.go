@@ -29,7 +29,8 @@ func TestResearchDocumentMarksSemanticFailuresAndKeepsNormalEmpty(t *testing.T) 
 	}{
 		{name: "business failure", value: map[string]any{"success": false, "message": "返回数据为空", "code": 9201}, wantError: "来源返回失败: 返回数据为空: code=9201"},
 		{name: "failed status", value: map[string]any{"status": "failed", "warning": "refresh failed"}, wantError: "来源状态失败: refresh failed"},
-		{name: "stale status", value: map[string]any{"status": "stale", "warning": "too old"}, wantError: "来源数据已过期: too old"},
+		{name: "historical evidence retains status", value: map[string]any{"status": "stale", "warning": "too old"}, wantError: ""},
+		{name: "checked empty source", value: researchSourceResult(map[string]any{"data": []any{}}, nil), wantError: ""},
 		{name: "normal empty", value: map[string]any{"status": "empty", "items": []any{}}, wantError: ""},
 		{name: "false error flag", value: map[string]any{"error": false, "items": []any{}}, wantError: ""},
 	}

@@ -48,7 +48,7 @@ func (provider *ResearchQuoteProvider) CurrentQuote(ctx context.Context, code st
 		return marketquote.Quote{}, err
 	}
 	price, err := strconv.ParseFloat(strings.TrimSpace(row.Price), 64)
-	if err != nil || price <= 0 {
+	if err != nil || price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) {
 		return marketquote.Quote{}, errors.New("realtime quote price is invalid")
 	}
 	previousClose, _ := strconv.ParseFloat(strings.TrimSpace(row.PreClose), 64)
@@ -173,7 +173,7 @@ func (collector *ResearchSourceCollector) CollectMarket(ctx context.Context, now
 			}
 			return result
 		}},
-		{"全球与国内指数", func() any { return collector.news.GlobalStockIndexes(10) }},
+		{"全球与国内指数", func() any { return researchSourceResult(collector.news.globalStockIndexes(ctx, 10)) }},
 		{"Reuters", func() any { return collector.news.ReutersNew() }},
 		{"东方财富GDP", func() any { return collector.news.GetGDP() }},
 		{"东方财富CPI", func() any { return collector.news.GetCPI() }},
@@ -187,9 +187,9 @@ func (collector *ResearchSourceCollector) CollectMarket(ctx context.Context, now
 
 func (collector *ResearchSourceCollector) CollectSectors(ctx context.Context, now time.Time) ([]researchevidence.SourceDocument, error) {
 	jobs := []researchSourceJob{
-		{"腾讯行业排名", func() any { return collector.news.GetIndustryRank("changepercent", 30) }},
-		{"Sina行业资金", func() any { return collector.news.GetIndustryMoneyRankSina("gn", "netamount") }},
-		{"Sina个股资金", func() any { return collector.news.GetMoneyRankSina("netamount") }},
+		{"腾讯行业排名", func() any { return researchSourceResult(collector.news.industryRank(ctx, "changepercent", 30)) }},
+		{"Sina行业资金", func() any { return researchSourceResult(collector.news.industryMoneyRankSina(ctx, "gn", "netamount")) }},
+		{"Sina个股资金", func() any { return researchSourceResult(collector.news.moneyRankSina(ctx, "netamount")) }},
 		{"雪球沪深热股", func() any { return collector.news.XUEQIUHotStock(50, "10") }},
 		{"东方财富热点事件", func() any { return collector.news.HotEvent(30) }},
 		{"东方财富热门话题", func() any { return collector.news.HotTopic(30) }},
@@ -223,15 +223,18 @@ func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now
 				}},
 				{"Sina日K " + code, func() any { return collector.stocks.GetKLineData(code, "240", 61) }},
 				{"Tencent分钟K " + code, func() any {
-					rows, source := collector.stocks.GetStockMinutePriceData(code)
-					return map[string]any{"source": source, "rows": rows}
+					rows, source, err := collector.stocks.getStockMinutePriceData(ctx, code)
+					if err != nil {
+						return map[string]any{"error": err.Error()}
+					}
+					return map[string]any{"source": source, "rows": &rows}
 				}},
-				{"东方财富公告 " + code, func() any { return collector.news.StockNotice(digits) }},
+				{"东方财富公告 " + code, func() any { return researchSourceResult(collector.news.stockNotice(ctx, digits)) }},
 				{"东方财富研报 " + code, func() any { return collector.news.StockResearchReportAt(digits, 30, now) }},
 				{"东方财富财务 " + code, func() any { return collector.stocks.GetStockFinancialInfo(code) }},
 				{"东方财富概念 " + code, func() any { return collector.stocks.GetStockConceptInfo(code) }},
-				{"Sina资金流 " + code, func() any { return collector.news.GetStockMoneyTrendByDay(code, 10) }},
-				{"巨潮互动易 " + code, func() any { return collector.news.InteractiveAnswer(1, 30, candidate.Name) }},
+				{"Sina资金流 " + code, func() any { return researchSourceResult(collector.news.stockMoneyTrendByDay(ctx, code, 10)) }},
+				{"巨潮互动易 " + code, func() any { return researchSourceResult(collector.news.interactiveAnswer(ctx, 1, 30, candidate.Name)) }},
 			}
 			local := make([]researchevidence.SourceDocument, 0, len(items))
 			for _, item := range items {
@@ -352,6 +355,18 @@ func researchSourceNow(clock func() time.Time) time.Time {
 	return time.Now()
 }
 
+func researchSourceResult(value any, err error) any {
+	if err != nil {
+		return map[string]any{"status": "failed", "error": err.Error()}
+	}
+	encoded, marshalErr := json.Marshal(value)
+	var decoded any
+	if marshalErr == nil && json.Unmarshal(encoded, &decoded) == nil && research2JSONValueEmpty(decoded) {
+		return map[string]any{"status": "empty", "data": value}
+	}
+	return value
+}
+
 func researchDocument(name, category string, now time.Time, value any) researchevidence.SourceDocument {
 	document := researchevidence.SourceDocument{SourceName: name, Category: category, CollectedAt: now}
 	if value == nil {
@@ -365,10 +380,10 @@ func researchDocument(name, category string, now time.Time, value any) researche
 	}
 	document.Error = semanticResearchSourceError(data)
 	if category == "stock" {
-		document.PromptContent = compactResearchPromptValueAt(name, value, now)
+		document.PromptContent = compactResearchPromptValue(name, value)
 		document.Content = document.PromptContent
-		if freshnessErr := validateCompactStockSourceAt(name, document.PromptContent, now); freshnessErr != nil {
-			document.Error = appendSourceDocumentError(document.Error, freshnessErr.Error())
+		if sourceErr := validateCompactStockSource(name, document.PromptContent); sourceErr != nil {
+			document.Error = appendSourceDocumentError(document.Error, sourceErr.Error())
 		}
 	} else {
 		document.Content = truncateResearchSourceJSON(string(data), 16000)
@@ -441,9 +456,7 @@ func semanticResearchSourceError(data []byte) string {
 	switch strings.ToLower(readText("status")) {
 	case "failed":
 		return format("来源状态失败")
-	case "stale":
-		return format("来源数据已过期")
-	case "empty":
+	case "stale", "empty":
 		return ""
 	}
 	var value any

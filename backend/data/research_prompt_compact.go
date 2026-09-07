@@ -11,17 +11,12 @@ import (
 	"unicode/utf8"
 
 	"go-stock/backend/models"
-	"go-stock/backend/research"
 )
 
 type compactDailyBar [6]any
 type compactMinuteBar [4]any
 
 func compactResearchPromptValue(name string, value any) string {
-	return compactResearchPromptValueAt(name, value, time.Time{})
-}
-
-func compactResearchPromptValueAt(name string, value any, collectedAt time.Time) string {
 	lower := strings.ToLower(name)
 	var compact any
 	switch {
@@ -30,7 +25,7 @@ func compactResearchPromptValueAt(name string, value any, collectedAt time.Time)
 	case strings.Contains(lower, "日k"):
 		compact = compactDailyKLine(value)
 	case strings.Contains(lower, "分钟k"):
-		compact = compactMinuteKLine(value, collectedAt)
+		compact = compactMinuteKLine(value)
 	default:
 		limit := 10
 		if strings.Contains(lower, "新闻") || strings.Contains(lower, "公告") || strings.Contains(lower, "研报") {
@@ -127,7 +122,7 @@ func kLineReturn(rows []models.KLineData, horizon int) (float64, bool) {
 	return end/start - 1, true
 }
 
-func compactMinuteKLine(value any, collectedAt time.Time) any {
+func compactMinuteKLine(value any) any {
 	payload, ok := value.(map[string]any)
 	if !ok {
 		return compactGenericPromptValue(value, 31)
@@ -139,18 +134,6 @@ func compactMinuteKLine(value any, collectedAt time.Time) any {
 	ordered := append([]MinuteData(nil), (*rows)...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].Time < ordered[j].Time })
 	tradingDate, _ := payload["source"].(string)
-	if tradingDate != "" && !collectedAt.IsZero() {
-		date := compactTradingDate(tradingDate)
-		cutoff := research.ShanghaiTime(collectedAt).Truncate(time.Minute)
-		filtered := ordered[:0]
-		for _, row := range ordered {
-			at, err := time.ParseInLocation("2006-01-02 15:04", date+" "+strings.TrimSpace(row.Time), cutoff.Location())
-			if err == nil && !at.After(cutoff) {
-				filtered = append(filtered, row)
-			}
-		}
-		ordered = filtered
-	}
 	result := map[string]any{"order": "newest_first", "barCount": len(ordered), "bars": []compactMinuteBar{}}
 	if tradingDate != "" {
 		result["tradingDate"] = tradingDate
@@ -203,7 +186,7 @@ func compactTradingDate(value string) string {
 	return value
 }
 
-func validateCompactStockSourceAt(name, content string, collectedAt time.Time) error {
+func validateCompactStockSource(name, content string) error {
 	lower := strings.ToLower(name)
 	if !strings.Contains(lower, "实时行情") && !strings.Contains(lower, "分钟k") {
 		return nil
@@ -213,20 +196,9 @@ func validateCompactStockSourceAt(name, content string, collectedAt time.Time) e
 		return errors.New("compact stock source is not valid JSON")
 	}
 	raw, _ := payload["asOf"].(string)
-	asOf, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	_, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
 	if err != nil {
 		return errors.New("compact stock source is missing a valid asOf")
-	}
-	localNow, localAsOf := research.ShanghaiTime(collectedAt), research.ShanghaiTime(asOf)
-	if localNow.Format("2006-01-02") != localAsOf.Format("2006-01-02") {
-		return errors.New("compact stock source is from a different trading date")
-	}
-	lag := localNow.Sub(localAsOf)
-	if lag < -lifecycleEvidenceClockSkew {
-		return errors.New("compact stock source is later than its collection time")
-	}
-	if research.IsTradingSession(localNow) && lag > lifecycleEvidenceMaxLag {
-		return errors.New("compact stock source is stale for the active session")
 	}
 	return nil
 }

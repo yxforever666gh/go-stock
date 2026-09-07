@@ -531,8 +531,15 @@ func TestHoldingFallbackUsesOnlyStockHistoryAndFixedNextSlot(t *testing.T) {
 	now := time.Date(2026, 8, 17, 9, 50, 0, 0, shanghaiLocation)
 	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -3), now, "response-old")
 	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -3))
+	for index := 0; index < 40; index++ {
+		if err := repo.AppendMessage(context.Background(), &LifecycleMessage{RecommendationID: rec.RecommendationID, Role: "user", Content: fmt.Sprintf("旧轮次%d", index), CreatedAt: now.Add(-time.Duration(40-index) * time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	ai := &scriptedAI{results: []sharedai.CompletionResult{{}, {Content: `{"action":"持有","reason":"量价仍稳","sourceRefs":[],"dataSufficiency":"充足"}`, ResponseID: "response-new"}}, errors: []error{errors.New("relay rejects previous_response_id"), nil}}
-	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{readyLifecycleDraft(now, "ready")}}
+	draft := readyLifecycleDraft(now, "ready")
+	draft.Sources = append(draft.Sources, LifecycleEvidenceSource{ID: "NEWS-CURRENT", Name: "公告", Category: "news", Status: "ok", CollectedAt: now, Content: "稳定公告的原文仍可读取"})
+	contexts := &scriptedContexts{drafts: []LifecycleObservationDraft{draft}}
 	service := NewService(repo, ai, &scriptedQuotes{}, weekdayTradingCalendar{}, contexts)
 	service.now = func() time.Time { return now }
 	if err := service.ProcessDue(context.Background()); err != nil {
@@ -545,6 +552,9 @@ func TestHoldingFallbackUsesOnlyStockHistoryAndFixedNextSlot(t *testing.T) {
 		if message.RecommendationID != rec.RecommendationID {
 			t.Fatalf("cross-stock memory: %+v", message)
 		}
+	}
+	if len(ai.requests[1].Messages) != 24 || !strings.Contains(ai.requests[1].Messages[23].Content, "稳定公告的原文仍可读取") {
+		t.Fatalf("current evidence lost after historical compaction: %+v", ai.requests[1].Messages)
 	}
 	stored, _ := repo.Recommendation(context.Background(), rec.RecommendationID)
 	if stored.Status != "active" || stored.NextCheckAt.Format("15:04") != "10:05" {

@@ -16,7 +16,7 @@ func TestSummarizeLifecycleMinutesBuildsFifteenThirtySixtyMinuteWindows(t *testi
 		at := now.Add(-time.Duration(60-index) * time.Minute)
 		rows = append(rows, MinuteData{Time: at.Format("15:04"), Price: 10 + float64(index)/100, Volume: 100, Amount: (10 + float64(index)/100) * 100})
 	}
-	summary, err := summarizeLifecycleMinutes(now, "20260818", rows)
+	summary, err := summarizeLifecycleMinutes("20260818", rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func TestSummarizeLifecycleMinutesConvertsCumulativeTurnoverToDeltas(t *testing.
 		volume := float64((index + 1) * 100)
 		rows = append(rows, MinuteData{Time: now.Add(-time.Duration(60-index) * time.Minute).Format("15:04"), Price: 10, Volume: volume, Amount: volume * 10 * 100})
 	}
-	summary, err := summarizeLifecycleMinutes(now, "20260818", rows)
+	summary, err := summarizeLifecycleMinutes("20260818", rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,9 +80,7 @@ func TestSummarizeLifecycleMinutesConvertsCumulativeTurnoverToDeltas(t *testing.
 
 func summarizeLifecycleMinuteWindowForAveragePriceTest(t *testing.T, rows []MinuteData) research.MinuteWindowSummary {
 	t.Helper()
-	location := shanghaiDataLocation()
-	now := time.Date(2026, 8, 18, 10, 30, 0, 0, location)
-	summary, err := summarizeLifecycleMinutes(now, "20260818", rows)
+	summary, err := summarizeLifecycleMinutes("20260818", rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,12 +97,12 @@ func assertLifecycleMinuteAveragePrice(t *testing.T, got float64, gotMethod stri
 	}
 }
 
-func TestSummarizeLifecycleMinutesRejectsStaleTradingData(t *testing.T) {
-	location := shanghaiDataLocation()
-	now := time.Date(2026, 8, 18, 10, 30, 0, 0, location)
-	_, err := summarizeLifecycleMinutes(now, "20260818", []MinuteData{{Time: "10:00", Price: 10}})
-	if err == nil {
-		t.Fatal("stale minute data was accepted")
+func TestSummarizeLifecycleMinutesPreservesHistoricalAndFutureLabels(t *testing.T) {
+	for _, date := range []string{"20260907", "20260904"} {
+		summary, err := summarizeLifecycleMinutes(date, []MinuteData{{Time: "09:59", Price: 10}})
+		if err != nil || summary.LatestAt.Format("20060102 15:04") != date+" 09:59" {
+			t.Fatalf("evidence label was rejected or rewritten: %+v err=%v", summary, err)
+		}
 	}
 }
 
@@ -118,7 +116,7 @@ func TestSummarizeLifecycleMinutesCarriesWindowsAcrossLunchBreak(t *testing.T) {
 	for at := time.Date(2026, 8, 18, 13, 0, 0, 0, location); !at.After(now); at = at.Add(time.Minute) {
 		rows = append(rows, MinuteData{Time: at.Format("15:04"), Price: 10.1, Volume: 100})
 	}
-	summary, err := summarizeLifecycleMinutes(now, "20260818", rows)
+	summary, err := summarizeLifecycleMinutes("20260818", rows)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,19 +140,18 @@ func TestLifecycleConditionKeywordRouting(t *testing.T) {
 	}
 }
 
-func TestLifecycleSourceFingerprintDeduplicatesOptionalContent(t *testing.T) {
+func TestLifecycleSourceRetainsRepeatedEvidenceContent(t *testing.T) {
 	now := time.Date(2026, 8, 18, 10, 0, 0, 0, shanghaiDataLocation())
-	first := newLifecycleSource("source-1", "增量新闻", "news", now, map[string]any{"title": "事件"}, nil, true, nil)
-	known := map[string]struct{}{first.Fingerprint: {}}
-	second := newLifecycleSource("source-2", "增量新闻", "news", now.Add(15*time.Minute), map[string]any{"title": "事件"}, nil, true, known)
-	if second.Status != "unchanged" || second.Content == first.Content {
+	first := newLifecycleSource("source-1", "增量新闻", "news", now, map[string]any{"title": "事件"}, nil)
+	second := newLifecycleSource("source-2", "增量新闻", "news", now.Add(15*time.Minute), map[string]any{"title": "事件"}, nil)
+	if second.Status != "ok" || second.Content != first.Content || second.Content == "" {
 		t.Fatalf("second=%+v first=%+v", second, first)
 	}
 }
 
 func TestLifecycleSourceMarksNestedEmptyPayloadAsEmpty(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 0, 0, 0, shanghaiDataLocation())
-	source := newLifecycleSource("source-empty", "全球指数", "market", now, map[string]any{"data": []any{}}, nil, false, nil)
+	source := newLifecycleSource("source-empty", "全球指数", "market", now, map[string]any{"data": []any{}}, nil)
 	if source.Status != "empty" {
 		t.Fatalf("source=%+v", source)
 	}

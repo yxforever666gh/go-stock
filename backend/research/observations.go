@@ -18,13 +18,13 @@ const (
 )
 
 type LifecycleContextRequest struct {
-	ObservationID     string
-	Recommendation    Recommendation
-	Phase             string
-	WindowFrom        time.Time
-	Now               time.Time
-	Position          *Position
-	KnownFingerprints map[string]struct{}
+	ObservationID  string
+	Recommendation Recommendation
+	Phase          string
+	WindowFrom     time.Time
+	Now            time.Time
+	Position       *Position
+	KnownNewsIDs   []uint
 }
 
 type LifecycleObservationDraft struct {
@@ -116,7 +116,7 @@ func ParseLifecycleEvidence(observation LifecycleObservation) []LifecycleEvidenc
 
 func ObservationHasSource(observation LifecycleObservation, sourceID string) bool {
 	for _, source := range ParseLifecycleEvidence(observation) {
-		if source.ID == sourceID && (source.Status == "ok" || source.Status == "empty" || source.Status == "unchanged") {
+		if source.ID == sourceID && (source.Status == "ok" || source.Status == "empty" || source.Status == "unchanged" || source.Status == "partial") {
 			return true
 		}
 	}

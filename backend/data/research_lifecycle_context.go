@@ -11,16 +11,12 @@ import (
 	"sync"
 	"time"
 
+	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
-	"go-stock/internal/marketquote"
 )
 
-const (
-	lifecycleSourceTimeout     = 20 * time.Second
-	lifecycleEvidenceMaxLag    = 2 * time.Minute
-	lifecycleEvidenceClockSkew = 5 * time.Second
-)
+const lifecycleSourceTimeout = 20 * time.Second
 
 type lifecycleCachedSource struct {
 	name        string
@@ -36,6 +32,7 @@ type ResearchLifecycleContextCollector struct {
 	quotes *ResearchQuoteProvider
 	stocks *StockDataApi
 	news   *MarketNewsApi
+	clock  func() time.Time
 
 	cacheMu     sync.Mutex
 	cacheBucket string
@@ -56,7 +53,7 @@ func NewResearchLifecycleContextCollectorWithProviders(quotes *ResearchQuoteProv
 	if news == nil {
 		news = NewMarketNewsApi()
 	}
-	return &ResearchLifecycleContextCollector{quotes: quotes, stocks: stocks, news: news}
+	return &ResearchLifecycleContextCollector{quotes: quotes, stocks: stocks, news: news, clock: time.Now}
 }
 
 func (collector *ResearchLifecycleContextCollector) CollectLifecycleContext(ctx context.Context, request research.LifecycleContextRequest) (research.LifecycleObservationDraft, error) {
@@ -67,7 +64,7 @@ func (collector *ResearchLifecycleContextCollector) CollectLifecycleContext(ctx 
 	quote, quoteErr := collector.quotes.CurrentQuote(ctx, request.Recommendation.StockCode)
 	if quoteErr != nil {
 		draft.Status, draft.CriticalFailure = "critical_failed", "实时行情不可用: "+quoteErr.Error()
-		draft.Sources = append(draft.Sources, failedLifecycleSource(quoteID, "实时行情", "quote", request.Now, quoteErr))
+		draft.Sources = append(draft.Sources, failedLifecycleSource(quoteID, "实时行情", "quote", researchSourceNow(collector.clock), quoteErr))
 		return draft, nil
 	}
 	draft.Quote = quote
@@ -76,29 +73,23 @@ func (collector *ResearchLifecycleContextCollector) CollectLifecycleContext(ctx 
 		"changeRate": safeRate(quote.Price-quote.PreviousClose, quote.PreviousClose), "volume": quote.Volume,
 		"amount": quote.Amount, "quoteAt": quote.At, "suspended": quote.Suspended, "limitUp": quote.LimitUp, "limitDown": quote.LimitDown,
 	}
-	draft.Sources = append(draft.Sources, newLifecycleSource(quoteID, "实时行情", "quote", request.Now, quoteContent, nil, false, request.KnownFingerprints))
-	if freshnessErr := validateLifecycleQuoteFreshness(request.Now, quote); freshnessErr != nil {
-		draft.Status, draft.CriticalFailure = "critical_failed", freshnessErr.Error()
-		draft.Sources[len(draft.Sources)-1].Status = "failed"
-		draft.Sources[len(draft.Sources)-1].Error = freshnessErr.Error()
-		return draft, nil
-	}
+	draft.Sources = append(draft.Sources, newLifecycleSource(quoteID, "实时行情", "quote", researchSourceNow(collector.clock), quoteContent, nil))
 
 	minuteRows, tradingDate, minuteErr := collector.collectMinute(ctx, request.Recommendation.StockCode)
 	if minuteErr == nil {
-		draft.MinuteSummary, minuteErr = summarizeLifecycleMinutes(request.Now, tradingDate, minuteRows)
+		draft.MinuteSummary, minuteErr = summarizeLifecycleMinutes(tradingDate, minuteRows)
 	}
 	if minuteErr != nil {
 		draft.Status, draft.CriticalFailure = "critical_failed", "分钟量价不可用: "+minuteErr.Error()
-		draft.Sources = append(draft.Sources, failedLifecycleSource(minuteID, "分钟量价", "minute", request.Now, minuteErr))
+		draft.Sources = append(draft.Sources, failedLifecycleSource(minuteID, "分钟量价", "minute", researchSourceNow(collector.clock), minuteErr))
 		return draft, nil
 	}
-	draft.Sources = append(draft.Sources, newLifecycleSource(minuteID, "分钟量价", "minute", request.Now, draft.MinuteSummary, nil, false, request.KnownFingerprints))
+	draft.Sources = append(draft.Sources, newLifecycleSource(minuteID, "分钟量价", "minute", researchSourceNow(collector.clock), draft.MinuteSummary, nil))
 
 	optional := collector.collectOptional(ctx, request)
 	draft.Sources = append(draft.Sources, optional...)
 	for _, source := range optional {
-		if source.Status == "failed" {
+		if source.Status == "failed" || source.Status == "partial" {
 			draft.Status = "partial"
 			break
 		}
@@ -106,56 +97,20 @@ func (collector *ResearchLifecycleContextCollector) CollectLifecycleContext(ctx 
 	return draft, nil
 }
 
-func validateLifecycleQuoteFreshness(now time.Time, quote marketquote.Quote) error {
-	if quote.Price <= 0 || quote.At.IsZero() {
-		return errors.New("实时行情缺少有效价格或时间")
-	}
-	localNow, localQuote := research.ShanghaiTime(now), research.ShanghaiTime(quote.At)
-	if localNow.Format("2006-01-02") != localQuote.Format("2006-01-02") {
-		return fmt.Errorf("实时行情日期滞后，行情时间为 %s", localQuote.Format(time.RFC3339))
-	}
-	lag := localNow.Sub(localQuote)
-	if lag > lifecycleEvidenceMaxLag || lag < -lifecycleEvidenceClockSkew {
-		return fmt.Errorf("实时行情时间异常，距当前时间 %s", lag.Round(time.Second))
-	}
-	return nil
-}
-
 func (collector *ResearchLifecycleContextCollector) collectMinute(ctx context.Context, code string) ([]MinuteData, string, error) {
-	type result struct {
-		rows []MinuteData
-		date string
+	ctx, cancel := context.WithTimeout(ctx, lifecycleSourceTimeout)
+	defer cancel()
+	rows, date, err := collector.stocks.getStockMinutePriceData(ctx, code)
+	if err != nil {
+		return nil, date, err
 	}
-	resultCh := make(chan result, 1)
-	go func() {
-		defer func() {
-			if recover() != nil {
-				resultCh <- result{}
-			}
-		}()
-		rows, date := collector.stocks.GetStockMinutePriceData(code)
-		value := result{date: date}
-		if rows != nil {
-			value.rows = *rows
-		}
-		resultCh <- value
-	}()
-	timer := time.NewTimer(lifecycleSourceTimeout)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return nil, "", ctx.Err()
-	case <-timer.C:
-		return nil, "", errors.New("分钟行情来源调用超时")
-	case value := <-resultCh:
-		if len(value.rows) == 0 || strings.TrimSpace(value.date) == "" {
-			return nil, value.date, errors.New("分钟行情来源返回空数据")
-		}
-		return value.rows, value.date, nil
+	if len(rows) == 0 || strings.TrimSpace(date) == "" {
+		return nil, date, errors.New("分钟行情来源返回空数据")
 	}
+	return rows, date, nil
 }
 
-func summarizeLifecycleMinutes(now time.Time, tradingDate string, rows []MinuteData) (research.MinuteEvidenceSummary, error) {
+func summarizeLifecycleMinutes(tradingDate string, rows []MinuteData) (research.MinuteEvidenceSummary, error) {
 	date, err := parseMinuteTradingDate(tradingDate)
 	if err != nil {
 		return research.MinuteEvidenceSummary{}, err
@@ -185,10 +140,6 @@ func summarizeLifecycleMinutes(now time.Time, tradingDate string, rows []MinuteD
 		bars[index].Amount = lifecycleCumulativeDelta(amounts[index], amounts[index-1])
 	}
 	latest := bars[len(bars)-1]
-	localNow := research.ShanghaiTime(now)
-	if latest.at.Format("2006-01-02") != localNow.Format("2006-01-02") || localNow.Sub(latest.at) > lifecycleEvidenceMaxLag || localNow.Sub(latest.at) < -lifecycleEvidenceClockSkew {
-		return research.MinuteEvidenceSummary{}, fmt.Errorf("分钟行情严重滞后，最新记录为 %s", latest.at.Format(time.RFC3339))
-	}
 	summary := research.MinuteEvidenceSummary{TradingDate: date.Format("2006-01-02"), LatestAt: latest.at, LatestPrice: latest.Price, TotalBars: len(bars)}
 	for _, minutes := range []int{15, 30, 60} {
 		// Use the latest trading-minute records rather than wall-clock time so
@@ -273,28 +224,30 @@ func parseMinuteTradingDate(value string) (time.Time, error) {
 }
 
 func (collector *ResearchLifecycleContextCollector) collectOptional(ctx context.Context, request research.LifecycleContextRequest) []research.LifecycleEvidenceSource {
+	ctx, cancel := context.WithTimeout(ctx, lifecycleSourceTimeout)
+	defer cancel()
 	type job struct {
 		suffix   string
 		name     string
 		category string
 		run      func() (any, error)
 	}
-	jobs := []job{{suffix: "NEWS", name: "增量新闻与重要事件", category: "news", run: func() (any, error) { return collector.incrementalNews(request) }}}
+	jobs := []job{{suffix: "NEWS", name: "增量新闻与重要事件", category: "news", run: func() (any, error) { return collector.incrementalNews(ctx, request) }}}
 	text := strings.ToLower(strings.Join([]string{request.Recommendation.AISummary, request.Recommendation.MainRisk}, " "))
 	if containsLifecycleKeyword(text, "板块", "行业", "概念", "主线", "热点") {
-		jobs = append(jobs, job{suffix: "SECTORMONEY", name: "行业资金", category: "sector_money", run: func() (any, error) { return collector.news.GetIndustryMoneyRankSina("gn", "netamount"), nil }})
+		jobs = append(jobs, job{suffix: "SECTORMONEY", name: "行业资金", category: "sector_money", run: func() (any, error) { return collector.news.industryMoneyRankSina(ctx, "gn", "netamount") }})
 	}
 	if containsLifecycleKeyword(text, "资金", "承接", "放量", "缩量", "成交", "量能", "换手") {
 		jobs = append(jobs, job{suffix: "STOCKMONEY", name: "个股日频资金趋势", category: "money", run: func() (any, error) {
-			return collector.news.GetStockMoneyTrendByDay(request.Recommendation.StockCode, 10), nil
+			return collector.news.stockMoneyTrendByDay(ctx, request.Recommendation.StockCode, 10)
 		}})
 	}
 	if containsLifecycleKeyword(text, "公告", "订单", "业绩", "回购", "减持", "增持", "股东", "互动") {
 		digits := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(request.Recommendation.StockCode), "sh"), "sz")
 		jobs = append(jobs,
-			job{suffix: "NOTICE", name: "公司公告", category: "announcement", run: func() (any, error) { return collector.news.StockNotice(digits), nil }},
+			job{suffix: "NOTICE", name: "公司公告", category: "announcement", run: func() (any, error) { return collector.news.stockNotice(ctx, digits) }},
 			job{suffix: "INTERACTIVE", name: "互动易", category: "interaction", run: func() (any, error) {
-				return collector.news.InteractiveAnswer(1, 20, request.Recommendation.StockName), nil
+				return collector.news.interactiveAnswer(ctx, 1, 20, request.Recommendation.StockName)
 			}},
 		)
 	}
@@ -309,7 +262,7 @@ func (collector *ResearchLifecycleContextCollector) collectOptional(ctx context.
 			defer wait.Done()
 			value, err := runLifecycleOptional(ctx, item.run)
 			results[index] = newLifecycleSource(research.LifecycleSourceID(request.ObservationID, item.suffix), item.name, item.category,
-				request.Now, value, err, true, request.KnownFingerprints)
+				researchSourceNow(collector.clock), value, err)
 		}()
 	}
 	wait.Wait()
@@ -327,8 +280,8 @@ func (collector *ResearchLifecycleContextCollector) sharedMarketSources(ctx cont
 			name, category string
 			run            func() (any, error)
 		}{
-			{name: "主要指数", category: "index", run: func() (any, error) { return collector.news.GlobalStockIndexes(5), nil }},
-			{name: "行业表现", category: "sector", run: func() (any, error) { return collector.news.GetIndustryRank("changepercent", 30), nil }},
+			{name: "主要指数", category: "index", run: func() (any, error) { return collector.news.globalStockIndexes(ctx, 5) }},
+			{name: "行业表现", category: "sector", run: func() (any, error) { return collector.news.industryRank(ctx, "changepercent", 30) }},
 		}
 		fresh := make([]lifecycleCachedSource, len(jobs))
 		var wait sync.WaitGroup
@@ -338,7 +291,7 @@ func (collector *ResearchLifecycleContextCollector) sharedMarketSources(ctx cont
 			go func() {
 				defer wait.Done()
 				value, err := runLifecycleOptional(ctx, item.run)
-				source := newLifecycleSource("", item.name, item.category, request.Now, value, err, false, nil)
+				source := newLifecycleSource("", item.name, item.category, researchSourceNow(collector.clock), value, err)
 				fresh[index] = lifecycleCachedSource{name: source.Name, category: source.Category, status: source.Status,
 					content: source.Content, errorText: source.Error, fingerprint: source.Fingerprint, collectedAt: source.CollectedAt}
 			}()
@@ -346,6 +299,12 @@ func (collector *ResearchLifecycleContextCollector) sharedMarketSources(ctx cont
 		wait.Wait()
 		collector.marketCache = fresh
 		collector.cacheBucket = bucket
+		for _, source := range fresh {
+			if source.status == "failed" {
+				collector.cacheBucket = ""
+				break
+			}
+		}
 	}
 	cached := append([]lifecycleCachedSource(nil), collector.marketCache...)
 	collector.cacheMu.Unlock()
@@ -359,35 +318,79 @@ func (collector *ResearchLifecycleContextCollector) sharedMarketSources(ctx cont
 		item := research.LifecycleEvidenceSource{ID: research.LifecycleSourceID(request.ObservationID, suffix), Name: source.name,
 			Category: source.category, Status: source.status, CollectedAt: source.collectedAt, Content: source.content,
 			Error: source.errorText, Fingerprint: source.fingerprint}
-		if _, exists := request.KnownFingerprints[item.Fingerprint]; exists && item.Status == "ok" {
-			item.Status, item.Content = "unchanged", "与前次观察一致，沿用该股票独立会话中的最近内容"
-		}
 		result = append(result, item)
 	}
 	return result
 }
 
-func (collector *ResearchLifecycleContextCollector) incrementalNews(request research.LifecycleContextRequest) (any, error) {
-	window, err := collector.news.GetNewsWindow(nil, request.WindowFrom, request.Now)
-	if err != nil {
-		return map[string]any{"status": window.Status, "warning": window.Warning}, err
+func (collector *ResearchLifecycleContextCollector) incrementalNews(ctx context.Context, request research.LifecycleContextRequest) (any, error) {
+	if db.Dao == nil {
+		return nil, errors.New("market news database is not initialized")
+	}
+	if request.Now.Before(request.WindowFrom) {
+		return nil, errors.New("invalid lifecycle news window")
 	}
 	digits := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(request.Recommendation.StockCode), "sh"), "sz")
-	name := strings.ToLower(strings.TrimSpace(request.Recommendation.StockName))
-	selected := make([]*models.Telegraph, 0, 30)
-	for _, item := range window.Items {
-		if item == nil {
-			continue
+	name := strings.TrimSpace(request.Recommendation.StockName)
+	if digits == "" {
+		return nil, errors.New("lifecycle news stock code is required")
+	}
+	zero := time.Date(2, time.January, 1, 0, 0, 0, 0, time.UTC)
+	// Event time defines when the news happened; CreatedAt also admits late
+	// arrivals since the last successful coverage, without relabelling events.
+	query := db.Dao.WithContext(ctx).Model(&models.Telegraph{}).Preload("TelegraphTags").
+		Where("created_at <= ?", request.Now).
+		Where(`((data_time > ? AND data_time <= ? AND (data_time >= ? OR created_at >= ?))
+			OR ((data_time IS NULL OR data_time <= ?) AND created_at >= ?))`, zero, request.Now, request.WindowFrom, request.WindowFrom, zero, request.WindowFrom).
+		Where(`is_red = ? OR instr(title, ?) > 0 OR instr(content, ?) > 0
+			OR (? <> '' AND (instr(title, ?) > 0 OR instr(content, ?) > 0))
+			OR EXISTS (SELECT 1 FROM telegraph_tags links JOIN tags ON tags.id = links.tag_id
+				WHERE links.telegraph_id = telegraph_list.id AND links.deleted_at IS NULL AND tags.deleted_at IS NULL
+				AND (instr(tags.name, ?) > 0 OR (? <> '' AND instr(tags.name, ?) > 0)))`, true, digits, digits, name, name, name, digits, name, name)
+	if len(request.KnownNewsIDs) > 0 {
+		query = query.Where("id NOT IN ?", request.KnownNewsIDs)
+	}
+	rows := make([]*models.Telegraph, 0, 31)
+	if err := query.Order("data_time DESC, created_at DESC, id DESC").Limit(31).Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("query lifecycle news: %w", err)
+	}
+	type newsItem struct {
+		ID         uint       `json:"id"`
+		EventAt    *time.Time `json:"eventAt"`
+		IngestedAt time.Time  `json:"ingestedAt"`
+		Title      string     `json:"title"`
+		Summary    string     `json:"summary"`
+		Source     string     `json:"source"`
+	}
+	items := make([]newsItem, 0, 30)
+	payload := map[string]any{"status": "partial", "warning": "新闻本轮分页未完，后续继续读取剩余事件", "coverageComplete": false, "from": request.WindowFrom, "to": request.Now, "items": items}
+	for _, row := range rows {
+		candidate := newsItem{ID: row.ID, EventAt: row.DataTime, IngestedAt: row.CreatedAt, Title: truncatePromptString(row.Title, 80), Summary: truncatePromptString(row.Content, 160), Source: truncatePromptString(row.Source, 40)}
+		items = append(items, candidate)
+		payload["items"] = items
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return nil, err
 		}
-		haystack := strings.ToLower(strings.Join([]string{item.Title, item.Content, strings.Join(item.SubjectTags, " "), strings.Join(item.StocksTags, " ")}, " "))
-		if item.IsRed || strings.Contains(haystack, digits) || (name != "" && strings.Contains(haystack, name)) {
-			selected = append(selected, item)
-			if len(selected) >= 30 {
-				break
-			}
+		// Keep complete identifiable records inside the model's source budget.
+		// IDs in persisted partial pages let subsequent observations resume even
+		// when many events share an identical timestamp.
+		if len(items) > 30 || len(encoded) > 2400 {
+			items = items[:len(items)-1]
+			break
 		}
 	}
-	return map[string]any{"status": window.Status, "warning": window.Warning, "from": request.WindowFrom, "to": request.Now, "items": selected}, nil
+	payload["items"] = items
+	if len(items) == len(rows) {
+		payload["status"], payload["warning"], payload["coverageComplete"] = "ok", "", true
+	}
+	if len(rows) == 0 {
+		if err := marketNewsFetchFailureForWindow(nil, request.WindowFrom, request.Now); err != nil {
+			return nil, err
+		}
+		payload["status"] = "empty"
+	}
+	return payload, nil
 }
 
 func runLifecycleOptional(ctx context.Context, run func() (any, error)) (any, error) {
@@ -417,7 +420,7 @@ func runLifecycleOptional(ctx context.Context, run func() (any, error)) (any, er
 	}
 }
 
-func newLifecycleSource(id, name, category string, now time.Time, value any, sourceErr error, dedupe bool, known map[string]struct{}) research.LifecycleEvidenceSource {
+func newLifecycleSource(id, name, category string, now time.Time, value any, sourceErr error) research.LifecycleEvidenceSource {
 	source := research.LifecycleEvidenceSource{ID: id, Name: name, Category: category, CollectedAt: now, Status: "ok"}
 	if sourceErr != nil {
 		source.Status, source.Error = "failed", sourceErr.Error()
@@ -428,21 +431,25 @@ func newLifecycleSource(id, name, category string, now time.Time, value any, sou
 		return source
 	}
 	content := truncateResearchSourceJSON(string(data), 8000)
+	var coverage struct {
+		Status  string `json:"status"`
+		Warning string `json:"warning"`
+	}
+	if source.Status == "ok" && json.Unmarshal(data, &coverage) == nil && coverage.Status == "partial" {
+		source.Status, source.Error = "partial", coverage.Warning
+	}
+	if len(data) > 8000 && source.Status != "failed" {
+		source.Status = "partial"
+		source.Error = strings.TrimSpace(source.Error + " 来源内容超过预算，已压缩截断")
+	}
 	var decoded any
 	empty := len(data) == 0 || (json.Unmarshal(data, &decoded) == nil && research2JSONValueEmpty(decoded))
 	if empty {
-		if source.Status != "failed" {
+		if source.Status == "ok" {
 			source.Status = "empty"
 		}
 	}
 	source.Fingerprint = research.EvidenceFingerprint(name + "\n" + content)
-	if dedupe {
-		if _, exists := known[source.Fingerprint]; exists && source.Status == "ok" {
-			source.Status = "unchanged"
-			source.Content = "与前次观察一致，沿用该股票独立会话中的最近内容"
-			return source
-		}
-	}
 	source.Content = content
 	return source
 }

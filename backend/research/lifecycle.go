@@ -17,7 +17,6 @@ import (
 	"go-stock/internal/trading"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 func newID() string { return uuid.NewString() }
@@ -336,19 +335,17 @@ func (s *Service) processOne(ctx context.Context, recommendation *Recommendation
 	}
 	allowed := map[string]bool{"持有": true, "卖出": true}
 	windowFrom := recommendation.SignalAt
-	if previous, previousErr := s.repository.LastUsableObservation(ctx, recommendation.RecommendationID); previousErr == nil && previous.ObservedAt.After(windowFrom) {
-		windowFrom = previous.ObservedAt
-	} else if previousErr != nil && !errors.Is(previousErr, gorm.ErrRecordNotFound) {
-		return previousErr
-	}
-	knownFingerprints, err := s.repository.ObservationFingerprints(ctx, recommendation.RecommendationID, 200)
+	coveredUntil, knownNewsIDs, err := s.repository.LifecycleNewsCoverage(ctx, recommendation.RecommendationID)
 	if err != nil {
 		return err
+	}
+	if coveredUntil.After(windowFrom) {
+		windowFrom = coveredUntil
 	}
 	enrichPositionValue(&current)
 	position := &current
 	contextRequest := LifecycleContextRequest{ObservationID: newID(), Recommendation: *recommendation, Phase: "holding",
-		WindowFrom: windowFrom, Now: now, Position: position, KnownFingerprints: knownFingerprints}
+		WindowFrom: windowFrom, Now: now, Position: position, KnownNewsIDs: knownNewsIDs}
 	draft, err := s.contextProvider.CollectLifecycleContext(ctx, contextRequest)
 	if err != nil {
 		return err
@@ -643,16 +640,22 @@ func lifecyclePrompt(recommendation Recommendation, now time.Time, observation L
 		perSourceBudget = 800
 	}
 	for _, source := range sources {
-		line := fmt.Sprintf("[%s] %s（%s，状态=%s）", source.ID, source.Name, source.Category, source.Status)
+		line := fmt.Sprintf("[%s] %s（%s，状态=%s，采集完成=%s）", source.ID, source.Name, source.Category, source.Status, source.CollectedAt.Format(time.RFC3339))
 		if source.Error != "" {
 			line += "，错误=" + truncateLifecycleText(source.Error, 500)
 		}
 		if source.Content != "" {
-			line += "：" + truncateLifecycleText(source.Content, perSourceBudget-len(line)-2)
+			if source.Category == "news" {
+				// The collector budgets complete news records before assigning
+				// coverage. A second text cut would silently lose covered IDs.
+				line += "：" + source.Content
+			} else {
+				line += "：" + truncateLifecycleText(source.Content, perSourceBudget-len(line)-2)
+			}
 		}
 		evidence.WriteString(line + "\n")
 	}
-	common := fmt.Sprintf("现在是 %s。只判断股票 %s(%s)，不得混入其他股票。原始 AI 摘要：%s。主要风险：%s。\n本轮观察编号：%s，数据状态：%s，增量窗口：%s 至 %s。\n本轮证据：\n%s\n最新证据优先于历史记忆；失败来源不得补造内容。sourceRefs 只能填写本轮方括号中的来源编号。",
+	common := fmt.Sprintf("检查开始于 %s。只判断股票 %s(%s)，不得混入其他股票。原始 AI 摘要：%s。主要风险：%s。\n本轮观察编号：%s，数据状态：%s，增量窗口：%s 至 %s。\n本轮证据：\n%s\n来源时间与采集完成时间分别保留；分钟时间是接口原始标签，不代表精确成交时刻。历史证据可用于分析，不能冒充当前成交报价；失败来源不得补造内容。sourceRefs 只能填写本轮方括号中的来源编号。",
 		now.Format(time.RFC3339), recommendation.StockName, recommendation.StockCode, recommendation.AISummary,
 		recommendation.MainRisk, observation.ObservationID, observation.Status,
 		observation.WindowFrom.Format(time.RFC3339), observation.ObservedAt.Format(time.RFC3339), evidence.String())
@@ -811,5 +814,3 @@ func isTPlusOne(entryAt, now time.Time) bool {
 	cy, cm, cd := current.Date()
 	return time.Date(cy, cm, cd, 0, 0, 0, 0, shanghaiLocation).After(time.Date(ey, em, ed, 0, 0, 0, 0, shanghaiLocation))
 }
-
-var _ = gorm.ErrRecordNotFound

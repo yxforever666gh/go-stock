@@ -46,18 +46,17 @@ func TestCompactResearchMinutePromptKeepsLatestThirtyOneAndWindows(t *testing.T)
 	}
 }
 
-func TestCompactResearchMinutePromptDropsProviderFutureLabel(t *testing.T) {
+func TestCompactResearchMinutePromptKeepsProviderMinuteLabel(t *testing.T) {
 	rows := []MinuteData{
 		{Time: "13:03", Price: 10, Volume: 100},
 		{Time: "13:04", Price: 10.1, Volume: 110},
 		{Time: "13:05", Price: 10.2, Volume: 120},
 	}
-	collectedAt := time.Date(2026, 9, 4, 13, 4, 33, 0, shanghaiDataLocation())
-	content := compactResearchPromptValueAt("Tencent分钟K sh600000", map[string]any{"source": "20260904", "rows": &rows}, collectedAt)
-	if !strings.Contains(content, `"asOf":"2026-09-04T13:04:00+08:00"`) || strings.Contains(content, `["13:05"`) {
-		t.Fatalf("future-labelled minute bar was not removed: %s", content)
+	content := compactResearchPromptValue("Tencent分钟K sh600000", map[string]any{"source": "20260904", "rows": &rows})
+	if !strings.Contains(content, `"asOf":"2026-09-04T13:05:00+08:00"`) || !strings.Contains(content, `["13:05"`) {
+		t.Fatalf("provider minute label was lost or rewritten: %s", content)
 	}
-	if err := validateCompactStockSourceAt("Tencent分钟K sh600000", content, collectedAt); err != nil {
+	if err := validateCompactStockSource("Tencent分钟K sh600000", content); err != nil {
 		t.Fatalf("filtered minute evidence was rejected: %v", err)
 	}
 }
@@ -81,13 +80,14 @@ func TestCompactResearchRealtimeQuoteKeepsRequiredFields(t *testing.T) {
 	}
 }
 
-func TestResearchDocumentRejectsStaleInternalRealtimeTimestamp(t *testing.T) {
+func TestResearchDocumentPreservesHistoricalRealtimeTimestamp(t *testing.T) {
 	now := time.Date(2026, 9, 3, 14, 20, 0, 0, shanghaiDataLocation())
-	rows := []models.StockInfo{{Date: "2026-09-03", Time: "14:15:00", Code: "sh600000", Name: "Alpha", Price: "10.10"}}
+	rows := []models.StockInfo{{Date: "2026-09-02", Time: "14:15:00", Code: "sh600000", Name: "Alpha", Price: "10.10"}}
 	document := researchDocument("Sina/Tencent实时行情 sh600000", "stock", now, &rows)
-	if document.Error == "" || !json.Valid([]byte(document.Content)) {
-		t.Fatalf("stale internal quote was not rejected structurally: %+v", document)
+	if document.Error != "" || !strings.Contains(document.Content, `"asOf":"2026-09-02T14:15:00+08:00"`) {
+		t.Fatalf("historical evidence was rejected or rewritten: %+v", document)
 	}
+	rows[0].Date = "2026-09-03"
 	rows[0].Time = "14:19:30"
 	document = researchDocument("Sina/Tencent实时行情 sh600000", "stock", now, &rows)
 	if document.Error != "" || !strings.Contains(document.Content, `"asOf":"2026-09-03T14:19:30+08:00"`) {

@@ -516,32 +516,50 @@ func (r *Repository) MarkObservationModelInvoked(ctx context.Context, observatio
 	})
 }
 
-func (r *Repository) LastUsableObservation(ctx context.Context, recommendationID string) (LifecycleObservation, error) {
-	var result LifecycleObservation
-	err := r.db.WithContext(ctx).Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"ready", "partial"}).
-		Order("observed_at DESC, id DESC").First(&result).Error
-	return result, err
-}
-
-func (r *Repository) ObservationFingerprints(ctx context.Context, recommendationID string, limit int) (map[string]struct{}, error) {
-	if limit <= 0 {
-		limit = 200
+func (r *Repository) LifecycleNewsCoverage(ctx context.Context, recommendationID string) (time.Time, []uint, error) {
+	rows, err := r.db.WithContext(ctx).Model(&LifecycleObservation{}).Where("recommendation_id = ?", recommendationID).
+		Select("evidence_json, observed_at").Order("observed_at DESC, id DESC").Rows()
+	if err != nil {
+		return time.Time{}, nil, err
 	}
-	var rows []LifecycleObservation
-	err := r.db.WithContext(ctx).Where("recommendation_id = ?", recommendationID).
-		Order("observed_at DESC, id DESC").Limit(limit).Find(&rows).Error
-	result := make(map[string]struct{}, len(rows)*4)
-	for _, row := range rows {
-		if row.ContentFingerprint != "" {
-			result[row.ContentFingerprint] = struct{}{}
+	defer rows.Close()
+	known := make([]uint, 0)
+	seen := make(map[uint]bool)
+	for rows.Next() {
+		var observation LifecycleObservation
+		if err := r.db.ScanRows(rows, &observation); err != nil {
+			return time.Time{}, nil, err
 		}
-		for _, source := range ParseLifecycleEvidence(row) {
-			if source.Fingerprint != "" {
-				result[source.Fingerprint] = struct{}{}
+		for _, source := range ParseLifecycleEvidence(observation) {
+			if source.Category != "news" || (source.Status != "ok" && source.Status != "empty" && source.Status != "partial") {
+				continue
 			}
+			var coverage struct {
+				To       time.Time `json:"to"`
+				Complete *bool     `json:"coverageComplete"`
+				Items    []struct {
+					ID uint `json:"id"`
+				} `json:"items"`
+			}
+			if json.Unmarshal([]byte(source.Content), &coverage) != nil {
+				continue
+			}
+			for _, item := range coverage.Items {
+				if item.ID != 0 && !seen[item.ID] {
+					seen[item.ID] = true
+					known = append(known, item.ID)
+				}
+			}
+			if source.Status == "partial" || (coverage.Complete != nil && !*coverage.Complete) {
+				continue
+			}
+			if !coverage.To.IsZero() {
+				return coverage.To, known, nil
+			}
+			return observation.ObservedAt, known, nil
 		}
 	}
-	return result, err
+	return time.Time{}, known, rows.Err()
 }
 
 func (r *Repository) UpdateRecommendation(ctx context.Context, id string, updates map[string]any) error {
@@ -934,8 +952,12 @@ func (r *Repository) Account(ctx context.Context) (SimulatedAccount, error) {
 }
 
 func (r *Repository) UpdatePositionQuote(ctx context.Context, id uint, quote marketquote.Quote) error {
+	if quote.At.IsZero() || quote.Price <= 0 || math.IsNaN(quote.Price) || math.IsInf(quote.Price, 0) {
+		return errors.New("position quote requires a finite positive price and source time")
+	}
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Model(&Position{}).Where("id = ? AND status = ?", id, "open").Updates(map[string]any{
+		return tx.Model(&Position{}).Where("id = ? AND status = ?", id, "open").
+			Where("current_price_at IS NULL OR current_price_at < ?", quote.At).Updates(map[string]any{
 			"current_price": quote.Price, "current_price_at": quote.At,
 		}).Error
 	})

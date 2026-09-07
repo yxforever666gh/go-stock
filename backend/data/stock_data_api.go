@@ -927,8 +927,19 @@ func getSHSZStockPriceInfo(stockName, stockCode string, crawlTimeOut int64) *[]s
 	return &[]string{markdown.String()}
 }
 
-// 分时数据
+// GetStockMinutePriceData preserves the existing chart API response shape.
+// Research uses getStockMinutePriceData so errors and cancellation survive.
+// Remove this adapter when StockMinutePriceLine exposes explicit source errors.
 func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]MinuteData, string) {
+	rows, date, err := receiver.getStockMinutePriceData(context.Background(), stockCode)
+	if err != nil {
+		logger.SugaredLogger.Errorf("GetStockMinutePriceData: %v", err)
+		return &[]MinuteData{}, ""
+	}
+	return &rows, date
+}
+
+func (receiver StockDataApi) getStockMinutePriceData(ctx context.Context, stockCode string) ([]MinuteData, string, error) {
 	url := fmt.Sprintf("https://web.ifzq.gtimg.cn/appstock/app/minute/query?code=%s", stockCode)
 	if strutil.HasPrefixAny(stockCode, []string{"gb_", "GB_"}) {
 		stockCode = strings.Replace(strings.ToUpper(stockCode), "GB_", "us", 1) + ".OQ"
@@ -937,24 +948,31 @@ func (receiver StockDataApi) GetStockMinutePriceData(stockCode string) (*[]Minut
 		url = fmt.Sprintf("https://web.ifzq.gtimg.cn/appstock/app/UsMinute/query?code=%s", stockCode)
 	}
 	logger.SugaredLogger.Infof("GetStockMinutePriceData url:%s", url)
-	resp, err := receiver.client.SetTimeout(time.Duration(receiver.config.CrawlTimeOut)*time.Second).R().
+	timeout := lifecycleSourceTimeout
+	if receiver.config != nil && receiver.config.Settings != nil && receiver.config.CrawlTimeOut > 0 {
+		timeout = time.Duration(receiver.config.CrawlTimeOut) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	resp, err := receiver.client.R().SetContext(ctx).
 		SetHeader("Host", "web.ifzq.gtimg.cn").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 Edg/119.0.0.0").
 		Get(url)
 
-	date := ""
-	minuteDatas := &[]MinuteData{}
-
 	if err != nil {
-		logger.SugaredLogger.Errorf("err:%s", err.Error())
-		return minuteDatas, date
+		return nil, "", fmt.Errorf("分钟行情请求失败: %w", err)
+	}
+	if resp == nil {
+		return nil, "", errors.New("分钟行情没有响应")
+	}
+	if resp.IsError() {
+		return nil, "", fmt.Errorf("分钟行情 HTTP %d", resp.StatusCode())
 	}
 	parsed, parsedDate, parseErr := parseTencentMinuteResponse(resp.Body(), stockCode)
 	if parseErr != nil {
-		logger.SugaredLogger.Errorf("GetStockMinutePriceData parse err:%v", parseErr)
-		return minuteDatas, date
+		return nil, "", fmt.Errorf("分钟行情解析失败: %w", parseErr)
 	}
-	return &parsed, parsedDate
+	return parsed, parsedDate, nil
 }
 
 func parseTencentMinuteResponse(body []byte, stockCode string) ([]MinuteData, string, error) {

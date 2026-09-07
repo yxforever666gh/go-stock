@@ -2,7 +2,9 @@ package research
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -193,5 +195,74 @@ func TestLifecycleDecisionAndPendingStateAreAtomic(t *testing.T) {
 	}
 	if stored.Status != "active" || stored.LastDecision != "" || stored.PreviousResponseID != "" {
 		t.Fatalf("partial decision persisted: %+v", stored)
+	}
+}
+
+func TestLifecycleNewsCoverageOnlyAdvancesAfterSourceSuccess(t *testing.T) {
+	repo := researchTestRepo(t)
+	start := time.Date(2026, 9, 7, 10, 0, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "active", start.AddDate(0, 0, -1), start, "")
+	for index, status := range []string{"ok", "failed", "partial", "empty"} {
+		at := start.Add(time.Duration(index) * 15 * time.Minute)
+		payload, _ := json.Marshal(map[string]any{"to": at, "coverageComplete": status != "partial"})
+		observation, err := NewLifecycleObservation(LifecycleContextRequest{ObservationID: newID(), Recommendation: rec, Now: at}, LifecycleObservationDraft{Status: "partial", Sources: []LifecycleEvidenceSource{{Category: "news", Status: status, Content: string(payload), CollectedAt: at.Add(time.Second)}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = repo.AppendObservation(context.Background(), &observation); err != nil {
+			t.Fatal(err)
+		}
+		covered, _, err := repo.LifecycleNewsCoverage(context.Background(), rec.RecommendationID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := start
+		if status == "empty" {
+			want = at
+		}
+		if !covered.Equal(want) {
+			t.Fatalf("status=%s advanced to %v want %v", status, covered, want)
+		}
+	}
+}
+
+func TestLifecyclePromptDoesNotCutAlreadyBudgetedNewsRecords(t *testing.T) {
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, shanghaiLocation)
+	sources := make([]LifecycleEvidenceSource, 0, 20)
+	for index := 0; index < 20; index++ {
+		sources = append(sources, LifecycleEvidenceSource{Category: "money", Content: "data", CollectedAt: now})
+	}
+	content := `{"items":[{"id":42,"summary":"` + strings.Repeat("x", 2300) + `尾部事件"}]}`
+	sources = append(sources, LifecycleEvidenceSource{Category: "news", Status: "ok", Content: content, CollectedAt: now})
+	request := LifecycleContextRequest{ObservationID: newID(), Now: now}
+	observation, err := NewLifecycleObservation(request, LifecycleObservationDraft{Sources: sources})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt := lifecyclePrompt(Recommendation{}, now, observation, nil); !strings.Contains(prompt, content) {
+		t.Fatal("news records were cut after assigning coverage")
+	}
+}
+
+func TestLifecyclePositionQuoteNeverMovesBackward(t *testing.T) {
+	repo := researchTestRepo(t)
+	now := time.Date(2026, 9, 7, 10, 0, 0, 0, shanghaiLocation)
+	rec := seedRecommendation(t, repo, "active", now.AddDate(0, 0, -1), now, "")
+	seedOpenPosition(t, repo, rec, now.AddDate(0, 0, -1))
+	position, err := repo.Position(context.Background(), rec.RecommendationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, quote := range []marketquote.Quote{{Price: 11, At: now}, {Price: 99, At: now.Add(-time.Second)}, {Price: 77, At: now}} {
+		if err = repo.UpdatePositionQuote(context.Background(), position.ID, quote); err != nil {
+			t.Fatal(err)
+		}
+	}
+	position, err = repo.Position(context.Background(), rec.RecommendationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if position.CurrentPrice != 11 || position.CurrentPriceAt == nil || !position.CurrentPriceAt.Equal(now) {
+		t.Fatalf("quote regressed: %+v", position)
 	}
 }
