@@ -15,6 +15,7 @@ import (
 	"go-stock/backend/instruments"
 	"go-stock/backend/models"
 	appservice "go-stock/internal/service"
+	"go-stock/internal/sqlitedb"
 
 	"github.com/PuerkitoBio/goquery"
 	"gorm.io/gorm"
@@ -101,8 +102,19 @@ func (s *Service) FollowFund(code string) (string, error) {
 		}
 		return "关注失败", fmt.Errorf("%w: query fund %s: %v", appservice.ErrOperationFailed, code, err)
 	}
-	followed := models.FollowedFund{Code: code, Name: fund.Name}
-	if err := operations.database.Where("code = ?", code).FirstOrCreate(&followed).Error; err != nil {
+	ctx := context.Background()
+	err := sqlitedb.Retry(ctx, func() error {
+		return operations.database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// An empty watchlist still needs the writer lock before the
+			// existence check; FirstOrCreate alone does not serialize it.
+			if err := tx.Exec("UPDATE followed_fund SET id = id WHERE 0").Error; err != nil {
+				return err
+			}
+			followed := models.FollowedFund{Code: code, Name: fund.Name}
+			return tx.Where("code = ?", code).FirstOrCreate(&followed).Error
+		})
+	}, nil)
+	if err != nil {
 		return "关注失败", fmt.Errorf("%w: follow fund %s: %v", appservice.ErrOperationFailed, code, err)
 	}
 	return "关注成功", nil

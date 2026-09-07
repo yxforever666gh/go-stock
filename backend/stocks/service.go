@@ -12,6 +12,7 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	appservice "go-stock/internal/service"
+	"go-stock/internal/sqlitedb"
 
 	"gorm.io/gorm"
 )
@@ -128,35 +129,51 @@ func (s *Service) Follow(stockCode string) (string, error) {
 }
 
 func (s *Service) followWithQuote(code string, stockInfo models.StockInfo) (string, error) {
-	database := s.dependencies.Database
-	var count int64
-	if err := database.Model(&models.FollowedStock{}).Where("is_del = ?", 0).Count(&count).Error; err != nil {
-		return "关注失败", fmt.Errorf("%w: count followed stocks: %v", appservice.ErrOperationFailed, err)
-	}
-	if count >= 63 {
-		return "最多只能关注63只股票", fmt.Errorf("%w: stock watchlist limit reached", appservice.ErrConflict)
-	}
-	var existing models.FollowedStock
-	err := database.Where("stock_code = ? AND is_del = ?", code, 0).First(&existing).Error
-	if err == nil {
-		return "已经关注了", fmt.Errorf("%w: stock %s is already followed", appservice.ErrConflict, code)
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return "关注失败", fmt.Errorf("%w: query followed stock: %v", appservice.ErrOperationFailed, err)
-	}
-	var maxSort int64
-	if err := database.Model(&models.FollowedStock{}).Select("COALESCE(MAX(sort), 0)").Scan(&maxSort).Error; err != nil {
-		return "关注失败", fmt.Errorf("%w: query stock sort: %v", appservice.ErrOperationFailed, err)
-	}
 	price, err := strconv.ParseFloat(strings.TrimSpace(stockInfo.Price), 64)
 	if err != nil {
 		return "关注失败", fmt.Errorf("%w: invalid stock price %q", appservice.ErrOperationFailed, stockInfo.Price)
 	}
-	row := models.FollowedStock{
-		StockCode: code, Name: stockInfo.Name, Price: price, Time: time.Now(), Sort: maxSort + 1,
-		AlarmChangePercent: 3, AlarmPrice: price + 1,
+	message := "关注成功"
+	ctx := context.Background()
+	err = sqlitedb.Retry(ctx, func() error {
+		return s.dependencies.Database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			// Acquire SQLite's writer lock before any admission reads, including
+			// when the watchlist is empty, without modifying existing rows.
+			if err := tx.Exec("UPDATE followed_stock SET sort = sort WHERE 0").Error; err != nil {
+				return err
+			}
+			var count int64
+			if err := tx.Model(&models.FollowedStock{}).Count(&count).Error; err != nil {
+				return err
+			}
+			if count >= 63 {
+				message = "最多只能关注63只股票"
+				return fmt.Errorf("%w: stock watchlist limit reached", appservice.ErrConflict)
+			}
+			var existing models.FollowedStock
+			err := tx.Where("stock_code = ?", code).First(&existing).Error
+			if err == nil {
+				message = "已经关注了"
+				return fmt.Errorf("%w: stock %s is already followed", appservice.ErrConflict, code)
+			}
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			var maxSort int64
+			if err := tx.Model(&models.FollowedStock{}).Select("COALESCE(MAX(sort), 0)").Scan(&maxSort).Error; err != nil {
+				return err
+			}
+			row := models.FollowedStock{
+				StockCode: code, Name: stockInfo.Name, Price: price, Time: time.Now(), Sort: maxSort + 1,
+				AlarmChangePercent: 3, AlarmPrice: price + 1,
+			}
+			return tx.Create(&row).Error
+		})
+	}, nil)
+	if errors.Is(err, appservice.ErrConflict) {
+		return message, err
 	}
-	if err := database.Create(&row).Error; err != nil {
+	if err != nil {
 		return "关注失败", fmt.Errorf("%w: follow stock %s: %v", appservice.ErrOperationFailed, code, err)
 	}
 	return "关注成功", nil
@@ -245,26 +262,35 @@ func (s *Service) SetStockSort(newSort int64, stockCode string) {
 		return
 	}
 	code := normalizeWatchlistCode(stockCode)
-	_ = s.dependencies.Database.Transaction(func(tx *gorm.DB) error {
-		var current models.FollowedStock
-		if err := tx.Where("stock_code = ?", code).First(&current).Error; err != nil {
-			return err
-		}
-		if current.Sort == newSort {
-			return nil
-		}
-		query := tx.Model(&models.FollowedStock{})
-		if newSort < current.Sort {
-			if err := query.Where("sort >= ? AND sort < ?", newSort, current.Sort).Update("sort", gorm.Expr("sort + 1")).Error; err != nil {
+	ctx := context.Background()
+	err := sqlitedb.Retry(ctx, func() error {
+		return s.dependencies.Database.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec("UPDATE followed_stock SET sort = sort WHERE 0").Error; err != nil {
 				return err
 			}
-		} else {
-			if err := query.Where("sort > ? AND sort <= ?", current.Sort, newSort).Update("sort", gorm.Expr("sort - 1")).Error; err != nil {
+			var current models.FollowedStock
+			if err := tx.Where("stock_code = ?", code).First(&current).Error; err != nil {
 				return err
 			}
-		}
-		return tx.Model(&models.FollowedStock{}).Where("stock_code = ?", code).Update("sort", newSort).Error
-	})
+			if current.Sort == newSort {
+				return nil
+			}
+			query := tx.Model(&models.FollowedStock{})
+			if newSort < current.Sort {
+				if err := query.Where("sort >= ? AND sort < ?", newSort, current.Sort).Update("sort", gorm.Expr("sort + 1")).Error; err != nil {
+					return err
+				}
+			} else {
+				if err := query.Where("sort > ? AND sort <= ?", current.Sort, newSort).Update("sort", gorm.Expr("sort - 1")).Error; err != nil {
+					return err
+				}
+			}
+			return tx.Model(&models.FollowedStock{}).Where("stock_code = ?", code).Update("sort", newSort).Error
+		})
+	}, nil)
+	if err != nil {
+		logger.SugaredLogger.Errorf("update stock sort failed for %s: %v", code, err)
+	}
 }
 
 func (s *Service) GetAllFollowedStocks() []models.FollowedStock {
