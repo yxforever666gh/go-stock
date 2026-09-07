@@ -46,7 +46,7 @@ const columns = [
 async function refresh() { await history.refresh(); if (visible.value) await detailRequest.refresh() }
 const polling = usePolling(async () => {
   await history.refreshHead()
-  if (visible.value && detail.value?.status === 'running') await detailRequest.refresh()
+  if (visible.value && (!detail.value || detail.value.status === 'running')) await detailRequest.refresh()
 }, 2000, {shouldRun: () => rows.value.some(row => row.status === 'running')})
 onMounted(() => { void refresh(); polling.start({immediate: false}) })
 </script>

@@ -43,3 +43,11 @@ test('ordinary Chinese reports, tables, links and code remain readable', async (
   assert.match(html, /href="https:\/\/example.com\/report"/)
   assert.match(html, /const price = 56.58/)
 })
+
+test('report section links retain their matching heading anchors', async () => {
+  const html = await render('# 分析结论\n\n[返回分析结论](#分析结论)\n\n## 风险提示\n\n[查看风险](#风险提示)')
+  const headings = [...html.matchAll(/<h[12]\b[^>]*\bid="([^"]+)"/g)].map(match => match[1])
+  const links = [...html.matchAll(/<a\b[^>]*\bhref="(#[^"]+)"/g)].map(match => decodeURIComponent(match[1].slice(1)))
+  assert.deepEqual(headings, ['分析结论', '风险提示'])
+  assert.deepEqual(links, headings)
+})

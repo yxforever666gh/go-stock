@@ -67,3 +67,33 @@ for (const filename of ['researchRecommendations.vue', 'research2Recommendations
     }
   })
 }
+
+test('research2 refreshes a pending detail when its list reaches a terminal state first', async () => {
+  let finishOldDetail, detailReads = 0, listStatus = 'running'
+  globalThis.__researchPageFixtures = {
+    ListResearch2Runs: async () => [{runId: 'r', status: listStatus}],
+    GetResearch2Run: async () => {
+      detailReads++
+      if (detailReads === 1) return await new Promise(resolve => { finishOldDetail = resolve })
+      return {runId: 'r', status: 'success'}
+    },
+  }
+  const app = renderer.createApp(await pageComponent('research2Report.vue'))
+  const vm = app.mount({})
+  try {
+    const state = vm.$.setupState
+    await flush()
+    const original = state.show({runId: 'r'})
+    listStatus = 'success'
+    await state.polling.run()
+    assert.equal(state.rows[0].status, 'success')
+    finishOldDetail({runId: 'r', status: 'running'})
+    await original
+    assert.equal(state.detail.status, 'success')
+    assert.equal(state.detailLoading, false)
+    assert.equal(detailReads, 2)
+  } finally {
+    app.unmount()
+    delete globalThis.__researchPageFixtures
+  }
+})
