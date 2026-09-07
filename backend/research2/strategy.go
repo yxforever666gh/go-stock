@@ -1114,7 +1114,7 @@ func (s *TradingService) ProcessDue(ctx context.Context, now time.Time) error {
 	if s.diagnosticWindowBypass {
 		return nil
 	}
-	return s.repository.ExpireExecutionChainsAtCutoff(ctx, now)
+	return s.repository.ExpireExecutionChainsAtCutoff(ctx, s.now())
 }
 
 func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
@@ -1193,6 +1193,14 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			// server validated the report. Legacy rows retain their former mode.
 			current := item.Late || (item.BuyLower == 0 && item.BuyUpper == 0)
 			snapshot, quoteErr := s.market.PriceAt(ctx, item.StockCode, item.TargetBuyAt, current)
+			checkedAt := s.now().In(shanghai())
+			ready, windowErr := s.buyWindowAvailable(ctx, item, run.ChainID, checkedAt)
+			if windowErr != nil {
+				return windowErr
+			}
+			if !ready {
+				continue
+			}
 			if quoteErr != nil {
 				if markErr := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "等待报告生成后的有效买入行情: "+quoteErr.Error(), nil); markErr != nil {
 					return markErr
@@ -1254,7 +1262,7 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				}
 				continue
 			}
-			if current && (snapshot.At.After(now.Add(5*time.Second)) || now.Sub(snapshot.At) > time.Minute) {
+			if current && !currentBuyQuoteFresh(snapshot.At, checkedAt) {
 				if markErr := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "等待不超过60秒的实时买入行情", &snapshot); markErr != nil {
 					return markErr
 				}
@@ -1297,6 +1305,29 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			if bought >= buyLimit {
 				break
 			}
+			sellAt, nextErr := s.nextTradingDayAt(ctx, item.TargetBuyAt, 10, 0)
+			if nextErr != nil {
+				return nextErr
+			}
+			// Other candidates and calendar calls can take time after collection.
+			// Recheck the execution boundary before using a collected quote.
+			checkedAt := s.now().In(shanghai())
+			ready, windowErr := s.buyWindowAvailable(ctx, item, run.ChainID, checkedAt)
+			if windowErr != nil {
+				return windowErr
+			}
+			if !ready {
+				continue
+			}
+			if (item.Late || (item.BuyLower == 0 && item.BuyUpper == 0)) && !currentBuyQuoteFresh(snapshots[item.RecommendationID].At, checkedAt) {
+				if err := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "其他候选采集期间买入行情已过期，等待新行情", nil); err != nil {
+					return err
+				}
+				if item.SelectionRole != "standby" {
+					buyLimit--
+				}
+				continue
+			}
 			cashCap := allocation
 			quantity, cost, sizeErr := trading.SizeBuy(item.StockCode, snapshots[item.RecommendationID].Price, cashCap)
 			if sizeErr != nil {
@@ -1314,10 +1345,6 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				if err = s.repository.PromoteStandby(ctx, item.RecommendationID, replaces, "更高优先级主选不可成交，按服务器排名递补"); err != nil {
 					return err
 				}
-			}
-			sellAt, nextErr := s.nextTradingDayAt(ctx, item.TargetBuyAt, 10, 0)
-			if nextErr != nil {
-				return nextErr
 			}
 			tradeAt := snapshots[item.RecommendationID].At
 			if tradeAt.IsZero() {
@@ -1353,6 +1380,26 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 	}
 	_, err = s.repository.SaveSnapshot(ctx, "trade_cycle", now)
 	return err
+}
+
+func currentBuyQuoteFresh(quotedAt, checkedAt time.Time) bool {
+	return !quotedAt.IsZero() && !quotedAt.After(checkedAt.Add(5*time.Second)) && checkedAt.Sub(quotedAt) <= time.Minute
+}
+
+func (s *TradingService) buyWindowAvailable(ctx context.Context, item Recommendation, chainID string, now time.Time) (bool, error) {
+	local := now.In(shanghai())
+	if item.SignalAt.In(shanghai()).Format("2006-01-02") != local.Format("2006-01-02") || atOrAfterClose(local) {
+		return false, s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "行情返回时已离开信号交易日或已收盘，仅保留分析")
+	}
+	lunch := time.Date(local.Year(), local.Month(), local.Day(), 11, 30, 0, 0, shanghai())
+	cutoff := time.Date(local.Year(), local.Month(), local.Day(), 13, 0, 0, 0, shanghai())
+	if chainID != "" && !s.diagnosticWindowBypass && !local.Before(cutoff) && item.SignalAt.Before(lunch) {
+		return false, s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "行情返回时已到13:00截止，不延迟追单")
+	}
+	if !continuousAuction(local) {
+		return false, s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "行情返回时不在连续竞价时段，等待下次检查", nil)
+	}
+	return true, nil
 }
 
 func (s *TradingService) processSells(ctx context.Context, now time.Time) error {

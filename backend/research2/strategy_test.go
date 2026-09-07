@@ -112,6 +112,63 @@ func (testCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, erro
 
 type testMarket struct{ price float64 }
 
+type fixedClockTradingService struct{ *TradingService }
+
+func testTradingService(repository *Repository, market MarketProvider, calendar Calendar) fixedClockTradingService {
+	return fixedClockTradingService{NewTradingService(repository, market, calendar)}
+}
+
+func (s fixedClockTradingService) ProcessDue(ctx context.Context, now time.Time) error {
+	s.now = func() time.Time { return now }
+	return s.TradingService.ProcessDue(ctx, now)
+}
+
+type advancingQuoteMarket struct {
+	chainMarket
+	now   *time.Time
+	after time.Time
+}
+
+func (m advancingQuoteMarket) PriceAt(ctx context.Context, code string, target time.Time, current bool) (PriceSnapshot, error) {
+	*m.now = m.after
+	snapshot, err := m.chainMarket.PriceAt(ctx, code, target, current)
+	snapshot.At = m.after
+	return snapshot, err
+}
+
+func TestBuyChecksClockAfterQuoteRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		started, finished time.Time
+		wantStatus        string
+	}{
+		{"request takes ten seconds", time.Date(2026, 9, 7, 10, 0, 5, 0, shanghai()), time.Date(2026, 9, 7, 10, 0, 15, 0, shanghai()), "active"},
+		{"request crosses lunch", time.Date(2026, 9, 7, 11, 29, 59, 0, shanghai()), time.Date(2026, 9, 7, 11, 30, 1, 0, shanghai()), "buy_pending"},
+		{"request crosses cutoff", time.Date(2026, 9, 7, 11, 29, 59, 0, shanghai()), time.Date(2026, 9, 7, 13, 0, 1, 0, shanghai()), "analysis_only"},
+		{"request crosses close", time.Date(2026, 9, 7, 14, 59, 59, 0, shanghai()), time.Date(2026, 9, 7, 15, 0, 1, 0, shanghai()), "analysis_only"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repository := research2TestRepository(t)
+			_, run := createChainRun(t, repository, tc.started)
+			item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, SelectionRole: "primary", StockCode: "sh600001", SignalAt: tc.started, Status: "buy_pending", TargetBuyAt: tc.started}
+			if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
+				t.Fatal(err)
+			}
+			current := tc.started
+			market := advancingQuoteMarket{chainMarket: chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, now: &current, after: tc.finished}
+			service := NewTradingService(repository, market, testCalendar{})
+			service.now = func() time.Time { return current }
+			if err := service.ProcessDue(context.Background(), tc.started); err != nil {
+				t.Fatal(err)
+			}
+			detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
+			if err != nil || detail.Recommendation.Status != tc.wantStatus {
+				t.Fatalf("status=%s want=%s err=%v", detail.Recommendation.Status, tc.wantStatus, err)
+			}
+		})
+	}
+}
+
 func (m testMarket) PriceAt(_ context.Context, code string, target time.Time, _ bool) (PriceSnapshot, error) {
 	return PriceSnapshot{Code: code, Price: m.price, At: target, Source: "test"}, nil
 }
@@ -377,7 +434,7 @@ func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 				t.Fatalf("run=%+v items=%+v err=%v listErr=%v", run, items, err, listErr)
 			}
 			market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
-			if err = NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), completed.Add(time.Second)); err != nil {
+			if err = testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), completed.Add(time.Second)); err != nil {
 				t.Fatal(err)
 			}
 			detail, err := repository.GetRecommendation(context.Background(), items[0].RecommendationID)
@@ -650,7 +707,7 @@ func TestTradingServiceBuysThreeRecommendationsAtAboutOneThirdEach(t *testing.T)
 	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
 	}
-	service := NewTradingService(repository, testMarket{price: 10}, testCalendar{})
+	service := testTradingService(repository, testMarket{price: 10}, testCalendar{})
 	if err := service.ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
@@ -689,7 +746,7 @@ func TestTradingServiceReallocatesAfterUnaffordableCandidate(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
 	}
-	service := NewTradingService(repository, &recordingMarket{prices: prices}, testCalendar{})
+	service := testTradingService(repository, &recordingMarket{prices: prices}, testCalendar{})
 	if err := service.ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
@@ -723,7 +780,7 @@ func TestTradingServiceDoesNotTradeDuringLunch(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	result, err := repository.ListRecommendations(context.Background(), 10, 0)
@@ -749,7 +806,7 @@ func TestTradingServiceConvertsClosingBuyToAnalysisOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), closeTime); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), closeTime); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -772,7 +829,7 @@ func TestTradingServiceConvertsPriorDayPendingBuyToAnalysisOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -799,7 +856,7 @@ func TestSellRetryRecoversTheExactTargetMinuteInsteadOfUsingCurrentQuote(t *test
 		t.Fatal(err)
 	}
 	market := &recordingMarket{prices: map[string]float64{"sh600000": 10.5}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	if len(market.currentFlags) != 1 || market.currentFlags[0] {
@@ -836,7 +893,7 @@ func TestSellRecoveryStillRunsAfterMarketClose(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := &recordingMarket{prices: map[string]float64{"sh600000": 10.5}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -861,7 +918,7 @@ func TestTrailing5BuyIgnoresLegacyPriceRange(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := &recordingMarket{prices: map[string]float64{"sh600000": 20}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -887,7 +944,7 @@ func TestTrailing5BuyWaitsForQuoteAtOrAfterSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := timestampMarket{price: 10, at: signal.Add(-time.Second)}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)

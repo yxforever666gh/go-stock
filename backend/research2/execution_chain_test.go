@@ -170,7 +170,7 @@ func TestTradingServicePromotesStandbysAndStopsAtThreeBuys(t *testing.T) {
 		codes[4]: {Price: 10, PreviousClose: 10},
 		codes[5]: {Price: 10, PreviousClose: 10},
 	}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := repository.RunRecommendations(context.Background(), run.RunID)
@@ -227,7 +227,7 @@ func TestPendingPrimaryReservesOneSlotWithoutBlockingAllStandbys(t *testing.T) {
 			codes[4]: {Price: 10, PreviousClose: 10},
 		},
 	}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := repository.RunRecommendations(context.Background(), run.RunID)
@@ -265,7 +265,7 @@ func TestTradingServicePartialFillPreservesRefillChainAndCashSlot(t *testing.T) 
 		"sh600011": {Price: 10, PreviousClose: 10},
 		"sh600012": {Price: 11, PreviousClose: 10, LimitUp: true},
 	}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	chain, err := repository.RefreshExecutionChainFilled(context.Background(), chain.ChainID)
@@ -291,7 +291,7 @@ func TestQuoteFailureStaysPendingAndDoesNotSpawnRefill(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := chainMarket{errors: map[string]error{item.StockCode: errors.New("temporary quote failure")}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	stored, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -317,7 +317,7 @@ func TestStaleExecutionQuoteStaysPending(t *testing.T) {
 		t.Fatal(err)
 	}
 	market := chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10, At: now.Add(-61 * time.Second)}}}
-	if err := NewTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -334,7 +334,7 @@ func TestDiagnosticTradingBypassDoesNotApplyThirteenOClockCutoff(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	service := NewTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
+	service := testTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
 	service.ConfigureDiagnosticWindowBypass(true)
 	if err := service.ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
@@ -357,7 +357,7 @@ func TestProductionCutoffCancelsMorningRetryBeforeBuyingAtThirteen(t *testing.T)
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	service := NewTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
+	service := testTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
 	if err := service.ProcessDue(context.Background(), time.Date(2026, 9, 4, 11, 30, 5, 0, shanghai())); err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +387,7 @@ func TestLunchRecommendationMayBuyAtThirteenBeforeChainCloses(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	if err := NewTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
+	if err := testTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
 		t.Fatal(err)
 	}
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
@@ -451,7 +451,7 @@ func TestExecutionChainConcurrentBuysNeverExceedThree(t *testing.T) {
 	if err != nil || chain.Status != "completed" || chain.FilledSlots != DailyTargetSlots {
 		t.Fatalf("chain=%+v err=%v", chain, err)
 	}
-	if err = NewTradingService(repository, chainMarket{}, testCalendar{}).ProcessDue(context.Background(), now.Add(time.Second)); err != nil {
+	if err = testTradingService(repository, chainMarket{}, testCalendar{}).ProcessDue(context.Background(), now.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	var pending int64
