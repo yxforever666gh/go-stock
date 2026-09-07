@@ -282,7 +282,10 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	if err != nil {
 		return finishFailure("failed", "初始化当日补位链失败: "+err.Error(), err)
 	}
-	if chain.Status != "running" {
+	// Older builds closed the chain on a retryable attempt failure. A newly
+	// claimed retry may reattach that failed chain within the start window;
+	// completed, disabled and cutoff chains remain terminal.
+	if chain.Status != "running" && chain.Status != "failed" {
 		return finishFailure("no_recommendation", "当日补位链已结束: "+chain.Status, nil)
 	}
 	run.ChainID = chain.ChainID

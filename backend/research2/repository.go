@@ -613,7 +613,7 @@ func (r *Repository) UnfinalizedMetrics(ctx context.Context) ([]Recommendation, 
 }
 
 func (r *Repository) FinalizeMetrics(ctx context.Context, id string, five, limitUp, minusThree bool) error {
-	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(map[string]any{"hit_five_before_sell": five, "hit_limit_up_full_day": limitUp, "hit_minus_three": minusThree, "metrics_finalized": true}).Error
+	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ? AND metrics_finalized = ?", id, false).Updates(map[string]any{"hit_five_before_sell": five, "hit_limit_up_full_day": limitUp, "hit_minus_three": minusThree, "metrics_finalized": true}).Error
 }
 
 func shanghai() *time.Location {

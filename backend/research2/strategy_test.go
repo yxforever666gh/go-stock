@@ -169,6 +169,57 @@ func TestBuyChecksClockAfterQuoteRequest(t *testing.T) {
 	}
 }
 
+type retryMetricMarket struct {
+	testMarket
+	failed bool
+	calls  int
+}
+
+func (m *retryMetricMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
+	m.calls++
+	if m.failed {
+		return MetricSnapshot{}, errors.New("incomplete target-session data")
+	}
+	return MetricSnapshot{HitFiveBeforeSell: true}, nil
+}
+
+func TestIncompleteMetricsRemainUnknownUntilEvidenceIsComplete(t *testing.T) {
+	repository := research2TestRepository(t)
+	now := time.Date(2026, 9, 7, 15, 5, 0, 0, shanghai())
+	item := Recommendation{RecommendationID: "metric-retry", AnalysisRunID: "run", StockCode: "sh600001", SignalAt: now, Status: "closed"}
+	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
+		t.Fatal(err)
+	}
+	market := &retryMetricMarket{failed: true}
+	service := NewTradingService(repository, market, testCalendar{})
+	if err := service.FinalizeMetrics(context.Background(), now); err != nil {
+		t.Fatal(err)
+	}
+	var stored Recommendation
+	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.MetricsFinalized || stored.HitFiveBeforeSell != nil || stored.HitLimitUpFullDay != nil || stored.HitMinusThree != nil {
+		t.Fatalf("unknown metrics became false: %+v", stored)
+	}
+	market.failed = false
+	if err := service.FinalizeMetrics(context.Background(), now.AddDate(0, 0, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.FinalizeMetrics(context.Background(), item.RecommendationID, false, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.FinalizeMetrics(context.Background(), now.AddDate(0, 0, 2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !stored.MetricsFinalized || stored.HitFiveBeforeSell == nil || !*stored.HitFiveBeforeSell || *stored.HitLimitUpFullDay || *stored.HitMinusThree || market.calls != 2 {
+		t.Fatalf("final metrics changed: %+v calls=%d", stored, market.calls)
+	}
+}
+
 func (m testMarket) PriceAt(_ context.Context, code string, target time.Time, _ bool) (PriceSnapshot, error) {
 	return PriceSnapshot{Code: code, Price: m.price, At: target, Source: "test"}, nil
 }
@@ -306,6 +357,15 @@ func TestRunnerRetriesFailedEvidenceBeforeReturningTerminalRun(t *testing.T) {
 	failed, err := first.Run(context.Background(), scheduled)
 	if err == nil || failed.Status != "failed" || failed.AttemptNo != 1 {
 		t.Fatalf("first=%+v err=%v", failed, err)
+	}
+	chain, chainErr := repository.ExecutionChain(context.Background(), failed.ChainID)
+	if chainErr != nil || chain.Status != "running" {
+		t.Fatalf("retryable failure closed the chain: %+v err=%v", chain, chainErr)
+	}
+	// Also recover rows left by older builds, which closed the chain on the
+	// first provider failure while still allowing another run attempt.
+	if err := repository.CompleteExecutionChain(context.Background(), failed.ChainID, "failed", "temporary evidence failure", started); err != nil {
+		t.Fatal(err)
 	}
 
 	secondAI := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}

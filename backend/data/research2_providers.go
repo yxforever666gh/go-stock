@@ -539,9 +539,59 @@ func limitResearch2Text(value string, max int) string {
 }
 
 type research2MarketProvider struct {
-	quotes *ResearchQuoteProvider
-	stocks *StockDataApi
-	cache  *ResearchChartProvider
+	quotes  research2.CurrentQuoteProvider
+	stocks  *StockDataApi
+	cache   *ResearchChartProvider
+	minutes []research2MinuteSource
+}
+
+type research2MinuteSource struct {
+	name  string
+	fetch func(context.Context, string, time.Time, time.Time) ([]minuteBar, string, error)
+}
+
+func (p *research2MarketProvider) minuteSources() []research2MinuteSource {
+	if p.minutes != nil {
+		return p.minutes
+	}
+	return []research2MinuteSource{
+		{"tencent", fetchMinuteBarsWithTencentContext},
+		{"eastmoney", func(ctx context.Context, code string, start, end time.Time) ([]minuteBar, string, error) {
+			if p.stocks == nil {
+				return nil, "eastmoney", errors.New("provider unavailable")
+			}
+			days := 2
+			if start.In(shanghaiDataLocation()).Format("2006-01-02") != end.In(shanghaiDataLocation()).Format("2006-01-02") {
+				days = 5
+			}
+			return fetchResearch2EastmoneyMinutes(ctx, p.stocks, code, start, end, days)
+		}},
+		{"local-minute-cache", func(ctx context.Context, code string, start, end time.Time) ([]minuteBar, string, error) {
+			bars, err := loadResearch2CachedMinuteBars(ctx, p.cache, code, start, end)
+			return bars, "local-minute-cache", err
+		}},
+	}
+}
+
+func (p *research2MarketProvider) loadMinutes(ctx context.Context, code string, start, end time.Time, usable func([]minuteBar) error) ([]minuteBar, string, error) {
+	var failures []error
+	for _, source := range p.minuteSources() {
+		if err := ctx.Err(); err != nil {
+			return nil, "", errors.Join(append(failures, err)...)
+		}
+		bars, name, err := source.fetch(ctx, code, start, end)
+		if err == nil {
+			err = usable(bars)
+		}
+		if err == nil {
+			return bars, name, nil
+		}
+		failures = append(failures, fmt.Errorf("%s: %w", source.name, err))
+	}
+	if len(failures) == 0 {
+		return nil, "", errors.New("minute providers are unavailable")
+	}
+	return nil, "", errors.Join(failures...)
 }
 
 func (p *research2MarketProvider) PriceAt(ctx context.Context, code string, target time.Time, current bool) (research2.PriceSnapshot, error) {
@@ -553,28 +603,23 @@ func (p *research2MarketProvider) PriceAt(ctx context.Context, code string, targ
 		return research2.PriceSnapshot{Code: quote.Code, Name: quote.Name, Price: quote.Price, PreviousClose: quote.PreviousClose, At: quote.At, Suspended: quote.Suspended, LimitUp: quote.LimitUp, LimitDown: quote.LimitDown, Source: "tencent_realtime"}, nil
 	}
 	start, end := target.Add(-time.Minute), target.Add(2*time.Minute)
-	bars, source, err := fetchMinuteBarsWithTencentContext(ctx, code, start, end)
-	if err != nil || len(bars) == 0 {
-		bars, source, err = fetchResearch2EastmoneyMinutes(ctx, p.stocks, code, start, end, 2)
-	}
-	if (err != nil || len(bars) == 0) && p.cache != nil {
-		cachedBars, cacheErr := loadResearch2CachedMinuteBars(ctx, p.cache, code, start, end)
-		if cacheErr == nil && len(cachedBars) > 0 {
-			bars = cachedBars
-			source, err = "local-minute-cache", nil
-		} else if err == nil {
-			err = cacheErr
+	var bar minuteBar
+	_, source, err := p.loadMinutes(ctx, code, start, end, func(bars []minuteBar) error {
+		var ok bool
+		bar, ok = exactResearch2Bar(bars, target)
+		if !ok {
+			return fmt.Errorf("valid target minute %s is unavailable", target.Format(time.RFC3339))
 		}
-	}
+		return nil
+	})
 	if err != nil {
 		return research2.PriceSnapshot{}, err
 	}
-	bar, ok := nearestResearch2Bar(bars, target)
-	if !ok {
-		return research2.PriceSnapshot{}, errors.New("target minute price is unavailable")
-	}
 	result := research2.PriceSnapshot{Code: code, Price: research2BarPrice(bar), At: bar.TradeTime, Source: source}
-	if quote, quoteErr := p.quotes.CurrentQuote(ctx, code); quoteErr == nil && math.Abs(quote.At.Sub(target).Minutes()) <= 5 {
+	if p.quotes == nil {
+		return result, nil
+	}
+	if quote, quoteErr := p.quotes.CurrentQuote(ctx, code); quoteErr == nil && quote.At.Truncate(time.Minute).Equal(target.Truncate(time.Minute)) {
 		result.Name = quote.Name
 		result.PreviousClose = quote.PreviousClose
 		result.Suspended = quote.Suspended
@@ -604,19 +649,32 @@ func (p *research2MarketProvider) Metrics(ctx context.Context, item research2.Re
 	if item.BuyAt == nil || item.TargetSellAt == nil {
 		return research2.MetricSnapshot{}, errors.New("trade window is incomplete")
 	}
-	end := time.Date(item.TargetSellAt.Year(), item.TargetSellAt.Month(), item.TargetSellAt.Day(), 15, 0, 0, 0, item.TargetSellAt.Location())
-	bars, _, err := fetchMinuteBarsWithTencent(item.StockCode, *item.BuyAt, end)
-	if err != nil || len(bars) == 0 {
-		bars, _, err = fetchResearch2EastmoneyMinutes(ctx, p.stocks, item.StockCode, *item.BuyAt, end, 5)
+	sellDay := item.TargetSellAt.In(shanghaiDataLocation())
+	end := time.Date(sellDay.Year(), sellDay.Month(), sellDay.Day(), 15, 0, 0, 0, shanghaiDataLocation())
+	var bars []minuteBar
+	_, _, err := p.loadMinutes(ctx, item.StockCode, *item.BuyAt, end, func(candidate []minuteBar) error {
+		var windowErr error
+		bars, windowErr = completeResearch2MetricWindow(candidate, item)
+		return windowErr
+	})
+	if err != nil {
+		return research2.MetricSnapshot{}, fmt.Errorf("metric minute window is incomplete: %w", err)
 	}
-	if err != nil || len(bars) == 0 {
-		return research2.MetricSnapshot{}, errors.New("metric minute window is unavailable")
+	if p.quotes == nil {
+		return research2.MetricSnapshot{}, errors.New("target-session previous close is unavailable")
 	}
+	quote, err := p.quotes.CurrentQuote(ctx, item.StockCode)
+	if err != nil {
+		return research2.MetricSnapshot{}, fmt.Errorf("target-session previous close is unavailable: %w", err)
+	}
+	// A quote's previous close belongs to its own trading session. A later
+	// recovery must not substitute another day's value (or infer it across
+	// corporate actions from an unadjusted historical closing price).
+	if quote.At.IsZero() || quote.At.In(shanghaiDataLocation()).Format("2006-01-02") != sellDay.Format("2006-01-02") || quote.PreviousClose <= 0 || math.IsNaN(quote.PreviousClose) || math.IsInf(quote.PreviousClose, 0) {
+		return research2.MetricSnapshot{}, errors.New("verified previous close for target trading session is unavailable")
+	}
+	sellDayPreviousClose := quote.PreviousClose
 	result := research2.MetricSnapshot{}
-	var sellDayPreviousClose float64
-	if quote, quoteErr := p.quotes.CurrentQuote(ctx, item.StockCode); quoteErr == nil {
-		sellDayPreviousClose = quote.PreviousClose
-	}
 	limitPrice := research2.MainBoardLimitPrice(sellDayPreviousClose)
 	for _, bar := range bars {
 		if item.TargetSellAt != nil && !bar.TradeTime.After(*item.TargetSellAt) && bar.High >= item.BuyPrice*1.05 {
@@ -627,6 +685,43 @@ func (p *research2MarketProvider) Metrics(ctx context.Context, item research2.Re
 		}
 		if sellDayPreviousClose > 0 && bar.TradeTime.Format("2006-01-02") == item.TargetSellAt.Format("2006-01-02") && bar.High >= limitPrice-0.001 {
 			result.HitLimitUpFullDay = true
+		}
+	}
+	return result, nil
+}
+
+// Minute endpoints label completed buckets by their ending minute. Require
+// every post-entry bucket on the buy session and every bucket on the target
+// sell session; overnight, lunch and intervening holidays are not gaps.
+func completeResearch2MetricWindow(rows []minuteBar, item research2.Recommendation) ([]minuteBar, error) {
+	if item.BuyAt == nil || item.TargetSellAt == nil {
+		return nil, errors.New("trade window is incomplete")
+	}
+	buyDay, sellDay := item.BuyAt.In(shanghaiDataLocation()), item.TargetSellAt.In(shanghaiDataLocation())
+	if buyDay.Format("2006-01-02") >= sellDay.Format("2006-01-02") {
+		return nil, errors.New("target session must follow buy session")
+	}
+	byMinute := make(map[int64]minuteBar, len(rows))
+	for _, bar := range rows {
+		if validResearch2ExecutionBar(bar) {
+			byMinute[bar.TradeTime.Truncate(time.Minute).Unix()] = bar
+		}
+	}
+	result := make([]minuteBar, 0, len(rows))
+	for _, day := range []time.Time{buyDay, sellDay} {
+		for minute := 9*60 + 31; minute <= 15*60; minute++ {
+			if minute > 11*60+30 && minute < 13*60+1 {
+				continue
+			}
+			at := time.Date(day.Year(), day.Month(), day.Day(), minute/60, minute%60, 0, 0, shanghaiDataLocation())
+			if !at.After(*item.BuyAt) {
+				continue
+			}
+			bar, ok := byMinute[at.Unix()]
+			if !ok {
+				return nil, fmt.Errorf("missing valid metric minute %s", at.Format(time.RFC3339))
+			}
+			result = append(result, bar)
 		}
 	}
 	return result, nil
@@ -678,18 +773,22 @@ func fetchResearch2EastmoneyMinutes(ctx context.Context, stocks *StockDataApi, c
 	return dedupeMinuteBars(result), "eastmoney", nil
 }
 
-func nearestResearch2Bar(bars []minuteBar, target time.Time) (minuteBar, bool) {
-	var selected minuteBar
-	ok := false
+func exactResearch2Bar(bars []minuteBar, target time.Time) (minuteBar, bool) {
 	for _, bar := range bars {
-		if bar.TradeTime.Before(target.Add(-time.Minute)) || bar.TradeTime.After(target.Add(2*time.Minute)) {
-			continue
-		}
-		if !ok || math.Abs(bar.TradeTime.Sub(target).Seconds()) < math.Abs(selected.TradeTime.Sub(target).Seconds()) {
-			selected, ok = bar, true
+		if bar.TradeTime.Truncate(time.Minute).Equal(target.Truncate(time.Minute)) && validResearch2ExecutionBar(bar) {
+			return bar, true
 		}
 	}
-	return selected, ok
+	return minuteBar{}, false
+}
+
+func validResearch2ExecutionBar(bar minuteBar) bool {
+	for _, value := range []float64{bar.Open, bar.High, bar.Low, bar.Close} {
+		if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return false
+		}
+	}
+	return !bar.TradeTime.IsZero() && bar.Low <= bar.Open && bar.Open <= bar.High && bar.Low <= bar.Close && bar.Close <= bar.High
 }
 
 func research2BarPrice(bar minuteBar) float64 {
