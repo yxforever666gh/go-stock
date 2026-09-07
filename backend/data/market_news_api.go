@@ -35,6 +35,7 @@ import (
 // @Desc
 // -----------------------------------------------------------------------------------
 type MarketNewsApi struct {
+	client *resty.Client
 }
 
 type NewsWindowStatus string
@@ -779,119 +780,157 @@ func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 }
 
 func (m MarketNewsApi) GlobalStockIndexes(crawlTimeOut uint) map[string]any {
-	empty := map[string]any{
-		"common":  []any{},
-		"america": []any{},
-		"europe":  []any{},
-		"asia":    []any{},
-		"other":   []any{},
+	data, err := m.globalStockIndexes(context.Background(), crawlTimeOut)
+	if err != nil {
+		logger.SugaredLogger.Errorf("GlobalStockIndexes: %v", err)
+		return map[string]any{"common": []any{}, "america": []any{}, "europe": []any{}, "asia": []any{}, "other": []any{},
+			"status": "failed", "error": err.Error()}
 	}
-	response, err := newFetchRestyClient().SetTimeout(time.Duration(crawlTimeOut)*time.Second).R().
-		SetHeader("Referer", "https://stockapp.finance.qq.com/mstats").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		Get("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/rank/indexRankDetail2")
-	if err != nil || response == nil {
-		if err != nil {
-			logger.SugaredLogger.Errorf("GlobalStockIndexes err:%v", err)
-		}
-		return empty
+	return data
+}
+
+func (m MarketNewsApi) globalStockIndexes(ctx context.Context, crawlTimeOut uint) (map[string]any, error) {
+	var response map[string]any
+	err := m.fetchMarketJSON(ctx, "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/rank/indexRankDetail2",
+		"https://stockapp.finance.qq.com/mstats", time.Duration(crawlTimeOut)*time.Second, &response)
+	if err != nil {
+		return nil, err
 	}
-	js := string(response.Body())
-	res := make(map[string]any)
-	if err = json.Unmarshal([]byte(js), &res); err != nil {
-		logger.SugaredLogger.Errorf("GlobalStockIndexes json.Unmarshal err:%v", err)
-		return empty
-	}
-	dataMap, ok := res["data"].(map[string]any)
-	if !ok || dataMap == nil {
-		return empty
-	}
-	for key, fallback := range empty {
-		if _, exists := dataMap[key]; !exists || dataMap[key] == nil {
-			dataMap[key] = fallback
+	if code, exists := response["code"]; exists {
+		status, err := convertor.ToInt(code)
+		if err != nil || status != 0 {
+			return nil, fmt.Errorf("global stock indexes response reported code %v", code)
 		}
 	}
-	return dataMap
+	data, ok := response["data"].(map[string]any)
+	if !ok || data == nil {
+		return nil, errors.New("global stock indexes response has no data object")
+	}
+	for _, key := range []string{"common", "america", "europe", "asia", "other"} {
+		if data[key] == nil {
+			data[key] = []any{}
+		} else if _, ok := data[key].([]any); !ok {
+			return nil, fmt.Errorf("global stock indexes field %s is not an array", key)
+		}
+	}
+	return data, nil
 }
 
 func (m MarketNewsApi) GetIndustryRank(sort string, cnt int) map[string]any {
-	url := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank?l=%d&p=1&t=01/averatio&ordertype=&o=%s", cnt, sort)
-	response, err := newFetchRestyClient().SetTimeout(time.Duration(5)*time.Second).R().
-		SetHeader("Referer", "https://stockapp.finance.qq.com/").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		Get(url)
-	if err != nil || response == nil {
-		if err != nil {
-			logger.SugaredLogger.Errorf("GetIndustryRank err:%v", err)
+	data, err := m.industryRank(context.Background(), sort, cnt)
+	if err != nil {
+		logger.SugaredLogger.Errorf("GetIndustryRank: %v", err)
+		return map[string]any{"data": []any{}, "status": "failed", "error": err.Error()}
+	}
+	return data
+}
+
+func (m MarketNewsApi) industryRank(ctx context.Context, sort string, cnt int) (map[string]any, error) {
+	endpoint := fmt.Sprintf("https://proxy.finance.qq.com/ifzqgtimg/appstock/app/mktHs/rank?l=%d&p=1&t=01/averatio&ordertype=&o=%s", cnt, url.QueryEscape(sort))
+	var response map[string]any
+	if err := m.fetchMarketJSON(ctx, endpoint, "https://stockapp.finance.qq.com/", 5*time.Second, &response); err != nil {
+		return nil, err
+	}
+	if code, exists := response["code"]; exists {
+		status, err := convertor.ToInt(code)
+		if err != nil || status != 0 {
+			return nil, fmt.Errorf("industry rank response reported code %v", code)
 		}
-		return map[string]any{"data": []any{}}
 	}
-	js := string(response.Body())
-	res := make(map[string]any)
-	if err = json.Unmarshal([]byte(js), &res); err != nil {
-		logger.SugaredLogger.Errorf("GetIndustryRank json.Unmarshal err:%v", err)
-		return map[string]any{"data": []any{}}
+	if _, ok := response["data"].([]any); !ok {
+		return nil, errors.New("industry rank response has no data array")
 	}
-	if _, ok := res["data"].([]any); !ok {
-		res["data"] = []any{}
-	}
-	return res
+	return response, nil
 }
 
 func (m MarketNewsApi) GetIndustryMoneyRankSina(fenlei, sort string) []map[string]any {
-	url := fmt.Sprintf("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk?page=1&num=20&sort=%s&asc=0&fenlei=%s", sort, fenlei)
-
-	response, _ := newFetchRestyClient().SetTimeout(time.Duration(5)*time.Second).R().
-		SetHeader("Host", "vip.stock.finance.sina.com.cn").
-		SetHeader("Referer", "https://finance.sina.com.cn").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		Get(url)
-	js := string(response.Body())
-	res := &[]map[string]any{}
-	err := json.Unmarshal([]byte(js), &res)
+	rows, err := m.industryMoneyRankSina(context.Background(), fenlei, sort)
 	if err != nil {
-		logger.SugaredLogger.Error(err)
-		return *res
+		logger.SugaredLogger.Errorf("GetIndustryMoneyRankSina: %v", err)
+		return []map[string]any{}
 	}
-	return *res
+	return rows
+}
+
+func (m MarketNewsApi) industryMoneyRankSina(ctx context.Context, fenlei, sort string) ([]map[string]any, error) {
+	endpoint := fmt.Sprintf("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_bk?page=1&num=20&sort=%s&asc=0&fenlei=%s", url.QueryEscape(sort), url.QueryEscape(fenlei))
+	rows := []map[string]any{}
+	if err := m.fetchMarketJSON(ctx, endpoint, "https://finance.sina.com.cn", 5*time.Second, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func (m MarketNewsApi) GetMoneyRankSina(sort string) []map[string]any {
+	rows, err := m.moneyRankSina(context.Background(), sort)
+	if err != nil {
+		logger.SugaredLogger.Errorf("GetMoneyRankSina: %v", err)
+		return []map[string]any{}
+	}
+	return rows
+}
+
+func (m MarketNewsApi) moneyRankSina(ctx context.Context, sort string) ([]map[string]any, error) {
 	if sort == "" {
 		sort = "netamount"
 	}
-	url := fmt.Sprintf("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj?page=1&num=20&sort=%s&asc=0&bankuai=&shichang=", sort)
-	response, _ := newFetchRestyClient().SetTimeout(time.Duration(5)*time.Second).R().
-		SetHeader("Host", "vip.stock.finance.sina.com.cn").
-		SetHeader("Referer", "https://finance.sina.com.cn").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").
-		Get(url)
-	js := string(response.Body())
-	res := &[]map[string]any{}
-	err := json.Unmarshal([]byte(js), &res)
-	if err != nil {
-		logger.SugaredLogger.Error(err)
-		return *res
+	endpoint := fmt.Sprintf("https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_bkzj_ssggzj?page=1&num=20&sort=%s&asc=0&bankuai=&shichang=", url.QueryEscape(sort))
+	rows := []map[string]any{}
+	if err := m.fetchMarketJSON(ctx, endpoint, "https://finance.sina.com.cn", 5*time.Second, &rows); err != nil {
+		return nil, err
 	}
-	return *res
+	return rows, nil
 }
 
 func (m MarketNewsApi) GetStockMoneyTrendByDay(stockCode string, days int) []map[string]any {
-	url := fmt.Sprintf("http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs?page=1&num=%d&sort=opendate&asc=0&daima=%s", days, stockCode)
-
-	response, _ := newFetchRestyClient().SetTimeout(time.Duration(5)*time.Second).R().
-		SetHeader("Host", "vip.stock.finance.sina.com.cn").
-		SetHeader("Referer", "https://finance.sina.com.cn").
-		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").Get(url)
-	js := string(response.Body())
-	res := &[]map[string]any{}
-	err := json.Unmarshal([]byte(js), &res)
+	rows, err := m.stockMoneyTrendByDay(context.Background(), stockCode, days)
 	if err != nil {
-		logger.SugaredLogger.Error(err)
-		return *res
+		logger.SugaredLogger.Errorf("GetStockMoneyTrendByDay: %v", err)
+		return []map[string]any{}
 	}
-	return *res
+	return rows
+}
 
+func (m MarketNewsApi) stockMoneyTrendByDay(ctx context.Context, stockCode string, days int) ([]map[string]any, error) {
+	endpoint := fmt.Sprintf("http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs?page=1&num=%d&sort=opendate&asc=0&daima=%s", days, url.QueryEscape(stockCode))
+	rows := []map[string]any{}
+	if err := m.fetchMarketJSON(ctx, endpoint, "https://finance.sina.com.cn", 5*time.Second, &rows); err != nil {
+		return nil, err
+	}
+	return rows, nil
+}
+
+func (m MarketNewsApi) fetchMarketJSON(ctx context.Context, endpoint, referer string, timeout time.Duration, target any) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	client := m.client
+	if client == nil {
+		client = newFetchRestyClient()
+	}
+	response, err := client.R().SetContext(ctx).
+		SetHeader("Referer", referer).SetHeader("User-Agent", stringsBuilderUserAgent()).Get(endpoint)
+	if err != nil {
+		return fmt.Errorf("market source request failed: %w", err)
+	}
+	if response == nil {
+		return errors.New("market source returned no response")
+	}
+	if response.StatusCode() < 200 || response.StatusCode() >= 300 {
+		return fmt.Errorf("market source HTTP %d", response.StatusCode())
+	}
+	if bytes.Equal(bytes.TrimSpace(response.Body()), []byte("null")) {
+		return errors.New("market source returned null instead of a data structure")
+	}
+	if err := json.Unmarshal(response.Body(), target); err != nil {
+		return fmt.Errorf("market source JSON is invalid: %w", err)
+	}
+	return nil
 }
 
 func (m MarketNewsApi) TopStocksRankingList(date string) {
