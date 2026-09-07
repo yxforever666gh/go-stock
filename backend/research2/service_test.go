@@ -161,6 +161,37 @@ func TestClosedRecommendationKeepsRealizedReturn(t *testing.T) {
 	}
 }
 
+func TestCurrentQuoteDoesNotRegressOrReplaceSameTimestamp(t *testing.T) {
+	repository := research2TestRepository(t)
+	now := time.Date(2026, 9, 7, 10, 5, 0, 0, shanghai())
+	item := Recommendation{RecommendationID: "ordered-mark", AnalysisRunID: "run", StockCode: "sh600000", SignalAt: now, Status: "active", CurrentPrice: 11, CurrentPriceAt: &now}
+	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
+		t.Fatal(err)
+	}
+	for _, at := range []time.Time{now.Add(-time.Second), now} {
+		if err := repository.UpdateCurrentQuote(context.Background(), item.RecommendationID, 99, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stored Recommendation
+	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.CurrentPrice != 11 || !stored.CurrentPriceAt.Equal(now) {
+		t.Fatalf("mark regressed: %+v", stored)
+	}
+	later := now.Add(time.Second)
+	if err := repository.UpdateCurrentQuote(context.Background(), item.RecommendationID, 12, later); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
+		t.Fatal(err)
+	}
+	if stored.CurrentPrice != 12 || !stored.CurrentPriceAt.Equal(later) {
+		t.Fatalf("new mark not accepted: %+v", stored)
+	}
+}
+
 type research2ChartProvider struct {
 	snapshot recommendationchart.ProviderSnapshot
 }

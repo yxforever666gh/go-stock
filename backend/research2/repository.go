@@ -475,12 +475,13 @@ func (r *Repository) ActiveRecommendations(ctx context.Context) ([]Recommendatio
 }
 
 func (r *Repository) UpdateCurrentQuote(ctx context.Context, recommendationID string, price float64, at time.Time) error {
-	if price <= 0 {
-		return errors.New("research2 current quote price must be positive")
+	if price <= 0 || math.IsNaN(price) || math.IsInf(price, 0) || at.IsZero() {
+		return errors.New("research2 current quote requires a positive finite price and timestamp")
 	}
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		return tx.Model(&Recommendation{}).
 			Where("recommendation_id = ? AND status IN ?", recommendationID, []string{"active", "sell_pending"}).
+			Where("current_price_at IS NULL OR current_price_at < ?", at).
 			Updates(map[string]any{"current_price": price, "current_price_at": at}).Error
 	})
 }

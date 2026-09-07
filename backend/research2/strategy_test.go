@@ -238,7 +238,7 @@ func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	}
 }
 
-func TestRunnerAllowsExactlyOneRetryForFailedRun(t *testing.T) {
+func TestRunnerRetriesFailedEvidenceBeforeReturningTerminalRun(t *testing.T) {
 	repository := research2TestRepository(t)
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
@@ -252,11 +252,15 @@ func TestRunnerAllowsExactlyOneRetryForFailedRun(t *testing.T) {
 	}
 
 	secondAI := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}
-	second := NewRunner(repository, secondAI, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: started.Add(time.Second)}}, testCalendar{})
+	secondEvidence := &recordingEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: started.Add(time.Second)}}
+	second := NewRunner(repository, secondAI, secondEvidence, testCalendar{})
 	second.ConfigureReplayClock(func() time.Time { return started.Add(time.Minute) }, nil)
 	retried, err := second.Run(context.Background(), scheduled)
 	if err != nil || retried.Status != "no_recommendation" || retried.AttemptNo != 2 || retried.RunID == failed.RunID {
 		t.Fatalf("second=%+v err=%v", retried, err)
+	}
+	if secondAI.calls != 1 || !secondEvidence.cutoff.Equal(started.Add(time.Minute)) {
+		t.Fatalf("retry did not recollect and call AI: calls=%d cutoff=%v reason=%s", secondAI.calls, secondEvidence.cutoff, retried.FailureReason)
 	}
 
 	thirdAI := &sequenceAI{responses: []string{`{}`}}

@@ -162,14 +162,10 @@ func (s *Service) refresh(ctx context.Context, items []Recommendation) error {
 				return
 			}
 			quote, err := s.quotes.CurrentQuote(ctx, item.StockCode)
-			if err != nil || quote.Price <= 0 {
+			if err != nil || quote.Price <= 0 || quote.At.IsZero() {
 				return
 			}
-			at := quote.At
-			if at.IsZero() {
-				at = s.now()
-			}
-			results <- quoteRefresh{recommendationID: item.RecommendationID, price: quote.Price, at: at}
+			results <- quoteRefresh{recommendationID: item.RecommendationID, price: quote.Price, at: quote.At}
 		}()
 	}
 	wait.Wait()

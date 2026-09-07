@@ -246,7 +246,10 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 		if saveErr := r.repository.SaveRun(ctx, &run); saveErr != nil {
 			cause = errors.Join(cause, fmt.Errorf("保存研究运行失败: %w", saveErr))
 		}
-		if status == "failed" && strings.TrimSpace(run.ChainID) != "" {
+		// A failed attempt is retryable under CreateRunAttempt. Keep its daily
+		// chain open until the existing start cutoff instead of making the next
+		// attempt return "no recommendation" before collecting any evidence.
+		if status == "failed" && strings.TrimSpace(run.ChainID) != "" && !completed.Before(lastStartExclusive) {
 			if chainErr := r.repository.CompleteExecutionChain(context.Background(), run.ChainID, "failed", reason, completed); chainErr != nil {
 				cause = errors.Join(cause, fmt.Errorf("结束失败补位链: %w", chainErr))
 			}
