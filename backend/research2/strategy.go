@@ -299,6 +299,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	if err = r.repository.AttachRunToExecutionChain(ctx, chain.ChainID, run.RunID); err != nil {
 		return finishFailure("failed", "保存补位链运行关系失败: "+err.Error(), err)
 	}
+	chain.Status = "running"
 	excludedCodes, excludeErr := r.repository.ExecutionChainExcludedCodes(ctx, chain.ChainID)
 	if excludeErr != nil {
 		return finishFailure("failed", "读取当日候选排除集失败: "+excludeErr.Error(), excludeErr)

@@ -239,11 +239,30 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 		return
 	}
 	chain, exists, err := runtime.Repository.ExecutionChainForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
-	if err != nil || !exists {
+	if err != nil {
+		logger.SugaredLogger.Errorf("读取研究中心2补位链失败: %v", err)
 		return
 	}
-	if chain.Status != "running" {
+	if exists && chain.Status != "running" && chain.Status != "failed" {
 		a.queueResearch2FinalEmail(runtime, setting, chain)
+		return
+	}
+	if !exists || chain.Status == "failed" {
+		// Audit/calendar failures can occur before a chain exists. Older builds
+		// also closed chains for retryable failures. Resume only the latest
+		// failed attempt, under the original analysis window and runner lock.
+		if !withinResearch2RecoveryWindow(now) {
+			return
+		}
+		latest, found, runErr := runtime.Repository.RunForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
+		if runErr != nil {
+			logger.SugaredLogger.Errorf("读取研究中心2失败轮次失败: %v", runErr)
+			return
+		}
+		if !found || latest.Status != "failed" {
+			return
+		}
+		a.runResearch2Analysis(research2ScheduledRoot(now))
 		return
 	}
 	if !now.In(research2Location()).Before(time.Date(now.In(research2Location()).Year(), now.In(research2Location()).Month(), now.In(research2Location()).Day(), 13, 0, 0, 0, research2Location())) {
@@ -253,6 +272,9 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 		}
 		chain, _ = runtime.Repository.ExecutionChain(a.ctx, chain.ChainID)
 		a.queueResearch2FinalEmail(runtime, setting, chain)
+		return
+	}
+	if !withinResearch2RecoveryWindow(now) {
 		return
 	}
 	a.runResearch2Analysis(research2ScheduledRoot(now))
