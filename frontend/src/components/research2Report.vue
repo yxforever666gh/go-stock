@@ -1,11 +1,17 @@
 <script setup>
-import {h, onMounted, ref} from 'vue'
-import {NButton, NTag, useMessage} from 'naive-ui'
+import {h, onMounted} from 'vue'
+import {NButton, NTag} from 'naive-ui'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
+import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
+import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
+import {usePolling} from '../composables/usePolling.js'
 import {GetResearch2Run, ListResearch2Runs} from '../services/research2-api'
 
-const message = useMessage(), loading = ref(false), rows = ref([]), detail = ref(null), visible = ref(false)
+const history = useResearchList(async (limit, offset) => await ListResearch2Runs(limit, offset) || [], {key: 'runId', pageSize: 100})
+const {rows, loading, error: listError, hasMore} = history
+const detailRequest = useResearchDetail(GetResearch2Run)
+const {detail, visible, loading: detailLoading, error: detailError} = detailRequest
 const labels = {running: '分析中', success: '已推荐', no_recommendation: '空仓', failed: '失败', skipped_non_trading_day: '非交易日', missed_window: '错过交易窗口'}
 const emailLabels = {pending: '待发送', sending: '发送中', retry_wait: '等待重试', sent: '已发送', failed: '发送失败', cancelled: '已取消'}
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
@@ -15,7 +21,7 @@ const qualityType = value => value === null || value === undefined ? 'default' :
 const degradedReason = run => run?.degraded === null || run?.degraded === undefined ? '历史运行未记录证据质量' : run.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
 const shortFailureReason = value => { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > 160 ? `${text.slice(0, 160)}…（完整信息见审计）` : text || '--' }
 const type = status => status === 'success' ? 'success' : status === 'failed' ? 'error' : status === 'running' ? 'warning' : 'info'
-async function show(row) { visible.value = true; detail.value = null; try { detail.value = await GetResearch2Run(row.runId) } catch (error) { message.error(error?.message || String(error)) } }
+const show = row => detailRequest.show(row.runId)
 const columns = [
   {title: '交易日', key: 'tradingDate', width: 110},
   {title: '批次', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
@@ -37,8 +43,12 @@ const columns = [
   {title: '说明', key: 'failureReason', minWidth: 220, ellipsis: {tooltip: true}, render: row => shortFailureReason(row.failureReason)},
   {title: '操作', key: 'action', width: 90, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => show(row)}, {default: () => '查看'})},
 ]
-async function refresh() { loading.value = true; try { rows.value = await ListResearch2Runs() } catch (error) { message.error(error?.message || String(error)) } finally { loading.value = false } }
-onMounted(refresh)
+async function refresh() { await history.refresh(); if (visible.value) await detailRequest.refresh() }
+const polling = usePolling(async () => {
+  await history.refreshHead()
+  if (visible.value && detail.value?.status === 'running') await detailRequest.refresh()
+}, 2000, {shouldRun: () => rows.value.some(row => row.status === 'running')})
+onMounted(() => { void refresh(); polling.start({immediate: false}) })
 </script>
 
 <template>
@@ -46,11 +56,13 @@ onMounted(refresh)
     <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:55,13:00)，使用最近5个已闭合交易分钟；09:55正常运行对应09:50—09:55，午休启动固定使用 11:25—11:30。主备执行仍不足三笔时立即补位；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
+    <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
   <n-modal v-model:show="visible">
     <n-card title="隔夜强势分析报告" closable style="width:min(1380px,96vw);max-height:94vh" @close="visible=false">
       <n-scrollbar style="max-height:82vh">
-        <n-spin :show="!detail">
+        <n-alert v-if="detailError" type="error">{{ detailError }} <n-button text @click="detailRequest.refresh">重试</n-button></n-alert>
+        <n-spin :show="detailLoading">
           <template v-if="detail">
             <ResearchAuditPanel owner-type="research2" :owner-id="String(detail.runId)" :active="visible">
               <template #final-result>

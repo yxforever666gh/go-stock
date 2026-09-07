@@ -1,18 +1,22 @@
 <script setup>
-import {h, onMounted, ref} from 'vue'
-import {NButton, NTag, NText, useMessage} from 'naive-ui'
+import {h, onMounted} from 'vue'
+import {NButton, NTag, NText} from 'naive-ui'
 import {GetAIRecommendation, GetAISimulatedAccount, ListAIRecommendations} from '../services/research-api'
 import {useDraggableDataTableColumns} from '../composables/useDraggableDataTableColumns'
 import {formatInteger, formatMoney, formatPercent, formatPrice} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
+import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
+import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
 
-const message = useMessage()
-const loading = ref(false)
-const rows = ref([])
-const detailVisible = ref(false)
-const detail = ref(null)
+const history = useResearchList(async (limit, offset) => {
+  if (offset === 0) await GetAISimulatedAccount()
+  return await ListAIRecommendations(limit, offset) || []
+})
+const {rows, loading, error: listError, hasMore} = history
+const detailRequest = useResearchDetail(GetAIRecommendation)
+const {detail, visible: detailVisible, loading: detailLoading, error: detailError} = detailRequest
 
 const statusLabels = {buy_pending: '待买入', pending: '旧制待激活', active: '持仓中', sell_pending: '待卖出', invalidated: '旧制已失效', missed_cash: '错过—资金不足', missed_untradable: '错过—不可交易', closed: '已卖出'}
 function dateTime(value) { return value ? String(value).slice(0, 19).replace('T', ' ') : '--' }
@@ -35,22 +39,8 @@ const defaultColumns = [
 ]
 const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research-recommendations:column-order:v2')
 
-async function refresh() {
-  loading.value = true
-  try {
-    await GetAISimulatedAccount()
-    rows.value = await ListAIRecommendations(200, 0) || []
-  }
-  catch (error) { message.error(error?.message || String(error)) }
-  finally { loading.value = false }
-}
-
-async function showDetail(row) {
-  detailVisible.value = true
-  detail.value = null
-  try { detail.value = await GetAIRecommendation(row.recommendationId) }
-  catch (error) { message.error(error?.message || String(error)) }
-}
+const refresh = history.refresh
+const showDetail = row => detailRequest.show(row.recommendationId)
 
 onMounted(refresh)
 </script>
@@ -64,12 +54,14 @@ onMounted(refresh)
     <div ref="tableRef">
       <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1890" :row-key="row => row.recommendationId"/>
     </div>
+    <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
 
   <n-modal v-model:show="detailVisible">
     <n-card class="research-detail-card" title="股票推荐详情" closable @close="detailVisible = false">
       <n-scrollbar style="max-height:87vh">
-        <n-spin :show="!detail">
+        <n-alert v-if="detailError" type="error">{{ detailError }} <n-button text @click="detailRequest.refresh">重试</n-button></n-alert>
+        <n-spin :show="detailLoading">
           <template v-if="detail">
             <n-descriptions bordered :column="3" size="small">
               <n-descriptions-item label="股票">{{ detail.recommendation.stockName }}（{{ detail.recommendation.stockCode }}）</n-descriptions-item>

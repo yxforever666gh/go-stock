@@ -26,6 +26,13 @@ test('research adapter preserves real bars, source errors, PnL and missing sessi
   assert.match(overlays.tooltipLines(model.bars[0]).join(' '), /预估净收益/)
 })
 
+test('data as-of comes from quotes or bars, never from a later collection time', () => {
+  const current = {...chart, refreshedAt: '2026-09-07T11:00:00+08:00'}
+  assert.equal(adaptResearchChart(current).asOf, chart.bars.at(-1).at)
+  assert.equal(adaptResearchChart({...current, bars: []}).asOf, '')
+  assert.equal(adaptResearchChart({...current, quoteAt: '2026-09-07T10:59:59+08:00'}).asOf, '2026-09-07T10:59:59+08:00')
+})
+
 test('partial session is not expanded into a false full-day missing interval', () => {
   const current = {
     stockCode: '600551', stockName: '时代出版', status: 'partial',

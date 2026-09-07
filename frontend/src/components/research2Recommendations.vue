@@ -1,17 +1,21 @@
 <script setup>
-import {h, onMounted, ref} from 'vue'
-import {NButton, NTag, NText, useMessage} from 'naive-ui'
+import {h, onMounted} from 'vue'
+import {NButton, NTag, NText} from 'naive-ui'
 import {GetResearch2Account, GetResearch2Recommendation, ListResearch2Recommendations} from '../services/research2-api'
 import {useDraggableDataTableColumns} from '../composables/useDraggableDataTableColumns'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
+import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
+import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
 import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 
-const message = useMessage()
-const loading = ref(false)
-const rows = ref([])
-const detail = ref(null)
-const visible = ref(false)
+const history = useResearchList(async (limit, offset) => {
+  if (offset === 0) await GetResearch2Account()
+  return await ListResearch2Recommendations(limit, offset) || []
+})
+const {rows, loading, error: listError, hasMore} = history
+const detailRequest = useResearchDetail(GetResearch2Recommendation)
+const {detail, visible, loading: detailLoading, error: detailError} = detailRequest
 
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
 const statusLabels = {buy_pending: '待买入', standby: '备选待命', standby_not_used: '备选未启用', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
@@ -22,12 +26,7 @@ const executionModeLabels = {live_after_signal: '信号后实时成交', recover
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
 
-async function show(row) {
-  visible.value = true
-  detail.value = null
-  try { detail.value = await GetResearch2Recommendation(row.recommendationId) }
-  catch (error) { message.error(error?.message || String(error)) }
-}
+const show = row => detailRequest.show(row.recommendationId)
 
 const defaultColumns = [
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
@@ -43,14 +42,7 @@ const defaultColumns = [
 ]
 const {tableRef, columnsRef} = useDraggableDataTableColumns(defaultColumns, 'go-stock:research2-recommendations:column-order:v2')
 
-async function refresh() {
-  loading.value = true
-  try {
-    await GetResearch2Account()
-    rows.value = await ListResearch2Recommendations(200, 0) || []
-  } catch (error) { message.error(error?.message || String(error)) }
-  finally { loading.value = false }
-}
+const refresh = history.refresh
 
 onMounted(refresh)
 </script>
@@ -65,12 +57,14 @@ onMounted(refresh)
     <div ref="tableRef">
       <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1185" :row-key="row => row.recommendationId"/>
     </div>
+    <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
 
   <n-modal v-model:show="visible">
     <n-card class="research-detail-card" title="推荐与成交详情" closable @close="visible=false">
       <n-scrollbar style="max-height:87vh">
-        <n-spin :show="!detail">
+        <n-alert v-if="detailError" type="error">{{ detailError }} <n-button text @click="detailRequest.refresh">重试</n-button></n-alert>
+        <n-spin :show="detailLoading">
           <template v-if="detail">
             <n-alert v-if="detail.recommendation.status === 'analysis_only'" type="info" :bordered="false" style="margin-bottom:12px">该推荐仅用于研究复盘，不会创建模拟成交或计入策略收益。</n-alert>
             <n-descriptions bordered :column="3">

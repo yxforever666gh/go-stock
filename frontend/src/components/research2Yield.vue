@@ -1,12 +1,20 @@
 <script setup>
-import {computed, h, onMounted, ref} from 'vue'
+import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NText, useMessage} from 'naive-ui'
 import {GetResearch2Performance, GetResearch2Recommendation, ListResearch2Recommendations} from '../services/research2-api'
 import {formatDrawdown, formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
+import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
+import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
 
-const message = useMessage(), loading = ref(false), performance = ref(null), rows = ref([]), detail = ref(null), visible = ref(false)
+const message = useMessage(), loading = ref(false), performance = ref(null)
+const history = useResearchList(async (limit, offset) => await ListResearch2Recommendations(limit, offset) || [])
+const {rows, loading: listLoading, error: listError, hasMore} = history
+const detailRequest = useResearchDetail(GetResearch2Recommendation)
+const {detail, visible, loading: detailLoading, error: detailError} = detailRequest
+let active = true
+onBeforeUnmount(() => { active = false })
 const rate = value => value === null || value === undefined ? '--' : formatPercent(value)
 const drawdownRate = value => value === null || value === undefined ? '--' : formatDrawdown(value)
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
@@ -27,14 +35,15 @@ const columns = [
   {title: '次日全天涨停', key: 'hitLimitUpFullDay', width: 120, render: row => yesNo(row.hitLimitUpFullDay)},
   {title: '曾低于-3%', key: 'hitMinusThree', width: 110, render: row => yesNo(row.hitMinusThree)},
 ]
-async function show(row) { visible.value = true; detail.value = null; try { detail.value = await GetResearch2Recommendation(row.recommendationId) } catch (error) { message.error(error?.message || String(error)) } }
+const show = row => detailRequest.show(row.recommendationId)
 async function refresh() {
+  if (loading.value) return
   loading.value = true
   try {
-    performance.value = await GetResearch2Performance()
-    rows.value = await ListResearch2Recommendations(200, 0) || []
-  } catch (error) { message.error(error?.message || String(error)) }
-  finally { loading.value = false }
+    const [result] = await Promise.all([GetResearch2Performance(), history.refresh()])
+    if (active) performance.value = result
+  } catch (error) { if (active) message.error(error?.message || String(error)) }
+  finally { if (active) loading.value = false }
 }
 onMounted(refresh)
 </script>
@@ -49,12 +58,14 @@ onMounted(refresh)
     <n-alert type="info" :bordered="false">{{assessment}}。主指标为下一交易日10:00卖出后的扣费净收益；+5%、全天涨停和-3%风险分别统计，不混作同一成功标准。</n-alert>
     <n-flex justify="space-between" align="center"><n-text depth="3">账户指标与未平仓收益按最新行情估值；点击股票可查看持仓期分钟走势。</n-text><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="920" :row-key="row => row.recommendationId"/>
+    <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="listLoading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
 
   <n-modal v-model:show="visible">
     <n-card class="research-detail-card" title="收益与成交详情" closable @close="visible=false">
       <n-scrollbar style="max-height:87vh">
-        <n-spin :show="!detail">
+        <n-alert v-if="detailError" type="error">{{ detailError }} <n-button text @click="detailRequest.refresh">重试</n-button></n-alert>
+        <n-spin :show="detailLoading">
           <template v-if="detail">
             <n-descriptions bordered :column="3">
               <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>

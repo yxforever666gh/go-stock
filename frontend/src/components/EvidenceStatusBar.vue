@@ -1,5 +1,6 @@
 <script setup>
 import {computed} from 'vue'
+import {dataDisplayStatus} from '../services/data-status.js'
 
 const props = defineProps({
   envelope: {type: Object, default: () => ({})},
@@ -9,14 +10,7 @@ const props = defineProps({
 
 defineEmits(['refresh'])
 
-const status = computed(() => {
-  if (props.loading && !props.envelope?.fetchedAt) return {label: '加载中', type: 'info'}
-  if (props.envelope?.status === 'unavailable') return {label: '不可用', type: 'error'}
-  if (props.envelope?.status === 'after_cutoff') return {label: '截止后数据', type: 'warning'}
-  if (props.envelope?.stale || props.envelope?.status === 'stale') return {label: '已过期', type: 'warning'}
-  if (props.envelope?.partial || props.envelope?.status === 'partial') return {label: '部分数据', type: 'warning'}
-  return {label: '数据完整', type: 'success'}
-})
+const status = computed(() => dataDisplayStatus(props.envelope, {loading: props.loading, error: props.error}))
 
 const sources = computed(() => {
   const value = props.envelope?.source

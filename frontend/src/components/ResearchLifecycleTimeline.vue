@@ -4,7 +4,7 @@ import {formatInteger, formatNumber, formatPercent} from '../utils/number-format
 
 const props = defineProps({detail: {type: Object, required: true}})
 
-const statusLabel = {ready: '数据完整', partial: '部分来源失败', critical_failed: '关键数据失败'}
+const statusLabel = {ready: '决策数据就绪', partial: '辅助来源不完整', critical_failed: '决策数据不可用'}
 const statusType = status => status === 'ready' ? 'success' : status === 'partial' ? 'warning' : 'error'
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
 

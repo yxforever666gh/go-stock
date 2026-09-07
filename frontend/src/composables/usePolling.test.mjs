@@ -63,3 +63,21 @@ test('polling honors an active session predicate', async () => {
   assert.equal(calls, 1)
   controller.stop()
 })
+
+test('stopping while a request is in flight cannot restart polling', async () => {
+  let tick, release, calls = 0, timers = 0
+  const controller = createPollingController(async () => {
+    calls++
+    await new Promise(resolve => { release = resolve })
+  }, 2000, {
+    setTimer: callback => { tick = callback; return ++timers },
+    clearTimer: () => {},
+    documentRef: {hidden: false},
+  })
+  controller.start()
+  controller.stop()
+  release(); await Promise.resolve(); await tick()
+  assert.equal(calls, 1)
+  assert.equal(timers, 1)
+  assert.equal(controller.isStopped(), true)
+})

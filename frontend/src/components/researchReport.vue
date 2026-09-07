@@ -4,25 +4,27 @@ import {NButton, NTag, useMessage} from 'naive-ui'
 import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
+import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
+import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
+import {usePolling} from '../composables/usePolling.js'
 import {
   GetAIAnalysisReport,
   GetAICapitalDeploymentStatus,
   ListAIAnalysisReports,
-  ListAIBuyOpportunities,
 } from '../services/research-api'
 import {CreateKnowledgeFromResearch, CreateKnowledgeMemoryCandidate} from '../services/knowledge-api'
 
 const message = useMessage()
 const loading = ref(false)
-const rows = ref([])
-const detailVisible = ref(false)
-const detail = ref(null)
-const detailRunID = ref('')
+const history = useResearchList(async (limit, offset) => await ListAIAnalysisReports(limit, offset) || [], {key: 'runId', pageSize: 100})
+const {rows, loading: listLoading, error: listError, hasMore} = history
+const detailRequest = useResearchDetail(GetAIAnalysisReport)
+const {detail, visible: detailVisible, selectedId: detailRunID, loading: detailLoading, error: detailError} = detailRequest
 const deploymentStatus = ref(null)
-const opportunities = ref([])
+const opportunities = computed(() => detail.value?.opportunities || [])
 const savingKnowledgeDraft = ref(false)
 const creatingMemoryCandidate = ref(false)
-let pollTimer = null
+let active = true
 
 const hasRunningReport = computed(() => rows.value.some(row => row.status === 'running'))
 
@@ -156,66 +158,28 @@ const columns = [
   {title: '操作', key: 'actions', width: 110, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => '查看报告'})},
 ]
 
-function stopPolling() {
-  if (pollTimer !== null) {
-    clearTimeout(pollTimer)
-    pollTimer = null
-  }
-}
-
-function schedulePolling() {
-  stopPolling()
-  if (!hasRunningReport.value) return
-  pollTimer = setTimeout(() => refresh(true), 2000)
-}
-
 async function refresh(silent = false) {
   if (loading.value) return
   loading.value = true
   try {
-		const [reportsResult, statusResult] = await Promise.allSettled([
-			ListAIAnalysisReports(100, 0),
+		const [, statusResult] = await Promise.allSettled([
+			silent ? history.refreshHead() : history.refresh(),
 			GetAICapitalDeploymentStatus(),
 		])
-		if (reportsResult.status === 'rejected') throw reportsResult.reason
-		rows.value = reportsResult.value || []
+		if (!active) return
 		if (statusResult.status === 'fulfilled') deploymentStatus.value = statusResult.value || null
 		if (detailVisible.value && detailRunID.value && (!detail.value || detail.value.status === 'running')) {
-			await refreshDetail(true)
+			await detailRequest.refresh()
 		}
   } catch (error) {
-		if (!silent) message.error(error?.message || String(error))
+		if (active && !silent) message.error(error?.message || String(error))
   } finally {
-    loading.value = false
-		schedulePolling()
+    if (active) loading.value = false
   }
 }
 
-async function showDetail(row) {
-  detailVisible.value = true
-  detail.value = null
-	opportunities.value = []
-	detailRunID.value = row.runId
-	await refreshDetail(false)
-}
-
-async function refreshDetail(silent = false) {
-  if (!detailRunID.value) return
-  try {
-		const [reportResult, opportunitiesResult] = await Promise.allSettled([
-			GetAIAnalysisReport(detailRunID.value),
-			ListAIBuyOpportunities(200, 0),
-		])
-		if (reportResult.status === 'rejected') throw reportResult.reason
-		detail.value = reportResult.value
-		const allOpportunities = opportunitiesResult.status === 'fulfilled' ? opportunitiesResult.value : []
-		opportunities.value = Array.isArray(reportResult.value?.opportunities)
-			? reportResult.value.opportunities
-			: (allOpportunities || []).filter(item => item.analysisRunId === detailRunID.value)
-  } catch (error) {
-    if (!silent) message.error(error?.message || String(error))
-  }
-}
+const showDetail = row => detailRequest.show(row.runId)
+const polling = usePolling(() => refresh(true), 2000, {shouldRun: () => hasRunningReport.value})
 
 async function saveKnowledgeDraft() {
   const runId = String(detail.value?.runId || detailRunID.value || '')
@@ -253,8 +217,8 @@ async function createMemoryCandidate() {
   }
 }
 
-onMounted(refresh)
-onBeforeUnmount(stopPolling)
+onMounted(() => { void refresh(); polling.start({immediate: false}) })
+onBeforeUnmount(() => { active = false })
 </script>
 
 <template>
@@ -266,12 +230,14 @@ onBeforeUnmount(stopPolling)
 			<n-button :loading="loading" @click="refresh(false)">刷新</n-button>
     </n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1600" :row-key="row => row.runId"/>
+    <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="listLoading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
 
   <n-modal v-model:show="detailVisible">
     <n-card style="width:min(1380px, 96vw); max-height:92vh" title="AI 分析报告" closable @close="detailVisible = false">
       <n-scrollbar style="max-height:78vh">
-        <n-spin :show="!detail">
+        <n-alert v-if="detailError" type="error">{{ detailError }} <n-button text @click="detailRequest.refresh">重试</n-button></n-alert>
+        <n-spin :show="detailLoading">
           <template v-if="detail">
             <ResearchAuditPanel owner-type="research1" :owner-id="String(detail.runId || detailRunID)" :active="detailVisible">
               <template #final-result>

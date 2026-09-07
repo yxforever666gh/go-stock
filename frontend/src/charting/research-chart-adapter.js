@@ -57,7 +57,7 @@ export function adaptResearchChart(chartData = {}) {
     },
     source: sources,
     sources,
-    asOf: chartData.quoteAt || chartData.refreshedAt || '',
+    asOf: chartData.quoteAt || chartData.bars?.at(-1)?.at || '',
     fetchedAt: chartData.refreshedAt || '',
     status,
     errors: chartData.providerErrors || [],

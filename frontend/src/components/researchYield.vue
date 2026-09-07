@@ -1,5 +1,5 @@
 <script setup>
-import {computed, h, onMounted, ref} from 'vue'
+import {computed, h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NButton, NTag, NText, useMessage} from 'naive-ui'
 import {
   GetAIRecommendation,
@@ -18,15 +18,21 @@ import {
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchLifecycleTimeline from './ResearchLifecycleTimeline.vue'
 import ResearchTradeChart from './ResearchTradeChart.vue'
+import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
+import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
 
 const message = useMessage()
 const loading = ref(false)
 const account = ref(null)
 const performance = ref(null)
 const cashFlows = ref([])
-const rows = ref([])
-const detailVisible = ref(false)
-const detail = ref(null)
+const history = useResearchList(async (limit, offset) => await ListAIRecommendations(limit, offset) || [])
+const {rows: historyRows, loading: listLoading, error: listError, hasMore} = history
+const rows = computed(() => historyRows.value.filter(item => item.activatedAt || ['missed_cash', 'missed_untradable'].includes(item.status)))
+const detailRequest = useResearchDetail(GetAIRecommendation)
+const {detail, visible: detailVisible, loading: detailLoading, error: detailError} = detailRequest
+let active = true
+onBeforeUnmount(() => { active = false })
 
 const positionsByRecommendation = computed(() => new Map((account.value?.positions || []).map(item => [item.recommendationId, item])))
 const performanceMetrics = computed(() => performance.value?.metrics || normalizePerformance().metrics)
@@ -89,36 +95,31 @@ const curveColumns = [
 ]
 
 async function refresh() {
+  if (loading.value) return
   loading.value = true
   try {
     const [accountResult, recommendationResult, cashFlowResult] = await Promise.allSettled([
       GetAISimulatedAccount(),
-      ListAIRecommendations(200, 0),
+      history.refresh(),
       ListAISimulatedAccountCashFlows(),
     ])
+    if (!active) return
     if (accountResult.status === 'rejected') throw accountResult.reason
     const normalizedAccount = normalizeAccountOverview(accountResult.value || {})
     account.value = normalizedAccount
-    rows.value = recommendationResult.status === 'fulfilled'
-      ? (recommendationResult.value || []).filter(item => item.activatedAt || ['missed_cash', 'missed_untradable'].includes(item.status))
-      : []
     cashFlows.value = normalizeCashFlows(cashFlowResult.status === 'fulfilled' ? cashFlowResult.value : [])
     let performanceResult
     try { performanceResult = {status: 'fulfilled', value: await GetAISimulatedAccountPerformance()} }
     catch (reason) { performanceResult = {status: 'rejected', reason} }
+    if (!active) return
     performance.value = normalizePerformance(performanceResult.status === 'fulfilled' ? performanceResult.value : {}, normalizedAccount)
     const optionalFailures = [recommendationResult, cashFlowResult, performanceResult].filter(item => item.status === 'rejected')
     if (optionalFailures.length) message.warning(`部分评估数据暂不可用（${optionalFailures.length} 项），已展示当前账户数据`)
-  } catch (error) { message.error(error?.message || String(error)) }
-  finally { loading.value = false }
+  } catch (error) { if (active) message.error(error?.message || String(error)) }
+  finally { if (active) loading.value = false }
 }
 
-async function showDetail(row) {
-  detailVisible.value = true
-  detail.value = null
-  try { detail.value = await GetAIRecommendation(row.recommendationId) }
-  catch (error) { message.error(error?.message || String(error)) }
-}
+const showDetail = row => detailRequest.show(row.recommendationId)
 
 onMounted(refresh)
 </script>
@@ -172,12 +173,14 @@ onMounted(refresh)
       <n-button :loading="loading" @click="refresh">刷新估值</n-button>
     </n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="1500" :row-key="row => row.recommendationId"/>
+    <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="listLoading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
 
   <n-modal v-model:show="detailVisible">
     <n-card class="research-detail-card" title="收益与成交详情" closable @close="detailVisible=false">
       <n-scrollbar style="max-height:87vh">
-        <n-spin :show="!detail">
+        <n-alert v-if="detailError" type="error">{{ detailError }} <n-button text @click="detailRequest.refresh">重试</n-button></n-alert>
+        <n-spin :show="detailLoading">
           <template v-if="detail">
             <n-descriptions bordered :column="3">
               <n-descriptions-item label="股票">{{ detail.recommendation.stockName }}（{{ detail.recommendation.stockCode }}）</n-descriptions-item>

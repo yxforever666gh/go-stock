@@ -1,5 +1,6 @@
 <script setup>
 import {computed} from 'vue'
+import {dataDisplayStatus} from '../../services/data-status.js'
 
 const props = defineProps({
   model: {type: Object, default: () => ({})},
@@ -8,13 +9,7 @@ const props = defineProps({
 })
 defineEmits(['refresh'])
 
-const status = computed(() => {
-  if (props.loading && !props.model?.fetchedAt) return {label: '加载中', type: 'info'}
-  if (props.model?.status === 'unavailable') return {label: '不可用', type: 'error'}
-  if (props.model?.status === 'after_cutoff') return {label: '截止后', type: 'warning'}
-  if (props.model?.status === 'partial' || props.model?.status === 'stale') return {label: props.model.status === 'stale' ? '已过期' : '部分数据', type: 'warning'}
-  return {label: '数据完整', type: 'success'}
-})
+const status = computed(() => dataDisplayStatus(props.model, {loading: props.loading, error: props.error, chart: true}))
 const sources = computed(() => {
   const values = props.model?.sources?.length ? props.model.sources : [props.model?.source]
   return [...new Set(values.flatMap(value => typeof value === 'string' ? [value] : [value?.provider || value?.name || value?.source]).filter(Boolean))]

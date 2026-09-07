@@ -8,6 +8,7 @@ import {adaptResearchChart, researchChartOverlays} from '../charting/research-ch
 import {useResearchChartPreferences} from '../composables/useResearchChartPreferences'
 import ChartDataMeta from './chart/ChartDataMeta.vue'
 import MarketChartCanvas from './chart/MarketChartCanvas.vue'
+import {useResearchChart} from '../composables/useResearchRequests.js'
 
 const props = defineProps({
   recommendationId: {type: String, required: true},
@@ -18,26 +19,13 @@ const props = defineProps({
 const message = useMessage()
 const {showPriceLines} = useResearchChartPreferences()
 const chartCanvas = ref(null)
-const chartData = ref(null)
-const initialLoading = ref(false)
-const refreshing = ref(false)
+const chartRequest = useResearchChart(
+  ({scope, id}) => scope === 'research2' ? GetResearch2RecommendationChart(id) : GetAIRecommendationChart(id),
+  ({scope, id}) => scope === 'research2' ? RefreshResearch2RecommendationChart(id) : RefreshAIRecommendationChart(id),
+)
+const {chartData, initialLoading, refreshing, cacheError, refreshError} = chartRequest
 const mode = ref('line')
 const selectedSession = ref(null)
-const cacheError = ref('')
-const refreshError = ref('')
-let requestVersion = 0
-
-function getChart() {
-  return props.scope === 'research2'
-    ? GetResearch2RecommendationChart(props.recommendationId)
-    : GetAIRecommendationChart(props.recommendationId)
-}
-
-function refreshChartData() {
-  return props.scope === 'research2'
-    ? RefreshResearch2RecommendationChart(props.recommendationId)
-    : RefreshAIRecommendationChart(props.recommendationId)
-}
 
 const model = computed(() => adaptResearchChart(chartData.value || {}))
 const fallbackTrades = computed(() => props.fallbackTrades.map(item => ({
@@ -74,42 +62,11 @@ function locateSession(date) {
   if (!found) message.warning(`${date} 暂无分钟数据`)
 }
 
-async function refreshChart(automatic = false, version = requestVersion) {
-  if (!props.recommendationId || refreshing.value || version !== requestVersion) return
-  refreshing.value = true
-  refreshError.value = ''
-  try {
-    const result = await refreshChartData()
-    if (version !== requestVersion) return
-    chartData.value = result
-  } catch (reason) {
-    if (version !== requestVersion) return
-    refreshError.value = reason?.message || String(reason)
-    if (!automatic) message.error(refreshError.value)
-  } finally {
-    if (version === requestVersion) refreshing.value = false
-  }
-}
-
-async function loadInitial() {
-  const version = ++requestVersion
-  chartData.value = null
-  cacheError.value = ''
-  refreshError.value = ''
+const refreshChart = chartRequest.refresh
+watch(() => [props.scope, props.recommendationId], ([scope, id]) => {
   selectedSession.value = null
-  initialLoading.value = true
-  try {
-    chartData.value = await getChart()
-  } catch (reason) {
-    if (version !== requestVersion) return
-    cacheError.value = reason?.message || String(reason)
-  } finally {
-    if (version === requestVersion) initialLoading.value = false
-  }
-  if (version === requestVersion) await refreshChart(true, version)
-}
-
-watch(() => [props.scope, props.recommendationId], () => { void loadInitial() }, {immediate: true})
+  void chartRequest.load({scope, id})
+}, {immediate: true})
 </script>
 
 <template>
@@ -134,7 +91,7 @@ watch(() => [props.scope, props.recommendationId], () => { void loadInitial() },
         <n-statistic label="最新价" :value="chartData?.currentPrice ? formatPrice(chartData.currentPrice) : '--'"/>
         <n-statistic label="预估净收益" :value="chartData && hasBuyTrade ? formatMoney(chartData.currentNetPnl) : '--'"/>
         <n-text :type="currentYield >= 0 ? 'error' : 'success'" strong>{{ chartData && hasBuyTrade ? formatPercent(currentYield) : '--' }}</n-text>
-        <n-button type="primary" :loading="refreshing" @click="refreshChart(false)">刷新行情</n-button>
+        <n-button type="primary" :loading="refreshing" :disabled="initialLoading" @click="refreshChart">刷新行情</n-button>
       </n-flex>
     </n-flex>
 
@@ -148,7 +105,7 @@ watch(() => [props.scope, props.recommendationId], () => { void loadInitial() },
       {{ refreshError || cacheError }}。{{ chartData ? '已保留上次缓存图表。' : '' }}
     </n-alert>
 
-    <ChartDataMeta :model="model" :loading="initialLoading || refreshing" :error="refreshError || cacheError" @refresh="refreshChart(false)"/>
+    <ChartDataMeta :model="model" :loading="initialLoading || refreshing" :error="refreshError || cacheError" @refresh="refreshChart"/>
     <n-spin :show="initialLoading || (refreshing && !chartData)" description="正在读取分钟行情">
       <MarketChartCanvas
           v-show="model.bars.length"
@@ -161,8 +118,8 @@ watch(() => [props.scope, props.recommendationId], () => { void loadInitial() },
       <n-empty v-if="!model.bars.length && !initialLoading && !refreshing" description="暂无分钟走势" class="chart-empty"/>
     </n-spin>
     <n-flex justify="space-between" class="chart-footnote">
-      <n-text depth="3">十字光标保留 OHLC、量价来源及扣除全部交易成本后的逐分钟净收益；真实成交标记不会被普通证券行情替换。</n-text>
-      <n-text depth="3">数据截至 {{ String(chartData?.refreshedAt || chartData?.quoteAt || '--').replace('T', ' ').slice(0, 19) }}</n-text>
+      <n-text depth="3">图表状态仅表示分钟数据覆盖情况；卖出检查与 AI 调用结果见下方时间线。十字光标保留量价来源及扣费净收益，真实成交标记保持不变。</n-text>
+      <n-text depth="3">行情时点 {{ String(chartData?.quoteAt || '--').replace('T', ' ').slice(0, 19) }} · 采集于 {{ String(chartData?.refreshedAt || '--').replace('T', ' ').slice(0, 19) }}</n-text>
     </n-flex>
   </section>
 </template>
