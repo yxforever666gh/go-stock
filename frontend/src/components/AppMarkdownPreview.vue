@@ -2,6 +2,7 @@
 import {computed} from 'vue'
 import {useThemeVars} from 'naive-ui'
 import {MdPreview} from 'md-editor-v3'
+import {safePreviewAttrs, sanitizeReportHTML} from './markdown-safety.js'
 
 defineOptions({inheritAttrs: false})
 
@@ -42,7 +43,9 @@ const resolvedTheme = computed(() => {
       class="app-markdown-surface app-markdown-preview"
       :model-value="modelValue"
       :theme="resolvedTheme"
-      v-bind="$attrs"
+      v-bind="safePreviewAttrs($attrs)"
+      :sanitize="sanitizeReportHTML"
+      :no-mermaid="true"
   />
 </template>
 
