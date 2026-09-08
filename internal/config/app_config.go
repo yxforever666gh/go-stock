@@ -106,6 +106,11 @@ type BrowserConfig struct {
 }
 
 func Load() AppConfig {
+	return applyRuntimeOverrides(LoadEnvironment())
+}
+
+// LoadEnvironment reads process settings without mutable UI runtime overrides.
+func LoadEnvironment() AppConfig {
 	runtimeDir := resolveRuntimeDir()
 	cfg := AppConfig{
 		Web: WebConfig{
@@ -154,7 +159,7 @@ func Load() AppConfig {
 			Path: strings.TrimSpace(os.Getenv("GO_STOCK_BROWSER_PATH")),
 		},
 	}
-	return applyRuntimeOverrides(cfg)
+	return cfg
 }
 
 // secretOrFile keeps the plain environment variable for legacy desktop
