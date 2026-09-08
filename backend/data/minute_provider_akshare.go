@@ -11,10 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"time"
-
-	appconfig "go-stock/internal/config"
 )
 
 const (
@@ -22,18 +19,6 @@ const (
 	defaultAkShareRetryWait        = 2 * time.Second
 	defaultAkShareFetchTimeout     = 90 * time.Second
 	akShareFetchMaxAttempts        = 2
-)
-
-var (
-	akShareFetchMu   sync.Mutex
-	akShareLastFetch time.Time
-)
-
-var (
-	akShareCircuitMu        sync.Mutex
-	akShareCircuitOpenUntil time.Time
-	akShareCircuitFailCount int
-	akShareCircuitLastErr   string
 )
 
 type akShareMinuteRow struct {
@@ -46,7 +31,7 @@ type akShareMinuteRow struct {
 	Amount    float64 `json:"amount"`
 }
 
-func akShareMinuteAdjustment(provider string) string {
+func (p *minuteProviders) akShareMinuteAdjustment(provider string) string {
 	// Eastmoney's one-minute endpoint is explicitly requested without
 	// adjustment. Sina honors GO_STOCK_AKSHARE_MINUTE_ADJUST, so that setting
 	// must become part of the persisted provenance rather than disappearing
@@ -54,7 +39,7 @@ func akShareMinuteAdjustment(provider string) string {
 	if strings.EqualFold(strings.TrimSpace(provider), "em") {
 		return "none"
 	}
-	adjustment := strings.ToLower(strings.TrimSpace(os.Getenv("GO_STOCK_AKSHARE_MINUTE_ADJUST")))
+	adjustment := p.adjustment
 	switch adjustment {
 	case "qfq", "hfq":
 		return adjustment
@@ -63,9 +48,9 @@ func akShareMinuteAdjustment(provider string) string {
 	}
 }
 
-func akShareMinuteSourceLabel(provider string) string {
+func (p *minuteProviders) akShareMinuteSourceLabel(provider string) string {
 	provider = strings.ToLower(strings.TrimSpace(provider))
-	return fmt.Sprintf("akshare:%s:adjustment=%s", provider, akShareMinuteAdjustment(provider))
+	return fmt.Sprintf("akshare:%s:adjustment=%s", provider, p.akShareMinuteAdjustment(provider))
 }
 
 func setMinuteBarsSource(bars []minuteBar, source string) []minuteBar {
@@ -75,15 +60,12 @@ func setMinuteBarsSource(bars []minuteBar, source string) []minuteBar {
 	return bars
 }
 
-func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+func (p *minuteProviders) fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
 	if !start.Before(end) {
 		return []minuteBar{}, "", nil
 	}
-	if err := EnsureAkShareRuntime(); err != nil {
-		return nil, "", err
-	}
 
-	if err := akShareCircuitCheck(); err != nil {
+	if err := p.akShareCircuitCheck(); err != nil {
 		return nil, "", err
 	}
 
@@ -93,7 +75,7 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 		return nil, "", fmt.Errorf("invalid stock code for akshare: %s", tsCode)
 	}
 
-	scriptPath, err := akShareScriptPath()
+	scriptPath, err := p.scriptPath, p.scriptErr
 	if err != nil {
 		return nil, "", err
 	}
@@ -101,7 +83,7 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 	startAt := normalizeMinuteTime(start).Format("2006-01-02 15:04:05")
 	endAt := normalizeMinuteTime(end).Format("2006-01-02 15:04:05")
 
-	sourcePref := resolveAkshareMinuteSourcePreference()
+	sourcePref := p.resolveAkshareMinuteSourcePreference()
 	if sourcePref == "" {
 		return nil, "", fmt.Errorf("AKShare 分钟线来源已在设置中全部关闭")
 	}
@@ -110,20 +92,20 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 		var rows []akShareMinuteRow
 		var lastErr error
 		for attempt := 1; attempt <= akShareFetchMaxAttempts; attempt++ {
-			if err := akShareCircuitCheck(); err != nil {
+			if err := p.akShareCircuitCheck(); err != nil {
 				return nil, err
 			}
-			waitForAkShareFetchWindow()
-			rows, err = runAkShareMinuteScript(scriptPath, tsCode, startAt, endAt, sourceOverride)
+			p.waitForAkShareFetchWindow()
+			rows, err = p.runAkShareMinuteScript(scriptPath, tsCode, startAt, endAt, sourceOverride)
 			if err == nil {
-				akShareCircuitRecordSuccess()
+				p.akShareCircuitRecordSuccess()
 				lastErr = nil
 				break
 			}
-			akShareCircuitRecordFailure(err)
+			p.akShareCircuitRecordFailure(err)
 			lastErr = err
 			if attempt < akShareFetchMaxAttempts {
-				time.Sleep(akShareRetryWait())
+				time.Sleep(p.akShareRetryWait())
 			}
 		}
 		if lastErr != nil {
@@ -139,21 +121,21 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 	if sourcePref == "auto" {
 		sinaRows, sinaErr := fetchRows("sina")
 		if sinaErr == nil {
-			sinaSource := akShareMinuteSourceLabel("sina")
+			sinaSource := p.akShareMinuteSourceLabel("sina")
 			sinaBars := setMinuteBarsSource(convertAkShareRowsToBars(sinaRows, start, end), sinaSource)
-			if minuteBarsCoverTradingSessions(sinaBars, start, end) {
+			if p.minuteBarsCoverTradingSessions(sinaBars, start, end) {
 				return sinaBars, sinaSource, nil
 			}
 			emRows, emErr := fetchRows("em")
 			if emErr == nil {
-				emSource := akShareMinuteSourceLabel("em")
+				emSource := p.akShareMinuteSourceLabel("em")
 				emBars := setMinuteBarsSource(convertAkShareRowsToBars(emRows, start, end), emSource)
 				if len(emBars) > 0 {
 					return emBars, emSource, nil
 				}
 			} else {
 				// Record EM failure so we don't keep hammering a broken upstream.
-				akShareCircuitRecordFailure(emErr)
+				p.akShareCircuitRecordFailure(emErr)
 			}
 			// Fall back to whatever Sina returned (even if incomplete) so we can
 			// at least advance the cache tail.
@@ -166,22 +148,22 @@ func fetchMinuteBarsWithAkShare(tsCode string, start, end time.Time) ([]minuteBa
 			return nil, "", emErr
 		}
 		rows = emRows
-		usedSource = akShareMinuteSourceLabel("em")
+		usedSource = p.akShareMinuteSourceLabel("em")
 	} else {
 		rows, err = fetchRows(sourcePref)
 		if err != nil {
 			return nil, "", err
 		}
-		usedSource = akShareMinuteSourceLabel(sourcePref)
+		usedSource = p.akShareMinuteSourceLabel(sourcePref)
 	}
 
 	bars := setMinuteBarsSource(convertAkShareRowsToBars(rows, start, end), usedSource)
 	return bars, usedSource, nil
 }
 
-func resolveAkshareMinuteSourcePreference() string {
-	sourcePref := appconfig.Load().Akshare.MinuteSource
-	sinaEnabled := minutePublicSinaEnabled()
+func (p *minuteProviders) resolveAkshareMinuteSourcePreference() string {
+	sourcePref := p.environment.Akshare.MinuteSource
+	sinaEnabled := p.settings.SinaMinuteEnabled
 
 	switch sourcePref {
 	case "sina":
@@ -195,7 +177,7 @@ func resolveAkshareMinuteSourcePreference() string {
 		switch {
 		case sinaEnabled:
 			return "auto"
-		case minutePublicAkshareEnabled():
+		case p.settings.AkshareEnabled:
 			return "em"
 		default:
 			return ""
@@ -204,33 +186,33 @@ func resolveAkshareMinuteSourcePreference() string {
 		if sinaEnabled {
 			return "auto"
 		}
-		if minutePublicAkshareEnabled() {
+		if p.settings.AkshareEnabled {
 			return "em"
 		}
 		return ""
 	}
 }
 
-func akShareCircuitCheck() error {
-	akShareCircuitMu.Lock()
-	defer akShareCircuitMu.Unlock()
-	if akShareCircuitOpenUntil.IsZero() {
+func (p *minuteProviders) akShareCircuitCheck() error {
+	p.state.akShareCircuitMu.Lock()
+	defer p.state.akShareCircuitMu.Unlock()
+	if p.state.akShareCircuitOpenUntil.IsZero() {
 		return nil
 	}
-	if time.Now().Before(akShareCircuitOpenUntil) {
-		msg := strings.TrimSpace(akShareCircuitLastErr)
+	if time.Now().Before(p.state.akShareCircuitOpenUntil) {
+		msg := strings.TrimSpace(p.state.akShareCircuitLastErr)
 		if msg == "" {
 			msg = "akshare unavailable"
 		}
-		return fmt.Errorf("akshare temporarily disabled until %s: %s", akShareCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
+		return fmt.Errorf("akshare temporarily disabled until %s: %s", p.state.akShareCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
 	}
-	akShareCircuitOpenUntil = time.Time{}
-	akShareCircuitFailCount = 0
-	akShareCircuitLastErr = ""
+	p.state.akShareCircuitOpenUntil = time.Time{}
+	p.state.akShareCircuitFailCount = 0
+	p.state.akShareCircuitLastErr = ""
 	return nil
 }
 
-func akShareCircuitRecordFailure(err error) {
+func (p *minuteProviders) akShareCircuitRecordFailure(err error) {
 	if err == nil {
 		return
 	}
@@ -261,42 +243,42 @@ func akShareCircuitRecordFailure(err error) {
 		return
 	}
 
-	akShareCircuitMu.Lock()
-	defer akShareCircuitMu.Unlock()
-	akShareCircuitFailCount++
-	akShareCircuitLastErr = err.Error()
-	if akShareCircuitFailCount < 2 {
+	p.state.akShareCircuitMu.Lock()
+	defer p.state.akShareCircuitMu.Unlock()
+	p.state.akShareCircuitFailCount++
+	p.state.akShareCircuitLastErr = err.Error()
+	if p.state.akShareCircuitFailCount < 2 {
 		return
 	}
 
 	backoff := 2 * time.Minute
-	if akShareCircuitFailCount >= 4 {
+	if p.state.akShareCircuitFailCount >= 4 {
 		backoff = 5 * time.Minute
 	}
-	if akShareCircuitFailCount >= 8 {
+	if p.state.akShareCircuitFailCount >= 8 {
 		backoff = 10 * time.Minute
 	}
-	akShareCircuitOpenUntil = time.Now().Add(backoff)
+	p.state.akShareCircuitOpenUntil = time.Now().Add(backoff)
 }
 
-func akShareCircuitRecordSuccess() {
-	akShareCircuitMu.Lock()
-	defer akShareCircuitMu.Unlock()
-	akShareCircuitOpenUntil = time.Time{}
-	akShareCircuitFailCount = 0
-	akShareCircuitLastErr = ""
+func (p *minuteProviders) akShareCircuitRecordSuccess() {
+	p.state.akShareCircuitMu.Lock()
+	defer p.state.akShareCircuitMu.Unlock()
+	p.state.akShareCircuitOpenUntil = time.Time{}
+	p.state.akShareCircuitFailCount = 0
+	p.state.akShareCircuitLastErr = ""
 }
 
-func runAkShareMinuteScript(scriptPath, symbol, startAt, endAt, sourceOverride string) ([]akShareMinuteRow, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), akShareFetchTimeout())
+func (p *minuteProviders) runAkShareMinuteScript(scriptPath, symbol, startAt, endAt, sourceOverride string) ([]akShareMinuteRow, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), p.akShareFetchTimeout())
 	defer cancel()
 
-	pythonBin, _, err := resolvePythonExecutable()
+	pythonBin, _, err := resolvePythonExecutableForConfig(p.environment.Python.Bin)
 	if err != nil {
 		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, pythonBin, scriptPath, symbol, startAt, endAt)
-	env := akShareScriptEnv()
+	env := p.akShareScriptEnv()
 	if strings.TrimSpace(sourceOverride) != "" {
 		env = append(env, "GO_STOCK_AKSHARE_MINUTE_SOURCE="+strings.TrimSpace(sourceOverride))
 	}
@@ -364,21 +346,21 @@ func minuteBarsCoverRange(bars []minuteBar, start, end time.Time) bool {
 	return !first.After(start) && !last.Before(end)
 }
 
-func minuteBarsCoverTradingSessions(bars []minuteBar, start, end time.Time) bool {
-	return minuteBarsCoverTradingSessionsForStock("", bars, start, end)
+func (p *minuteProviders) minuteBarsCoverTradingSessions(bars []minuteBar, start, end time.Time) bool {
+	return p.minuteBarsCoverTradingSessionsForStock("", bars, start, end)
 }
 
-func minuteBarsCoverTradingSessionsForStock(stockCode string, bars []minuteBar, start, end time.Time) bool {
-	return minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode, bars, start, end, false)
+func (p *minuteProviders) minuteBarsCoverTradingSessionsForStock(stockCode string, bars []minuteBar, start, end time.Time) bool {
+	return p.minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode, bars, start, end, false)
 }
 
-func minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string, bars []minuteBar, start, end time.Time, allowSuspensionFetch bool) bool {
-	sessions := buildMinuteCoverageSessions(start, end)
+func (p *minuteProviders) minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string, bars []minuteBar, start, end time.Time, allowSuspensionFetch bool) bool {
+	sessions := p.buildMinuteCoverageSessions(start, end)
 	if len(sessions) == 0 {
 		return true
 	}
 	if len(bars) == 0 {
-		return minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, start, end, allowSuspensionFetch)
+		return p.minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, start, end, allowSuspensionFetch)
 	}
 	ordered := append([]minuteBar(nil), bars...)
 	sort.SliceStable(ordered, func(i, j int) bool {
@@ -399,7 +381,7 @@ func minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string,
 			sessionBars = append(sessionBars, ordered[scan])
 		}
 		if len(sessionBars) == 0 {
-			if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, session.End, allowSuspensionFetch) {
+			if p.minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, session.End, allowSuspensionFetch) {
 				continue
 			}
 			return false
@@ -407,12 +389,12 @@ func minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string,
 		first := normalizeMinuteTime(sessionBars[0].TradeTime)
 		last := normalizeMinuteTime(sessionBars[len(sessionBars)-1].TradeTime)
 		if first.After(session.Start) {
-			if !minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, first.Add(-time.Minute), allowSuspensionFetch) {
+			if !p.minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, session.Start, first.Add(-time.Minute), allowSuspensionFetch) {
 				return false
 			}
 		}
 		if last.Before(session.End) {
-			if !minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, last.Add(time.Minute), session.End, allowSuspensionFetch) {
+			if !p.minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, last.Add(time.Minute), session.End, allowSuspensionFetch) {
 				return false
 			}
 		}
@@ -420,7 +402,7 @@ func minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string,
 		for i := 1; i < len(sessionBars); i++ {
 			cur := normalizeMinuteTime(sessionBars[i].TradeTime)
 			if cur.Sub(prev) > tolerance {
-				if minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, prev.Add(time.Minute), cur.Add(-time.Minute), allowSuspensionFetch) {
+				if p.minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, prev.Add(time.Minute), cur.Add(-time.Minute), allowSuspensionFetch) {
 					prev = cur
 					continue
 				}
@@ -432,48 +414,48 @@ func minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(stockCode string,
 	return true
 }
 
-func akShareScriptEnv() []string {
-	if forceNoProxyForFetchEnabled() {
-		return envWithoutProxy()
+func (p *minuteProviders) akShareScriptEnv() []string {
+	if p.settings.ForceNoProxyForFetch {
+		return stripProxyEnvironment(p.processEnv)
 	}
-	mode := appconfig.Load().Akshare.ProxyMode
+	mode := p.environment.Akshare.ProxyMode
 	switch mode {
 	case "inherit":
 		// Use whatever proxy settings are present in the environment.
-		return os.Environ()
+		return append([]string(nil), p.processEnv...)
 	default:
 		// Default: disable proxy to avoid broken proxy env causing hard failures.
-		return envWithoutProxy()
+		return stripProxyEnvironment(p.processEnv)
 	}
 }
 
-func akShareFetchTimeout() time.Duration {
-	return time.Duration(appconfig.Load().Akshare.TimeoutSec) * time.Second
+func (p *minuteProviders) akShareFetchTimeout() time.Duration {
+	return time.Duration(p.environment.Akshare.TimeoutSec) * time.Second
 }
 
-func waitForAkShareFetchWindow() {
-	interval := akShareFetchMinInterval()
+func (p *minuteProviders) waitForAkShareFetchWindow() {
+	interval := p.akShareFetchMinInterval()
 	if interval <= 0 {
 		return
 	}
-	akShareFetchMu.Lock()
-	defer akShareFetchMu.Unlock()
+	p.state.akShareFetchMu.Lock()
+	defer p.state.akShareFetchMu.Unlock()
 
-	if !akShareLastFetch.IsZero() {
-		elapsed := time.Since(akShareLastFetch)
+	if !p.state.akShareLastFetch.IsZero() {
+		elapsed := time.Since(p.state.akShareLastFetch)
 		if elapsed < interval {
 			time.Sleep(interval - elapsed)
 		}
 	}
-	akShareLastFetch = time.Now()
+	p.state.akShareLastFetch = time.Now()
 }
 
-func akShareFetchMinInterval() time.Duration {
-	return time.Duration(appconfig.Load().Akshare.MinIntervalMS) * time.Millisecond
+func (p *minuteProviders) akShareFetchMinInterval() time.Duration {
+	return time.Duration(p.environment.Akshare.MinIntervalMS) * time.Millisecond
 }
 
-func akShareRetryWait() time.Duration {
-	return time.Duration(appconfig.Load().Akshare.RetryWaitMS) * time.Millisecond
+func (p *minuteProviders) akShareRetryWait() time.Duration {
+	return time.Duration(p.environment.Akshare.RetryWaitMS) * time.Millisecond
 }
 
 func akShareScriptPath() (string, error) {
@@ -581,8 +563,7 @@ func extractAShareSymbol(stockCode string) string {
 	return ""
 }
 
-func envWithoutProxy() []string {
-	raw := os.Environ()
+func stripProxyEnvironment(raw []string) []string {
 	env := make([]string, 0, len(raw)+2)
 	for _, item := range raw {
 		parts := strings.SplitN(item, "=", 2)

@@ -14,14 +14,14 @@ func TestAkShareFetchMinIntervalFromEnv(t *testing.T) {
 	if err := os.Setenv(key, "2500"); err != nil {
 		t.Fatalf("set env failed: %v", err)
 	}
-	if got := akShareFetchMinInterval(); got != 2500*time.Millisecond {
+	if got := newGlobalMinuteProviders().akShareFetchMinInterval(); got != 2500*time.Millisecond {
 		t.Fatalf("unexpected interval: %v", got)
 	}
 
 	if err := os.Setenv(key, ""); err != nil {
 		t.Fatalf("set env failed: %v", err)
 	}
-	if got := akShareFetchMinInterval(); got != defaultAkShareFetchMinInterval {
+	if got := newGlobalMinuteProviders().akShareFetchMinInterval(); got != defaultAkShareFetchMinInterval {
 		t.Fatalf("expect default interval: %v", got)
 	}
 }
@@ -35,12 +35,12 @@ func TestWaitForAkShareFetchWindowThrottle(t *testing.T) {
 		t.Fatalf("set env failed: %v", err)
 	}
 
-	akShareFetchMu.Lock()
-	akShareLastFetch = time.Now()
-	akShareFetchMu.Unlock()
+	globalMinuteProviderState.akShareFetchMu.Lock()
+	globalMinuteProviderState.akShareLastFetch = time.Now()
+	globalMinuteProviderState.akShareFetchMu.Unlock()
 
 	begin := time.Now()
-	waitForAkShareFetchWindow()
+	newGlobalMinuteProviders().waitForAkShareFetchWindow()
 	cost := time.Since(begin)
 	if cost < 25*time.Millisecond {
 		t.Fatalf("throttle did not take effect, cost=%v", cost)
@@ -76,7 +76,7 @@ func TestAkShareMinuteSourceLabelCarriesAdjustment(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Setenv("GO_STOCK_AKSHARE_MINUTE_ADJUST", test.adjustment)
-			if got := akShareMinuteSourceLabel(test.provider); got != test.want {
+			if got := newGlobalMinuteProviders().akShareMinuteSourceLabel(test.provider); got != test.want {
 				t.Fatalf("source label=%q want %q", got, test.want)
 			}
 		})

@@ -7,29 +7,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
 	"go-stock/backend/logger"
-	appconfig "go-stock/internal/config"
 )
 
 const (
 	defaultSinaMinuteFetchMinInterval = 650 * time.Millisecond
 	defaultSinaMinuteTimeout          = 25 * time.Second
-)
-
-var (
-	sinaMinuteFetchMu   sync.Mutex
-	sinaMinuteLastFetch time.Time
-)
-
-var (
-	sinaMinuteCircuitMu        sync.Mutex
-	sinaMinuteCircuitOpenUntil time.Time
-	sinaMinuteCircuitFailCount int
-	sinaMinuteCircuitLastErr   string
 )
 
 type sinaMinuteKLineRow struct {
@@ -42,46 +28,46 @@ type sinaMinuteKLineRow struct {
 	Amount string `json:"amount"`
 }
 
-func sinaMinuteFetchMinInterval() time.Duration {
-	return time.Duration(appconfig.Load().Minute.SinaMinIntervalMS) * time.Millisecond
+func (p *minuteProviders) sinaMinuteFetchMinInterval() time.Duration {
+	return time.Duration(p.environment.Minute.SinaMinIntervalMS) * time.Millisecond
 }
 
-func waitForSinaMinuteFetchWindow() {
-	interval := sinaMinuteFetchMinInterval()
+func (p *minuteProviders) waitForSinaMinuteFetchWindow() {
+	interval := p.sinaMinuteFetchMinInterval()
 	if interval <= 0 {
 		return
 	}
-	sinaMinuteFetchMu.Lock()
-	defer sinaMinuteFetchMu.Unlock()
-	if !sinaMinuteLastFetch.IsZero() {
-		elapsed := time.Since(sinaMinuteLastFetch)
+	p.state.sinaMinuteFetchMu.Lock()
+	defer p.state.sinaMinuteFetchMu.Unlock()
+	if !p.state.sinaMinuteLastFetch.IsZero() {
+		elapsed := time.Since(p.state.sinaMinuteLastFetch)
 		if elapsed < interval {
 			time.Sleep(interval - elapsed)
 		}
 	}
-	sinaMinuteLastFetch = time.Now()
+	p.state.sinaMinuteLastFetch = time.Now()
 }
 
-func sinaMinuteCircuitCheck() error {
-	sinaMinuteCircuitMu.Lock()
-	defer sinaMinuteCircuitMu.Unlock()
-	if sinaMinuteCircuitOpenUntil.IsZero() {
+func (p *minuteProviders) sinaMinuteCircuitCheck() error {
+	p.state.sinaMinuteCircuitMu.Lock()
+	defer p.state.sinaMinuteCircuitMu.Unlock()
+	if p.state.sinaMinuteCircuitOpenUntil.IsZero() {
 		return nil
 	}
-	if time.Now().Before(sinaMinuteCircuitOpenUntil) {
-		msg := strings.TrimSpace(sinaMinuteCircuitLastErr)
+	if time.Now().Before(p.state.sinaMinuteCircuitOpenUntil) {
+		msg := strings.TrimSpace(p.state.sinaMinuteCircuitLastErr)
 		if msg == "" {
 			msg = "sina minute api unavailable"
 		}
-		return fmt.Errorf("sina minute api temporarily disabled until %s: %s", sinaMinuteCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
+		return fmt.Errorf("sina minute api temporarily disabled until %s: %s", p.state.sinaMinuteCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
 	}
-	sinaMinuteCircuitOpenUntil = time.Time{}
-	sinaMinuteCircuitFailCount = 0
-	sinaMinuteCircuitLastErr = ""
+	p.state.sinaMinuteCircuitOpenUntil = time.Time{}
+	p.state.sinaMinuteCircuitFailCount = 0
+	p.state.sinaMinuteCircuitLastErr = ""
 	return nil
 }
 
-func sinaMinuteCircuitRecordFailure(err error) {
+func (p *minuteProviders) sinaMinuteCircuitRecordFailure(err error) {
 	if err == nil {
 		return
 	}
@@ -111,29 +97,29 @@ func sinaMinuteCircuitRecordFailure(err error) {
 		return
 	}
 
-	sinaMinuteCircuitMu.Lock()
-	defer sinaMinuteCircuitMu.Unlock()
-	sinaMinuteCircuitFailCount++
-	sinaMinuteCircuitLastErr = err.Error()
-	if sinaMinuteCircuitFailCount < 2 {
+	p.state.sinaMinuteCircuitMu.Lock()
+	defer p.state.sinaMinuteCircuitMu.Unlock()
+	p.state.sinaMinuteCircuitFailCount++
+	p.state.sinaMinuteCircuitLastErr = err.Error()
+	if p.state.sinaMinuteCircuitFailCount < 2 {
 		return
 	}
 	backoff := 2 * time.Minute
-	if sinaMinuteCircuitFailCount >= 4 {
+	if p.state.sinaMinuteCircuitFailCount >= 4 {
 		backoff = 5 * time.Minute
 	}
-	if sinaMinuteCircuitFailCount >= 8 {
+	if p.state.sinaMinuteCircuitFailCount >= 8 {
 		backoff = 10 * time.Minute
 	}
-	sinaMinuteCircuitOpenUntil = time.Now().Add(backoff)
+	p.state.sinaMinuteCircuitOpenUntil = time.Now().Add(backoff)
 }
 
-func sinaMinuteCircuitRecordSuccess() {
-	sinaMinuteCircuitMu.Lock()
-	defer sinaMinuteCircuitMu.Unlock()
-	sinaMinuteCircuitOpenUntil = time.Time{}
-	sinaMinuteCircuitFailCount = 0
-	sinaMinuteCircuitLastErr = ""
+func (p *minuteProviders) sinaMinuteCircuitRecordSuccess() {
+	p.state.sinaMinuteCircuitMu.Lock()
+	defer p.state.sinaMinuteCircuitMu.Unlock()
+	p.state.sinaMinuteCircuitOpenUntil = time.Time{}
+	p.state.sinaMinuteCircuitFailCount = 0
+	p.state.sinaMinuteCircuitLastErr = ""
 }
 
 func tsCodeToSinaSymbol(tsCode string) (string, error) {
@@ -183,7 +169,7 @@ func newSinaMinuteClient() *resty.Client {
 	return client
 }
 
-func fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+func (p *minuteProviders) fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
 	if !start.Before(end) {
 		return []minuteBar{}, "sina", nil
 	}
@@ -199,7 +185,7 @@ func fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, 
 		return []minuteBar{}, "sina", fmt.Errorf("sina minute provider only enabled for today")
 	}
 
-	if err := sinaMinuteCircuitCheck(); err != nil {
+	if err := p.sinaMinuteCircuitCheck(); err != nil {
 		return []minuteBar{}, "sina", err
 	}
 
@@ -228,7 +214,7 @@ func fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, 
 
 	url := fmt.Sprintf("http://quotes.sina.cn/cn/api/json_v2.php/CN_MarketDataService.getKLineData?symbol=%s&scale=1&ma=no&datalen=%d", symbol, datalen)
 
-	waitForSinaMinuteFetchWindow()
+	p.waitForSinaMinuteFetchWindow()
 	client := newSinaMinuteClient()
 
 	var body []byte
@@ -237,7 +223,7 @@ func fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, 
 		resp, reqErr := client.R().Get(url)
 		if reqErr != nil {
 			lastErr = reqErr
-			sinaMinuteCircuitRecordFailure(reqErr)
+			p.sinaMinuteCircuitRecordFailure(reqErr)
 			if attempt < 2 {
 				time.Sleep(time.Duration(attempt) * 900 * time.Millisecond)
 			}
@@ -245,17 +231,17 @@ func fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, 
 		}
 		if resp == nil {
 			lastErr = fmt.Errorf("empty http response")
-			sinaMinuteCircuitRecordFailure(lastErr)
+			p.sinaMinuteCircuitRecordFailure(lastErr)
 			break
 		}
 		if resp.StatusCode() == http.StatusTooManyRequests {
 			lastErr = fmt.Errorf("sina rate limited (HTTP 429)")
-			sinaMinuteCircuitRecordFailure(lastErr)
+			p.sinaMinuteCircuitRecordFailure(lastErr)
 			break
 		}
 		if resp.StatusCode() >= 400 {
 			lastErr = fmt.Errorf("sina http status %d", resp.StatusCode())
-			sinaMinuteCircuitRecordFailure(lastErr)
+			p.sinaMinuteCircuitRecordFailure(lastErr)
 			break
 		}
 		body = resp.Body()
@@ -267,16 +253,16 @@ func fetchMinuteBarsWithSina(tsCode string, start, end time.Time) ([]minuteBar, 
 	}
 	if len(body) == 0 {
 		err := fmt.Errorf("sina empty body")
-		sinaMinuteCircuitRecordFailure(err)
+		p.sinaMinuteCircuitRecordFailure(err)
 		return []minuteBar{}, "sina", err
 	}
 
 	var rows []sinaMinuteKLineRow
 	if err := json.Unmarshal(body, &rows); err != nil {
-		sinaMinuteCircuitRecordFailure(err)
+		p.sinaMinuteCircuitRecordFailure(err)
 		return []minuteBar{}, "sina", fmt.Errorf("decode sina minute json failed: %w", err)
 	}
-	sinaMinuteCircuitRecordSuccess()
+	p.sinaMinuteCircuitRecordSuccess()
 
 	bars := make([]minuteBar, 0, len(rows))
 	for _, row := range rows {

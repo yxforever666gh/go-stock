@@ -42,24 +42,6 @@ func mergeSyncErr(base, current error) error {
 	return fmt.Errorf("%v; %v", base, current)
 }
 
-func minuteProviderSettings() *Settings {
-	cfg := GetSettingConfig()
-	if cfg == nil {
-		return nil
-	}
-	return cfg.Settings
-}
-
-func minutePublicSinaEnabled() bool {
-	settings := minuteProviderSettings()
-	return settings == nil || normalizeMinuteProviderMode(settings.MinuteProviderMode) != "public" || settings.SinaMinuteEnabled
-}
-
-func minutePublicAkshareEnabled() bool {
-	settings := minuteProviderSettings()
-	return settings == nil || normalizeMinuteProviderMode(settings.MinuteProviderMode) != "public" || settings.AkshareEnabled
-}
-
 func normalizeMinuteCoverageEnd(t time.Time) time.Time {
 	if t.IsZero() {
 		return t

@@ -142,11 +142,11 @@ func TestSelectResearch2CandidatesExcludesStocksInsideLimitBufferAndHonorsBounda
 		row("600004", limitPrice*0.98),
 		{Code: "600005", Name: "缺前收", Price: 10, PreClose: 0, ChangeRate: 1, ChangeValid: true, Volume: 100000, Amount: 10000000, Turnover: 3, ListingDate: 20200101, Timestamp: asOf.Unix()},
 	}
-	selected := selectResearch2Candidates(rows, 10, asOf)
+	selected := selectResearch2CandidatesWithExclusions(rows, 10, asOf, nil, IsCNOpenTradeDayStrict)
 	if len(selected) != 2 || selected[0].Code != "sh600003" || selected[1].Code != "sh600004" {
 		t.Fatalf("near-limit filter or 1.5%% boundary is wrong: %+v", selected)
 	}
-	selected = selectResearch2CandidatesWithExclusions(rows, 10, asOf, map[string]struct{}{"SH600003": {}})
+	selected = selectResearch2CandidatesWithExclusions(rows, 10, asOf, map[string]struct{}{"SH600003": {}}, IsCNOpenTradeDayStrict)
 	if len(selected) != 1 || selected[0].Code != "sh600004" {
 		t.Fatalf("candidate exclusions were not normalized/applied: %+v", selected)
 	}

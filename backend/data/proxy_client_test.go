@@ -76,7 +76,7 @@ func TestDataFetchClientsDisableProxyByDefault(t *testing.T) {
 	tushareAPI := NewTushareApi(&SettingConfig{})
 	assertRestyProxyDisabled(t, tushareAPI.client)
 
-	diemengClient := newDiemengClient()
+	diemengClient := newGlobalMinuteProviders().newDiemengClient()
 	assertRestyProxyDisabled(t, diemengClient)
 
 	sinaClient := newSinaMinuteClient()

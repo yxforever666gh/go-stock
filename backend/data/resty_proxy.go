@@ -8,6 +8,7 @@ import (
 	"github.com/go-resty/resty/v2"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"golang.org/x/net/http/httpproxy"
 )
 
 func forceNoProxyForFetchEnabled() bool {
@@ -123,4 +124,17 @@ func settingsProxyURLForSettings(config *models.SettingConfig) (string, bool) {
 		return "", false
 	}
 	return proxyURL, true
+}
+func restyApplyCapturedEnvProxy(client *resty.Client, environment []string) {
+	values := map[string]string{}
+	for _, item := range environment {
+		if key, value, ok := strings.Cut(item, "="); ok {
+			values[strings.ToUpper(key)] = value
+		}
+	}
+	config := httpproxy.Config{HTTPProxy: values["HTTP_PROXY"], HTTPSProxy: values["HTTPS_PROXY"], NoProxy: values["NO_PROXY"], CGI: values["REQUEST_METHOD"] != ""}
+	proxy := config.ProxyFunc()
+	transport := client.GetClient().Transport.(*http.Transport).Clone()
+	transport.Proxy = func(request *http.Request) (*url.URL, error) { return proxy(request.URL) }
+	client.SetTransport(transport)
 }

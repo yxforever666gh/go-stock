@@ -5,7 +5,6 @@ import (
 	"go-stock/backend/logger"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -30,38 +29,32 @@ type diemengSuspensionCacheEntry struct {
 	Err       error
 }
 
-var (
-	fetchDiemengSuspensionsFn = fetchDiemengSuspensions
-	diemengSuspensionCacheMu  sync.Mutex
-	diemengSuspensionCache    = map[string]diemengSuspensionCacheEntry{}
-)
-
 const (
 	diemengSuspensionCacheTTL    = 6 * time.Hour
 	diemengSuspensionErrorTTL    = 5 * time.Minute
 	diemengSuspensionMaxPageSize = 10000
 )
 
-func fetchDiemengSuspensions(stockCode string, tradeDate time.Time) ([]diemengSuspensionItem, error) {
+func (p *minuteProviders) fetchDiemengSuspensions(stockCode string, tradeDate time.Time) ([]diemengSuspensionItem, error) {
 	stockCode = normalizeRecommendStockCode(stockCode)
 	if stockCode == "" {
 		return nil, nil
 	}
-	if !hasDiemengKey() {
+	if !p.hasDiemengKey() {
 		return nil, fmt.Errorf("missing GO_STOCK_DIEMENG_API_KEY")
 	}
-	if err := diemengCircuitCheck(); err != nil {
+	if err := p.diemengCircuitCheck(); err != nil {
 		return nil, err
 	}
 	dayKey := tradeDate.In(cnLocation()).Format("2006-01-02")
 	cacheKey := strings.ToUpper(stockCode) + "|" + dayKey
-	if cached, ok := getCachedDiemengSuspensions(cacheKey); ok {
+	if cached, ok := p.getCachedDiemengSuspensions(cacheKey); ok {
 		return cached.Items, cached.Err
 	}
 
-	client := newDiemengClient()
-	apiKey := strings.TrimSpace(diemengAPIKey())
-	waitForDiemengFetchWindow()
+	client := p.newDiemengClient()
+	apiKey := strings.TrimSpace(p.diemengAPIKey())
+	p.waitForDiemengFetchWindow()
 
 	var resp diemengResponse[diemengSuspensionData]
 	httpResp, err := client.R().
@@ -73,32 +66,32 @@ func fetchDiemengSuspensions(stockCode string, tradeDate time.Time) ([]diemengSu
 		SetResult(&resp).
 		Get("/stock/suspension")
 	if err != nil {
-		diemengCircuitRecordFailure(err)
-		setCachedDiemengSuspensions(cacheKey, nil, err)
+		p.diemengCircuitRecordFailure(err)
+		p.setCachedDiemengSuspensions(cacheKey, nil, err)
 		return nil, err
 	}
 	if httpResp == nil {
 		err = fmt.Errorf("empty http response")
-		diemengCircuitRecordFailure(err)
-		setCachedDiemengSuspensions(cacheKey, nil, err)
+		p.diemengCircuitRecordFailure(err)
+		p.setCachedDiemengSuspensions(cacheKey, nil, err)
 		return nil, err
 	}
 	if httpResp.StatusCode() == http.StatusTooManyRequests {
 		err = fmt.Errorf("diemeng suspension rate limited (HTTP 429)")
-		diemengCircuitRecordFailure(err)
-		setCachedDiemengSuspensions(cacheKey, nil, err)
+		p.diemengCircuitRecordFailure(err)
+		p.setCachedDiemengSuspensions(cacheKey, nil, err)
 		return nil, err
 	}
 	if httpResp.StatusCode() >= 400 {
 		err = fmt.Errorf("diemeng suspension http status %d", httpResp.StatusCode())
-		diemengCircuitRecordFailure(err)
-		setCachedDiemengSuspensions(cacheKey, nil, err)
+		p.diemengCircuitRecordFailure(err)
+		p.setCachedDiemengSuspensions(cacheKey, nil, err)
 		return nil, err
 	}
 	if resp.Code != 200 {
 		err = fmt.Errorf("diemeng suspension api error (code=%d): %s", resp.Code, strings.TrimSpace(resp.Msg))
-		diemengCircuitRecordFailure(err)
-		setCachedDiemengSuspensions(cacheKey, nil, err)
+		p.diemengCircuitRecordFailure(err)
+		p.setCachedDiemengSuspensions(cacheKey, nil, err)
 		return nil, err
 	}
 
@@ -106,15 +99,15 @@ func fetchDiemengSuspensions(stockCode string, tradeDate time.Time) ([]diemengSu
 	if len(items) == 0 {
 		items = resp.Data.List
 	}
-	diemengCircuitRecordSuccess()
-	setCachedDiemengSuspensions(cacheKey, items, nil)
+	p.diemengCircuitRecordSuccess()
+	p.setCachedDiemengSuspensions(cacheKey, items, nil)
 	return items, nil
 }
 
-func getCachedDiemengSuspensions(cacheKey string) (diemengSuspensionCacheEntry, bool) {
-	diemengSuspensionCacheMu.Lock()
-	defer diemengSuspensionCacheMu.Unlock()
-	entry, ok := diemengSuspensionCache[cacheKey]
+func (p *minuteProviders) getCachedDiemengSuspensions(cacheKey string) (diemengSuspensionCacheEntry, bool) {
+	p.state.suspensionMu.Lock()
+	defer p.state.suspensionMu.Unlock()
+	entry, ok := p.state.suspensions[cacheKey]
 	if !ok {
 		return diemengSuspensionCacheEntry{}, false
 	}
@@ -125,42 +118,42 @@ func getCachedDiemengSuspensions(cacheKey string) (diemengSuspensionCacheEntry, 
 	if ttl <= 0 || time.Since(entry.CheckedAt) < ttl {
 		return entry, true
 	}
-	delete(diemengSuspensionCache, cacheKey)
+	delete(p.state.suspensions, cacheKey)
 	return diemengSuspensionCacheEntry{}, false
 }
 
-func cachedDiemengSuspensions(stockCode string, tradeDate time.Time) (diemengSuspensionCacheEntry, bool) {
+func (p *minuteProviders) cachedDiemengSuspensions(stockCode string, tradeDate time.Time) (diemengSuspensionCacheEntry, bool) {
 	stockCode = normalizeRecommendStockCode(stockCode)
 	if stockCode == "" {
 		return diemengSuspensionCacheEntry{}, false
 	}
 	dayKey := tradeDate.In(cnLocation()).Format("2006-01-02")
-	return getCachedDiemengSuspensions(strings.ToUpper(stockCode) + "|" + dayKey)
+	return p.getCachedDiemengSuspensions(strings.ToUpper(stockCode) + "|" + dayKey)
 }
 
-func setCachedDiemengSuspensions(cacheKey string, items []diemengSuspensionItem, err error) {
-	diemengSuspensionCacheMu.Lock()
-	diemengSuspensionCache[cacheKey] = diemengSuspensionCacheEntry{
+func (p *minuteProviders) setCachedDiemengSuspensions(cacheKey string, items []diemengSuspensionItem, err error) {
+	p.state.suspensionMu.Lock()
+	p.state.suspensions[cacheKey] = diemengSuspensionCacheEntry{
 		CheckedAt: time.Now(),
 		Items:     append([]diemengSuspensionItem(nil), items...),
 		Err:       err,
 	}
-	diemengSuspensionCacheMu.Unlock()
+	p.state.suspensionMu.Unlock()
 
 }
 
-func clearDiemengSuspensionCache() {
-	diemengSuspensionCacheMu.Lock()
-	diemengSuspensionCache = map[string]diemengSuspensionCacheEntry{}
-	diemengSuspensionCacheMu.Unlock()
+func (p *minuteProviders) clearDiemengSuspensionCache() {
+	p.state.suspensionMu.Lock()
+	p.state.suspensions = map[string]diemengSuspensionCacheEntry{}
+	p.state.suspensionMu.Unlock()
 
 }
 
-func minuteCoverageGapCoveredBySuspension(stockCode string, start, end time.Time) bool {
-	return minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, start, end, false)
+func (p *minuteProviders) minuteCoverageGapCoveredBySuspension(stockCode string, start, end time.Time) bool {
+	return p.minuteCoverageGapCoveredBySuspensionWithFetch(stockCode, start, end, false)
 }
 
-func minuteCoverageGapCoveredBySuspensionWithFetch(stockCode string, start, end time.Time, allowFetch bool) bool {
+func (p *minuteProviders) minuteCoverageGapCoveredBySuspensionWithFetch(stockCode string, start, end time.Time, allowFetch bool) bool {
 	stockCode = normalizeRecommendStockCode(stockCode)
 	if stockCode == "" {
 		return false
@@ -170,28 +163,28 @@ func minuteCoverageGapCoveredBySuspensionWithFetch(stockCode string, start, end 
 	if start.IsZero() || end.IsZero() || start.After(end) {
 		return false
 	}
-	sessions := buildMinuteCoverageSessions(start, end)
+	sessions := p.buildMinuteCoverageSessions(start, end)
 	if len(sessions) == 0 {
 		return false
 	}
 	for _, session := range sessions {
-		if !minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode, session, allowFetch) {
+		if !p.minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode, session, allowFetch) {
 			return false
 		}
 	}
 	return true
 }
 
-func minuteCoverageSessionCoveredBySuspension(stockCode string, session minuteCoverageSession) bool {
-	return minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode, session, false)
+func (p *minuteProviders) minuteCoverageSessionCoveredBySuspension(stockCode string, session minuteCoverageSession) bool {
+	return p.minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode, session, false)
 }
 
-func minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode string, session minuteCoverageSession, allowFetch bool) bool {
+func (p *minuteProviders) minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode string, session minuteCoverageSession, allowFetch bool) bool {
 	if session.Start.IsZero() || session.End.IsZero() || session.Start.After(session.End) {
 		return false
 	}
 	var items []diemengSuspensionItem
-	if cached, ok := cachedDiemengSuspensions(stockCode, session.Start); ok {
+	if cached, ok := p.cachedDiemengSuspensions(stockCode, session.Start); ok {
 		if cached.Err != nil {
 			return false
 		}
@@ -201,7 +194,11 @@ func minuteCoverageSessionCoveredBySuspensionWithFetch(stockCode string, session
 			return false
 		}
 		var err error
-		items, err = fetchDiemengSuspensionsFn(stockCode, session.Start)
+		fetch := p.fetchDiemengSuspensions
+		if p.state.fetchSuspensions != nil {
+			fetch = p.state.fetchSuspensions
+		}
+		items, err = fetch(stockCode, session.Start)
 		if err != nil {
 			logger.SugaredLogger.Warnf("query diemeng suspension failed: code=%s date=%s err=%v", stockCode, session.Start.Format("2006-01-02"), err)
 			return false
@@ -236,7 +233,7 @@ func sameDiemengSuspensionStock(want, got string) bool {
 
 type minuteCoverageSession struct{ Start, End time.Time }
 
-func buildMinuteCoverageSessions(start, end time.Time) []minuteCoverageSession {
+func (p *minuteProviders) buildMinuteCoverageSessions(start, end time.Time) []minuteCoverageSession {
 	if start.IsZero() || end.IsZero() || start.After(end) {
 		return nil
 	}
@@ -246,7 +243,11 @@ func buildMinuteCoverageSessions(start, end time.Time) []minuteCoverageSession {
 	endDay := time.Date(end.Year(), end.Month(), end.Day(), 0, 0, 0, 0, loc)
 	var result []minuteCoverageSession
 	for day, guard := startDay, 0; !day.After(endDay) && guard < 370; day, guard = day.AddDate(0, 0, 1), guard+1 {
-		if !isCNOpenTradeDay(day) {
+		open, known := p.calendar.IsTradingDayCached(day)
+		if !known {
+			open = !isWeekendCN(day)
+		}
+		if !open {
 			continue
 		}
 		for _, pair := range [][2]time.Time{

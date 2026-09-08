@@ -58,7 +58,7 @@ func (p *research2DefaultMinuteWindowProvider) Window(ctx context.Context, code 
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	if bars, source, err := fetchMinuteBarsWithTencentContext(ctx, code, start, end); err == nil && len(bars) > 0 {
+	if bars, source, err := minuteProvidersForStocks(p.stocks).fetchMinuteBarsWithTencentContext(ctx, code, start, end); err == nil && len(bars) > 0 {
 		clean := sanitizeResearch2MinuteBars(bars, source, start, end)
 		if len(clean) >= research2MinimumMinuteBars {
 			return clean, source, nil
@@ -940,7 +940,7 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		}
 		candidateRows = append(candidateRows, row)
 	}
-	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes)
+	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes, minuteProvidersForStocks(c.stocks).calendar.cacheForTask().isTradingDayStrict)
 	windows := collectResearch2CandidateWindows(collectionCtx, c.minuteWindows, selected, marketSnapshot.Rows, windowStart, windowEnd)
 
 	type documentsResult struct {

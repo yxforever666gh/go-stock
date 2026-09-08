@@ -558,7 +558,7 @@ func shanghaiDataLocation() *time.Location {
 
 func ResolveAIAnalysisConfig(setting *SettingConfig) (*models.AIConfig, error) {
 	if setting == nil {
-		setting = GetSettingConfig()
+		return nil, errors.New("research settings snapshot is required")
 	}
 	config := SelectPrimaryAIConfig(setting.AiConfigs)
 	if config == nil {

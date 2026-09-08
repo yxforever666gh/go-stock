@@ -3,6 +3,9 @@ package data
 import (
 	"context"
 	"errors"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -81,5 +84,33 @@ func TestOpenAISettingsDefaultsDoNotMutateSnapshot(t *testing.T) {
 	}
 	if model.TimeOut != 0 || setting.CrawlTimeOut != 0 || setting.KDays != 0 {
 		t.Fatal("constructor mutated caller configuration")
+	}
+}
+func TestResearchNewsUsesInjectedDatabase(t *testing.T) {
+	now := time.Now()
+	var providers []*MarketNewsApi
+	for _, content := range []string{"center-one", "center-two"} {
+		database, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "news.db")), &gorm.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sqlDB, err := database.DB()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = sqlDB.Close() })
+		if err := database.AutoMigrate(&models.Telegraph{}, &models.TelegraphTags{}, &models.Tags{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Create(&models.Telegraph{Content: content, DataTime: &now, Source: "fixture"}).Error; err != nil {
+			t.Fatal(err)
+		}
+		providers = append(providers, NewMarketNewsApiWithSettings(nil, database))
+	}
+	for index, provider := range providers {
+		result, err := provider.GetNewsWindow(nil, now.Add(-time.Minute), now.Add(time.Minute))
+		if err != nil || len(result.Items) != 1 || result.Items[0].Content != []string{"center-one", "center-two"}[index] {
+			t.Fatalf("news read crossed storage boundary: %+v %v", result, err)
+		}
 	}
 }

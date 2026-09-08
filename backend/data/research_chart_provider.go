@@ -121,7 +121,7 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 		if !winEnd.After(winStart) || provider.chartAnyCacheWindowCovered(keys, winStart, winEnd) {
 			continue
 		}
-		providers := enabledChartMinuteProviders(day)
+		providers := minuteProvidersForStocks(provider.quotes.stocks).enabledChartMinuteProviders(day)
 		if len(providers) == 0 {
 			errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: "configuration",
 				Message: date + " 没有已启用且适用于该日期的一分钟数据源"})
@@ -206,16 +206,16 @@ type chartMinuteProvider struct {
 	fetch func(string, time.Time, time.Time) ([]minuteBar, string, error)
 }
 
-func enabledChartMinuteProviders(day time.Time) []chartMinuteProvider {
-	settings := minuteProviderSettings()
+func (p *minuteProviders) enabledChartMinuteProviders(day time.Time) []chartMinuteProvider {
+	settings := p.settings.Settings
 	available := make(map[string]chartMinuteProvider, 4)
 	if settings != nil && settings.PrivateMinuteEnabled &&
 		normalizePrivateMinuteLevel(settings.PrivateMinuteLevel) == "1min" &&
 		strings.TrimSpace(settings.PrivateMinuteBaseURL) != "" &&
 		strings.TrimSpace(settings.PrivateMinuteAPIKey) != "" {
-		available["private"] = chartMinuteProvider{name: "diemeng", fetch: fetchMinuteBarsWithDiemeng}
+		available["private"] = chartMinuteProvider{name: "diemeng", fetch: p.fetchMinuteBarsWithDiemeng}
 	}
-	for id, provider := range availablePublicChartMinuteProviders(settings, day) {
+	for id, provider := range p.availablePublicChartMinuteProviders(settings, day) {
 		available[id] = provider
 	}
 	legacyMode, persistedOrder := "public", ""
@@ -232,7 +232,7 @@ func enabledChartMinuteProviders(day time.Time) []chartMinuteProvider {
 	return result
 }
 
-func availablePublicChartMinuteProviders(settings *Settings, day time.Time) map[string]chartMinuteProvider {
+func (p *minuteProviders) availablePublicChartMinuteProviders(settings *Settings, day time.Time) map[string]chartMinuteProvider {
 	akshare, sina, tencent := true, true, true
 	if settings != nil {
 		akshare, sina, tencent = settings.AkshareEnabled, settings.SinaMinuteEnabled, settings.TencentMinuteEnabled
@@ -242,16 +242,16 @@ func availablePublicChartMinuteProviders(settings *Settings, day time.Time) map[
 	recent := today.Sub(day) <= 7*24*time.Hour && !day.After(today)
 	result := make(map[string]chartMinuteProvider, 3)
 	if isToday && tencent {
-		result["tencent"] = chartMinuteProvider{name: "tencent", fetch: fetchMinuteBarsWithTencent}
+		result["tencent"] = chartMinuteProvider{name: "tencent", fetch: p.fetchMinuteBarsWithTencent}
 	}
 	if isToday && sina {
-		result["sina"] = chartMinuteProvider{name: "sina", fetch: fetchMinuteBarsWithSina}
+		result["sina"] = chartMinuteProvider{name: "sina", fetch: p.fetchMinuteBarsWithSina}
 	}
 	if !isToday && recent && tencent {
-		result["tencent"] = chartMinuteProvider{name: "tencent", fetch: fetchMinuteBarsWithTencent}
+		result["tencent"] = chartMinuteProvider{name: "tencent", fetch: p.fetchMinuteBarsWithTencent}
 	}
 	if akshare {
-		result["akshare"] = chartMinuteProvider{name: "akshare", fetch: fetchMinuteBarsWithAkShare}
+		result["akshare"] = chartMinuteProvider{name: "akshare", fetch: p.fetchMinuteBarsWithAkShare}
 	}
 	return result
 }
@@ -304,7 +304,7 @@ func (provider *ResearchChartProvider) chartCacheWindowCovered(code string, star
 		return false
 	}
 	sort.SliceStable(valid, func(i, j int) bool { return valid[i].TradeTime.Before(valid[j].TradeTime) })
-	return minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(code, valid, start, end, false)
+	return minuteProvidersForStocks(provider.quotes.stocks).minuteBarsCoverTradingSessionsForStockWithSuspensionFetch(code, valid, start, end, false)
 }
 
 func (provider *ResearchChartProvider) chartAnyCacheWindowCovered(keys []string, start, end time.Time) bool {

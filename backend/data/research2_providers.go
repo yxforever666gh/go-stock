@@ -424,11 +424,7 @@ func (c *research2EvidenceCollector) fetchFullMarketRequest(ctx context.Context,
 	return research2MarketResponse{}, lastErr
 }
 
-func selectResearch2Candidates(rows []research2MarketRow, limit int, asOf time.Time) []researchevidence.StockCandidate {
-	return selectResearch2CandidatesWithExclusions(rows, limit, asOf, nil)
-}
-
-func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}) []researchevidence.StockCandidate {
+func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}, isOpen func(time.Time) (bool, error)) []researchevidence.StockCandidate {
 	excluded := normalizeResearch2ExcludedCodes(excludedCodes)
 	eligible := make([]research2MarketRow, 0, len(rows))
 	for _, row := range rows {
@@ -443,7 +439,7 @@ func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit in
 		if _, blocked := excluded[research2CanonicalCode(code)]; blocked {
 			continue
 		}
-		if !listedForResearch2Sessions(row.ListingDate, asOf, 10, IsCNOpenTradeDayStrict) {
+		if !listedForResearch2Sessions(row.ListingDate, asOf, 10, isOpen) {
 			continue
 		}
 		if _, _, blocked := research2.IsInsideLimitBuffer(row.Price, row.PreClose, research2.SelectionLimitDistancePct); blocked {
@@ -560,7 +556,7 @@ func (p *research2MarketProvider) minuteSources() []research2MinuteSource {
 		return p.minutes
 	}
 	return []research2MinuteSource{
-		{"tencent", fetchMinuteBarsWithTencentContext},
+		{"tencent", minuteProvidersForStocks(p.stocks).fetchMinuteBarsWithTencentContext},
 		{"eastmoney", func(ctx context.Context, code string, start, end time.Time) ([]minuteBar, string, error) {
 			if p.stocks == nil {
 				return nil, "eastmoney", errors.New("provider unavailable")

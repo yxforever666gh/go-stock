@@ -193,7 +193,7 @@ func TestResearch2ThemeBackgroundETFAndFundNeverBecomeCandidates(t *testing.T) {
 		{Code: "512000", Name: "券商ETF", Price: 1, PreClose: 1, ChangeRate: 1, Volume: 100, Amount: 10000, ListingDate: 20100101},
 		{Code: "159001", Name: "测试基金", Price: 1, PreClose: 1, ChangeRate: 1, Volume: 100, Amount: 10000, ListingDate: 20100101},
 	}
-	candidates := selectResearch2Candidates(rows, 12, asOf)
+	candidates := selectResearch2CandidatesWithExclusions(rows, 12, asOf, nil, IsCNOpenTradeDayStrict)
 	if len(candidates) != 1 || candidates[0].Code != "sh600000" {
 		t.Fatalf("ETF/fund entered Research2 candidates: %+v", candidates)
 	}

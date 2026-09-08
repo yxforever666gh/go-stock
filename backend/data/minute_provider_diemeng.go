@@ -9,12 +9,10 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
 	"go-stock/backend/logger"
-	appconfig "go-stock/internal/config"
 )
 
 const (
@@ -24,18 +22,6 @@ const (
 	defaultDiemengFetchMinInterval = 1200 * time.Millisecond
 	defaultDiemengTimeout          = 60 * time.Second
 	diemengMaxPages                = 50
-)
-
-var (
-	diemengFetchMu   sync.Mutex
-	diemengLastFetch time.Time
-)
-
-var (
-	diemengCircuitMu        sync.Mutex
-	diemengCircuitOpenUntil time.Time
-	diemengCircuitFailCount int
-	diemengCircuitLastErr   string
 )
 
 type diemengHistoryReq struct {
@@ -72,48 +58,49 @@ type diemengResponse[T any] struct {
 	Data T      `json:"data"`
 }
 
-func hasDiemengKey() bool {
-	return strings.TrimSpace(diemengAPIKey()) != ""
+func (p *minuteProviders) hasDiemengKey() bool {
+	return strings.TrimSpace(p.diemengAPIKey()) != ""
 }
 
-func diemengAPIKey() string {
-	return strings.TrimSpace(appconfig.Load().Diemeng.APIKey)
+func (p *minuteProviders) diemengAPIKey() string {
+	return strings.TrimSpace(p.environment.Diemeng.APIKey)
 }
 
-func diemengBaseURL() string {
-	return appconfig.Load().Diemeng.BaseURL
+func (p *minuteProviders) diemengBaseURL() string {
+	return p.environment.Diemeng.BaseURL
 }
 
-func diemengConfiguredBaseURL() string {
-	baseURL := strings.TrimSpace(diemengBaseURL())
+func (p *minuteProviders) diemengConfiguredBaseURL() string {
+	baseURL := strings.TrimSpace(p.diemengBaseURL())
 	if baseURL != "" {
 		return baseURL
 	}
 	return defaultDiemengBaseURL
 }
 
-func diemengEffectiveBaseURL() string {
-	return normalizeDiemengEffectiveBaseURL(diemengConfiguredBaseURL())
+func (p *minuteProviders) diemengEffectiveBaseURL() string {
+	return normalizeDiemengEffectiveBaseURLForProxy(p.diemengConfiguredBaseURL(), p.keepDiemengHost)
 }
 
 func DiemengEffectiveBaseURLForDisplay() string {
-	return diemengEffectiveBaseURL()
+	return newGlobalMinuteProviders().diemengEffectiveBaseURL()
 }
 
 func normalizeDiemengEffectiveBaseURL(raw string) string {
+	return normalizeDiemengEffectiveBaseURLForProxy(raw, diemengShouldUseConfiguredHost())
+}
+
+func normalizeDiemengEffectiveBaseURLForProxy(raw string, keepConfiguredHost bool) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		raw = defaultDiemengBaseURL
 	}
-	normalized := appconfig.Load().Diemeng.BaseURL
-	if normalized == "" || strings.TrimSpace(raw) != strings.TrimSpace(normalized) {
-		normalized = normalizeDiemengBaseURLWithFallback(raw)
-	}
+	normalized := normalizeDiemengBaseURLWithFallback(raw)
 	parsed, err := url.Parse(normalized)
 	if err != nil || parsed == nil || strings.TrimSpace(parsed.Scheme) == "" || strings.TrimSpace(parsed.Host) == "" {
 		return normalized
 	}
-	if diemengShouldUseConfiguredHost() {
+	if keepConfiguredHost {
 		return strings.TrimRight(parsed.String(), "/")
 	}
 	switch strings.ToLower(strings.TrimSpace(parsed.Hostname())) {
@@ -167,50 +154,50 @@ func systemProxyContains(keyword string) bool {
 	return false
 }
 
-func diemengTimeout() time.Duration {
-	return time.Duration(appconfig.Load().Diemeng.TimeoutSec) * time.Second
+func (p *minuteProviders) diemengTimeout() time.Duration {
+	return time.Duration(p.environment.Diemeng.TimeoutSec) * time.Second
 }
 
-func diemengFetchMinInterval() time.Duration {
-	return time.Duration(appconfig.Load().Diemeng.MinIntervalMS) * time.Millisecond
+func (p *minuteProviders) diemengFetchMinInterval() time.Duration {
+	return time.Duration(p.environment.Diemeng.MinIntervalMS) * time.Millisecond
 }
 
-func waitForDiemengFetchWindow() {
-	interval := diemengFetchMinInterval()
+func (p *minuteProviders) waitForDiemengFetchWindow() {
+	interval := p.diemengFetchMinInterval()
 	if interval <= 0 {
 		return
 	}
-	diemengFetchMu.Lock()
-	defer diemengFetchMu.Unlock()
-	if !diemengLastFetch.IsZero() {
-		elapsed := time.Since(diemengLastFetch)
+	p.state.diemengFetchMu.Lock()
+	defer p.state.diemengFetchMu.Unlock()
+	if !p.state.diemengLastFetch.IsZero() {
+		elapsed := time.Since(p.state.diemengLastFetch)
 		if elapsed < interval {
 			time.Sleep(interval - elapsed)
 		}
 	}
-	diemengLastFetch = time.Now()
+	p.state.diemengLastFetch = time.Now()
 }
 
-func diemengCircuitCheck() error {
-	diemengCircuitMu.Lock()
-	defer diemengCircuitMu.Unlock()
-	if diemengCircuitOpenUntil.IsZero() {
+func (p *minuteProviders) diemengCircuitCheck() error {
+	p.state.diemengCircuitMu.Lock()
+	defer p.state.diemengCircuitMu.Unlock()
+	if p.state.diemengCircuitOpenUntil.IsZero() {
 		return nil
 	}
-	if time.Now().Before(diemengCircuitOpenUntil) {
-		msg := strings.TrimSpace(diemengCircuitLastErr)
+	if time.Now().Before(p.state.diemengCircuitOpenUntil) {
+		msg := strings.TrimSpace(p.state.diemengCircuitLastErr)
 		if msg == "" {
 			msg = "diemeng api unavailable"
 		}
-		return fmt.Errorf("diemeng api temporarily disabled until %s: %s", diemengCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
+		return fmt.Errorf("diemeng api temporarily disabled until %s: %s", p.state.diemengCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
 	}
-	diemengCircuitOpenUntil = time.Time{}
-	diemengCircuitFailCount = 0
-	diemengCircuitLastErr = ""
+	p.state.diemengCircuitOpenUntil = time.Time{}
+	p.state.diemengCircuitFailCount = 0
+	p.state.diemengCircuitLastErr = ""
 	return nil
 }
 
-func diemengCircuitRecordFailure(err error) {
+func (p *minuteProviders) diemengCircuitRecordFailure(err error) {
 	if err == nil {
 		return
 	}
@@ -238,34 +225,34 @@ func diemengCircuitRecordFailure(err error) {
 		return
 	}
 
-	diemengCircuitMu.Lock()
-	defer diemengCircuitMu.Unlock()
-	diemengCircuitFailCount++
-	diemengCircuitLastErr = err.Error()
-	if diemengCircuitFailCount < 2 {
+	p.state.diemengCircuitMu.Lock()
+	defer p.state.diemengCircuitMu.Unlock()
+	p.state.diemengCircuitFailCount++
+	p.state.diemengCircuitLastErr = err.Error()
+	if p.state.diemengCircuitFailCount < 2 {
 		return
 	}
 	backoff := 2 * time.Minute
-	if diemengCircuitFailCount >= 4 {
+	if p.state.diemengCircuitFailCount >= 4 {
 		backoff = 5 * time.Minute
 	}
-	diemengCircuitOpenUntil = time.Now().Add(backoff)
+	p.state.diemengCircuitOpenUntil = time.Now().Add(backoff)
 }
 
-func diemengCircuitRecordSuccess() {
-	diemengCircuitMu.Lock()
-	defer diemengCircuitMu.Unlock()
-	diemengCircuitOpenUntil = time.Time{}
-	diemengCircuitFailCount = 0
-	diemengCircuitLastErr = ""
+func (p *minuteProviders) diemengCircuitRecordSuccess() {
+	p.state.diemengCircuitMu.Lock()
+	defer p.state.diemengCircuitMu.Unlock()
+	p.state.diemengCircuitOpenUntil = time.Time{}
+	p.state.diemengCircuitFailCount = 0
+	p.state.diemengCircuitLastErr = ""
 }
 
-func diemengProxyMode() string {
-	return appconfig.Load().Diemeng.ProxyMode
+func (p *minuteProviders) diemengProxyMode() string {
+	return p.environment.Diemeng.ProxyMode
 }
 
-func diemengProxyFromSettings() string {
-	config := GetSettingConfig()
+func (p *minuteProviders) diemengProxyFromSettings() string {
+	config := p.settings
 	if config == nil || config.Settings == nil {
 		return ""
 	}
@@ -275,13 +262,13 @@ func diemengProxyFromSettings() string {
 	return strings.TrimSpace(config.HttpProxy)
 }
 
-func newDiemengClient() *resty.Client {
+func (p *minuteProviders) newDiemengClient() *resty.Client {
 	client := newNoProxyRestyClient().
-		SetBaseURL(diemengEffectiveBaseURL()).
-		SetTimeout(diemengTimeout()).
+		SetBaseURL(p.diemengEffectiveBaseURL()).
+		SetTimeout(p.diemengTimeout()).
 		SetRetryCount(0).
 		SetHeader("Content-Type", "application/json")
-	if forceNoProxyForFetchEnabled() {
+	if p.settings.ForceNoProxyForFetch {
 		return client
 	}
 
@@ -290,17 +277,13 @@ func newDiemengClient() *resty.Client {
 	//    - inherit: use system env proxy (default Go behavior)
 	//    - settings/config: use app Settings.HttpProxy
 	//    - off/disable: force no proxy
-	mode := diemengProxyMode()
+	mode := p.diemengProxyMode()
 	switch mode {
 	case "inherit":
-		client = resty.New().
-			SetBaseURL(diemengEffectiveBaseURL()).
-			SetTimeout(diemengTimeout()).
-			SetRetryCount(0).
-			SetHeader("Content-Type", "application/json")
+		restyApplyCapturedEnvProxy(client, p.processEnv)
 		return client
 	case "settings", "config":
-		settingsProxy := diemengProxyFromSettings()
+		settingsProxy := p.diemengProxyFromSettings()
 		if settingsProxy == "" {
 			logger.SugaredLogger.Warnf("GO_STOCK_DIEMENG_PROXY_MODE=%s but settings http proxy is empty; fallback to no-proxy", mode)
 			break
@@ -308,7 +291,7 @@ func newDiemengClient() *resty.Client {
 		// Validate URL early so errors are explicit to users.
 		u, err := url.Parse(settingsProxy)
 		if err != nil || u == nil || strings.TrimSpace(u.Scheme) == "" || strings.TrimSpace(u.Host) == "" {
-			logger.SugaredLogger.Warnf("invalid settings http proxy url=%q (need scheme://host:port); fallback to no-proxy: %v", settingsProxy, err)
+			logger.SugaredLogger.Warn("invalid settings http proxy URL; fallback to no-proxy")
 			break
 		}
 		client.SetProxy(settingsProxy)
@@ -321,14 +304,14 @@ func newDiemengClient() *resty.Client {
 	return client
 }
 
-func fetchMinuteBarsWithDiemeng(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+func (p *minuteProviders) fetchMinuteBarsWithDiemeng(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
 	if !start.Before(end) {
 		return []minuteBar{}, "diemeng", nil
 	}
-	if !hasDiemengKey() {
+	if !p.hasDiemengKey() {
 		return []minuteBar{}, "diemeng", fmt.Errorf("missing GO_STOCK_DIEMENG_API_KEY")
 	}
-	if err := diemengCircuitCheck(); err != nil {
+	if err := p.diemengCircuitCheck(); err != nil {
 		return []minuteBar{}, "diemeng", err
 	}
 	if extractAShareSymbol(tsCode) == "" {
@@ -336,10 +319,10 @@ func fetchMinuteBarsWithDiemeng(tsCode string, start, end time.Time) ([]minuteBa
 	}
 
 	// Use 1-minute by default for trigger scan accuracy.
-	level := appconfig.Load().Diemeng.Level
+	level := p.environment.Diemeng.Level
 
-	client := newDiemengClient()
-	apiKey := strings.TrimSpace(diemengAPIKey())
+	client := p.newDiemengClient()
+	apiKey := strings.TrimSpace(p.diemengAPIKey())
 
 	start = normalizeMinuteTime(start)
 	end = normalizeMinuteTime(end)
@@ -362,7 +345,7 @@ func fetchMinuteBarsWithDiemeng(tsCode string, start, end time.Time) ([]minuteBa
 		pageSize := 10000
 
 		for page < diemengMaxPages {
-			waitForDiemengFetchWindow()
+			p.waitForDiemengFetchWindow()
 
 			reqBody := diemengHistoryReq{
 				StockCode: tsCode,
@@ -390,27 +373,27 @@ func fetchMinuteBarsWithDiemeng(tsCode string, start, end time.Time) ([]minuteBa
 				}
 			}
 			if err != nil {
-				diemengCircuitRecordFailure(err)
+				p.diemengCircuitRecordFailure(err)
 				return nil, fmt.Errorf("diemeng request failed: %w", err)
 			}
 			if httpResp == nil {
 				err = fmt.Errorf("empty http response")
-				diemengCircuitRecordFailure(err)
+				p.diemengCircuitRecordFailure(err)
 				return nil, err
 			}
 			if httpResp.StatusCode() == http.StatusTooManyRequests {
 				err = fmt.Errorf("diemeng rate limited (HTTP 429)")
-				diemengCircuitRecordFailure(err)
+				p.diemengCircuitRecordFailure(err)
 				return nil, err
 			}
 			if httpResp.StatusCode() >= 400 {
 				err = fmt.Errorf("diemeng http status %d", httpResp.StatusCode())
-				diemengCircuitRecordFailure(err)
+				p.diemengCircuitRecordFailure(err)
 				return nil, err
 			}
 			if resp.Code != 200 {
 				err = fmt.Errorf("diemeng api error (code=%d): %s", resp.Code, strings.TrimSpace(resp.Msg))
-				diemengCircuitRecordFailure(err)
+				p.diemengCircuitRecordFailure(err)
 				return nil, err
 			}
 
@@ -424,11 +407,11 @@ func fetchMinuteBarsWithDiemeng(tsCode string, start, end time.Time) ([]minuteBa
 			// 仅当第一页就为空时将其视为异常；后续页为空则视为正常结束。
 			if len(items) == 0 && page == 0 {
 				err = fmt.Errorf("diemeng returned empty data (stock=%s, level=%s, %s~%s)", tsCode, level, startAt, endAt)
-				diemengCircuitRecordFailure(err)
+				p.diemengCircuitRecordFailure(err)
 				return nil, err
 			}
 
-			diemengCircuitRecordSuccess()
+			p.diemengCircuitRecordSuccess()
 			if len(items) > 0 {
 				all = append(all, items...)
 			}
