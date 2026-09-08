@@ -33,6 +33,9 @@ func (a *App) domReady(ctx context.Context) {
 	}
 	releaseinfo.MarkSchedulerReady(true)
 	a.startImmediateRuntimeTasks(config)
+	if config != nil && config.Settings != nil && config.Research2AutoEnabled {
+		a.goTask(func(context.Context) { a.recoverResearch2Schedule(int(config.AIAnalysisConfigID), time.Now()) })
+	}
 	a.startMaintenanceRuntime(config)
 
 	logger.SugaredLogger.Infof("domReady-cronEntrys:%+v", a.cronEntrys)
@@ -167,6 +170,7 @@ func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 }
 
 func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
+	a.recoverResearch2RunsOnStartup(time.Now())
 	a.reloadAIAnalysisCron(config, true)
 	a.reloadResearch2Cron(config)
 	a.registerThemeLifecycleCron()

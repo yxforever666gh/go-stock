@@ -9,6 +9,10 @@ import (
 )
 
 func (a *App) updateConfig(settingConfig *models.SettingConfig) (string, error) {
+	res, err := a.services.Config.UpdateConfig(settingConfig)
+	if err != nil {
+		return res, err
+	}
 	if settingConfig.RefreshInterval > 0 {
 		if entryID, exists := a.getCronEntry("MonitorStockPrices"); exists {
 			a.cron.Remove(entryID)
@@ -25,10 +29,6 @@ func (a *App) updateConfig(settingConfig *models.SettingConfig) (string, error) 
 		a.setCronEntry("MonitorStockPrices", id)
 	}
 
-	res, err := a.services.Config.UpdateConfig(settingConfig)
-	if err != nil {
-		return res, err
-	}
 	if strings.Contains(res, "\u4fdd\u5b58\u6210\u529f") {
 		a.reloadMarketNewsPolling(settingConfig, true)
 		a.reloadAIAnalysisCron(settingConfig, false)

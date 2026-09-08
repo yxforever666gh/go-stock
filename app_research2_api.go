@@ -81,7 +81,6 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 	if setting == nil || setting.Settings == nil {
 		return
 	}
-	configID := int(setting.AIAnalysisConfigID)
 	if setting.Research2EmailEnabled {
 		entryID, err := a.cron.AddFunc("@every 30s", func() { a.processResearch2Emails() })
 		if err != nil {
@@ -116,13 +115,18 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 		}
 		a.setCronEntry(registration.key, entryID)
 	}
-	go a.recoverResearch2Schedule(configID, time.Now())
 }
 
-func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
+// recoverResearch2RunsOnStartup is called only by guarded startup assembly,
+// before the scheduler can launch an analysis. Configuration reload is not a restart.
+func (a *App) recoverResearch2RunsOnStartup(now time.Time) {
 	local := now.In(research2Location())
 	if db.Dao != nil {
 		repository := research2.NewRepository(db.Dao)
+		if err := repository.RecoverInterruptedRunsForDate(a.ctx, local.Format("2006-01-02"), local); err != nil {
+			logger.SugaredLogger.Errorf("恢复研究中心2中断运行失败: %v", err)
+			return
+		}
 		expired, expireErr := repository.ExpireStaleExecutionChains(a.ctx, local.Format("2006-01-02"), local)
 		if expireErr != nil {
 			logger.SugaredLogger.Errorf("结束研究中心2跨日补位链失败: %v", expireErr)
@@ -137,6 +141,10 @@ func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 			}
 		}
 	}
+}
+
+func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
+	local := now.In(research2Location())
 	if !withinResearch2RecoveryWindow(local) {
 		return
 	}
@@ -144,13 +152,9 @@ func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
 	if err != nil || !tradeDay {
 		return
 	}
-	runtime, runtimeErr := a.ensureResearch2Runtime(configID)
+	_, runtimeErr := a.ensureResearch2Runtime(configID)
 	if runtimeErr != nil {
 		logger.SugaredLogger.Errorf("恢复研究中心2运行时初始化失败: %v", runtimeErr)
-		return
-	}
-	if recoverErr := runtime.Repository.RecoverInterruptedRunsForDate(a.ctx, local.Format("2006-01-02"), local); recoverErr != nil {
-		logger.SugaredLogger.Errorf("恢复研究中心2中断运行失败: %v", recoverErr)
 		return
 	}
 	// Runner atomically decides whether this is attempt 1, an eligible retry,
