@@ -534,7 +534,7 @@ onBeforeUnmount(() => {
             </n-form-item-gi>
             <n-form-item-gi :span="24" label="实验市场证据：" path="experimentalEvidenceEnabled">
               <n-switch v-model:value="formValue.experimentalEvidenceEnabled" @update:value="handleImmediateFieldChange"/>
-              <n-text depth="3" style="margin-left: 12px">默认关闭；开启后仅当前研究中心接入实验市场证据并可能改变研究结果，市场行情页面不受影响。</n-text>
+              <n-text depth="3" style="margin-left: 12px">默认关闭；为当前研究中心加入题材与知识增强，下一轮任务生效，核心行情证据继续使用。</n-text>
             </n-form-item-gi>
             <template v-if="settingsScope === 'research1'">
               <n-form-item-gi :span="6" label="资金补位：" path="capitalDeployment.enabled">

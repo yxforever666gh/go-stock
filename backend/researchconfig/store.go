@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go-stock/backend/models"
+	"go-stock/internal/trading"
 	"gorm.io/gorm"
 )
 
@@ -26,6 +27,25 @@ type Snapshot struct {
 type Store struct{ db *gorm.DB }
 
 func New(db *gorm.DB) *Store { return &Store{db: db} }
+
+// NewPositionsPermission reads the latest switch on the actual buy transaction.
+// Other execution parameters remain fixed in the task's captured snapshot.
+func NewPositionsPermission(center string) func(context.Context, *gorm.DB) error {
+	return func(ctx context.Context, tx *gorm.DB) error {
+		snapshot, err := New(tx).Load(ctx, center)
+		if err != nil {
+			return err
+		}
+		enabled := snapshot.Settings.AICapitalDeploymentEnabled
+		if center == Research2 {
+			enabled = snapshot.Settings.Research2AutoEnabled
+		}
+		if !enabled {
+			return trading.ErrNewPositionsDisabled
+		}
+		return nil
+	}
+}
 
 // ActiveModels confines both normal reads and new execution to one owner.
 func ActiveModels(db *gorm.DB, owner string) *gorm.DB {

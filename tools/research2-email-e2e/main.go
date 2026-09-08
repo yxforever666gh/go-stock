@@ -16,6 +16,7 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/research2"
+	"go-stock/backend/researchconfig"
 	"go-stock/internal/migrations"
 	"go-stock/internal/researchevidence"
 
@@ -165,7 +166,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "migrate isolated databases:", err)
 		os.Exit(1)
 	}
-	setting := data.GetSettingConfig()
+	snapshot, loadErr := researchconfig.New(db.Dao).Load(context.Background(), researchconfig.Research2)
+	if loadErr != nil {
+		fmt.Fprintln(os.Stderr, loadErr)
+		os.Exit(1)
+	}
+	setting := snapshot.Settings
 	if setting == nil || setting.Settings == nil || setting.AIAnalysisConfigID == 0 {
 		fmt.Fprintln(os.Stderr, "active AI configuration is unavailable")
 		os.Exit(1)

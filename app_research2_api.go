@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"go-stock/backend/data"
-	"go-stock/backend/db"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research2"
 	"go-stock/backend/research2app"
+	"go-stock/backend/researchconfig"
 	"go-stock/internal/recommendationchart"
 	"go-stock/internal/service"
 )
@@ -22,79 +22,65 @@ const (
 	research2AnalysisStartMinute = 55
 )
 
-func (a *App) ensureResearch2Runtime(configID int) (*research2app.Runtime, error) {
+func (a *App) ensureResearch2Runtime(cfg *models.SettingConfig) (*research2app.Runtime, error) {
 	if a == nil {
 		return nil, errors.New("application is unavailable")
 	}
-	a.research2RuntimeMu.RLock()
-	runtime := a.research2Runtime
-	a.research2RuntimeMu.RUnlock()
-	if runtime != nil {
-		return runtime, nil
+	if cfg == nil || cfg.Settings == nil {
+		return nil, errors.New("研究中心2配置不可用")
 	}
 	a.research2RuntimeMu.Lock()
 	defer a.research2RuntimeMu.Unlock()
-	if a.research2Runtime != nil {
+	if a.research2Runtime != nil && sameResearchRuntimeConfig(a.research2Settings, cfg) {
 		return a.research2Runtime, nil
 	}
 	if a.research2Factory == nil {
 		return nil, errors.New("research2 runtime factory is unavailable")
 	}
-	created, err := a.research2Factory(configID)
+	created, err := a.research2Factory(researchconfig.Clone(cfg))
 	if err != nil {
 		return nil, err
 	}
 	a.research2Runtime = created
+	a.research2Settings = researchconfig.Clone(cfg)
 	return created, nil
 }
 
-func (a *App) resetResearch2Runtime() {
-	a.research2RuntimeMu.Lock()
-	a.research2Runtime = nil
-	a.research2RuntimeMu.Unlock()
+func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
+	a.research2ConfigMu.Lock()
+	defer a.research2ConfigMu.Unlock()
+	// A save may have completed after startup loaded its initial snapshot.
+	if current := a.loadResearch2Settings(); current != nil {
+		setting = current
+	}
+	a.reloadResearch2CronLocked(setting)
 }
 
-func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
-	for _, key := range []string{research2AnalysisEntryKey, research2TradingEntryKey, research2MetricsEntryKey, research2EmailEntryKey} {
+func (a *App) reloadResearch2CronLocked(setting *models.SettingConfig) {
+	for _, key := range []string{research2AnalysisEntryKey, research2TradingEntryKey, research2MetricsEntryKey} {
 		if entry, exists := a.getCronEntry(key); exists {
 			a.cron.Remove(entry)
 		}
 		a.deleteCronEntry(key)
 	}
 	if setting != nil && setting.Settings != nil && !setting.Research2AutoEnabled {
-		a.research2RuntimeMu.RLock()
-		existing := a.research2Runtime
-		a.research2RuntimeMu.RUnlock()
-		if existing != nil && existing.Repository != nil {
+		if a.researchDatabase != nil {
+			repository := research2.NewRepository(a.researchDatabase)
 			now := time.Now().In(research2Location())
-			chains, err := existing.Repository.DisableRunningExecutionChains(a.ctx, now.Format("2006-01-02"), now)
+			chains, err := repository.DisableRunningExecutionChains(a.ctx, now.Format("2006-01-02"), now)
 			if err != nil {
 				logger.SugaredLogger.Errorf("关闭研究中心2补位链失败: %v", err)
 			} else {
 				for _, chain := range chains {
-					a.queueResearch2FinalEmail(existing, setting, chain)
+					a.queueResearch2FinalEmail(&research2app.Runtime{Repository: repository, Email: research2.NewEmailService(repository, nil)}, chain)
 				}
 			}
 		}
 	}
-	a.resetResearch2Runtime()
 	if setting == nil || setting.Settings == nil {
 		return
 	}
-	if setting.Research2EmailEnabled {
-		entryID, err := a.cron.AddFunc("@every 30s", func() { a.processResearch2Emails() })
-		if err != nil {
-			a.recordSchedulerRegistrationError(research2EmailEntryKey, "@every 30s", err)
-		} else {
-			a.setCronEntry(research2EmailEntryKey, entryID)
-			go a.processResearch2Emails()
-		}
-	} else {
-		go a.cancelResearch2Emails()
-	}
-	if !setting.Research2AutoEnabled {
-		return
-	}
+	a.reloadResearch2EmailCron(setting)
 	registrations := []struct {
 		key, spec string
 		run       func()
@@ -108,6 +94,9 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 		{research2MetricsEntryKey, "0 5 15 * * 1-5", func() { a.finalizeResearch2Metrics(time.Now()) }},
 	}
 	for _, registration := range registrations {
+		if registration.key == research2AnalysisEntryKey && !setting.Research2AutoEnabled {
+			continue
+		}
 		entryID, err := a.cron.AddFunc(registration.spec, registration.run)
 		if err != nil {
 			a.recordSchedulerRegistrationError(registration.key, registration.spec, err)
@@ -117,20 +106,40 @@ func (a *App) reloadResearch2Cron(setting *models.SettingConfig) {
 	}
 }
 
+func (a *App) reloadResearch2EmailCron(setting *models.SettingConfig) {
+	if entry, exists := a.getCronEntry(research2EmailEntryKey); exists {
+		a.cron.Remove(entry)
+		a.deleteCronEntry(research2EmailEntryKey)
+	}
+	if setting.Research2EmailEnabled {
+		entry, err := a.cron.AddFunc("@every 30s", func() { a.processResearch2Emails() })
+		if err != nil {
+			a.recordSchedulerRegistrationError(research2EmailEntryKey, "@every 30s", err)
+			return
+		}
+		a.setCronEntry(research2EmailEntryKey, entry)
+		a.goTask(func(context.Context) { a.processResearch2Emails() })
+	} else {
+		a.goTask(func(context.Context) { a.cancelResearch2Emails() })
+	}
+}
+
 // recoverResearch2RunsOnStartup is called only by guarded startup assembly,
 // before the scheduler can launch an analysis. Configuration reload is not a restart.
-func (a *App) recoverResearch2RunsOnStartup(now time.Time) {
+func (a *App) recoverResearch2RunsOnStartup(now time.Time) error {
 	local := now.In(research2Location())
-	if db.Dao != nil {
-		repository := research2.NewRepository(db.Dao)
+	if a.researchDatabase == nil {
+		return errors.New("research storage is unavailable")
+	}
+	{
+		repository := research2.NewRepository(a.researchDatabase)
 		if err := repository.RecoverInterruptedRunsForDate(a.ctx, local.Format("2006-01-02"), local); err != nil {
-			logger.SugaredLogger.Errorf("恢复研究中心2中断运行失败: %v", err)
-			return
+			return fmt.Errorf("恢复研究中心2中断运行: %w", err)
 		}
 		expired, expireErr := repository.ExpireStaleExecutionChains(a.ctx, local.Format("2006-01-02"), local)
 		if expireErr != nil {
-			logger.SugaredLogger.Errorf("结束研究中心2跨日补位链失败: %v", expireErr)
-		} else if setting := data.GetSettingConfig(); setting != nil && setting.Settings != nil && setting.Research2EmailEnabled {
+			return fmt.Errorf("结束研究中心2跨日补位链: %w", expireErr)
+		} else if setting := a.loadResearch2Settings(); setting != nil && setting.Settings != nil && setting.Research2EmailEnabled {
 			email := research2.NewEmailService(repository, nil)
 			for _, chain := range expired {
 				if run, runErr := repository.ExecutionChainEmailRun(a.ctx, chain.ChainID); runErr == nil {
@@ -141,18 +150,23 @@ func (a *App) recoverResearch2RunsOnStartup(now time.Time) {
 			}
 		}
 	}
+	return nil
 }
 
-func (a *App) recoverResearch2Schedule(configID int, now time.Time) {
+func (a *App) recoverResearch2Schedule(now time.Time) {
 	local := now.In(research2Location())
 	if !withinResearch2RecoveryWindow(local) {
 		return
 	}
-	tradeDay, err := data.ResearchTradingCalendar{}.IsTradingDay(a.ctx, local)
+	setting := a.loadResearch2Settings()
+	if setting == nil || !setting.Research2AutoEnabled {
+		return
+	}
+	tradeDay, err := data.NewResearchTradingCalendar(setting).IsTradingDay(a.ctx, local)
 	if err != nil || !tradeDay {
 		return
 	}
-	_, runtimeErr := a.ensureResearch2Runtime(configID)
+	_, runtimeErr := a.ensureResearch2Runtime(setting)
 	if runtimeErr != nil {
 		logger.SugaredLogger.Errorf("恢复研究中心2运行时初始化失败: %v", runtimeErr)
 		return
@@ -169,17 +183,17 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 		return
 	}
 	defer a.research2RunMu.Unlock()
-	setting := data.GetSettingConfig()
-	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
-		return
-	}
-	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
-	if err != nil {
-		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
-		return
-	}
 	chainID, parentRunID := "", ""
 	for {
+		setting := a.loadResearch2Settings()
+		if setting == nil || !setting.Research2AutoEnabled {
+			return
+		}
+		runtime, err := a.ensureResearch2Runtime(setting)
+		if err != nil {
+			logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
+			return
+		}
 		var run research2.AnalysisRun
 		if chainID == "" {
 			run, err = runtime.Runner.Run(a.ctx, scheduledFor)
@@ -193,7 +207,7 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 			logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
 			if run.ChainID != "" {
 				if failedChain, chainErr := runtime.Repository.ExecutionChain(a.ctx, run.ChainID); chainErr == nil && failedChain.Status != "running" {
-					a.queueResearch2FinalEmail(runtime, setting, failedChain)
+					a.queueResearch2FinalEmail(runtime, failedChain)
 				}
 			}
 			return
@@ -210,7 +224,7 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 			return
 		}
 		if chain.Status != "running" {
-			a.queueResearch2FinalEmail(runtime, setting, chain)
+			a.queueResearch2FinalEmail(runtime, chain)
 			return
 		}
 		ready, readyErr := runtime.Repository.ExecutionChainsReadyForRefill(a.ctx, time.Now())
@@ -233,11 +247,11 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 }
 
 func (a *App) resumeResearch2ExecutionChain(now time.Time) {
-	setting := data.GetSettingConfig()
+	setting := a.loadResearch2Settings()
 	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
 		return
 	}
-	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		logger.SugaredLogger.Errorf("恢复研究中心2补位链失败: %v", err)
 		return
@@ -248,7 +262,7 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 		return
 	}
 	if exists && chain.Status != "running" && chain.Status != "failed" {
-		a.queueResearch2FinalEmail(runtime, setting, chain)
+		a.queueResearch2FinalEmail(runtime, chain)
 		return
 	}
 	if !exists || chain.Status == "failed" {
@@ -275,7 +289,7 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 			return
 		}
 		chain, _ = runtime.Repository.ExecutionChain(a.ctx, chain.ChainID)
-		a.queueResearch2FinalEmail(runtime, setting, chain)
+		a.queueResearch2FinalEmail(runtime, chain)
 		return
 	}
 	if !withinResearch2RecoveryWindow(now) {
@@ -284,7 +298,8 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 	a.runResearch2Analysis(research2ScheduledRoot(now))
 }
 
-func (a *App) queueResearch2FinalEmail(runtime *research2app.Runtime, setting *models.SettingConfig, chain research2.ExecutionChain) {
+func (a *App) queueResearch2FinalEmail(runtime *research2app.Runtime, chain research2.ExecutionChain) {
+	setting := a.loadResearch2Settings()
 	if runtime == nil || runtime.Email == nil || setting == nil || setting.Settings == nil || !setting.Research2EmailEnabled || chain.Status == "running" {
 		return
 	}
@@ -327,11 +342,11 @@ func (a *App) processResearch2Emails() {
 		return
 	}
 	defer a.research2EmailMu.Unlock()
-	setting := data.GetSettingConfig()
+	setting := a.loadResearch2Settings()
 	if setting == nil || setting.Settings == nil {
 		return
 	}
-	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		logger.SugaredLogger.Errorf("初始化研究中心2邮件服务失败: %v", err)
 		return
@@ -357,14 +372,14 @@ func (a *App) cancelResearch2Emails() {
 }
 
 func (a *App) testResearch2Email(ctx context.Context) error {
-	setting := data.GetSettingConfig()
+	setting := a.loadResearch2Settings()
 	if setting == nil || setting.Settings == nil {
 		return errors.New("研究中心2邮件配置不可用")
 	}
 	if _, _, configErr := research2.ValidateEmailConfig(research2EmailConfig(setting)); configErr != nil {
 		return fmt.Errorf("%w: %s", service.ErrInvalidInput, configErr.Error())
 	}
-	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		return err
 	}
@@ -376,11 +391,11 @@ func (a *App) processResearch2Trades(now time.Time) {
 		return
 	}
 	defer a.research2TradeMu.Unlock()
-	setting := data.GetSettingConfig()
-	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
+	setting := a.loadResearch2Settings()
+	if setting == nil || setting.Settings == nil {
 		return
 	}
-	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
 		return
@@ -395,11 +410,11 @@ func (a *App) finalizeResearch2Metrics(now time.Time) {
 		return
 	}
 	defer a.research2MetricMu.Unlock()
-	setting := data.GetSettingConfig()
-	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
+	setting := a.loadResearch2Settings()
+	if setting == nil || setting.Settings == nil {
 		return
 	}
-	runtime, err := a.ensureResearch2Runtime(int(setting.AIAnalysisConfigID))
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
 		return
@@ -410,12 +425,8 @@ func (a *App) finalizeResearch2Metrics(now time.Time) {
 }
 
 func (a *App) research2Repository() (*research2.Repository, error) {
-	setting := data.GetSettingConfig()
-	configID := 0
-	if setting != nil {
-		configID = int(setting.AIAnalysisConfigID)
-	}
-	runtime, err := a.ensureResearch2Runtime(configID)
+	setting := a.loadResearch2Settings()
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		return nil, err
 	}
@@ -423,12 +434,8 @@ func (a *App) research2Repository() (*research2.Repository, error) {
 }
 
 func (a *App) research2Valuation() (*research2.Service, error) {
-	setting := data.GetSettingConfig()
-	configID := 0
-	if setting != nil {
-		configID = int(setting.AIAnalysisConfigID)
-	}
-	runtime, err := a.ensureResearch2Runtime(configID)
+	setting := a.loadResearch2Settings()
+	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		return nil, err
 	}

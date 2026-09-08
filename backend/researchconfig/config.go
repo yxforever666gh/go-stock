@@ -133,6 +133,10 @@ func Clone(cfg *models.SettingConfig) *models.SettingConfig {
 		for i, model := range cfg.AiConfigs {
 			if model != nil {
 				item := *model
+				if model.ArchivedAt != nil {
+					at := *model.ArchivedAt
+					item.ArchivedAt = &at
+				}
 				copy.AiConfigs[i] = &item
 			}
 		}

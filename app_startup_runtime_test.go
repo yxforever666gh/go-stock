@@ -54,8 +54,8 @@ func TestMarketNewsPollingSupportsResearchAndHasSafeMinimumInterval(t *testing.T
 	if marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{}}) {
 		t.Fatal("market news polling should be disabled when both news and research are disabled")
 	}
-	if !marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{AICapitalDeploymentEnabled: true}}) {
-		t.Fatal("capital deployment research must keep market news polling enabled")
+	if marketNewsPollingEnabled(&models.SettingConfig{Settings: &models.Settings{AICapitalDeploymentEnabled: true}}) {
+		t.Fatal("a legacy research switch must not control the global news scheduler")
 	}
 	if got := marketNewsPollingInterval(1); got != marketNewsPollingMinimumInterval {
 		t.Fatalf("short polling interval=%s want=%s", got, marketNewsPollingMinimumInterval)
@@ -65,9 +65,9 @@ func TestMarketNewsPollingSupportsResearchAndHasSafeMinimumInterval(t *testing.T
 	}
 }
 
-func TestMarketNewsPollingReloadFollowsCapitalDeploymentSwitch(t *testing.T) {
+func TestMarketNewsPollingReloadFollowsGlobalNewsSwitch(t *testing.T) {
 	app := NewAppWithServices(service.AppServices{})
-	enabled := &models.SettingConfig{Settings: &models.Settings{AICapitalDeploymentEnabled: true, RefreshInterval: 1}}
+	enabled := &models.SettingConfig{Settings: &models.Settings{EnableNews: true, RefreshInterval: 1}}
 	app.reloadMarketNewsPolling(enabled, false)
 	for _, key := range []string{"GetNewTelegraph", "newSinaNews", "tradingViewNews"} {
 		if _, exists := app.getCronEntry(key); !exists {

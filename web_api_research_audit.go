@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"go-stock/backend/researchaudit"
+	"go-stock/backend/researchconfig"
 
 	"gorm.io/gorm"
 )
@@ -114,7 +115,7 @@ func stringValue(value *string) string {
 func writeResearchAuditError(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	switch {
-	case errors.Is(err, researchaudit.ErrInvalidRequest):
+	case errors.Is(err, researchaudit.ErrInvalidRequest), errors.Is(err, researchconfig.ErrInvalidCenter), errors.Is(err, researchconfig.ErrModelOwnership), errors.Is(err, researchconfig.ErrInvalidConfig):
 		status = http.StatusBadRequest
 	case errors.Is(err, researchaudit.ErrNotFound), errors.Is(err, gorm.ErrRecordNotFound):
 		status = http.StatusNotFound

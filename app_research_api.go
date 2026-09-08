@@ -12,6 +12,7 @@ import (
 	"go-stock/backend/models"
 	"go-stock/backend/research"
 	"go-stock/backend/researchapp"
+	"go-stock/backend/researchconfig"
 	"go-stock/internal/recommendationchart"
 )
 
@@ -26,35 +27,31 @@ const (
 	defaultCapitalReanalysisInterval = 30 * time.Minute
 )
 
-func (a *App) replaceResearchRuntime(configID int) error {
+func (a *App) researchRuntimeForSettings(cfg *models.SettingConfig) (*researchapp.Runtime, error) {
+	a.researchRuntimeMu.Lock()
+	defer a.researchRuntimeMu.Unlock()
+	if a.researchRuntime != nil && sameResearchRuntimeConfig(a.researchSettings, cfg) {
+		return a.researchRuntime, nil
+	}
 	factory := a.researchFactory
 	if factory == nil {
 		factory = newResearchRuntime
 	}
-	runtime, err := factory(configID)
+	runtime, err := factory(researchconfig.Clone(cfg))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	a.researchRuntimeMu.Lock()
 	a.researchRuntime = runtime
-	a.researchRuntimeMu.Unlock()
-	return nil
+	a.researchSettings = researchconfig.Clone(cfg)
+	return runtime, nil
 }
 
 func (a *App) getResearchRuntime() (*researchapp.Runtime, error) {
-	a.researchRuntimeMu.RLock()
-	runtime := a.researchRuntime
-	a.researchRuntimeMu.RUnlock()
-	if runtime != nil {
-		return runtime, nil
-	}
-	// Read-only research pages remain available even when every model is off.
-	if err := a.replaceResearchRuntime(0); err != nil {
+	snapshot, err := a.researchConfiguration(a.taskContext(), researchconfig.Research1)
+	if err != nil {
 		return nil, err
 	}
-	a.researchRuntimeMu.RLock()
-	defer a.researchRuntimeMu.RUnlock()
-	return a.researchRuntime, nil
+	return a.researchRuntimeForSettings(snapshot.Settings)
 }
 
 func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig, startup bool) {
@@ -67,42 +64,6 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig, startup bool) 
 			a.deleteCronEntry(key)
 		}
 	}
-	if setting == nil || setting.Settings == nil {
-		if err := a.replaceResearchRuntime(0); err != nil {
-			a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", err)
-			return
-		}
-		a.registerResearchLifecycleScanner()
-		return
-	}
-	target, maxImmediate, _, policyErr := data.NormalizeAICapitalDeploymentSettings(
-		setting.AITargetCapitalUtilization,
-		setting.AIMaxImmediateBuysPerRun,
-		setting.AIReanalysisIntervalMinutes,
-	)
-	if policyErr != nil {
-		a.recordSchedulerRegistrationError("AICapitalDeploymentPolicy", "@every 1m", policyErr)
-		target, maxImmediate = 0.90, 2
-	}
-	selected, err := data.ResolveAIAnalysisConfig(setting)
-	if err != nil {
-		if replaceErr := a.replaceResearchRuntime(0); replaceErr != nil {
-			a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", replaceErr)
-			return
-		}
-		logger.SugaredLogger.Infof("资金补位尚无可用模型，事件会持久化等待配置恢复: %v", err)
-	} else {
-		if err := a.replaceResearchRuntime(int(selected.ID)); err != nil {
-			a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", err)
-			return
-		}
-	}
-	runtime, runtimeErr := a.getResearchRuntime()
-	if runtimeErr != nil {
-		a.recordSchedulerRegistrationError("AICapitalDeploymentRuntime", "@every 1m", runtimeErr)
-		return
-	}
-	runtime.Service.SetCapitalDeploymentPolicy(target, maxImmediate)
 	a.registerResearchLifecycleScanner()
 	deploymentID, deploymentErr := a.cron.AddFunc("@every 1m", func() { a.processCapitalDeployment(false) })
 	if deploymentErr != nil {
@@ -111,7 +72,7 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig, startup bool) 
 	}
 	a.setCronEntry(aiDeploymentEntryKey, deploymentID)
 	a.goTask(func(context.Context) { a.processCapitalDeployment(startup) })
-	logger.SugaredLogger.Infof("资金补位事件调度器已加载 enabled=%t；持仓生命周期继续每分钟扫描", setting.AICapitalDeploymentEnabled)
+	logger.SugaredLogger.Info("资金补位事件调度器已加载；每个任务读取研究中心1配置，持仓生命周期继续扫描")
 }
 
 func (a *App) registerResearchLifecycleScanner() {
@@ -204,12 +165,17 @@ func (a *App) processCapitalDeployment(startup bool) {
 		return
 	}
 	defer a.aiDeploymentRunMu.Unlock()
-	runtime, err := a.getResearchRuntime()
+	ctx, now := a.taskContext(), time.Now()
+	snapshot, err := a.researchConfiguration(ctx, researchconfig.Research1)
+	if err != nil {
+		logger.SugaredLogger.Errorf("读取研究中心1配置失败: %v", err)
+		return
+	}
+	runtime, err := a.researchRuntimeForSettings(snapshot.Settings)
 	if err != nil {
 		logger.SugaredLogger.Errorf("资金补位运行时不可用: %v", err)
 		return
 	}
-	ctx, now := a.taskContext(), time.Now()
 	if recovered, recoverErr := runtime.Service.RecoverExpiredAnalysisLeases(ctx, now); recoverErr != nil {
 		logger.SugaredLogger.Errorf("资金补位恢复过期租约失败: %v", recoverErr)
 		return
@@ -228,11 +194,11 @@ func (a *App) processCapitalDeployment(startup bool) {
 	} else if normalized > 0 {
 		logger.SugaredLogger.Infof("资金补位已规范排队窗口: %d", normalized)
 	}
-	setting := a.services.Config.GetConfig()
+	setting := snapshot.Settings
 	if setting == nil || setting.Settings == nil || !setting.AICapitalDeploymentEnabled {
 		return
 	}
-	target, maxImmediate, reanalysisMinutes, err := data.NormalizeAICapitalDeploymentSettings(
+	_, _, reanalysisMinutes, err := data.NormalizeAICapitalDeploymentSettings(
 		setting.AITargetCapitalUtilization,
 		setting.AIMaxImmediateBuysPerRun,
 		setting.AIReanalysisIntervalMinutes,
@@ -241,7 +207,6 @@ func (a *App) processCapitalDeployment(startup bool) {
 		logger.SugaredLogger.Errorf("资金补位策略无效: %v", err)
 		return
 	}
-	runtime.Service.SetCapitalDeploymentPolicy(target, maxImmediate)
 	status, err := runtime.Service.CapitalDeploymentStatus(ctx, now)
 	if err != nil {
 		logger.SugaredLogger.Errorf("资金补位状态检查失败: %v", err)
@@ -293,6 +258,8 @@ func (a *App) startClaimedCapitalDeployment(runtime *researchapp.Runtime, select
 		return
 	}
 	a.aiAnalysisRunning = true
+	permit := &research.AnalysisBuyPermit{}
+	a.activeAnalysisBuyPermit = permit
 	a.aiAnalysisRunMu.Unlock()
 	leaseDone := make(chan struct{})
 	a.goTask(func(ctx context.Context) {
@@ -317,6 +284,7 @@ func (a *App) startClaimedCapitalDeployment(runtime *researchapp.Runtime, select
 		defer func() {
 			a.aiAnalysisRunMu.Lock()
 			a.aiAnalysisRunning = false
+			a.activeAnalysisBuyPermit = nil
 			a.aiAnalysisRunMu.Unlock()
 		}()
 		triggerIDs := make([]string, 0, len(claim.Triggers))
@@ -328,6 +296,7 @@ func (a *App) startClaimedCapitalDeployment(runtime *researchapp.Runtime, select
 			}
 		}
 		run, runErr := runtime.Runner.Run(ctx, research.AnalysisRequest{
+			BuyPermit:    permit,
 			ScheduledFor: claim.Run.ScheduledFor, AIConfigID: selected.ID, ProviderName: data.DisplayAIProviderName(selected),
 			ModelName: selected.ModelName, Mode: research.AnalysisModeEvent, ReservedRunID: claim.Run.RunID,
 			LeaseOwner: a.aiDeploymentLeaseOwner, TriggerIDs: triggerIDs, TriggerReasons: triggerReasons, TriggerSource: claim.Run.TriggerSource,
@@ -425,23 +394,16 @@ type capitalDeploymentStatusResponse struct {
 }
 
 func (a *App) getAICapitalDeploymentStatusContext(ctx context.Context) (capitalDeploymentStatusResponse, error) {
-	runtime, err := a.getResearchRuntime()
+	snapshot, err := a.researchConfiguration(ctx, researchconfig.Research1)
 	if err != nil {
 		return capitalDeploymentStatusResponse{}, err
 	}
-	setting := a.services.Config.GetConfig()
-	enabled := setting != nil && setting.Settings != nil && setting.AICapitalDeploymentEnabled
-	if enabled {
-		target, maxImmediate, _, policyErr := data.NormalizeAICapitalDeploymentSettings(
-			setting.AITargetCapitalUtilization,
-			setting.AIMaxImmediateBuysPerRun,
-			setting.AIReanalysisIntervalMinutes,
-		)
-		if policyErr != nil {
-			return capitalDeploymentStatusResponse{}, policyErr
-		}
-		runtime.Service.SetCapitalDeploymentPolicy(target, maxImmediate)
+	runtime, err := a.researchRuntimeForSettings(snapshot.Settings)
+	if err != nil {
+		return capitalDeploymentStatusResponse{}, err
 	}
+	setting := snapshot.Settings
+	enabled := setting != nil && setting.Settings != nil && setting.AICapitalDeploymentEnabled
 	now := time.Now()
 	status, err := runtime.Service.CapitalDeploymentStatus(ctx, now)
 	if err != nil {

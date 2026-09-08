@@ -19,6 +19,10 @@ func cloneProviderSettings(source *models.SettingConfig) *models.SettingConfig {
 	for i, config := range source.AiConfigs {
 		if config != nil {
 			copy := *config
+			if config.ArchivedAt != nil {
+				at := *config.ArchivedAt
+				copy.ArchivedAt = &at
+			}
 			result.AiConfigs[i] = &copy
 		}
 	}

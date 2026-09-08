@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
+	"go-stock/backend/researchconfig"
 	"go-stock/internal/releaseinfo"
 	"time"
 )
@@ -33,9 +34,7 @@ func (a *App) domReady(ctx context.Context) {
 	}
 	releaseinfo.MarkSchedulerReady(true)
 	a.startImmediateRuntimeTasks(config)
-	if config != nil && config.Settings != nil && config.Research2AutoEnabled {
-		a.goTask(func(context.Context) { a.recoverResearch2Schedule(int(config.AIAnalysisConfigID), time.Now()) })
-	}
+	a.goTask(func(context.Context) { a.recoverResearch2Schedule(time.Now()) })
 	a.startMaintenanceRuntime(config)
 
 	logger.SugaredLogger.Infof("domReady-cronEntrys:%+v", a.cronEntrys)
@@ -118,7 +117,7 @@ func marketNewsPollingEnabled(config *models.SettingConfig) bool {
 	if config.EnableNews {
 		return true
 	}
-	return config.AICapitalDeploymentEnabled
+	return false
 }
 
 func marketNewsPollingInterval(configuredSeconds int64) time.Duration {
@@ -170,9 +169,22 @@ func (a *App) startMaintenanceRuntime(config *models.SettingConfig) {
 }
 
 func (a *App) registerConfiguredCronRuntimes(config *models.SettingConfig) {
-	a.recoverResearch2RunsOnStartup(time.Now())
-	a.reloadAIAnalysisCron(config, true)
-	a.reloadResearch2Cron(config)
+	r1, err := a.researchConfiguration(a.taskContext(), researchconfig.Research1)
+	if err != nil {
+		a.recordSchedulerRegistrationError("Research1Configuration", "startup", err)
+		return
+	}
+	r2, err := a.researchConfiguration(a.taskContext(), researchconfig.Research2)
+	if err != nil {
+		a.recordSchedulerRegistrationError("Research2Configuration", "startup", err)
+		return
+	}
+	if err := a.recoverResearch2RunsOnStartup(time.Now()); err != nil {
+		a.recordSchedulerRegistrationError("Research2Recovery", "startup", err)
+		return
+	}
+	a.reloadAIAnalysisCron(r1.Settings, true)
+	a.reloadResearch2Cron(r2.Settings)
 	a.registerThemeLifecycleCron()
 }
 

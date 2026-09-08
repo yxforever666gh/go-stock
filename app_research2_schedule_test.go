@@ -7,11 +7,10 @@ import (
 	"time"
 
 	"go-stock/backend/ai"
-	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"go-stock/backend/research2"
 	"go-stock/backend/research2app"
-	appconfig "go-stock/internal/config"
+	"go-stock/backend/researchconfig"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -58,7 +57,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 	created := 0
 	app := &App{
 		ctx: context.Background(),
-		research2Factory: func(int) (*research2app.Runtime, error) {
+		research2Factory: func(*models.SettingConfig) (*research2app.Runtime, error) {
 			created++
 			return nil, nil
 		},
@@ -69,7 +68,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 		time.Date(2026, 9, 3, 13, 0, 0, 0, location),
 		time.Date(2026, 9, 5, 10, 0, 0, 0, location),
 	} {
-		app.recoverResearch2Schedule(1, at)
+		app.recoverResearch2Schedule(at)
 	}
 	if created != 0 {
 		t.Fatalf("recovery created runtime %d times outside an eligible trading window", created)
@@ -134,20 +133,16 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = connection.Close() })
-			if err := database.AutoMigrate(&models.Settings{}, &models.AIConfig{}, &research2.AnalysisRun{}, &research2.ExecutionChain{}, &research2.Recommendation{}, &research2.Trade{}, &research2.Account{}, &research2.AccountSnapshot{}); err != nil {
+			if err := database.AutoMigrate(&researchconfig.Record{}, &models.AIConfig{}, &research2.AnalysisRun{}, &research2.ExecutionChain{}, &research2.Recommendation{}, &research2.Trade{}, &research2.Account{}, &research2.AccountSnapshot{}); err != nil {
 				t.Fatal(err)
 			}
-			if err := database.Create(&models.Settings{Research2AutoEnabled: tc.enabled, BrowserPath: "fixture-browser"}).Error; err != nil {
+			raw, err := researchconfig.ConfigJSON(researchconfig.Research2, &models.SettingConfig{Settings: &models.Settings{Research2AutoEnabled: tc.enabled, BrowserPath: "fixture-browser"}})
+			if err != nil {
 				t.Fatal(err)
 			}
-			// The model's default is true; explicitly persist false so this case
-			// exercises the saved off switch rather than GORM's create default.
-			if err := database.Model(&models.Settings{}).Where("id > ?", 0).Update("research2_auto_enabled", tc.enabled).Error; err != nil {
+			if err := database.Create(&researchconfig.Record{Center: researchconfig.Research2, Revision: 1, ConfigJSON: string(raw)}).Error; err != nil {
 				t.Fatal(err)
 			}
-			previousDatabase := db.Dao
-			db.Dao = database
-			t.Cleanup(func() { db.Dao = previousDatabase; appconfig.ResetRuntimeOverride() })
 			repository := research2.NewRepository(database)
 			if err := repository.EnsureAccount(context.Background()); err != nil {
 				t.Fatal(err)
@@ -171,7 +166,12 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 			collector, model := &research2ResumeEvidence{}, &research2ResumeAI{}
 			runner := research2.NewRunner(repository, model, collector, research2ResumeCalendar{})
 			runner.ConfigureReplayClock(func() time.Time { return now }, nil)
-			app := &App{ctx: context.Background(), research2Runtime: &research2app.Runtime{Repository: repository, Runner: runner, Trading: research2.NewTradingService(repository, research2ResumeMarket{}, research2ResumeCalendar{})}}
+			store := researchconfig.New(database)
+			settings, err := store.Load(context.Background(), researchconfig.Research2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			app := &App{ctx: context.Background(), researchConfigStore: store, researchDatabase: database, research2Settings: settings.Settings, research2Runtime: &research2app.Runtime{Repository: repository, Runner: runner, Trading: research2.NewTradingService(repository, research2ResumeMarket{}, research2ResumeCalendar{})}}
 			app.resumeResearch2ExecutionChain(now)
 			latest, exists, err := repository.RunForDate(context.Background(), old.TradingDate)
 			if err != nil || !exists {

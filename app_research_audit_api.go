@@ -7,15 +7,15 @@ import (
 
 	aicontract "go-stock/backend/ai"
 	"go-stock/backend/data"
-	"go-stock/backend/db"
 	"go-stock/backend/researchaudit"
+	"go-stock/backend/researchconfig"
 )
 
-func newResearchAuditService() (*researchaudit.Service, error) {
-	if db.Dao == nil {
+func (a *App) newResearchAuditService() (*researchaudit.Service, error) {
+	if a.researchDatabase == nil {
 		return nil, errors.New("database is not initialized")
 	}
-	return researchaudit.NewService(researchaudit.NewRepository(db.Dao)), nil
+	return researchaudit.NewService(researchaudit.NewRepository(a.researchDatabase)), nil
 }
 
 func (a *App) ensureAuditOwnerExists(ctx context.Context, ownerType, ownerID string) error {
@@ -36,7 +36,7 @@ func (a *App) getResearchAudit(ctx context.Context, ownerType, ownerID string) (
 	if err := a.ensureAuditOwnerExists(ctx, ownerType, ownerID); err != nil {
 		return researchaudit.AuditView{}, err
 	}
-	service, err := newResearchAuditService()
+	service, err := a.newResearchAuditService()
 	if err != nil {
 		return researchaudit.AuditView{}, err
 	}
@@ -48,7 +48,7 @@ func (a *App) exportResearchAudit(ctx context.Context, ownerType, ownerID string
 	if err := a.ensureAuditOwnerExists(ctx, ownerType, ownerID); err != nil {
 		return nil, err
 	}
-	service, err := newResearchAuditService()
+	service, err := a.newResearchAuditService()
 	if err != nil {
 		return nil, err
 	}
@@ -74,10 +74,17 @@ func (executor appReplayExecutor) CompleteReplay(ctx context.Context, call resea
 }
 
 func (a *App) createResearchReplay(ctx context.Context, request researchaudit.CreateReplayRequest) (researchaudit.ReplayView, error) {
+	snapshot, err := a.researchConfiguration(ctx, request.SourceOwnerType)
+	if err != nil {
+		return researchaudit.ReplayView{}, err
+	}
+	if _, err := researchModel(snapshot, request.ModelConfigID); err != nil {
+		return researchaudit.ReplayView{}, err
+	}
 	if err := a.ensureAuditOwnerExists(ctx, request.SourceOwnerType, strings.TrimSpace(request.SourceOwnerID)); err != nil {
 		return researchaudit.ReplayView{}, err
 	}
-	service, err := newResearchAuditService()
+	service, err := a.newResearchAuditService()
 	if err != nil {
 		return researchaudit.ReplayView{}, err
 	}
@@ -87,14 +94,14 @@ func (a *App) createResearchReplay(ctx context.Context, request researchaudit.Cr
 	}
 	view := researchaudit.ReplayView{Replay: replay}
 	a.goTask(func(taskCtx context.Context) {
-		client := aicontract.NewResearchReplayClient(replay.ModelConfigID, data.ResearchAIClientOptionsForSettings(data.GetSettingConfig()))
+		client := aicontract.NewResearchReplayClient(replay.ModelConfigID, data.ResearchAIClientOptionsForSettings(researchconfig.Clone(snapshot.Settings)))
 		_, _ = service.ExecuteReplay(taskCtx, replay.ReplayID, appReplayExecutor{client: client})
 	})
 	return view, nil
 }
 
 func (a *App) getResearchReplay(ctx context.Context, replayID string) (researchaudit.ReplayView, error) {
-	service, err := newResearchAuditService()
+	service, err := a.newResearchAuditService()
 	if err != nil {
 		return researchaudit.ReplayView{}, err
 	}
