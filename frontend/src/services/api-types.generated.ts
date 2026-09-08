@@ -1160,6 +1160,8 @@ export type Research2Recommendation = {
   catalystScore?: number
   currentPrice?: number
   currentPriceAt?: string
+  displaySelectionRank?: number
+  displaySelectionRole?: "primary" | "standby" | "pending" | ""
   estimatedLotCost?: number
   executionFailureCode?: string
   executionLimitDistancePct?: number | null

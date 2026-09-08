@@ -252,7 +252,7 @@ func (r *Repository) CreateEmailDelivery(ctx context.Context, delivery *EmailDel
 
 func (r *Repository) DueEmailDeliveries(ctx context.Context, now time.Time, limit int) ([]EmailDelivery, error) {
 	var items []EmailDelivery
-	if limit <= 0 {
+	if limit < 0 {
 		limit = 20
 	}
 	err := r.db.WithContext(ctx).
@@ -296,7 +296,11 @@ func (r *Repository) RecordEmailAttempt(ctx context.Context, delivery EmailDeliv
 }
 func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int) ([]Recommendation, error) {
 	var items []Recommendation
-	err := r.db.WithContext(ctx).Order("signal_at DESC, final_score DESC, stock_code ASC, id DESC").Limit(limit).Offset(offset).Find(&items).Error
+	if limit <= 0 {
+		limit = -1
+	}
+	query := dailySelectionQuery + ", displayed AS (SELECT * FROM ranked v WHERE " + dailySelectionVisible + dailySelectionOrder + " LIMIT ? OFFSET ?)" + dailySelectionProjection + dailySelectionOrder
+	err := r.db.WithContext(ctx).Raw(query, DailyTargetSlots, limit, max(0, offset), DailyTargetSlots, DailyTargetSlots, DailyTargetSlots).Scan(&items).Error
 	for index := range items {
 		enrichLiveRecommendation(&items[index])
 	}
@@ -304,8 +308,13 @@ func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int)
 }
 func (r *Repository) GetRecommendation(ctx context.Context, id string) (RecommendationDetail, error) {
 	var result RecommendationDetail
-	if err := r.db.WithContext(ctx).Where("recommendation_id = ?", id).First(&result.Recommendation).Error; err != nil {
-		return result, err
+	query := r.db.WithContext(ctx).Raw(dailySelectionQuery+", displayed AS (SELECT * FROM ranked WHERE recommendation_id = ?)"+dailySelectionProjection,
+		id, DailyTargetSlots, DailyTargetSlots, DailyTargetSlots).Scan(&result.Recommendation)
+	if query.Error != nil {
+		return result, query.Error
+	}
+	if query.RowsAffected == 0 {
+		return result, gorm.ErrRecordNotFound
 	}
 	if err := r.db.WithContext(ctx).Where("run_id = ?", result.Recommendation.AnalysisRunID).First(&result.Analysis).Error; err != nil {
 		return result, err

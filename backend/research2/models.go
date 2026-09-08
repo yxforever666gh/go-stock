@@ -122,6 +122,8 @@ type Recommendation struct {
 	AnalysisRunID             string     `json:"analysisRunId" gorm:"size:36;index;not null"`
 	SelectionRole             string     `json:"selectionRole,omitempty" gorm:"size:24;not null;default:'legacy-unversioned';index:idx_research2_recommendations_role_rank,priority:1"`
 	SelectionRank             int        `json:"selectionRank" gorm:"not null;default:0;index:idx_research2_recommendations_role_rank,priority:2"`
+	DisplaySelectionRole      string     `json:"displaySelectionRole" gorm:"->;-:migration"`
+	DisplaySelectionRank      int        `json:"displaySelectionRank" gorm:"->;-:migration"`
 	ReplacesRecommendationID  string     `json:"replacesRecommendationId,omitempty" gorm:"size:36;index"`
 	PromotionReason           string     `json:"promotionReason,omitempty" gorm:"type:text"`
 	StockCode                 string     `json:"stockCode" gorm:"size:16;index;not null"`
