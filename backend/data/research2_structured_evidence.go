@@ -185,16 +185,17 @@ type research2CompactMetrics struct {
 }
 
 type research2CompactCandidate struct {
-	EntityID       string                  `json:"entityId"`
-	Code           string                  `json:"code"`
-	Name           string                  `json:"name"`
-	CoreEligible   bool                    `json:"coreEligible"`
-	Quote          *research2CompactQuote  `json:"quote,omitempty"`
-	MinuteBarCount int                     `json:"minuteBarCount"`
-	MinuteSource   string                  `json:"minuteSource,omitempty"`
-	Metrics        research2CompactMetrics `json:"metrics"`
-	SourceIDs      []string                `json:"sourceIds"`
-	Missing        []string                `json:"missing,omitempty"`
+	EntityID       string                           `json:"entityId"`
+	Code           string                           `json:"code"`
+	Name           string                           `json:"name"`
+	CoreEligible   bool                             `json:"coreEligible"`
+	Quote          *research2CompactQuote           `json:"quote,omitempty"`
+	MinuteBarCount int                              `json:"minuteBarCount"`
+	MinuteSource   string                           `json:"minuteSource,omitempty"`
+	Metrics        research2CompactMetrics          `json:"metrics"`
+	SourceIDs      []string                         `json:"sourceIds"`
+	Missing        []string                         `json:"missing,omitempty"`
+	ScoreEvidence  research2.CandidateScoreEvidence `json:"scoreEvidence"`
 }
 
 type research2CompactSnapshot struct {
@@ -731,6 +732,17 @@ func research2CompactDocumentSummary(document researchevidence.SourceDocument) s
 	if strings.TrimSpace(document.Error) != "" || research2DocumentIsEmpty(document) {
 		return ""
 	}
+	if facts := research2.ScoreSourceFacts(document); len(facts) > 0 {
+		omitted := 0
+		if len(facts) > 8 {
+			omitted = len(facts) - 8
+			facts = facts[:8]
+		}
+		encoded, err := json.Marshal(map[string]any{"rows": facts, "omittedRows": omitted})
+		if err == nil {
+			return string(encoded)
+		}
+	}
 	var payload any
 	if json.Unmarshal([]byte(document.Content), &payload) != nil {
 		return limitResearch2Text(document.Content, 360)
@@ -1141,6 +1153,11 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 			if source.EntityID == entityID {
 				compactCandidates[candidateIndex].SourceIDs = append(compactCandidates[candidateIndex].SourceIDs, source.SourceID)
 			}
+		}
+		support := research2.BuildCandidateScoreEvidence(compactCandidates[candidateIndex].Code, frozenDocuments, cutoff, freezeAt, time.Time{})
+		compactCandidates[candidateIndex].ScoreEvidence = support
+		for _, link := range append(append([]research2.ScoreEvidenceLink{}, support.Sector...), support.Catalyst...) {
+			compactCandidates[candidateIndex].SourceIDs = append(compactCandidates[candidateIndex].SourceIDs, link.SourceID)
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}
