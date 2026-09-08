@@ -24,6 +24,18 @@ complexity visible, and reserve full-system proof for an explicit release.
   delivering a feature or fix. Do not start a repository-wide cleanup unless
   the user explicitly requests it.
 
+## Research ownership
+
+- Research 1 and Research 2 own separate strategy, account, execution, settings,
+  and task lifecycle state. Neither center or application package imports the
+  other center or `backend/data`; shared primitives do not import either center.
+- Capture a deep configuration snapshot at each task entry. Provider retries,
+  fallbacks, and evidence collection use that snapshot; never temporarily replace
+  global settings. A center settings save only notifies that center.
+- Changes to shared AI, trading, quotes, evidence, chart, SQLite, configuration,
+  or data/root research adapters require `domain research-shared`. Changes to
+  shared frontend research requests, pages, or charts also run affected behavior tests.
+
 ## Change budget
 
 - Explain necessity and long-term cost in the final response when a task adds
@@ -31,7 +43,8 @@ complexity visible, and reserve full-system proof for an explicit release.
   public interface, configuration option, schema object, or background job.
 - Treat tests, documentation, and generated files separately from production
   code when reporting size. These measurements explain the change; they are not
-  mechanical pass/fail gates.
+  mechanical pass/fail gates. Count physical lines including blank lines; report
+  runtime prompts, tests, documentation, and generated files separately.
 
 ## Verification
 

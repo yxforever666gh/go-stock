@@ -111,10 +111,14 @@ go run .
 .\scripts\verify.ps1 -Tier release
 ```
 
-发布前可一次验证两个研究中心。该入口只使用测试 fixture，并在执行前后校验工作区及生产数据库、WAL、SHM 的 SHA256：
+修改共用配置、AI、行情或图表后，可一次验证两个研究中心、共享 Go 包及前端研究行为。该入口使用临时 fixture，并在成功和失败后核对已暂存、未暂存及未跟踪文件的内容：
 
 ```powershell
 .\scripts\research-centers.test.ps1
+# 只需 Go 共享边界时：
+.\scripts\verify.ps1 -Tier domain -Domain research-shared
+# 可选观察生产数据库、WAL、SHM；运行中应用也可能改变这些文件：
+.\scripts\research-centers.test.ps1 -CheckProductionDatabases
 ```
 
 `fast`、`domain` 和 `release` 验证均关闭真实网络和集成测试开关；普通测试必须自行使用临时 fixture。真实来源、浏览器、邮件和生产数据库验证不属于日常开发入口。详细范围与停止条件见 [`AGENTS.md`](./AGENTS.md)。
