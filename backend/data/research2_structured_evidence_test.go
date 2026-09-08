@@ -149,6 +149,9 @@ func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testin
 	if len(compact.Candidates) != 12 {
 		t.Fatalf("compact prompt lost candidates: %d", len(compact.Candidates))
 	}
+	if strings.Contains(evidence.Prompt, `"scoreEvidence"`) {
+		t.Fatal("collector derived scores before the runner verified the catalyst window")
+	}
 	for _, candidate := range compact.Candidates {
 		if !candidate.CoreEligible || candidate.MinuteBarCount != 5 || candidate.Metrics.VWAP == nil || candidate.Metrics.ReturnPct == nil {
 			t.Fatalf("candidate metrics incomplete: %+v", candidate)

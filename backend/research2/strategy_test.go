@@ -435,7 +435,7 @@ func TestRunnerTakesSignalTimeAfterAllValidation(t *testing.T) {
 	started := time.Date(2026, 8, 27, 10, 3, 40, 0, loc)
 	validated := started.Add(4 * time.Second)
 	clockCalls := 0
-	runner := NewRunner(repository, &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}}, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+	runner := NewRunner(repository, &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`}}, fixedEvidence{value: scoreFixtureEvidence(started, researchevidence.StockCandidate{Code: "sh600000", Name: "浦发银行"})}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time {
 		clockCalls++
 		if clockCalls >= 2 {
@@ -463,8 +463,8 @@ func TestRunnerCompletionImmediatelyBeforeAfternoonOpenTargets1300(t *testing.T)
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
 	current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
 	completed := time.Date(2026, 8, 27, 12, 59, 59, 0, loc)
-	ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+	ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`}
+	runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(current, researchevidence.StockCandidate{Code: "sh600000", Name: "浦发银行"})}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return current }, nil)
 
 	run, err := runner.Run(context.Background(), scheduled)
@@ -484,8 +484,8 @@ func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 		t.Run(completed.Format("15:04:05"), func(t *testing.T) {
 			repository := research2TestRepository(t)
 			current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
-			ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}
-			runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}}}}, testCalendar{})
+			ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`}
+			runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(current, researchevidence.StockCandidate{Code: "sh600000", Name: "浦发银行"})}, testCalendar{})
 			runner.ConfigureReplayClock(func() time.Time { return current }, nil)
 
 			run, err := runner.Run(context.Background(), scheduled)
@@ -508,7 +508,7 @@ func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 func TestBuildPromptUsesCompactInjectedEvidenceWithoutReportOrBuyRange(t *testing.T) {
 	loc := shanghai()
 	cutoff := time.Date(2026, 8, 27, 10, 14, 0, 0, loc)
-	prompt := buildPrompt(Evidence{Prompt: `{"candidates":[{"code":"sh600000"}]}`, WindowStartAt: cutoff.Add(-5 * time.Minute)}, cutoff)
+	prompt := buildPrompt(prepareEvidence(Evidence{CutoffAt: cutoff, Prompt: `{"candidates":[{"code":"sh600000"}]}`, WindowStartAt: cutoff.Add(-5 * time.Minute)}, time.Time{}), cutoff)
 	for _, forbidden := range []string{"https://", "reportMarkdown", "buyLower", "buyUpper", "09:55冻结"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("prompt contains forbidden %q: %s", forbidden, prompt)
@@ -661,15 +661,11 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 func TestRunnerStoresScoreAbove50EvenWhenModelConclusionSaysStayOut(t *testing.T) {
 	repository := research2TestRepository(t)
 	ai := &sequenceAI{responses: []string{
-		`{"tradingDay":true,"conclusion":"空仓，不推荐任何股票","reportMarkdown":"# 结论\n\n模型伪造报告。","recommendations":[{"code":"sh600000","name":"模型名称","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":51,"referencePrice":10,"buyLower":9,"buyUpper":11}]}`,
+		`{"tradingDay":true,"conclusion":"空仓，不推荐任何股票","reportMarkdown":"# 结论\n\n模型伪造报告。","recommendations":[{"code":"sh600000","name":"模型名称","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":51,"referencePrice":10,"buyLower":9,"buyUpper":11,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`,
 	}}
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{
-		Prompt:           "测试证据",
-		SourceStatusJSON: "[]",
-		Candidates:       []researchevidence.StockCandidate{{Code: "sh600000", Name: "证据名称"}},
-	}}, testCalendar{})
+	runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(scheduled.Add(7*time.Minute), researchevidence.StockCandidate{Code: "sh600000", Name: "证据名称"})}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 
 	run, err := runner.Run(context.Background(), scheduled)
@@ -698,7 +694,9 @@ func TestValidateRecommendationsRejectsStocksOutsideFrozenEvidence(t *testing.T)
 		{Code: "sh600000", Name: "模型名称", MarketScore: 15, SectorScore: 15, StockScore: 20, CatalystScore: 10, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
 		{Code: "sz000001", Name: "证据外股票", MarketScore: 15, SectorScore: 15, StockScore: 20, CatalystScore: 10, FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11},
 	}
-	items, warnings := validateRecommendations("run", generated, generated, []researchevidence.StockCandidate{{Code: "sh600000", Name: "证据名称"}}, values)
+	values[0].SourceRefs = scoreFixtureRefs(values[0].Code)
+	evidence := prepareEvidence(scoreFixtureEvidence(generated, researchevidence.StockCandidate{Code: "sh600000", Name: "证据名称"}), generated.Add(-19*time.Hour))
+	items, warnings := validateRecommendations("run", generated, evidence, values)
 	if len(items) != 1 || items[0].StockCode != "sh600000" || items[0].StockName != "证据名称" {
 		t.Fatalf("unexpected validated items: %+v", items)
 	}
@@ -716,7 +714,13 @@ func TestValidateRecommendationsUsesScoreAndCodePriority(t *testing.T) {
 		{Code: "sz000001", MarketScore: 15, SectorScore: 20, StockScore: 25, CatalystScore: 10, FinalScore: 70, ReferencePrice: 10},
 		{Code: "sh600000", MarketScore: 20, SectorScore: 25, StockScore: 25, CatalystScore: 10, FinalScore: 80, ReferencePrice: 10},
 	}
-	items, warnings := validateRecommendations("run", generated, generated, nil, values)
+	candidates := make([]researchevidence.StockCandidate, 0, len(values))
+	for index := range values {
+		values[index].SourceRefs = scoreFixtureRefs(values[index].Code)
+		candidates = append(candidates, researchevidence.StockCandidate{Code: values[index].Code})
+	}
+	evidence := prepareEvidence(scoreFixtureEvidence(generated, candidates...), generated.Add(-19*time.Hour))
+	items, warnings := validateRecommendations("run", generated, evidence, values)
 	if len(warnings) != 0 {
 		t.Fatalf("warnings=%v", warnings)
 	}

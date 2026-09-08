@@ -1,7 +1,10 @@
 package research2
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"go-stock/backend/researchaudit"
 	"go-stock/internal/researchevidence"
 	"strings"
 	"testing"
@@ -11,7 +14,7 @@ import (
 func TestResearch2ScorePromptSeparatesSnapshotAndFreeze(t *testing.T) {
 	t0 := time.Date(2026, 9, 8, 10, 0, 2, 0, shanghai())
 	freeze := time.Date(2026, 9, 8, 10, 0, 21, 455695000, shanghai())
-	prompt := buildPrompt(Evidence{FreezeAt: freeze, Prompt: `{}`}, t0)
+	prompt := buildPrompt(prepareEvidence(Evidence{CutoffAt: t0, FreezeAt: freeze, Prompt: `{}`}, time.Time{}), t0)
 	if !strings.Contains(prompt, "辅助来源") || !strings.Contains(prompt, "证据冻结时间") || strings.Contains(prompt, "所有指标只使用证据截止时间") {
 		t.Fatal("prompt incorrectly applies the quote cutoff to auxiliary collection")
 	}
@@ -24,6 +27,97 @@ func scoreAuditDocument(id, category, content string, at time.Time) researchevid
 	return researchevidence.SourceDocument{SourceID: id, SourceName: id, Category: category, Content: content, AvailableAt: &at, CollectedAt: at}
 }
 
+func scoreFixtureRefs(code string) []string {
+	return []string{"market", "quote-" + code, "概念 " + code, "公告 " + code}
+}
+
+// Tests that exercise execution or score arithmetic still supply the same
+// minimum provenance that a real collector must expose.
+func scoreFixtureEvidence(at time.Time, candidates ...researchevidence.StockCandidate) Evidence {
+	evidence := Evidence{Prompt: `{}`, CutoffAt: at, SourceStatusJSON: `[]`, Candidates: candidates,
+		Documents: []researchevidence.SourceDocument{scoreAuditDocument("market", "market", `{"advances":4000}`, at)}}
+	for _, candidate := range candidates {
+		code := candidate.Code
+		evidence.Documents = append(evidence.Documents,
+			scoreAuditDocument("quote-"+code, "quote", fmt.Sprintf(`{"entityId":"stock:%s","price":10}`, code), at),
+			scoreAuditDocument("概念 "+code, "stock", fmt.Sprintf(`{"BOARD_NAME":"fixture","SECURITY_CODE":"%s","BOARD_YIELD":1.5}`, code), at),
+			scoreAuditDocument("公告 "+code, "stock", fmt.Sprintf(`{"title":"新订单","publishedAt":%q}`, at.Add(-time.Minute).Format(time.RFC3339)), at))
+	}
+	return evidence
+}
+
+func TestRunnerPreparedScoresSurviveRepairAndKnowledgeWithoutChangingFrozenEvidence(t *testing.T) {
+	at := time.Date(2026, 9, 8, 10, 0, 0, 0, shanghai())
+	since := time.Date(2026, 9, 7, 15, 0, 0, 0, shanghai())
+	for _, knowledgeText := range []string{"", "知识库引用 [kb:example]，只作背景"} {
+		t.Run(fmt.Sprintf("knowledge=%t", knowledgeText != ""), func(t *testing.T) {
+			repository := research2TestRepository(t)
+			if err := repository.DB().AutoMigrate(&researchaudit.PromptVersion{}, &researchaudit.Payload{}, &researchaudit.RunState{}); err != nil {
+				t.Fatal(err)
+			}
+			evidence := scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: "sh600343"})
+			evidence.Candidates = append(evidence.Candidates, researchevidence.StockCandidate{Code: "600343"})
+			evidence.Prompt = `{"candidates":[{"code":"sh600343"}],"frozen":"keep exact bytes"}`
+			originalDocuments, _ := json.Marshal(evidence.Documents)
+			ai := &sequenceAI{responses: []string{"invalid JSON", `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600343","marketScore":15,"sectorScore":15,"stockScore":25,"catalystScore":5,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600343","概念 sh600343","公告 sh600343"]}]}`}}
+			audit := researchaudit.NewRecorder(researchaudit.NewRepository(repository.DB()))
+			runner := NewRunner(repository, ai, fixedEvidence{value: evidence}, testCalendar{})
+			runner.ConfigureKnowledge(&fixtureKnowledgeRetriever{prompt: knowledgeText})
+			runner.ConfigureAudit(audit)
+			runner.ConfigureReplayClock(func() time.Time { return at }, nil)
+			run, err := runner.Run(context.Background(), at)
+			if err != nil || run.RecommendationCount != 1 || ai.calls != 2 {
+				t.Fatalf("run=%+v calls=%d err=%v", run, ai.calls, err)
+			}
+			view, err := audit.Audit(context.Background(), researchaudit.OwnerResearch2, run.RunID)
+			if err != nil || len(view.Payloads) != 2 {
+				t.Fatalf("audit=%+v err=%v", view, err)
+			}
+			if view.Payloads[0].EvidenceSHA256 != view.Payloads[1].EvidenceSHA256 {
+				t.Fatal("repair changed the scoring basis")
+			}
+			for index, payload := range view.Payloads {
+				var recorded struct {
+					ScoreEvidence         map[string]CandidateScoreEvidence `json:"scoreEvidence"`
+					CatalystWindowStartAt time.Time                         `json:"catalystWindowStartAt"`
+					Documents             []researchevidence.SourceDocument `json:"documents"`
+				}
+				if err := json.Unmarshal([]byte(payload.Evidence), &recorded); err != nil {
+					t.Fatal(err)
+				}
+				if len(recorded.ScoreEvidence) != 1 || recorded.ScoreEvidence["sh600343"].CatalystState != "fresh_available" || !recorded.CatalystWindowStartAt.Equal(since) {
+					t.Fatalf("incorrect or duplicate prepared scores: %+v", recorded)
+				}
+				scores, _ := json.Marshal(recorded.ScoreEvidence)
+				if !strings.Contains(ai.requests[index].Prompt, evidence.Prompt) || !strings.Contains(ai.requests[index].Prompt, string(scores)) || !strings.Contains(ai.requests[index].Prompt, "# 知识库参考（不是市场评分来源）\n"+knowledgeText) {
+					t.Fatal("model input differs from audited scores or corrupted the original snapshot")
+				}
+				recordedDocuments, _ := json.Marshal(recorded.Documents)
+				if string(recordedDocuments) != string(originalDocuments) {
+					t.Fatal("auditing rewrote frozen source documents")
+				}
+			}
+			if !strings.Contains(run.ReportMarkdown, "存在带可核验时间的新催化材料") || !strings.Contains(run.ReportMarkdown, "公告 sh600343") {
+				t.Fatal("report did not use the prepared catalyst evidence")
+			}
+			after, _ := json.Marshal(evidence.Documents)
+			if string(after) != string(originalDocuments) {
+				t.Fatal("run mutated the collector's frozen documents")
+			}
+		})
+	}
+}
+
+func TestRecommendationsCannotBypassEvidenceWithNilDocuments(t *testing.T) {
+	at := time.Date(2026, 9, 8, 10, 0, 0, 0, shanghai())
+	evidence := prepareEvidence(Evidence{CutoffAt: at, Candidates: []researchevidence.StockCandidate{{Code: "sh600343"}}}, time.Time{})
+	value := modelRecommendation{Code: "sh600343", MarketScore: 20, StockScore: 40, FinalScore: 60, ReferencePrice: 10, SourceRefs: []string{"missing"}}
+	items, warnings := validateRecommendations("run", at, evidence, []modelRecommendation{value})
+	if len(items) != 0 || len(warnings) == 0 || len(validateModelSourceRefs([]modelRecommendation{value}, evidence)) == 0 {
+		t.Fatalf("nil documents bypassed production validation: %+v %v", items, warnings)
+	}
+}
+
 func TestResearch2ScoreEvidenceBindsExactBoardsAndThemeConstituents(t *testing.T) {
 	t0 := time.Date(2026, 9, 8, 10, 0, 2, 0, shanghai())
 	freeze := t0.Add(20 * time.Second)
@@ -32,7 +126,7 @@ func TestResearch2ScoreEvidenceBindsExactBoardsAndThemeConstituents(t *testing.T
 		scoreAuditDocument("sectors", "sector", `{"data":[{"bd_code":"BK0490","bd_name":"军工","bd_zdf":"1.5"},{"bd_name":"军工装备","bd_zdf":"8.2"}]}`, t0.Add(13*time.Second)),
 		scoreAuditDocument("theme-army", "theme", `{"themeId":"army","snapshot":{"heatScore":90},"stockConstituents":[{"assetType":"stock","code":"600343","market":"SH"}]}`, t0),
 	}
-	proof := BuildCandidateScoreEvidence("sh600343", docs, t0, freeze, t0.Add(-19*time.Hour))
+	proof := buildCandidateScoreEvidence("sh600343", docs, t0, freeze, t0.Add(-19*time.Hour))
 	if proof.SectorState != "available" || len(proof.Sector) != 3 {
 		t.Fatalf("valid auxiliary evidence omitted: %+v", proof)
 	}
@@ -40,13 +134,13 @@ func TestResearch2ScoreEvidenceBindsExactBoardsAndThemeConstituents(t *testing.T
 	if !strings.Contains(string(encoded), `"bd_zdf":"1.5"`) || strings.Contains(string(encoded), `"8.2"`) {
 		t.Fatalf("inexact board match: %s", encoded)
 	}
-	other := BuildCandidateScoreEvidence("sh600391", docs, t0, freeze, t0.Add(-19*time.Hour))
+	other := buildCandidateScoreEvidence("sh600391", docs, t0, freeze, t0.Add(-19*time.Hour))
 	if len(other.Sector) != 0 || other.SectorState != "membership_unverified" {
 		t.Fatalf("unproved stock membership leaked: %+v", other)
 	}
 	docs[1].AvailableAt = &[]time.Time{freeze.Add(time.Second)}[0]
 	docs = docs[:2]
-	proof = BuildCandidateScoreEvidence("sh600343", docs, t0, freeze, time.Time{})
+	proof = buildCandidateScoreEvidence("sh600343", docs, t0, freeze, time.Time{})
 	if proof.SectorState != "membership_only" {
 		t.Fatalf("after-freeze source accepted: %+v", proof)
 	}
@@ -72,7 +166,7 @@ func TestResearch2ScoreCatalystDistinguishesOldEmptyFailureAndFresh(t *testing.T
 			if sample.failed {
 				doc.Error = "HTTP 503"
 			}
-			proof := BuildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{doc}, t0, freeze, since)
+			proof := buildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{doc}, t0, freeze, since)
 			if proof.CatalystState != sample.want {
 				t.Fatalf("proof=%+v", proof)
 			}
@@ -80,7 +174,7 @@ func TestResearch2ScoreCatalystDistinguishesOldEmptyFailureAndFresh(t *testing.T
 	}
 	theme := scoreAuditDocument("theme", "theme", `{"themeId":"army","stockConstituents":[{"assetType":"stock","code":"600343"}]}`, t0)
 	catalyst := scoreAuditDocument("theme-event", "catalyst", `{"themeId":"army","event":{"eventAt":"2026-08-27T10:00:00+08:00","title":"旧事件"},"claim":{"publishedAt":"2026-09-08T09:30:00+08:00"}}`, t0)
-	proof := BuildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{theme, catalyst}, t0, freeze, since)
+	proof := buildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{theme, catalyst}, t0, freeze, since)
 	if proof.CatalystState != "old_background" {
 		t.Fatalf("new claim relabelled old event: %+v", proof)
 	}
@@ -93,7 +187,7 @@ func TestResearch2ScoreCatalystKeepsEachEventDateAndCompanyReplyTime(t *testing.
 	t0 := time.Date(2026, 9, 8, 10, 0, 2, 0, shanghai())
 	since := time.Date(2026, 9, 7, 15, 0, 0, 0, shanghai())
 	doc := scoreAuditDocument("公告 sh600343", "stock", `[{"title":"诉讼公告","notice_date":"2026-09-08"},{"title":"大订单旧公告","notice_date":"2026-08-27"}]`, t0)
-	proof := BuildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{doc}, t0, t0, since)
+	proof := buildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{doc}, t0, t0, since)
 	if len(proof.Catalyst) != 1 || len(proof.Catalyst[0].Facts) != 2 {
 		t.Fatalf("missing event facts: %+v", proof)
 	}
@@ -111,7 +205,7 @@ func TestResearch2ScoreCatalystKeepsEachEventDateAndCompanyReplyTime(t *testing.
 	} {
 		payload, _ := json.Marshal(map[string]any{"results": []any{map[string]any{"stockCode": "600343", "mainContent": "投资者问题", "attachedContent": "公司答复", "pubDate": sample.question, "attachedPubDate": sample.reply}}})
 		doc := scoreAuditDocument("互动易 sh600343", "stock", string(payload), t0)
-		proof := BuildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{doc}, t0, t0, since)
+		proof := buildCandidateScoreEvidence("sh600343", []researchevidence.SourceDocument{doc}, t0, t0, since)
 		if proof.CatalystState != sample.want {
 			t.Fatalf("question was treated as company reply: %+v", proof)
 		}
@@ -128,7 +222,7 @@ func TestResearch2ScoreTypedSectorFlowMatchesOutsideSummaryPreview(t *testing.T)
 	rows = append(rows, map[string]any{"code": "BK0490", "name": "军工", "netAmount": 12345.6, "changePct": 1.2})
 	payload, _ := json.Marshal(map[string]any{"data": rows, "status": "ok"})
 	docs = append(docs, scoreAuditDocument("typed-sector", "sector", string(payload), t0))
-	proof := BuildCandidateScoreEvidence("sh600343", docs, t0, t0, time.Time{})
+	proof := buildCandidateScoreEvidence("sh600343", docs, t0, t0, time.Time{})
 	if proof.SectorState != "available" || len(proof.Sector) != 2 || proof.Sector[1].Facts[0]["netAmount"] != 12345.6 {
 		t.Fatalf("typed flow or later rows lost: %+v", proof)
 	}
@@ -152,7 +246,9 @@ func TestResearch2ScoreSavedSeptemberSamplesRemainUnchanged(t *testing.T) {
 		t.Run(sample.day+sample.code, func(t *testing.T) {
 			at, _ := time.ParseInLocation("2006-01-02", sample.day, shanghai())
 			value := modelRecommendation{Code: sample.code, MarketScore: 18, StockScore: sample.stock, RiskDeduction: sample.risk, FinalScore: sample.want, ReferencePrice: 10}
-			items, warnings := validateRecommendations("fixture", at, at, nil, []modelRecommendation{value})
+			value.SourceRefs = scoreFixtureRefs(sample.code)
+			evidence := prepareEvidence(scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: sample.code}), time.Time{})
+			items, warnings := validateRecommendations("fixture", at, evidence, []modelRecommendation{value})
 			if len(items) != 1 || items[0].FinalScore != sample.want || len(warnings) > 0 {
 				t.Fatalf("historical component formula changed: %+v %v", items, warnings)
 			}
@@ -172,25 +268,25 @@ func TestResearch2ScoreSourceValidationKeepsThresholdAndExplainsZero(t *testing.
 	}
 	candidates := []researchevidence.StockCandidate{{Code: "sh600343", Name: "航天动力"}}
 	value := modelRecommendation{Code: "sh600343", MarketScore: 18, StockScore: 37, RiskDeduction: 3, FinalScore: 52, ReferencePrice: 19.61, SourceRefs: []string{"market", "stock-sh600343", "概念 sh600343", "公告 sh600343"}, ScoreReasons: map[string]string{"sector": "板块资料可用，本轮未奖励该项"}}
-	window := scoreEvidenceWindow{t0, since}
-	items, warnings := validateRecommendationsWithEvidence("run", t0, t0, freeze, candidates, docs, nil, []modelRecommendation{value}, window)
+	evidence := prepareEvidence(Evidence{CutoffAt: t0, FreezeAt: freeze, Candidates: candidates, Documents: docs}, since)
+	items, warnings := validateRecommendations("run", t0, evidence, []modelRecommendation{value})
 	if len(items) != 1 || items[0].FinalScore != 52 || len(warnings) != 0 {
 		t.Fatalf("saved scoring baseline changed: items=%+v warnings=%v", items, warnings)
 	}
-	lines := strings.Join(scoreReportLines(items[0], value, Evidence{CutoffAt: t0, FreezeAt: freeze, Documents: docs, Candidates: candidates, CatalystWindowStartAt: since}), "\n")
+	lines := strings.Join(scoreReportLines(items[0], value, evidence), "\n")
 	for _, text := range []string{"分项评分依据", "0分不能直接解释成接口失败", "只有旧背景", "概念 sh600343"} {
 		if !strings.Contains(lines, text) {
 			t.Fatalf("missing explanation %q: %s", text, lines)
 		}
 	}
 	value.CatalystScore = 1
-	if got := validateRecommendationScoreEvidence(value.Code, value, docs, freeze, candidates, window); len(got) == 0 {
+	if got := validateRecommendationScoreEvidence(value.Code, value, evidence); len(got) == 0 {
 		t.Fatal("old notice awarded new catalyst credit")
 	}
 	value.CatalystScore = 0
 	value.StockScore = 35
 	value.FinalScore = 50
-	if items, _ = validateRecommendationsWithEvidence("run", t0, t0, freeze, candidates, docs, nil, []modelRecommendation{value}, window); len(items) != 0 {
+	if items, _ = validateRecommendations("run", t0, evidence, []modelRecommendation{value}); len(items) != 0 {
 		t.Fatal("50-point threshold changed")
 	}
 }

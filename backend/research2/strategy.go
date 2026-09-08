@@ -42,7 +42,32 @@ type Evidence struct {
 	Degraded                 bool
 	DegradedReasons          []string
 	CandidateReferencePrices map[string]float64
-	CatalystWindowStartAt    time.Time
+}
+
+// preparedEvidence belongs to one run. Every consumer uses the same score
+// support, derived only after both snapshot and catalyst windows are known.
+type preparedEvidence struct {
+	Evidence
+	scoreEvidence         map[string]CandidateScoreEvidence
+	catalystWindowStartAt time.Time
+	knowledgePrompt       string
+}
+
+func prepareEvidence(evidence Evidence, catalystWindowStartAt time.Time) preparedEvidence {
+	if evidence.FreezeAt.IsZero() {
+		evidence.FreezeAt = evidence.CutoffAt
+	}
+	prepared := preparedEvidence{Evidence: evidence, catalystWindowStartAt: catalystWindowStartAt, scoreEvidence: make(map[string]CandidateScoreEvidence, len(evidence.Candidates))}
+	for _, candidate := range evidence.Candidates {
+		code, ok := trading.NormalizeMainlandCode(candidate.Code)
+		if !ok {
+			continue
+		}
+		if _, exists := prepared.scoreEvidence[code]; !exists {
+			prepared.scoreEvidence[code] = buildCandidateScoreEvidence(code, evidence.Documents, evidence.CutoffAt, evidence.FreezeAt, catalystWindowStartAt)
+		}
+	}
+	return prepared
 }
 
 type EvidenceCollector interface {
@@ -306,40 +331,36 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	if excludeErr != nil {
 		return finishFailure("failed", "读取当日候选排除集失败: "+excludeErr.Error(), excludeErr)
 	}
-	var evidence Evidence
+	var collected Evidence
 	if collector, ok := r.collector.(FilteredRunEvidenceCollector); ok {
-		evidence, err = collector.CollectForRunWithExclusions(ctx, run.RunID, cutoff, excludedCodes)
+		collected, err = collector.CollectForRunWithExclusions(ctx, run.RunID, cutoff, excludedCodes)
 	} else if collector, ok := r.collector.(RunEvidenceCollector); ok {
-		evidence, err = collector.CollectForRun(ctx, run.RunID, cutoff)
+		collected, err = collector.CollectForRun(ctx, run.RunID, cutoff)
 	} else {
-		evidence, err = r.collector.Collect(ctx, cutoff)
+		collected, err = r.collector.Collect(ctx, cutoff)
 	}
-	run.SourceStatusJSON = defaultJSON(evidence.SourceStatusJSON, "[]")
-	if !evidence.CutoffAt.IsZero() {
-		cutoff = evidence.CutoffAt.In(shanghai())
+	run.SourceStatusJSON = defaultJSON(collected.SourceStatusJSON, "[]")
+	if !collected.CutoffAt.IsZero() {
+		cutoff = collected.CutoffAt.In(shanghai())
 		run.EvidenceCutoffAt = cutoff
 	} else {
-		evidence.CutoffAt = cutoff
+		collected.CutoffAt = cutoff
 	}
-	if !evidence.WindowStartAt.IsZero() {
-		windowStart = evidence.WindowStartAt.In(shanghai())
-		evidence.WindowStartAt = windowStart
+	if !collected.WindowStartAt.IsZero() {
+		windowStart = collected.WindowStartAt.In(shanghai())
+		collected.WindowStartAt = windowStart
 		run.EvidenceWindowStartAt = &windowStart
 	} else {
 		windowStart = cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
-		evidence.WindowStartAt = windowStart
+		collected.WindowStartAt = windowStart
 		run.EvidenceWindowStartAt = &windowStart
 	}
-	coverage := evidence.CoveragePct
+	coverage := collected.CoveragePct
 	run.EvidenceCoveragePct = &coverage
-	degraded := evidence.Degraded
+	degraded := collected.Degraded
 	run.Degraded = &degraded
-	if evidence.EvidenceSetID != "" {
-		run.EvidenceProfileVersion, run.EvidenceSetID = evidence.EvidenceProfileVersion, evidence.EvidenceSetID
-	}
-	sourceCutoff := evidence.FreezeAt
-	if sourceCutoff.IsZero() {
-		sourceCutoff = cutoff
+	if collected.EvidenceSetID != "" {
+		run.EvidenceProfileVersion, run.EvidenceSetID = collected.EvidenceProfileVersion, collected.EvidenceSetID
 	}
 	// Persist the collector's authoritative cutoff even when collection failed,
 	// so the failure report and immutable audit point at the same snapshot.
@@ -352,11 +373,11 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	if err != nil {
 		return finishFailure("failed", "策略证据采集失败: "+err.Error(), err)
 	}
-	evidence.CatalystWindowStartAt = previousCatalystSessionClose(ctx, r.calendar, cutoff)
+	evidence := prepareEvidence(collected, previousCatalystSessionClose(ctx, r.calendar, cutoff))
 	if r.knowledge != nil {
 		retrieval, retrievalErr := r.knowledge.RetrieveForResearch(ctx, knowledge.ResearchRetrievalRequest{OwnerType: "research2", OwnerID: run.RunID, Query: research2KnowledgeQuery(evidence.Prompt), CutoffAt: cutoff, Limit: 5, ExperimentalEnabled: true})
 		if retrievalErr == nil && strings.TrimSpace(retrieval.Prompt) != "" {
-			evidence.Prompt = strings.TrimSpace(evidence.Prompt) + "\n\n" + retrieval.Prompt
+			evidence.knowledgePrompt = retrieval.Prompt
 		}
 	}
 	attempts := make(map[string]aicontract.ModelAttemptRecord)
@@ -413,7 +434,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 		run.ModelName = result.Model
 		output, err = ParseModelOutput(result.Content)
 		if err == nil {
-			sourceValidationMessages = validateModelSourceRefs(output.Recommendations, evidence.Documents, sourceCutoff, evidence.Candidates, scoreEvidenceWindow{cutoff, evidence.CatalystWindowStartAt})
+			sourceValidationMessages = validateModelSourceRefs(output.Recommendations, evidence)
 		}
 		if err == nil && len(sourceValidationMessages) == 0 {
 			break
@@ -438,7 +459,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	}
 	// Complete all source, score, candidate and price validation before taking
 	// the authoritative server-side signal timestamp.
-	items, validationMessages := validateRecommendationsWithEvidence(run.RunID, cutoff, local, sourceCutoff, evidence.Candidates, evidence.Documents, evidence.CandidateReferencePrices, output.Recommendations, scoreEvidenceWindow{cutoff, evidence.CatalystWindowStartAt})
+	items, validationMessages := validateRecommendations(run.RunID, cutoff, evidence, output.Recommendations)
 	assignResearch2SelectionRoles(items, run.RequestedSlots)
 	generated := r.now().In(shanghai())
 	run.GeneratedAt = &generated
@@ -527,18 +548,20 @@ func assignResearch2SelectionRoles(items []Recommendation, requestedSlots int) {
 	}
 }
 
-func research2AuditEvidence(evidence Evidence) map[string]any {
+func research2AuditEvidence(evidence preparedEvidence) map[string]any {
 	return map[string]any{
-		"evidenceSetId": evidence.EvidenceSetID,
-		"cutoffAt":      evidence.CutoffAt,
-		"freezeAt":      evidence.FreezeAt,
-		"windowEndAt":   evidence.WindowEndAt,
-		"sourceStatus":  json.RawMessage(defaultJSON(evidence.SourceStatusJSON, "[]")),
-		"documents":     evidence.Documents,
+		"evidenceSetId":         evidence.EvidenceSetID,
+		"cutoffAt":              evidence.CutoffAt,
+		"freezeAt":              evidence.FreezeAt,
+		"windowEndAt":           evidence.WindowEndAt,
+		"sourceStatus":          json.RawMessage(defaultJSON(evidence.SourceStatusJSON, "[]")),
+		"documents":             evidence.Documents,
+		"scoreEvidence":         evidence.scoreEvidence,
+		"catalystWindowStartAt": evidence.catalystWindowStartAt,
 	}
 }
 
-func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase string, callSequence int, cutoff time.Time, prompt string, evidence Evidence, attempts []aicontract.ModelAttemptRecord, result aicontract.CompletionResult, repaired bool, callErr error) error {
+func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase string, callSequence int, cutoff time.Time, prompt string, evidence preparedEvidence, attempts []aicontract.ModelAttemptRecord, result aicontract.CompletionResult, repaired bool, callErr error) error {
 	if r == nil || r.audit == nil {
 		return nil
 	}
@@ -605,7 +628,7 @@ func research2KnowledgeQuery(evidencePrompt string) string {
 	return "市场 题材 风险 行业 个股 " + value
 }
 
-func buildPrompt(evidence Evidence, cutoff time.Time) string {
+func buildPrompt(evidence preparedEvidence, cutoff time.Time) string {
 	windowStart := evidence.WindowStartAt.In(shanghai())
 	if evidence.WindowStartAt.IsZero() {
 		windowStart = cutoff.Truncate(time.Minute).Add(-5 * time.Minute)
@@ -618,20 +641,7 @@ func buildPrompt(evidence Evidence, cutoff time.Time) string {
 	if evidence.FreezeAt.IsZero() {
 		freezeAt = cutoff
 	}
-	var snapshot map[string]any
-	evidencePrompt := strings.TrimSpace(evidence.Prompt)
-	if json.Unmarshal([]byte(evidencePrompt), &snapshot) == nil && snapshot != nil {
-		candidates, _ := snapshot["candidates"].([]any)
-		for _, candidate := range candidates {
-			row, _ := candidate.(map[string]any)
-			if code := scoreCode(row["code"]); code != "" {
-				row["scoreEvidence"] = BuildCandidateScoreEvidence(code, evidence.Documents, cutoff, freezeAt, evidence.CatalystWindowStartAt)
-			}
-		}
-		if encoded, err := json.Marshal(snapshot); err == nil {
-			evidencePrompt = string(encoded)
-		}
-	}
+	scoreEvidenceJSON, _ := json.Marshal(evidence.scoreEvidence)
 	return strings.Join([]string{
 		strategyPrompt,
 		"\n# 本次执行参数",
@@ -640,18 +650,22 @@ func buildPrompt(evidence Evidence, cutoff time.Time) string {
 		"- 市场快照时点：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 证据冻结时间：" + freezeAt.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 辅助来源在冻结前完成即可按标注状态评估；不能把行情快照时点误作辅助采集截止。",
-		"- 新催化参考起点（上一交易日收盘；--表示未核验）：" + formatResearch2Time(evidence.CatalystWindowStartAt),
+		"- 新催化参考起点（上一交易日收盘；--表示未核验）：" + formatResearch2Time(evidence.catalystWindowStartAt),
 		"- 13:00前启动的任务允许跨越13:00继续完成；完成时间只用于执行归类，不得导致分析失败。",
 		"- 程序将在报告校验完成后获取第一笔有效行情买入；午休期间完成的报告统一在13:00买入；13:00及以后完成的推荐仅保存分析、不交易；已买入标的卖出目标固定为下一交易日10:00。",
 		"- 独立账户初始资金12,000元；最多输出6只唯一股票，服务端按最终分排序为主选与备选；一手100股含费用成本不得超过账户资金。",
 		"- 不得访问外部地址、推算缺失值或编造行情；只能使用下方注入的结构化证据。",
-		"- sourceRefs只能填写证据sources中存在且适用于该股票的sourceId，不得填写来源名称或URL。先读候选scoreEvidence中的明确板块、题材和催化关联；一般板块排行榜不是股票归属证明。",
+		"- sourceRefs只能填写证据sources中存在且适用于该股票的sourceId，不得填写来源名称或URL。先读本轮候选评分依据中的明确板块、题材和催化关联；一般板块排行榜不是股票归属证明。",
 		"- recommendations是按优先级生成的候选清单：程序将按分项重新计算最终分，计算结果>50才可入库；不足6只时只输出确有证据支持的股票，不得凑数。",
 		"- 不要输出报告生成时间、买入时间、买入区间或Markdown报告，这些由服务端生成。",
 		"\n# 输出协议（只输出JSON，不加代码围栏）",
 		`{"tradingDay":true,"conclusion":"简洁结论，不含时间","recommendations":[{"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["source-id"],"scoreReasons":{"market":"依据及0分原因","sector":"依据及0分原因","stock":"依据及0分原因","catalyst":"来源缺失/只有旧背景/核实无新催化/可用新催化及质量","risk":"扣分依据，0分说明未发现可核验风险"}}]}`,
 		"\n# 系统注入的紧凑结构化证据",
-		evidencePrompt,
+		strings.TrimSpace(evidence.Prompt),
+		"\n# 本轮候选评分依据（按规范化股票代码索引）",
+		string(scoreEvidenceJSON),
+		"\n# 知识库参考（不是市场评分来源）",
+		strings.TrimSpace(evidence.knowledgePrompt),
 	}, "\n")
 }
 
@@ -674,21 +688,16 @@ func ParseModelOutput(content string) (modelOutput, error) {
 	return output, nil
 }
 
-func validateRecommendations(runID string, generated, tradingDay time.Time, candidates []researchevidence.StockCandidate, values []modelRecommendation) ([]Recommendation, []string) {
-	return validateRecommendationsWithEvidence(runID, generated, tradingDay, generated, candidates, nil, nil, values)
-}
-
-func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cutoff time.Time, candidates []researchevidence.StockCandidate, documents []researchevidence.SourceDocument, referencePrices map[string]float64, values []modelRecommendation, windows ...scoreEvidenceWindow) ([]Recommendation, []string) {
+func validateRecommendations(runID string, generated time.Time, evidence preparedEvidence, values []modelRecommendation) ([]Recommendation, []string) {
 	items := make([]Recommendation, 0, len(values))
 	warnings := make([]string, 0)
 	seen := map[string]struct{}{}
-	allowed := make(map[string]string, len(candidates))
-	for _, candidate := range candidates {
+	allowed := make(map[string]string, len(evidence.Candidates))
+	for _, candidate := range evidence.Candidates {
 		if code, ok := trading.NormalizeMainlandCode(candidate.Code); ok {
 			allowed[code] = strings.TrimSpace(candidate.Name)
 		}
 	}
-	restrictToEvidence := candidates != nil
 	for _, value := range values {
 		code, ok := trading.NormalizeMainlandCode(value.Code)
 		if !ok || !(strings.HasPrefix(code, "sh60") || strings.HasPrefix(code, "sz00")) {
@@ -700,15 +709,15 @@ func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cu
 		}
 		seen[code] = struct{}{}
 		evidenceName, inEvidence := allowed[code]
-		if restrictToEvidence && !inEvidence {
+		if !inEvidence {
 			warnings = append(warnings, code+"不在本次冻结候选集合中")
 			continue
 		}
-		if sourceWarnings := validateRecommendationSourceRefs(code, value.SourceRefs, documents, cutoff, candidates); len(sourceWarnings) > 0 {
+		if sourceWarnings := validateRecommendationSourceRefs(code, value.SourceRefs, evidence.Documents, evidence.FreezeAt, evidence.Candidates); len(sourceWarnings) > 0 {
 			warnings = append(warnings, sourceWarnings...)
 			continue
 		}
-		if scoreWarnings := validateRecommendationScoreEvidence(code, value, documents, cutoff, candidates, windows...); len(scoreWarnings) > 0 {
+		if scoreWarnings := validateRecommendationScoreEvidence(code, value, evidence); len(scoreWarnings) > 0 {
 			warnings = append(warnings, scoreWarnings...)
 			continue
 		}
@@ -725,9 +734,9 @@ func validateRecommendationsWithEvidence(runID string, generated, tradingDay, cu
 			continue
 		}
 		referencePrice := value.ReferencePrice
-		if referencePrices != nil {
+		if evidence.CandidateReferencePrices != nil {
 			var priceExists bool
-			referencePrice, priceExists = referencePrices[code]
+			referencePrice, priceExists = evidence.CandidateReferencePrices[code]
 			if !priceExists {
 				warnings = append(warnings, code+"缺少截止点证据参考价")
 				continue
@@ -765,81 +774,61 @@ func validScoreComponent(value, maximum float64) bool {
 	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0 && value <= maximum
 }
 
-func validateModelSourceRefs(values []modelRecommendation, documents []researchevidence.SourceDocument, cutoff time.Time, candidates []researchevidence.StockCandidate, windows ...scoreEvidenceWindow) []string {
-	if documents == nil {
-		return nil
-	}
+func validateModelSourceRefs(values []modelRecommendation, evidence preparedEvidence) []string {
 	warnings := make([]string, 0)
 	for _, value := range values {
 		code, ok := trading.NormalizeMainlandCode(value.Code)
 		if !ok {
 			code = strings.TrimSpace(value.Code)
 		}
-		warnings = append(warnings, validateRecommendationSourceRefs(code, value.SourceRefs, documents, cutoff, candidates)...)
-		warnings = append(warnings, validateRecommendationScoreEvidence(code, value, documents, cutoff, candidates, windows...)...)
+		warnings = append(warnings, validateRecommendationSourceRefs(code, value.SourceRefs, evidence.Documents, evidence.FreezeAt, evidence.Candidates)...)
+		warnings = append(warnings, validateRecommendationScoreEvidence(code, value, evidence)...)
 	}
 	return warnings
 }
 
-func validateRecommendationScoreEvidence(code string, value modelRecommendation, documents []researchevidence.SourceDocument, cutoff time.Time, candidates []researchevidence.StockCandidate, windows ...scoreEvidenceWindow) []string {
-	if documents == nil {
-		return nil
-	}
-	byID := make(map[string]researchevidence.SourceDocument, len(documents))
-	for _, document := range documents {
+func validateRecommendationScoreEvidence(code string, value modelRecommendation, evidence preparedEvidence) []string {
+	byID := make(map[string]researchevidence.SourceDocument, len(evidence.Documents))
+	for _, document := range evidence.Documents {
 		byID[strings.TrimSpace(document.SourceID)] = document
 	}
 	supported := map[string]bool{}
 	for _, ref := range value.SourceRefs {
 		document, ok := byID[strings.TrimSpace(ref)]
-		if !ok || document.AvailableAt == nil || document.AvailableAt.After(cutoff) || strings.TrimSpace(document.Error) != "" || !research2CitationPayloadUsable(document.Content) || !scoreScopedDocumentApplies(document, code, candidates, documents, cutoff) {
+		if !ok || document.AvailableAt == nil || document.AvailableAt.After(evidence.FreezeAt) || strings.TrimSpace(document.Error) != "" || !research2CitationPayloadUsable(document.Content) || !scoreScopedDocumentApplies(document, code, evidence.Candidates, evidence.Documents, evidence.FreezeAt) {
 			continue
 		}
 		category := strings.ToLower(strings.TrimSpace(document.Category))
-		name := strings.ToLower(strings.TrimSpace(document.SourceName))
 		sourceID := strings.ToLower(strings.TrimSpace(document.SourceID))
 		if category == "market" || strings.HasPrefix(sourceID, "research2:market:") {
 			supported["market"] = true
 		}
-		if category == "sector" || category == "theme" || strings.Contains(sourceID, ":sector:") || strings.Contains(sourceID, ":concept:") {
-			supported["sector"] = true
-		}
-		for _, fact := range ScoreSourceFacts(document) {
-			if fact["BOARD_NAME"] != nil && scoreObjectOwns(fact, code) && scoreNumberAvailable(fact["BOARD_YIELD"]) {
-				supported["sector"] = true
-			}
-		}
 		if category == "stock" || category == "quote" || category == "minute" || strings.HasPrefix(sourceID, "research2:quote:") || strings.HasPrefix(sourceID, "research2:minutes:") {
 			supported["stock"] = true
 		}
-		if category == "catalyst" || strings.Contains(name, "新闻") || strings.Contains(name, "公告") || strings.Contains(name, "催化") || strings.Contains(name, "热点") || strings.Contains(name, "互动") {
-			supported["catalyst"] = true
-		}
 	}
-	if len(windows) > 0 {
-		proof := BuildCandidateScoreEvidence(code, documents, windows[0].MarketCutoff, cutoff, windows[0].FreshSince)
-		cited := map[string]bool{}
-		for _, ref := range value.SourceRefs {
-			cited[strings.TrimSpace(ref)] = true
+	proof := evidence.scoreEvidence[code]
+	cited := map[string]bool{}
+	for _, ref := range value.SourceRefs {
+		cited[strings.TrimSpace(ref)] = true
+	}
+	supported["sector"], supported["catalyst"] = false, false
+	for _, link := range proof.Sector {
+		if !cited[link.SourceID] {
+			continue
 		}
-		supported["sector"], supported["catalyst"] = false, false
-		for _, link := range proof.Sector {
-			if !cited[link.SourceID] {
-				continue
-			}
-			if link.Relation == "exact_board_match" || link.Relation == "verified_theme_constituent" {
+		if link.Relation == "exact_board_match" || link.Relation == "verified_theme_constituent" {
+			supported["sector"] = true
+		}
+		for _, fact := range link.Facts {
+			if scoreNumberAvailable(fact["BOARD_YIELD"]) {
 				supported["sector"] = true
 			}
-			for _, fact := range link.Facts {
-				if scoreNumberAvailable(fact["BOARD_YIELD"]) {
-					supported["sector"] = true
-				}
-			}
 		}
-		for _, link := range proof.Catalyst {
-			if cited[link.SourceID] && link.Relation == "fresh_available" {
-				supported["catalyst"] = true
-			}
+	}
+	for _, link := range proof.Catalyst {
+		if cited[link.SourceID] && link.Relation == "fresh_available" {
+			supported["catalyst"] = true
 		}
 	}
 	warnings := make([]string, 0, 4)
@@ -861,11 +850,6 @@ func validateRecommendationScoreEvidence(code string, value modelRecommendation,
 }
 
 func validateRecommendationSourceRefs(code string, refs []string, documents []researchevidence.SourceDocument, cutoff time.Time, candidates []researchevidence.StockCandidate) []string {
-	// A nil document slice represents a legacy collector that cannot expose
-	// stable source IDs. New trailing5 evidence always supplies Documents.
-	if documents == nil {
-		return nil
-	}
 	if len(refs) == 0 {
 		return []string{code + "未提供sourceRefs"}
 	}
@@ -967,7 +951,7 @@ func sourceDocumentAppliesToStock(document researchevidence.SourceDocument, code
 	return false
 }
 
-func renderAnalysisReport(run AnalysisRun, evidence Evidence, output modelOutput, items []Recommendation, warnings []string) string {
+func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output modelOutput, items []Recommendation, warnings []string) string {
 	generated := run.StartedAt
 	if run.GeneratedAt != nil {
 		generated = run.GeneratedAt.In(shanghai())

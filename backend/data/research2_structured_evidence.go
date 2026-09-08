@@ -185,17 +185,16 @@ type research2CompactMetrics struct {
 }
 
 type research2CompactCandidate struct {
-	EntityID       string                           `json:"entityId"`
-	Code           string                           `json:"code"`
-	Name           string                           `json:"name"`
-	CoreEligible   bool                             `json:"coreEligible"`
-	Quote          *research2CompactQuote           `json:"quote,omitempty"`
-	MinuteBarCount int                              `json:"minuteBarCount"`
-	MinuteSource   string                           `json:"minuteSource,omitempty"`
-	Metrics        research2CompactMetrics          `json:"metrics"`
-	SourceIDs      []string                         `json:"sourceIds"`
-	Missing        []string                         `json:"missing,omitempty"`
-	ScoreEvidence  research2.CandidateScoreEvidence `json:"scoreEvidence"`
+	EntityID       string                  `json:"entityId"`
+	Code           string                  `json:"code"`
+	Name           string                  `json:"name"`
+	CoreEligible   bool                    `json:"coreEligible"`
+	Quote          *research2CompactQuote  `json:"quote,omitempty"`
+	MinuteBarCount int                     `json:"minuteBarCount"`
+	MinuteSource   string                  `json:"minuteSource,omitempty"`
+	Metrics        research2CompactMetrics `json:"metrics"`
+	SourceIDs      []string                `json:"sourceIds"`
+	Missing        []string                `json:"missing,omitempty"`
 }
 
 type research2CompactSnapshot struct {
@@ -1153,11 +1152,6 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 			if source.EntityID == entityID {
 				compactCandidates[candidateIndex].SourceIDs = append(compactCandidates[candidateIndex].SourceIDs, source.SourceID)
 			}
-		}
-		support := research2.BuildCandidateScoreEvidence(compactCandidates[candidateIndex].Code, frozenDocuments, cutoff, freezeAt, time.Time{})
-		compactCandidates[candidateIndex].ScoreEvidence = support
-		for _, link := range append(append([]research2.ScoreEvidenceLink{}, support.Sector...), support.Catalyst...) {
-			compactCandidates[candidateIndex].SourceIDs = append(compactCandidates[candidateIndex].SourceIDs, link.SourceID)
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}
