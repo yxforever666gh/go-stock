@@ -188,7 +188,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	client := ai.NewResearchClient(int(setting.AIAnalysisConfigID), data.ResearchAIClientOptions())
+	client := ai.NewResearchClient(int(setting.AIAnalysisConfigID), data.ResearchAIClientOptionsForSettings(setting))
 	runner := research2.NewRunner(repository, client, historicalCollector{mainDB: db.Dao, minuteDB: db.MinuteDao, date: tradingDate}, fixedCalendar{})
 	fixedNow := cutoff.Add(2 * time.Minute)
 	runner.ConfigureReplayClock(func() time.Time { return fixedNow }, func(context.Context, time.Time) error { return nil })

@@ -92,10 +92,14 @@ type StockBasicResponse struct {
 }
 
 func NewStockDataApi() *StockDataApi {
+	return NewStockDataApiWithSettings(GetSettingConfig())
+}
+
+func NewStockDataApiWithSettings(setting *models.SettingConfig) *StockDataApi {
 	client := newRealtimeRestyClient()
 	return &StockDataApi{
 		client: client,
-		config: GetSettingConfig(),
+		config: cloneProviderSettings(setting),
 	}
 }
 

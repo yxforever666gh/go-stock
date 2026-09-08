@@ -69,7 +69,7 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
-	dependencies, options, err := data.NewResearchDependencies(int(selected.ID), db.Dao, db.MinuteDao)
+	dependencies, options, err := data.NewResearchDependencies(int(selected.ID), db.Dao, db.MinuteDao, setting)
 	if err != nil {
 		return err
 	}

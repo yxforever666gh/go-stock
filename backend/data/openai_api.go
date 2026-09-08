@@ -73,10 +73,16 @@ func NewDeepSeekOpenAi(ctx context.Context, aiConfigId int) *OpenAi {
 }
 
 func NewOpenAiWithConfig(ctx context.Context, aiConfig *AIConfig) *OpenAi {
+	return NewOpenAiWithSettings(ctx, aiConfig, GetSettingConfig())
+}
+
+func NewOpenAiWithSettings(ctx context.Context, aiConfig *AIConfig, setting *models.SettingConfig) *OpenAi {
 	if aiConfig == nil {
 		aiConfig = &AIConfig{}
 	}
-	settingConfig := GetSettingConfig()
+	model := *aiConfig
+	aiConfig = &model
+	settingConfig := cloneProviderSettings(setting)
 	if aiConfig.TimeOut <= 0 {
 		aiConfig.TimeOut = 60 * 5
 	}

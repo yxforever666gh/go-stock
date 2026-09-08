@@ -87,7 +87,7 @@ func (a *App) createResearchReplay(ctx context.Context, request researchaudit.Cr
 	}
 	view := researchaudit.ReplayView{Replay: replay}
 	a.goTask(func(taskCtx context.Context) {
-		client := aicontract.NewResearchReplayClient(replay.ModelConfigID, data.ResearchAIClientOptions())
+		client := aicontract.NewResearchReplayClient(replay.ModelConfigID, data.ResearchAIClientOptionsForSettings(data.GetSettingConfig()))
 		_, _ = service.ExecuteReplay(taskCtx, replay.ReplayID, appReplayExecutor{client: client})
 	})
 	return view, nil

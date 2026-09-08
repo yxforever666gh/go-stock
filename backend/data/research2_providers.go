@@ -17,6 +17,7 @@ import (
 
 	"go-stock/backend/ai"
 	"go-stock/backend/marketdata"
+	"go-stock/backend/models"
 	"go-stock/backend/research2"
 	"go-stock/backend/research2app"
 	"go-stock/backend/researchaudit"
@@ -30,11 +31,15 @@ import (
 
 // NewResearch2Dependencies builds only the concrete infrastructure adapters;
 // runtime service composition belongs to backend/research2app.
-func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB) (research2app.Dependencies, error) {
+func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *models.SettingConfig) (research2app.Dependencies, error) {
 	if mainDB == nil {
 		return research2app.Dependencies{}, errors.New("database is not initialized")
 	}
-	stocks := NewStockDataApi()
+	if setting == nil || setting.Settings == nil {
+		return research2app.Dependencies{}, errors.New("research settings snapshot is required")
+	}
+	setting = cloneProviderSettings(setting)
+	stocks := NewStockDataApiWithSettings(setting)
 	news := NewMarketNewsApi()
 	quoteProvider := NewResearchQuoteProviderWithStockData(stocks)
 	calendar := ResearchTradingCalendar{}
@@ -49,7 +54,7 @@ func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB) (research
 	market := &research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
 	return research2app.Dependencies{
 		Quotes: quoteProvider, Chart: chartProvider, ChartCalendar: calendar,
-		AI: ai.NewResearchClient(configID, ResearchAIClientOptions()), Evidence: collector, EvidenceStore: marketdata.NewRepository(mainDB),
+		AI: ai.NewResearchClient(configID, ResearchAIClientOptionsForSettings(setting)), Evidence: collector, EvidenceStore: marketdata.NewRepository(mainDB),
 		EvidenceBuild: buildResearch2EvidenceItem, EvidenceProfile: research2EvidenceProfileV7,
 		Calendar: calendar, Market: market,
 		Audit: researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)), Knowledge: NewKnowledgeService(mainDB),

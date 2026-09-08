@@ -107,7 +107,7 @@ func newResearchRuntime(configID int) (*researchapp.Runtime, error) {
 }
 
 func newResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*researchapp.Runtime, error) {
-	dependencies, options, err := data.NewResearchDependencies(configID, mainDB, minuteDB)
+	dependencies, options, err := data.NewResearchDependencies(configID, mainDB, minuteDB, data.GetSettingConfig())
 	if err != nil {
 		return nil, err
 	}
@@ -115,7 +115,7 @@ func newResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*re
 }
 
 func newResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*research2app.Runtime, error) {
-	dependencies, err := data.NewResearch2Dependencies(configID, mainDB, minuteDB)
+	dependencies, err := data.NewResearch2Dependencies(configID, mainDB, minuteDB, data.GetSettingConfig())
 	if err != nil {
 		return nil, err
 	}
