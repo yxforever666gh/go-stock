@@ -105,53 +105,80 @@ func (ai *permissionBlockingAI) Complete(ctx context.Context, request sharedai.C
 }
 
 func TestDisableDuringAnalysisKeepsRequestedActionAndCompletesReport(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	repo := researchTestRepo(t)
-	setEnabled := configurePermissionFixture(t, repo)
-	at := time.Date(2026, 9, 9, 10, 0, 0, 0, shanghaiLocation)
-	ai := &permissionBlockingAI{started: make(chan struct{}), resume: make(chan struct{}), delegate: &scriptedAI{results: []sharedai.CompletionResult{
-		{Content: "市场风险可控"},
-		{Content: `{"analysis":"银行资金转强","directions":["银行"],"candidates":[{"code":"600000","name":"浦发银行"}]}`},
-		{Content: `{"analysis":"结构改善","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"结构改善","mainRisk":"回落","sourceRefs":"S001"}]}`},
-		{Content: "建议直接模拟买入。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|结构改善|回落|S001|"},
-	}}}
-	quote := marketquote.Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: at}
-	service := NewService(repo, ai, &scriptedQuotes{quotes: []marketquote.Quote{quote}}, weekdayTradingCalendar{})
-	service.now = func() time.Time { return at }
-	runner := NewAnalysisRunner(service, fixedCollector{})
-	var run AnalysisRun
-	done := make(chan error, 1)
-	go func() { var err error; run, err = runner.Run(ctx, AnalysisRequest{ScheduledFor: at}); done <- err }()
-	select {
-	case <-ai.started:
-	case <-ctx.Done():
-		t.Fatal("analysis did not reach final model call")
-	}
-	setEnabled(false)
-	close(ai.resume)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	opportunities, err := repo.BuyOpportunitiesForRun(ctx, run.RunID)
-	if err != nil || len(opportunities) != 1 {
-		t.Fatalf("opportunities=%+v err=%v", opportunities, err)
-	}
-	item := opportunities[0]
-	if run.Status == "failed" || run.CompletedAt == nil || run.RecommendationCount != 0 || item.RequestedAction != OpportunityActionBuyNow || item.Action != OpportunityActionReject || item.Status != "closed" || !strings.Contains(item.ValidationReason, "自动策略已关闭") || !strings.Contains(run.FinalReport, "自动策略已关闭") {
-		t.Fatalf("disabled analysis did not close cleanly: run=%+v opportunity=%+v", run, item)
-	}
-	wait := BuyOpportunity{AnalysisRunID: run.RunID, Action: OpportunityActionWait, StockCode: "sz000001", ReanalysisAt: &at}
-	if err := repo.CreateBuyOpportunity(ctx, &wait); err != nil {
-		t.Fatal(err)
-	}
-	if wait.RequestedAction != OpportunityActionWait || wait.Status != "closed" || wait.ReanalysisAt != nil {
-		t.Fatalf("disabled wait remained runnable: %+v", wait)
-	}
-	var trades int64
-	repo.DB().Model(&SimulatedTrade{}).Count(&trades)
-	if trades != 0 {
-		t.Fatal("disabled analysis created trades")
+	for name, reopen := range map[string]bool{"stay disabled": false, "quickly reenabled": true} {
+		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			repo := researchTestRepo(t)
+			setEnabled := configurePermissionFixture(t, repo)
+			at := time.Date(2026, 9, 9, 10, 0, 0, 0, shanghaiLocation)
+			ai := &permissionBlockingAI{started: make(chan struct{}), resume: make(chan struct{}), delegate: &scriptedAI{results: []sharedai.CompletionResult{
+				{Content: "市场风险可控"},
+				{Content: `{"analysis":"银行资金转强","directions":["银行"],"candidates":[{"code":"600000","name":"浦发银行"}]}`},
+				{Content: `{"analysis":"结构改善","shortlist":[{"stockName":"浦发银行","stockCode":"sh600000","aiSummary":"结构改善","mainRisk":"回落","sourceRefs":"S001"}]}`},
+				{Content: "建议直接模拟买入。\n\n" + finalReportTableHeader + "\n|---|---|---|---|---|\n|浦发银行|sh600000|结构改善|回落|S001|"},
+			}}}
+			quote := marketquote.Quote{Code: "sh600000", Name: "浦发银行", Market: "SH", Price: 10, PreviousClose: 9.8, At: at}
+			service := NewService(repo, ai, &scriptedQuotes{quotes: []marketquote.Quote{quote}}, weekdayTradingCalendar{})
+			service.now = func() time.Time { return at }
+			runner := NewAnalysisRunner(service, fixedCollector{})
+			var run AnalysisRun
+			permit := &AnalysisBuyPermit{}
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				run, err = runner.Run(ctx, AnalysisRequest{ScheduledFor: at, BuyPermit: permit})
+				done <- err
+			}()
+			select {
+			case <-ai.started:
+			case <-ctx.Done():
+				t.Fatal("analysis did not reach final model call")
+			}
+			setEnabled(false)
+			permit.Disable()
+			if reopen {
+				setEnabled(true)
+			}
+			close(ai.resume)
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+			opportunities, err := repo.BuyOpportunitiesForRun(ctx, run.RunID)
+			if err != nil || len(opportunities) != 1 {
+				t.Fatalf("opportunities=%+v err=%v", opportunities, err)
+			}
+			item := opportunities[0]
+			if run.Status == "failed" || run.CompletedAt == nil || run.RecommendationCount != 0 || item.RequestedAction != OpportunityActionBuyNow || item.Action != OpportunityActionReject || item.Status != "closed" || !strings.Contains(item.ValidationReason, "自动策略已关闭") || !strings.Contains(run.FinalReport, "自动策略已关闭") {
+				t.Fatalf("disabled analysis did not close cleanly: run=%+v opportunity=%+v", run, item)
+			}
+			setEnabled(false)
+			wait := BuyOpportunity{AnalysisRunID: run.RunID, Action: OpportunityActionWait, StockCode: "sz000001", ReanalysisAt: &at}
+			if err := repo.CreateBuyOpportunity(ctx, &wait); err != nil {
+				t.Fatal(err)
+			}
+			if wait.RequestedAction != OpportunityActionWait || wait.Status != "closed" || wait.ReanalysisAt != nil {
+				t.Fatalf("disabled wait remained runnable: %+v", wait)
+			}
+			var trades int64
+			repo.DB().Model(&SimulatedTrade{}).Count(&trades)
+			if trades != 0 {
+				t.Fatal("disabled analysis created trades")
+			}
+			if reopen {
+				setEnabled(true)
+				nextService := NewService(repo, &scriptedAI{results: ai.delegate.results}, &scriptedQuotes{quotes: []marketquote.Quote{quote}}, weekdayTradingCalendar{})
+				nextService.now = func() time.Time { return at }
+				next, err := NewAnalysisRunner(nextService, fixedCollector{}).Run(ctx, AnalysisRequest{ScheduledFor: at.Add(time.Second), BuyPermit: &AnalysisBuyPermit{}})
+				if err != nil || next.RecommendationCount != 1 {
+					t.Fatalf("new enabled run inherited the old permit: run=%+v err=%v", next, err)
+				}
+				repo.DB().Model(&SimulatedTrade{}).Where("side = ?", "buy").Count(&trades)
+				if trades != 1 {
+					t.Fatalf("new enabled run buys=%d", trades)
+				}
+			}
+		})
 	}
 }
 
@@ -203,6 +230,8 @@ func (q permissionBlockingQuote) CurrentQuote(ctx context.Context, _ string) (ma
 func TestDisableWhileBuyQuoteInFlightPreventsCommit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	permit := &AnalysisBuyPermit{}
+	ctx = context.WithValue(ctx, analysisBuyPermitKey{}, permit)
 	repo := researchTestRepo(t)
 	setEnabled := configurePermissionFixture(t, repo)
 	at := time.Date(2026, 9, 9, 10, 0, 0, 0, shanghaiLocation)
@@ -218,6 +247,8 @@ func TestDisableWhileBuyQuoteInFlightPreventsCommit(t *testing.T) {
 		t.Fatal("buy did not reach quote request")
 	}
 	setEnabled(false)
+	permit.Disable()
+	setEnabled(true)
 	close(quote.resume)
 	if err := <-done; !errors.Is(err, trading.ErrNewPositionsDisabled) {
 		t.Fatalf("enqueue err=%v", err)

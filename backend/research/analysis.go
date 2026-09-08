@@ -45,6 +45,7 @@ func IsCapitalDeploymentAnalysisWindow(value time.Time) bool {
 }
 
 type AnalysisRequest struct {
+	BuyPermit          *AnalysisBuyPermit `json:"-"`
 	ScheduledFor       time.Time
 	AIConfigID         uint
 	ProviderName       string
@@ -269,6 +270,9 @@ func recentRecommendationContext(source []RecommendationHistoryItem) string {
 }
 
 func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (result AnalysisRun, resultErr error) {
+	if request.BuyPermit != nil {
+		ctx = context.WithValue(ctx, analysisBuyPermitKey{}, request.BuyPermit)
+	}
 	r.service.analysisMu.Lock()
 	defer r.service.analysisMu.Unlock()
 	now := r.service.now()

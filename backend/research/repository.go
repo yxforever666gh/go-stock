@@ -110,6 +110,9 @@ func (r *Repository) CheckNewPositionsAllowed(ctx context.Context) error {
 }
 
 func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gorm.DB) error {
+	if err := checkAnalysisBuyPermit(ctx); err != nil {
+		return err
+	}
 	if r.newPositionsPermission == nil {
 		return nil
 	}
@@ -295,7 +298,7 @@ func (r *Repository) CreateBuyOpportunity(ctx context.Context, opportunity *BuyO
 		return errors.New("invalid decision quote status")
 	}
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		if opportunity.Action != OpportunityActionReject && r.newPositionsPermission != nil {
+		if opportunity.Action != OpportunityActionReject && (r.newPositionsPermission != nil || ctx.Value(analysisBuyPermitKey{}) != nil) {
 			if err := lockAccountForWrite(tx); err != nil {
 				return err
 			}
