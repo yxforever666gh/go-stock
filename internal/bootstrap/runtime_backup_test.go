@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go-stock/internal/migrations"
+	"go-stock/internal/releaseinfo"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
@@ -26,7 +27,8 @@ func TestBackupMainBeforePendingMigrationSnapshotsExistingDatabase(t *testing.T)
 	if err := migrations.MigrateMain(database); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Where("id = ?", 25).Delete(&migrations.MigrationRecord{}).Error; err != nil {
+	currentSchema := releaseinfo.Manifest().MainSchemaVersion
+	if err := database.Where("id = ?", currentSchema).Delete(&migrations.MigrationRecord{}).Error; err != nil {
 		t.Fatal(err)
 	}
 	destination, err := backupMainBeforePendingMigration(database, filepath.Join(directory, "backups"))
@@ -49,7 +51,7 @@ func TestBackupMainBeforePendingMigrationSnapshotsExistingDatabase(t *testing.T)
 	}
 	t.Cleanup(func() { _ = backupSQL.Close() })
 	var recordCount int64
-	if err := backup.Model(&migrations.MigrationRecord{}).Count(&recordCount).Error; err != nil || recordCount != 24 {
+	if err := backup.Model(&migrations.MigrationRecord{}).Count(&recordCount).Error; err != nil || recordCount != int64(currentSchema-1) {
 		t.Fatalf("backup migration records=%d err=%v", recordCount, err)
 	}
 	if err := migrations.MigrateMain(database); err != nil {
