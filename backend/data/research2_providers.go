@@ -42,7 +42,7 @@ func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *
 	stocks := NewStockDataApiWithSettings(setting)
 	news := NewMarketNewsApiWithSettings(setting, mainDB)
 	quoteProvider := NewResearchQuoteProviderWithStockData(stocks)
-	calendar := ResearchTradingCalendar{}
+	calendar := NewResearchTradingCalendar(setting)
 	sources := NewResearchSourceCollectorWithProviders(news, stocks)
 	marketEvidence := NewMarketEvidenceServiceWithSettings(mainDB, minuteDB, setting)
 	chartProvider := NewResearchChartProviderWithStorage(quoteProvider, minuteDB)

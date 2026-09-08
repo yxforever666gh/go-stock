@@ -49,6 +49,29 @@ func TestResearchNewsFetchStateDoesNotCrossInstances(t *testing.T) {
 	}
 }
 
+func TestResearchCalendarFailureAndCredentialsStayWithinSnapshot(t *testing.T) {
+	setting := &models.SettingConfig{Settings: &models.Settings{TushareToken: "first"}}
+	first := NewResearchTradingCalendar(setting)
+	second := NewResearchTradingCalendar(&models.SettingConfig{Settings: &models.Settings{TushareToken: "second"}})
+	setting.TushareToken = "later"
+	first.cache.fetch = func(_ string, _, _ time.Time, _ int64) (map[string]bool, error) {
+		return nil, errors.New("first unavailable")
+	}
+	day := time.Date(2026, 9, 8, 0, 0, 0, 0, cnLocation())
+	second.cache.fetch = func(_ string, _, _ time.Time, _ int64) (map[string]bool, error) {
+		return map[string]bool{day.Format("2006-01-02"): true}, nil
+	}
+	if _, err := first.IsTradingDay(context.Background(), day); err == nil {
+		t.Fatal("missing first failure")
+	}
+	if open, err := second.IsTradingDay(context.Background(), day); err != nil || !open {
+		t.Fatalf("second calendar poisoned: %v", err)
+	}
+	if first.cache.setting.TushareToken != "first" {
+		t.Fatal("calendar credentials changed during task")
+	}
+}
+
 func TestOpenAISettingsDefaultsDoNotMutateSnapshot(t *testing.T) {
 	model := &models.AIConfig{ApiKey: "test", ModelName: "test-model"}
 	setting := &models.SettingConfig{Settings: &models.Settings{}}

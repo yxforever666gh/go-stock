@@ -26,7 +26,7 @@ func NewResearchDependencies(configID int, mainDB, minuteDB *gorm.DB, setting *m
 	stocks := NewStockDataApiWithSettings(setting)
 	news := NewMarketNewsApiWithSettings(setting, mainDB)
 	quotes := NewResearchQuoteProviderWithStockData(stocks)
-	calendar := ResearchTradingCalendar{}
+	calendar := NewResearchTradingCalendar(setting)
 	baseSources := NewResearchSourceCollectorWithProviders(news, stocks)
 	dependencies := researchapp.Dependencies{
 		AI: ai.NewResearchClient(configID, ResearchAIClientOptionsForSettings(setting)), Quotes: quotes, Calendar: calendar,
