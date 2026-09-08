@@ -311,6 +311,13 @@ var mainMigrations = []migration{
 		apply:       applyResearch2ExecutionChainSchema,
 		verify:      verifyMainSchema26Runtime,
 	},
+	{
+		id: 27, name: "independent_research_settings",
+		description: "Separates research configuration and AI model ownership without rewriting global settings or historical research records.",
+		definition:  mainMigrationV27Definition,
+		apply:       applyResearchSettingsSchema,
+		verify:      verifyMainSchema27Runtime,
+	},
 }
 
 var legacyStrategyTables = []string{

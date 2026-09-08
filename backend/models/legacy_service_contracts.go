@@ -78,18 +78,20 @@ type AIConfig struct {
 	ID               uint `gorm:"primarykey"`
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
-	Sort             int     `json:"sort" gorm:"index"`
-	Disabled         bool    `json:"disabled"`
-	Name             string  `json:"name"`
-	BaseUrl          string  `json:"baseUrl"`
-	ApiKey           string  `json:"apiKey" `
-	ModelName        string  `json:"modelName"`
-	ApiProtocol      string  `json:"apiProtocol" gorm:"default:'chat_completions'"`
-	MaxTokens        int     `json:"maxTokens"`
-	Temperature      float64 `json:"temperature"`
-	TimeOut          int     `json:"timeOut"`
-	HttpProxy        string  `json:"httpProxy"`
-	HttpProxyEnabled bool    `json:"httpProxyEnabled"`
+	Owner            string     `json:"-" gorm:"not null;default:'global';index:idx_ai_config_owner_archived"`
+	ArchivedAt       *time.Time `json:"-" gorm:"index:idx_ai_config_owner_archived"`
+	Sort             int        `json:"sort" gorm:"index"`
+	Disabled         bool       `json:"disabled"`
+	Name             string     `json:"name"`
+	BaseUrl          string     `json:"baseUrl"`
+	ApiKey           string     `json:"apiKey" `
+	ModelName        string     `json:"modelName"`
+	ApiProtocol      string     `json:"apiProtocol" gorm:"default:'chat_completions'"`
+	MaxTokens        int        `json:"maxTokens"`
+	Temperature      float64    `json:"temperature"`
+	TimeOut          int        `json:"timeOut"`
+	HttpProxy        string     `json:"httpProxy"`
+	HttpProxyEnabled bool       `json:"httpProxyEnabled"`
 }
 
 func (AIConfig) TableName() string { return "ai_config" }
