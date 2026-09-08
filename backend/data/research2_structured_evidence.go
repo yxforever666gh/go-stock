@@ -493,7 +493,7 @@ func research2DocumentIsEmpty(document researchevidence.SourceDocument) bool {
 	if json.Unmarshal([]byte(content), &value) != nil {
 		return false
 	}
-	return research2JSONValueEmpty(value)
+	return researchevidence.JSONValueEmpty(value)
 }
 
 func research2DocumentEmptyKind(document researchevidence.SourceDocument) string {
@@ -543,44 +543,6 @@ func research2DocumentEmbeddedStatus(document researchevidence.SourceDocument) s
 			return marketdata.StatusFailed
 		}
 		return ""
-	}
-}
-
-func research2JSONValueEmpty(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return true
-	case string:
-		return strings.TrimSpace(typed) == ""
-	case []any:
-		if len(typed) == 0 {
-			return true
-		}
-		for _, item := range typed {
-			if !research2JSONValueEmpty(item) {
-				return false
-			}
-		}
-		return true
-	case map[string]any:
-		if len(typed) == 0 {
-			return true
-		}
-		if data, exists := typed["data"]; exists && research2JSONValueEmpty(data) {
-			return true
-		}
-		for key, item := range typed {
-			switch strings.ToLower(strings.TrimSpace(key)) {
-			case "code", "rc", "status", "success", "message", "warning", "total", "count", "page", "pagesize":
-				continue
-			}
-			if !research2JSONValueEmpty(item) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
 	}
 }
 

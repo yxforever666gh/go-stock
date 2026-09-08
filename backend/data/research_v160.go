@@ -361,7 +361,7 @@ func researchSourceResult(value any, err error) any {
 	}
 	encoded, marshalErr := json.Marshal(value)
 	var decoded any
-	if marshalErr == nil && json.Unmarshal(encoded, &decoded) == nil && research2JSONValueEmpty(decoded) {
+	if marshalErr == nil && json.Unmarshal(encoded, &decoded) == nil && researchevidence.JSONValueEmpty(decoded) {
 		return map[string]any{"status": "empty", "data": value}
 	}
 	return value
@@ -460,7 +460,7 @@ func semanticResearchSourceError(data []byte) string {
 		return ""
 	}
 	var value any
-	if !explicitNoError && json.Unmarshal(data, &value) == nil && research2JSONValueEmpty(value) {
+	if !explicitNoError && json.Unmarshal(data, &value) == nil && researchevidence.JSONValueEmpty(value) {
 		return "来源返回空数据"
 	}
 	return ""

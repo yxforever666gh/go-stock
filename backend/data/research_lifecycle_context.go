@@ -13,6 +13,7 @@ import (
 
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/internal/researchevidence"
 )
 
 const lifecycleSourceTimeout = 20 * time.Second
@@ -442,7 +443,7 @@ func newLifecycleSource(id, name, category string, now time.Time, value any, sou
 		source.Error = strings.TrimSpace(source.Error + " 来源内容超过预算，已压缩截断")
 	}
 	var decoded any
-	empty := len(data) == 0 || (json.Unmarshal(data, &decoded) == nil && research2JSONValueEmpty(decoded))
+	empty := len(data) == 0 || (json.Unmarshal(data, &decoded) == nil && researchevidence.JSONValueEmpty(decoded))
 	if empty {
 		if source.Status == "ok" {
 			source.Status = "empty"
