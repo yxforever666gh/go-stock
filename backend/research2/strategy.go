@@ -483,7 +483,6 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			items[index].FailureReason = "报告在13:00及以后完成，仅保存分析，不进入模拟交易及收益统计"
 		}
 	}
-	run.ReportMarkdown = renderAnalysisReport(run, evidence, output, items, validationMessages)
 	if len(items) == 0 {
 		run.Status = "no_recommendation"
 		run.FailureReason = strings.TrimSpace(output.Conclusion)
@@ -501,7 +500,9 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			run.StandbyCount++
 		}
 	}
-	if err = r.repository.FinalizeRun(ctx, &run, items); err != nil {
+	if err = r.repository.FinalizeRun(ctx, &run, items, func() string {
+		return renderAnalysisReport(run, evidence, output, items, validationMessages)
+	}); err != nil {
 		if auditStarted {
 			_ = r.audit.Fail(context.Background(), researchaudit.OwnerResearch2, run.RunID, err)
 		}
@@ -1165,6 +1166,11 @@ func (s *TradingService) ProcessDue(ctx context.Context, now time.Time) error {
 }
 
 func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
+	if err := s.repository.CheckNewPositionsAllowed(ctx); errors.Is(err, trading.ErrNewPositionsDisabled) {
+		return nil
+	} else if err != nil {
+		return err
+	}
 	items, err := s.repository.DueRecommendations(ctx, now, []string{"buy_pending", "standby"})
 	if err != nil || len(items) == 0 {
 		return err
@@ -1399,8 +1405,8 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			}
 			trade := Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: tradeAt, MarketPrice: snapshots[item.RecommendationID].Price, ExecutionPrice: cost.ExecutionPrice, Quantity: quantity, Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount, NetCashFlow: cost.NetCashFlow, PriceSource: snapshots[item.RecommendationID].Source, ExecutionMode: "live_after_signal"}
 			if err = s.repository.RecordBuy(ctx, item.RecommendationID, trade, sellAt); err != nil {
-				if errors.Is(err, ErrDailyBuyLimitReached) || errors.Is(err, ErrExecutionChainClosed) {
-					if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "当日三笔买入目标已完成，当前候选不再执行"); markErr != nil {
+				if errors.Is(err, trading.ErrNewPositionsDisabled) || errors.Is(err, ErrDailyBuyLimitReached) || errors.Is(err, ErrExecutionChainClosed) {
+					if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", err.Error()); markErr != nil {
 						return errors.Join(err, markErr)
 					}
 					continue

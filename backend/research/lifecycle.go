@@ -150,6 +150,9 @@ func (s *Service) EnqueueRecommendationBefore(ctx context.Context, recommendatio
 func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Recommendation, initial []LifecycleMessage, executionDeadline time.Time, signalQuotes ...marketquote.Quote) error {
 	s.serial.Lock()
 	defer s.serial.Unlock()
+	if err := s.repository.CheckNewPositionsAllowed(ctx); err != nil {
+		return err
+	}
 	now := s.now()
 	if !executionDeadline.IsZero() && now.After(executionDeadline) {
 		return ErrExecutionWindowClosed
@@ -197,6 +200,9 @@ func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Rec
 		return nil
 	}
 	if err := s.attemptBuyWithQuote(ctx, recommendation, now, signalQuote); err != nil {
+		if errors.Is(err, trading.ErrNewPositionsDisabled) {
+			return errors.Join(err, s.deferBuyProcessingError(ctx, recommendation.RecommendationID, now, err))
+		}
 		// Admission already committed successfully. An internal calendar/database
 		// fault must not turn the parent analysis into a failed report while the
 		// queued recommendation remains visible and reserved. Leave it retryable.
@@ -463,6 +469,9 @@ func (s *Service) attemptBuy(ctx context.Context, recommendation *Recommendation
 }
 
 func (s *Service) attemptBuyWithQuote(ctx context.Context, recommendation *Recommendation, now time.Time, providedQuote *marketquote.Quote) error {
+	if err := s.repository.CheckNewPositionsAllowed(ctx); err != nil {
+		return err
+	}
 	var quote marketquote.Quote
 	var err error
 	if providedQuote != nil {
@@ -577,6 +586,9 @@ func (err *lifecycleOperationError) Error() string { return err.err.Error() }
 func (err *lifecycleOperationError) Unwrap() error { return err.err }
 
 func (s *Service) deferBuyProcessingError(ctx context.Context, recommendationID string, now time.Time, processErr error) error {
+	if errors.Is(processErr, trading.ErrNewPositionsDisabled) {
+		return s.repository.FailBuy(ctx, recommendationID, "missed_untradable", "策略已关闭", trading.ErrNewPositionsDisabled.Error(), now, nil)
+	}
 	next, err := NextTradingSessionOpen(ctx, s.calendar, now.Add(time.Minute))
 	if err != nil {
 		return err

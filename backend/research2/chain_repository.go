@@ -82,7 +82,7 @@ func (r *Repository) AttachRunToExecutionChain(ctx context.Context, chainID, run
 		if strings.TrimSpace(chain.RootRunID) == "" {
 			updates["root_run_id"] = runID
 		}
-		return tx.Model(&chain).Updates(updates).Error
+		return tx.Model(&chain).Where("status IN ?", []string{"running", "failed"}).Updates(updates).Error
 	})
 }
 
@@ -241,9 +241,6 @@ func (r *Repository) DisableRunningExecutionChains(ctx context.Context, tradingD
 				return err
 			}
 			stopped[index].Status, stopped[index].StopReason, stopped[index].CompletedAt = "disabled", "研究中心2自动策略已关闭", &disabledAt
-			if err := tx.Model(&AnalysisRun{}).Where("chain_id = ? AND status = ?", stopped[index].ChainID, "running").Updates(map[string]any{"status": "failed", "generated_at": disabledAt, "failure_reason": stopped[index].StopReason}).Error; err != nil {
-				return err
-			}
 			if err := tx.Table("research2_recommendations").Where("analysis_run_id IN (?) AND status IN ?",
 				tx.Model(&AnalysisRun{}).Select("run_id").Where("chain_id = ?", stopped[index].ChainID), []string{"buy_pending", "standby"}).
 				Updates(map[string]any{"status": "analysis_only", "failure_reason": "自动策略已关闭，仅保留分析"}).Error; err != nil {

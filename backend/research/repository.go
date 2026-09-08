@@ -294,7 +294,20 @@ func (r *Repository) CreateBuyOpportunity(ctx context.Context, opportunity *BuyO
 	if !validDecisionQuoteStatus(opportunity.DecisionQuoteStatus) {
 		return errors.New("invalid decision quote status")
 	}
-	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(opportunity).Error })
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if opportunity.Action != OpportunityActionReject && r.newPositionsPermission != nil {
+			if err := lockAccountForWrite(tx); err != nil {
+				return err
+			}
+			if err := r.checkNewPositionsAllowed(ctx, tx); errors.Is(err, trading.ErrNewPositionsDisabled) {
+				opportunity.Action, opportunity.Status, opportunity.ValidationReason = OpportunityActionReject, "closed", err.Error()
+				opportunity.ReanalysisAt, opportunity.ExpiresAt = nil, nil
+			} else if err != nil {
+				return err
+			}
+		}
+		return tx.Create(opportunity).Error
+	})
 }
 
 func (r *Repository) UpdateBuyOpportunity(ctx context.Context, opportunityID string, updates map[string]any) error {
