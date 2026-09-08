@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type Repository struct{ db *gorm.DB }
+type Repository struct {
+	db                     *gorm.DB
+	newPositionsPermission func(context.Context, *gorm.DB) error
+}
 
 var (
 	ErrDailyBuyLimitReached = errors.New("research2 daily buy limit is already reached")
@@ -45,6 +48,23 @@ func research2TransactionWithWriteRetry(ctx context.Context, database *gorm.DB, 
 
 func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
 func (r *Repository) DB() *gorm.DB                { return r.db }
+
+// ConfigureNewPositionsPermission is called before publishing the runtime.
+// The callback must read its setting from the supplied database/transaction.
+func (r *Repository) ConfigureNewPositionsPermission(permission func(context.Context, *gorm.DB) error) {
+	r.newPositionsPermission = permission
+}
+
+func (r *Repository) CheckNewPositionsAllowed(ctx context.Context) error {
+	return r.checkNewPositionsAllowed(ctx, r.db.WithContext(ctx))
+}
+
+func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gorm.DB) error {
+	if r.newPositionsPermission == nil {
+		return nil
+	}
+	return r.newPositionsPermission(ctx, database)
+}
 
 func (r *Repository) EnsureAccount(ctx context.Context) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&Account{ID: 1, InitialCash: InitialCash, Cash: InitialCash}).Error
@@ -361,6 +381,9 @@ func (r *Repository) DeferDueBuys(ctx context.Context, dueBefore, target time.Ti
 func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, trade Trade, sellAt time.Time) error {
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockResearch2AccountForWrite(tx); err != nil {
+			return err
+		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
 			return err
 		}
 		var recommendation Recommendation

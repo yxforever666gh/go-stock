@@ -28,6 +28,7 @@ type Repository struct {
 	policyMu                 sync.RWMutex
 	targetCapitalUtilization float64
 	maxImmediateBuys         int
+	newPositionsPermission   func(context.Context, *gorm.DB) error
 }
 
 // lockAccountForWrite turns SQLite's deferred transaction into a write
@@ -96,6 +97,23 @@ type RecommendationCapacity struct {
 
 func NewRepository(database *gorm.DB) *Repository {
 	return &Repository{db: database, targetCapitalUtilization: 0.90, maxImmediateBuys: 2}
+}
+
+// ConfigureNewPositionsPermission is called before publishing the runtime.
+// The callback must read its setting from the supplied database/transaction.
+func (r *Repository) ConfigureNewPositionsPermission(permission func(context.Context, *gorm.DB) error) {
+	r.newPositionsPermission = permission
+}
+
+func (r *Repository) CheckNewPositionsAllowed(ctx context.Context) error {
+	return r.checkNewPositionsAllowed(ctx, r.db.WithContext(ctx))
+}
+
+func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gorm.DB) error {
+	if r.newPositionsPermission == nil {
+		return nil
+	}
+	return r.newPositionsPermission(ctx, database)
 }
 
 func (r *Repository) SetCapitalDeploymentPolicy(targetUtilization float64, maxImmediate int) {
@@ -383,6 +401,9 @@ func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, rec
 		if err := lockAccountForWrite(tx); err != nil {
 			return err
 		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
+			return err
+		}
 		target, _ := r.capitalDeploymentPolicy()
 		capacity, err := recommendationCapacity(tx, target)
 		if err != nil {
@@ -578,6 +599,9 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote mar
 	tradeID, eventID := newID(), newID()
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
 			return err
 		}
 		var recommendation Recommendation

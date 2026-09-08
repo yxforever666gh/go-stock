@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrInsufficientCash = errors.New("insufficient cash")
-	ErrMinimumOrder     = errors.New("insufficient cash for minimum order unit")
+	ErrInsufficientCash     = errors.New("insufficient cash")
+	ErrMinimumOrder         = errors.New("insufficient cash for minimum order unit")
+	ErrNewPositionsDisabled = errors.New("自动策略已关闭，停止新增买入；已有持仓继续按退出规则管理")
 )
 
 const (
