@@ -40,11 +40,11 @@ func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *
 	}
 	setting = cloneProviderSettings(setting)
 	stocks := NewStockDataApiWithSettings(setting)
-	news := NewMarketNewsApi()
+	news := NewMarketNewsApiWithSettings(setting, mainDB)
 	quoteProvider := NewResearchQuoteProviderWithStockData(stocks)
 	calendar := ResearchTradingCalendar{}
 	sources := NewResearchSourceCollectorWithProviders(news, stocks)
-	marketEvidence := NewMarketEvidenceServiceWithStorage(mainDB, minuteDB)
+	marketEvidence := NewMarketEvidenceServiceWithSettings(mainDB, minuteDB, setting)
 	chartProvider := NewResearchChartProviderWithStorage(quoteProvider, minuteDB)
 	collector := &research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,

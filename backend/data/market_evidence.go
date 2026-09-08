@@ -18,6 +18,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/instruments"
 	"go-stock/backend/marketdata"
+	"go-stock/backend/models"
 
 	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
@@ -172,10 +173,14 @@ func NewMarketEvidenceService() *MarketEvidenceService {
 // to the minute database while allowing isolated cache tests to inject their
 // own database.
 func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceService {
+	return NewMarketEvidenceServiceWithSettings(db.Dao, minuteDB, GetSettingConfig())
+}
+
+func NewMarketEvidenceServiceWithSettings(mainDB, minuteDB *gorm.DB, setting *models.SettingConfig) *MarketEvidenceService {
 	service := &MarketEvidenceService{
-		client:   newFetchRestyClient().SetTimeout(8 * time.Second),
+		client:   newFetchRestyClientForSettings(setting).SetTimeout(8 * time.Second),
 		now:      time.Now,
-		mainDB:   db.Dao,
+		mainDB:   mainDB,
 		minuteDB: minuteDB,
 		urls: marketEvidenceURLs{
 			breadth:           "https://push2.eastmoney.com/api/qt/clist/get",
@@ -191,14 +196,6 @@ func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceServ
 			details:           "https://push2.eastmoney.com/api/qt/stock/details/get",
 		},
 	}
-	if minuteDB != nil {
-		if minuteDB.Migrator().HasTable(&marketTradeTickCache{}) {
-			_ = cleanupTradeTickCache(context.Background(), minuteDB, tradeTickRetentionDays)
-		}
-		if minuteDB.Migrator().HasTable(&marketAuctionSnapshotCache{}) {
-			_ = cleanupAuctionSnapshotCache(context.Background(), minuteDB, auctionRetentionDays)
-		}
-	}
 	return service
 }
 
@@ -207,9 +204,7 @@ func NewMarketEvidenceServiceWithMinuteDB(minuteDB *gorm.DB) *MarketEvidenceServ
 // Tencent breadth fallback: it builds its universe from the main stock master
 // while its tick/minute fallbacks use the minute database.
 func NewMarketEvidenceServiceWithStorage(mainDB, minuteDB *gorm.DB) *MarketEvidenceService {
-	service := NewMarketEvidenceServiceWithMinuteDB(minuteDB)
-	service.mainDB = mainDB
-	return service
+	return NewMarketEvidenceServiceWithSettings(mainDB, minuteDB, GetSettingConfig())
 }
 
 func (s *MarketEvidenceService) Breadth(ctx context.Context) marketdata.DataEnvelope[BreadthData] {

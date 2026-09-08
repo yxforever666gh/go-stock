@@ -24,7 +24,7 @@ func NewResearchDependencies(configID int, mainDB, minuteDB *gorm.DB, setting *m
 	}
 	setting = cloneProviderSettings(setting)
 	stocks := NewStockDataApiWithSettings(setting)
-	news := NewMarketNewsApi()
+	news := NewMarketNewsApiWithSettings(setting, mainDB)
 	quotes := NewResearchQuoteProviderWithStockData(stocks)
 	calendar := ResearchTradingCalendar{}
 	baseSources := NewResearchSourceCollectorWithProviders(news, stocks)
@@ -51,7 +51,7 @@ func NewResearchDependencies(configID int, mainDB, minuteDB *gorm.DB, setting *m
 	options.CapitalDeployment = &researchapp.CapitalDeploymentPolicy{TargetUtilization: target, MaxImmediateBuys: maxImmediate}
 	options.ExperimentalEvidence = setting.ExperimentalEvidenceEnabled
 	if options.ExperimentalEvidence {
-		dependencies.ExperimentalSources = NewExperimentalResearchSourceCollector(baseSources, NewMarketEvidenceService(), newThemeEvidenceReader(mainDB))
+		dependencies.ExperimentalSources = NewExperimentalResearchSourceCollector(baseSources, NewMarketEvidenceServiceWithSettings(mainDB, minuteDB, setting), newThemeEvidenceReader(mainDB))
 		dependencies.Evidence = marketdata.NewRepository(mainDB)
 		dependencies.EvidenceProfile = researchThemeEvidenceProfile
 		dependencies.Knowledge = NewKnowledgeService(mainDB)

@@ -135,7 +135,7 @@ func TestDiemengEffectiveBaseURLKeepsConfiguredHostWithMohomopartyProxy(t *testi
 }
 
 func TestGetMarketNewsFetchMetaReturnsCopy(t *testing.T) {
-	marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{
+	(MarketNewsApi{}).marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{
 		NetworkPath:  "proxy",
 		FallbackUsed: true,
 	})
