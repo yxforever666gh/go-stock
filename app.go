@@ -5,8 +5,11 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
+	"go-stock/backend/research"
 	"go-stock/backend/research2app"
 	"go-stock/backend/researchapp"
+	"go-stock/backend/researchconfig"
 	"go-stock/internal/bootstrap"
 	"go-stock/internal/service"
 	"sync"
@@ -20,40 +23,47 @@ import (
 
 // App struct
 type App struct {
-	ctx                    context.Context
-	runtime                *runtimeCoordinator
-	cache                  *freecache.Cache
-	cron                   *cron.Cron
-	cronEntrys             map[string]cron.EntryID
-	cronEntrysMu           sync.RWMutex
-	services               service.AppServices
-	domReadyMu             sync.Mutex
-	domReadyDone           bool
-	schedulerErrorsMu      sync.Mutex
-	schedulerErrors        []error
-	themeRuntimeMu         sync.Mutex
-	themeRuntime           themeLifecycleCollector
-	themeFactory           themeLifecycleFactory
-	themeClock             func() time.Time
-	themeOpenTradeDay      func(time.Time) (bool, error)
-	themeRunMu             sync.Mutex
-	themeErrorsMu          sync.Mutex
-	themeErrors            []error
-	researchRuntimeMu      sync.RWMutex
-	researchRuntime        *researchapp.Runtime
-	researchFactory        func(int) (*researchapp.Runtime, error)
-	research2RuntimeMu     sync.RWMutex
-	research2Runtime       *research2app.Runtime
-	research2Factory       func(int) (*research2app.Runtime, error)
-	aiAnalysisRunMu        sync.Mutex
-	aiAnalysisRunning      bool
-	aiDeploymentRunMu      sync.Mutex
-	aiDeploymentLeaseOwner string
-	aiLifecycleRunMu       sync.Mutex
-	research2RunMu         sync.Mutex
-	research2TradeMu       sync.Mutex
-	research2MetricMu      sync.Mutex
-	research2EmailMu       sync.Mutex
+	ctx                     context.Context
+	runtime                 *runtimeCoordinator
+	cache                   *freecache.Cache
+	cron                    *cron.Cron
+	cronEntrys              map[string]cron.EntryID
+	cronEntrysMu            sync.RWMutex
+	services                service.AppServices
+	domReadyMu              sync.Mutex
+	domReadyDone            bool
+	schedulerErrorsMu       sync.Mutex
+	schedulerErrors         []error
+	themeRuntimeMu          sync.Mutex
+	themeRuntime            themeLifecycleCollector
+	themeFactory            themeLifecycleFactory
+	themeClock              func() time.Time
+	themeOpenTradeDay       func(time.Time) (bool, error)
+	themeRunMu              sync.Mutex
+	themeErrorsMu           sync.Mutex
+	themeErrors             []error
+	researchRuntimeMu       sync.RWMutex
+	researchRuntime         *researchapp.Runtime
+	researchFactory         func(*models.SettingConfig) (*researchapp.Runtime, error)
+	researchSettings        *models.SettingConfig
+	researchConfigStore     *researchconfig.Store
+	researchDatabase        *gorm.DB
+	research2RuntimeMu      sync.RWMutex
+	research2Runtime        *research2app.Runtime
+	research2Factory        func(*models.SettingConfig) (*research2app.Runtime, error)
+	research2Settings       *models.SettingConfig
+	research2ConfigMu       sync.Mutex
+	research1ConfigMu       sync.Mutex
+	aiAnalysisRunMu         sync.Mutex
+	aiAnalysisRunning       bool
+	activeAnalysisBuyPermit *research.AnalysisBuyPermit
+	aiDeploymentRunMu       sync.Mutex
+	aiDeploymentLeaseOwner  string
+	aiLifecycleRunMu        sync.Mutex
+	research2RunMu          sync.Mutex
+	research2TradeMu        sync.Mutex
+	research2MetricMu       sync.Mutex
+	research2EmailMu        sync.Mutex
 }
 
 const aiLifecycleEntryKey = "AIAnalysisLifecycleDue"
@@ -77,11 +87,12 @@ func NewAppWithServices(services service.AppServices) *App {
 		cron:              c,
 		cronEntrys:        make(map[string]cron.EntryID),
 		services:          services,
+		researchDatabase:  db.Dao,
 		themeClock:        time.Now,
 		themeOpenTradeDay: data.IsCNOpenTradeDayStrict,
 		researchFactory:   newResearchRuntime,
-		research2Factory: func(configID int) (*research2app.Runtime, error) {
-			return newResearch2RuntimeWithStorage(configID, db.Dao, db.MinuteDao)
+		research2Factory: func(cfg *models.SettingConfig) (*research2app.Runtime, error) {
+			return newResearch2RuntimeWithStorage(cfg, db.Dao, db.MinuteDao)
 		},
 		aiDeploymentLeaseOwner: "go-stock-" + uuid.NewString(),
 	}
@@ -93,33 +104,43 @@ func NewAppWithRuntime(appRuntime bootstrap.AppRuntime) *App {
 		app.themeClock = appRuntime.Clock.Now
 	}
 	app.configureThemeLifecycleRuntime(appRuntime.Storage.Main, appRuntime.Storage.Minute)
-	app.researchFactory = func(configID int) (*researchapp.Runtime, error) {
-		return newResearchRuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
+	app.researchConfigStore = researchconfig.New(appRuntime.Storage.Main)
+	app.researchDatabase = appRuntime.Storage.Main
+	app.researchFactory = func(cfg *models.SettingConfig) (*researchapp.Runtime, error) {
+		return newResearchRuntimeWithStorage(cfg, appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	}
-	app.research2Factory = func(configID int) (*research2app.Runtime, error) {
-		return newResearch2RuntimeWithStorage(configID, appRuntime.Storage.Main, appRuntime.Storage.Minute)
+	app.research2Factory = func(cfg *models.SettingConfig) (*research2app.Runtime, error) {
+		return newResearch2RuntimeWithStorage(cfg, appRuntime.Storage.Main, appRuntime.Storage.Minute)
 	}
 	return app
 }
 
-func newResearchRuntime(configID int) (*researchapp.Runtime, error) {
-	return newResearchRuntimeWithStorage(configID, db.Dao, db.MinuteDao)
+func newResearchRuntime(cfg *models.SettingConfig) (*researchapp.Runtime, error) {
+	return newResearchRuntimeWithStorage(cfg, db.Dao, db.MinuteDao)
 }
 
-func newResearchRuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*researchapp.Runtime, error) {
-	dependencies, options, err := data.NewResearchDependencies(configID, mainDB, minuteDB)
+func newResearchRuntimeWithStorage(cfg *models.SettingConfig, mainDB, minuteDB *gorm.DB) (*researchapp.Runtime, error) {
+	dependencies, options, err := data.NewResearchDependencies(int(cfg.AIAnalysisConfigID), mainDB, minuteDB, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return researchapp.NewRuntime(mainDB, dependencies, options)
+	runtime, err := researchapp.NewRuntime(mainDB, dependencies, options)
+	if err == nil {
+		runtime.Repository.ConfigureNewPositionsPermission(researchconfig.NewPositionsPermission(researchconfig.Research1))
+	}
+	return runtime, err
 }
 
-func newResearch2RuntimeWithStorage(configID int, mainDB, minuteDB *gorm.DB) (*research2app.Runtime, error) {
-	dependencies, err := data.NewResearch2Dependencies(configID, mainDB, minuteDB)
+func newResearch2RuntimeWithStorage(cfg *models.SettingConfig, mainDB, minuteDB *gorm.DB) (*research2app.Runtime, error) {
+	dependencies, err := data.NewResearch2Dependencies(int(cfg.AIAnalysisConfigID), mainDB, minuteDB, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return research2app.NewRuntime(mainDB, dependencies)
+	runtime, err := research2app.NewRuntime(mainDB, dependencies)
+	if err == nil {
+		runtime.Repository.ConfigureNewPositionsPermission(researchconfig.NewPositionsPermission(researchconfig.Research2))
+	}
+	return runtime, err
 }
 
 // isTradingDay 判断是否是交易日

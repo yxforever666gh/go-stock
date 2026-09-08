@@ -29,6 +29,7 @@ type commandResponse struct {
 func registerWebV1Routes(mux *http.ServeMux, app *App, hub *WebEventHub, status webStatusProvider, shutdown func()) {
 	registerSystemRoutes(mux, app, hub, status, shutdown)
 	registerSettingsRoutes(mux, app)
+	registerResearchSettingsRoutes(mux, app)
 	registerGroupRoutes(mux, app)
 	registerStockRoutes(mux, app)
 	registerFundRoutes(mux, app)

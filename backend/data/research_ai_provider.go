@@ -2,6 +2,7 @@ package data
 
 import (
 	"context"
+	"os"
 
 	"go-stock/backend/ai"
 	"go-stock/backend/logger"
@@ -10,17 +11,15 @@ import (
 
 // ResearchAIClientOptions adapts persisted settings and the concrete OpenAI
 // implementation to the provider-neutral orchestration in backend/ai.
-func ResearchAIClientOptions() ai.ResearchClientOptions {
+func ResearchAIClientOptionsForSettings(setting *models.SettingConfig) ai.ResearchClientOptions {
+	snapshot := cloneProviderSettings(setting)
+	environment := os.Environ()
 	return ai.ResearchClientOptions{
 		LoadConfigs: func() []*models.AIConfig {
-			setting := GetSettingConfig()
-			if setting == nil {
-				return nil
-			}
-			return setting.AiConfigs
+			return cloneProviderSettings(snapshot).AiConfigs
 		},
 		CompleteProvider: func(ctx context.Context, config *models.AIConfig, messages []map[string]any, previousResponseID string, activity func(ai.StreamActivity)) (string, string, string, error) {
-			provider := NewOpenAiWithConfig(ctx, config)
+			provider := newOpenAiWithEnvironment(ctx, config, snapshot, environment)
 			provider.DisableRequestRetries = true
 			return provider.CompleteResearchStream(ctx, messages, previousResponseID, activity)
 		},

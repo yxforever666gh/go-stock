@@ -99,6 +99,15 @@ func TestTradeRetentionKeepsThirtyObservedTradingDates(t *testing.T) {
 	if err := database.Model(&marketTradeTickCache{}).Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
+	if count != 31 {
+		t.Fatalf("provider construction deleted cached data: %d", count)
+	}
+	if err := cleanupTradeTickCache(context.Background(), database, tradeTickRetentionDays); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Model(&marketTradeTickCache{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
 	if count != 30 {
 		t.Fatalf("expected 30 observed trading dates, got %d", count)
 	}

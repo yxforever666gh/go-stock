@@ -28,6 +28,7 @@ type Repository struct {
 	policyMu                 sync.RWMutex
 	targetCapitalUtilization float64
 	maxImmediateBuys         int
+	newPositionsPermission   func(context.Context, *gorm.DB) error
 }
 
 // lockAccountForWrite turns SQLite's deferred transaction into a write
@@ -96,6 +97,26 @@ type RecommendationCapacity struct {
 
 func NewRepository(database *gorm.DB) *Repository {
 	return &Repository{db: database, targetCapitalUtilization: 0.90, maxImmediateBuys: 2}
+}
+
+// ConfigureNewPositionsPermission is called before publishing the runtime.
+// The callback must read its setting from the supplied database/transaction.
+func (r *Repository) ConfigureNewPositionsPermission(permission func(context.Context, *gorm.DB) error) {
+	r.newPositionsPermission = permission
+}
+
+func (r *Repository) CheckNewPositionsAllowed(ctx context.Context) error {
+	return r.checkNewPositionsAllowed(ctx, r.db.WithContext(ctx))
+}
+
+func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gorm.DB) error {
+	if err := checkAnalysisBuyPermit(ctx); err != nil {
+		return err
+	}
+	if r.newPositionsPermission == nil {
+		return nil
+	}
+	return r.newPositionsPermission(ctx, database)
 }
 
 func (r *Repository) SetCapitalDeploymentPolicy(targetUtilization float64, maxImmediate int) {
@@ -276,7 +297,20 @@ func (r *Repository) CreateBuyOpportunity(ctx context.Context, opportunity *BuyO
 	if !validDecisionQuoteStatus(opportunity.DecisionQuoteStatus) {
 		return errors.New("invalid decision quote status")
 	}
-	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(opportunity).Error })
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if opportunity.Action != OpportunityActionReject && (r.newPositionsPermission != nil || ctx.Value(analysisBuyPermitKey{}) != nil) {
+			if err := lockAccountForWrite(tx); err != nil {
+				return err
+			}
+			if err := r.checkNewPositionsAllowed(ctx, tx); errors.Is(err, trading.ErrNewPositionsDisabled) {
+				opportunity.Action, opportunity.Status, opportunity.ValidationReason = OpportunityActionReject, "closed", err.Error()
+				opportunity.ReanalysisAt, opportunity.ExpiresAt = nil, nil
+			} else if err != nil {
+				return err
+			}
+		}
+		return tx.Create(opportunity).Error
+	})
 }
 
 func (r *Repository) UpdateBuyOpportunity(ctx context.Context, opportunityID string, updates map[string]any) error {
@@ -381,6 +415,9 @@ func (r *Repository) CreateRecommendationWithinCapacity(ctx context.Context, rec
 	}
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
 			return err
 		}
 		target, _ := r.capitalDeploymentPolicy()
@@ -578,6 +615,9 @@ func (r *Repository) Buy(ctx context.Context, recommendationID string, quote mar
 	tradeID, eventID := newID(), newID()
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockAccountForWrite(tx); err != nil {
+			return err
+		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
 			return err
 		}
 		var recommendation Recommendation

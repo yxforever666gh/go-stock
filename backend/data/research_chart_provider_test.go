@@ -88,7 +88,7 @@ func TestEnabledChartMinuteProvidersPrivatePriorityFallsBackToPublicSources(t *t
 		"tencent_minute_enabled":  true,
 	})
 
-	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	got := chartProviderNames(newGlobalMinuteProviders().enabledChartMinuteProviders(time.Now().In(cnLocation())))
 	want := []string{"diemeng", "tencent", "sina", "akshare"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("private-priority providers = %v; want %v", got, want)
@@ -108,7 +108,7 @@ func TestEnabledChartMinuteProvidersPublicPriorityFallsBackToPrivateSource(t *te
 		"tencent_minute_enabled":  true,
 	})
 
-	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	got := chartProviderNames(newGlobalMinuteProviders().enabledChartMinuteProviders(time.Now().In(cnLocation())))
 	want := []string{"tencent", "sina", "akshare", "diemeng"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("public-priority providers = %v; want %v", got, want)
@@ -128,7 +128,7 @@ func TestEnabledChartMinuteProvidersHonorsIndividualSwitches(t *testing.T) {
 		"tencent_minute_enabled":  false,
 	})
 
-	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	got := chartProviderNames(newGlobalMinuteProviders().enabledChartMinuteProviders(time.Now().In(cnLocation())))
 	want := []string{"diemeng", "sina"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("providers with switches = %v; want %v", got, want)
@@ -148,7 +148,7 @@ func TestEnabledChartMinuteProvidersSkipsPrivateSourceUnlessItProvidesOneMinuteB
 		"tencent_minute_enabled":  true,
 	})
 
-	got := chartProviderNames(enabledChartMinuteProviders(time.Now().In(cnLocation())))
+	got := chartProviderNames(newGlobalMinuteProviders().enabledChartMinuteProviders(time.Now().In(cnLocation())))
 	want := []string{"tencent", "sina", "akshare"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("providers with non-1min private source = %v; want %v", got, want)

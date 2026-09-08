@@ -100,21 +100,32 @@ func validateResearchQuoteResponseCode(requested, response string) (string, erro
 	return responseCode, nil
 }
 
-type ResearchTradingCalendar struct{}
+type ResearchTradingCalendar struct{ cache *cnTradeCalCache }
 
-func (ResearchTradingCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, error) {
-	return IsCNOpenTradeDayStrict(value)
+func NewResearchTradingCalendar(setting *models.SettingConfig) ResearchTradingCalendar {
+	return ResearchTradingCalendar{cache: &cnTradeCalCache{setting: cloneProviderSettings(setting)}}
+}
+
+func (calendar ResearchTradingCalendar) cacheForTask() *cnTradeCalCache {
+	if calendar.cache == nil {
+		return globalCNTradeCalCache
+	}
+	return calendar.cache
+}
+
+func (calendar ResearchTradingCalendar) IsTradingDay(_ context.Context, value time.Time) (bool, error) {
+	return calendar.cacheForTask().isTradingDayStrict(value)
 }
 
 // IsTradingDayCached is used by the read-only chart endpoint. A cache miss is
 // reported as unknown so the caller can use a non-network weekday fallback;
 // only an explicit chart refresh is allowed to populate the remote calendar.
-func (ResearchTradingCalendar) IsTradingDayCached(value time.Time) (bool, bool) {
+func (calendar ResearchTradingCalendar) IsTradingDayCached(value time.Time) (bool, bool) {
 	local := value.In(cnLocation())
 	if local.Weekday() == time.Saturday || local.Weekday() == time.Sunday {
 		return false, true
 	}
-	return globalCNTradeCalCache.lookup(local)
+	return calendar.cacheForTask().lookup(local)
 }
 
 type ResearchSourceCollector struct {
@@ -361,7 +372,7 @@ func researchSourceResult(value any, err error) any {
 	}
 	encoded, marshalErr := json.Marshal(value)
 	var decoded any
-	if marshalErr == nil && json.Unmarshal(encoded, &decoded) == nil && research2JSONValueEmpty(decoded) {
+	if marshalErr == nil && json.Unmarshal(encoded, &decoded) == nil && researchevidence.JSONValueEmpty(decoded) {
 		return map[string]any{"status": "empty", "data": value}
 	}
 	return value
@@ -460,7 +471,7 @@ func semanticResearchSourceError(data []byte) string {
 		return ""
 	}
 	var value any
-	if !explicitNoError && json.Unmarshal(data, &value) == nil && research2JSONValueEmpty(value) {
+	if !explicitNoError && json.Unmarshal(data, &value) == nil && researchevidence.JSONValueEmpty(value) {
 		return "来源返回空数据"
 	}
 	return ""
@@ -547,7 +558,7 @@ func shanghaiDataLocation() *time.Location {
 
 func ResolveAIAnalysisConfig(setting *SettingConfig) (*models.AIConfig, error) {
 	if setting == nil {
-		setting = GetSettingConfig()
+		return nil, errors.New("research settings snapshot is required")
 	}
 	config := SelectPrimaryAIConfig(setting.AiConfigs)
 	if config == nil {

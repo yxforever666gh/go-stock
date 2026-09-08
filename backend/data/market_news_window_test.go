@@ -12,20 +12,20 @@ import (
 
 func isolateMarketNewsFetchMeta(t *testing.T) {
 	t.Helper()
-	marketNewsFetchMetaMu.Lock()
-	previous := make(map[string]marketNewsFetchMeta, len(marketNewsFetchMetaBySource))
-	for key, meta := range marketNewsFetchMetaBySource {
+	globalMarketNewsFetchState.mu.Lock()
+	previous := make(map[string]marketNewsFetchMeta, len(globalMarketNewsFetchState.bySource))
+	for key, meta := range globalMarketNewsFetchState.bySource {
 		previous[key] = meta
 	}
-	previousSequence := marketNewsFetchSequence
-	marketNewsFetchMetaBySource = map[string]marketNewsFetchMeta{}
-	marketNewsFetchSequence = 0
-	marketNewsFetchMetaMu.Unlock()
+	previousSequence := globalMarketNewsFetchState.sequence
+	globalMarketNewsFetchState.bySource = map[string]marketNewsFetchMeta{}
+	globalMarketNewsFetchState.sequence = 0
+	globalMarketNewsFetchState.mu.Unlock()
 	t.Cleanup(func() {
-		marketNewsFetchMetaMu.Lock()
-		marketNewsFetchMetaBySource = previous
-		marketNewsFetchSequence = previousSequence
-		marketNewsFetchMetaMu.Unlock()
+		globalMarketNewsFetchState.mu.Lock()
+		globalMarketNewsFetchState.bySource = previous
+		globalMarketNewsFetchState.sequence = previousSequence
+		globalMarketNewsFetchState.mu.Unlock()
 	})
 }
 
@@ -159,8 +159,8 @@ func TestGetNewsWindowDistinguishesFetchFailureFromSuccessfulEmpty(t *testing.T)
 
 	from := time.Now().Add(-time.Minute)
 	to := time.Now().Add(time.Minute)
-	failedSequence := marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphAPI, marketNewsSourceCLSTelegraph)
-	marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphAPI, failedSequence, "direct", false, errors.New("upstream unavailable"))
+	failedSequence := (MarketNewsApi{}).marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphAPI, marketNewsSourceCLSTelegraph)
+	(MarketNewsApi{}).marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphAPI, failedSequence, "direct", false, errors.New("upstream unavailable"))
 
 	failed, err := NewMarketNewsApi().GetNewsWindow(nil, from, to)
 	if err == nil {
@@ -179,8 +179,8 @@ func TestGetNewsWindowDistinguishesFetchFailureFromSuccessfulEmpty(t *testing.T)
 
 	// A later successful fallback fetch with a valid but empty feed supersedes
 	// the failed API endpoint for the same real source.
-	successSequence := marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphWeb, marketNewsSourceCLSTelegraph)
-	marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphWeb, successSequence, "proxy", true, nil)
+	successSequence := (MarketNewsApi{}).marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphWeb, marketNewsSourceCLSTelegraph)
+	(MarketNewsApi{}).marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphWeb, successSequence, "proxy", true, nil)
 	empty, err := NewMarketNewsApi().GetNewsWindow(nil, from, to)
 	if err != nil {
 		t.Fatalf("successful empty fetch returned error: %v", err)
@@ -192,10 +192,10 @@ func TestGetNewsWindowDistinguishesFetchFailureFromSuccessfulEmpty(t *testing.T)
 
 func TestMarketNewsFetchStateIgnoresOlderCompletion(t *testing.T) {
 	isolateMarketNewsFetchMeta(t)
-	older := marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
-	newer := marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
-	marketNewsFinishFetch(marketNewsFetchKeySinaLive, newer, "proxy", true, nil)
-	marketNewsFinishFetch(marketNewsFetchKeySinaLive, older, "direct", false, errors.New("late failure"))
+	older := (MarketNewsApi{}).marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
+	newer := (MarketNewsApi{}).marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
+	(MarketNewsApi{}).marketNewsFinishFetch(marketNewsFetchKeySinaLive, newer, "proxy", true, nil)
+	(MarketNewsApi{}).marketNewsFinishFetch(marketNewsFetchKeySinaLive, older, "direct", false, errors.New("late failure"))
 
 	meta := GetMarketNewsFetchMeta(marketNewsFetchKeySinaLive)
 	if meta["status"] != "success" || meta["networkPath"] != "proxy" || meta["fallbackUsed"] != true {

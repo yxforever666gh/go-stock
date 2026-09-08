@@ -13,6 +13,7 @@ import (
 	"go-stock/backend/db"
 	"go-stock/backend/research"
 	"go-stock/backend/researchapp"
+	"go-stock/backend/researchconfig"
 )
 
 type researchRunRepository interface {
@@ -61,15 +62,16 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	// refresh. The standalone research command must establish the same runtime
 	// precondition because its source collector refreshes news concurrently.
 	data.InitAnalyzeSentiment()
-	setting := data.GetSettingConfig()
-	if setting == nil || setting.Settings == nil {
-		return errors.New("AI 分析设置不存在")
+	snapshot, err := researchconfig.New(db.Dao).Load(context.Background(), researchconfig.Research1)
+	if err != nil {
+		return fmt.Errorf("读取研究中心1设置: %w", err)
 	}
+	setting := snapshot.Settings
 	selected, err := data.ResolveAIAnalysisConfig(setting)
 	if err != nil {
 		return err
 	}
-	dependencies, options, err := data.NewResearchDependencies(int(selected.ID), db.Dao, db.MinuteDao)
+	dependencies, options, err := data.NewResearchDependencies(int(selected.ID), db.Dao, db.MinuteDao, setting)
 	if err != nil {
 		return err
 	}
@@ -77,6 +79,7 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 	if err != nil {
 		return err
 	}
+	runtime.Repository.ConfigureNewPositionsPermission(researchconfig.NewPositionsPermission(researchconfig.Research1))
 
 	ctx := context.Background()
 	cancel := func() {}
@@ -84,7 +87,12 @@ func runResearch(args []string, g GlobalOptions, stdout, stderr io.Writer) error
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer cancel()
+	permit := &research.AnalysisBuyPermit{}
+	if !setting.AICapitalDeploymentEnabled {
+		permit.Disable()
+	}
 	run, runErr := executeResearchOnce(ctx, runtime.Repository, runtime.Runner, research.AnalysisRequest{
+		BuyPermit:    permit,
 		ScheduledFor: time.Now(), AIConfigID: selected.ID,
 		ProviderName: data.DisplayAIProviderName(selected), ModelName: selected.ModelName, Mode: research.AnalysisModeManual,
 	})

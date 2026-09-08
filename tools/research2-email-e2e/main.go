@@ -16,6 +16,7 @@ import (
 	"go-stock/backend/data"
 	"go-stock/backend/db"
 	"go-stock/backend/research2"
+	"go-stock/backend/researchconfig"
 	"go-stock/internal/migrations"
 	"go-stock/internal/researchevidence"
 
@@ -165,7 +166,12 @@ func main() {
 		fmt.Fprintln(os.Stderr, "migrate isolated databases:", err)
 		os.Exit(1)
 	}
-	setting := data.GetSettingConfig()
+	snapshot, loadErr := researchconfig.New(db.Dao).Load(context.Background(), researchconfig.Research2)
+	if loadErr != nil {
+		fmt.Fprintln(os.Stderr, loadErr)
+		os.Exit(1)
+	}
+	setting := snapshot.Settings
 	if setting == nil || setting.Settings == nil || setting.AIAnalysisConfigID == 0 {
 		fmt.Fprintln(os.Stderr, "active AI configuration is unavailable")
 		os.Exit(1)
@@ -188,7 +194,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	client := ai.NewResearchClient(int(setting.AIAnalysisConfigID), data.ResearchAIClientOptions())
+	client := ai.NewResearchClient(int(setting.AIAnalysisConfigID), data.ResearchAIClientOptionsForSettings(setting))
 	runner := research2.NewRunner(repository, client, historicalCollector{mainDB: db.Dao, minuteDB: db.MinuteDao, date: tradingDate}, fixedCalendar{})
 	fixedNow := cutoff.Add(2 * time.Minute)
 	runner.ConfigureReplayClock(func() time.Time { return fixedNow }, func(context.Context, time.Time) error { return nil })

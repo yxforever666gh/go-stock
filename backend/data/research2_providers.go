@@ -17,6 +17,7 @@ import (
 
 	"go-stock/backend/ai"
 	"go-stock/backend/marketdata"
+	"go-stock/backend/models"
 	"go-stock/backend/research2"
 	"go-stock/backend/research2app"
 	"go-stock/backend/researchaudit"
@@ -30,30 +31,38 @@ import (
 
 // NewResearch2Dependencies builds only the concrete infrastructure adapters;
 // runtime service composition belongs to backend/research2app.
-func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB) (research2app.Dependencies, error) {
+func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *models.SettingConfig) (research2app.Dependencies, error) {
 	if mainDB == nil {
 		return research2app.Dependencies{}, errors.New("database is not initialized")
 	}
-	stocks := NewStockDataApi()
-	news := NewMarketNewsApi()
+	if setting == nil || setting.Settings == nil {
+		return research2app.Dependencies{}, errors.New("research settings snapshot is required")
+	}
+	setting = cloneProviderSettings(setting)
+	stocks := NewStockDataApiWithSettings(setting)
+	news := NewMarketNewsApiWithSettings(setting, mainDB)
 	quoteProvider := NewResearchQuoteProviderWithStockData(stocks)
-	calendar := ResearchTradingCalendar{}
+	calendar := NewResearchTradingCalendar(setting)
 	sources := NewResearchSourceCollectorWithProviders(news, stocks)
-	marketEvidence := NewMarketEvidenceServiceWithStorage(mainDB, minuteDB)
+	marketEvidence := NewMarketEvidenceServiceWithSettings(mainDB, minuteDB, setting)
 	chartProvider := NewResearchChartProviderWithStorage(quoteProvider, minuteDB)
 	collector := &research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
-		themes:        newThemeEvidenceReader(mainDB),
 	}
 	market := &research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
-	return research2app.Dependencies{
+	dependencies := research2app.Dependencies{
 		Quotes: quoteProvider, Chart: chartProvider, ChartCalendar: calendar,
-		AI: ai.NewResearchClient(configID, ResearchAIClientOptions()), Evidence: collector, EvidenceStore: marketdata.NewRepository(mainDB),
+		AI: ai.NewResearchClient(configID, ResearchAIClientOptionsForSettings(setting)), Evidence: collector, EvidenceStore: marketdata.NewRepository(mainDB),
 		EvidenceBuild: buildResearch2EvidenceItem, EvidenceProfile: research2EvidenceProfileV7,
 		Calendar: calendar, Market: market,
-		Audit: researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)), Knowledge: NewKnowledgeService(mainDB),
-	}, nil
+		Audit: researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)),
+	}
+	if setting.ExperimentalEvidenceEnabled {
+		collector.themes = newThemeEvidenceReader(mainDB)
+		dependencies.Knowledge = NewKnowledgeService(mainDB)
+	}
+	return dependencies, nil
 }
 
 type research2MarketRow struct {
@@ -419,11 +428,7 @@ func (c *research2EvidenceCollector) fetchFullMarketRequest(ctx context.Context,
 	return research2MarketResponse{}, lastErr
 }
 
-func selectResearch2Candidates(rows []research2MarketRow, limit int, asOf time.Time) []researchevidence.StockCandidate {
-	return selectResearch2CandidatesWithExclusions(rows, limit, asOf, nil)
-}
-
-func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}) []researchevidence.StockCandidate {
+func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}, isOpen func(time.Time) (bool, error)) []researchevidence.StockCandidate {
 	excluded := normalizeResearch2ExcludedCodes(excludedCodes)
 	eligible := make([]research2MarketRow, 0, len(rows))
 	for _, row := range rows {
@@ -438,7 +443,7 @@ func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit in
 		if _, blocked := excluded[research2CanonicalCode(code)]; blocked {
 			continue
 		}
-		if !listedForResearch2Sessions(row.ListingDate, asOf, 10, IsCNOpenTradeDayStrict) {
+		if !listedForResearch2Sessions(row.ListingDate, asOf, 10, isOpen) {
 			continue
 		}
 		if _, _, blocked := research2.IsInsideLimitBuffer(row.Price, row.PreClose, research2.SelectionLimitDistancePct); blocked {
@@ -555,7 +560,7 @@ func (p *research2MarketProvider) minuteSources() []research2MinuteSource {
 		return p.minutes
 	}
 	return []research2MinuteSource{
-		{"tencent", fetchMinuteBarsWithTencentContext},
+		{"tencent", minuteProvidersForStocks(p.stocks).fetchMinuteBarsWithTencentContext},
 		{"eastmoney", func(ctx context.Context, code string, start, end time.Time) ([]minuteBar, string, error) {
 			if p.stocks == nil {
 				return nil, "eastmoney", errors.New("provider unavailable")

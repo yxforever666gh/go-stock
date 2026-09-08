@@ -33,7 +33,7 @@ type chartProviderFactory func(ChartRequest) []chartBarProvider
 
 func productionChartProviders(request ChartRequest) []chartBarProvider {
 	if request.Period == ChartPeriod1Minute {
-		items := enabledChartMinuteProviders(request.To)
+		items := newGlobalMinuteProviders().enabledChartMinuteProviders(request.To)
 		result := make([]chartBarProvider, 0, len(items))
 		for _, item := range items {
 			result = append(result, minuteChartProviderAdapter{provider: item})

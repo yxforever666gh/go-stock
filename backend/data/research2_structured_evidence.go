@@ -58,7 +58,7 @@ func (p *research2DefaultMinuteWindowProvider) Window(ctx context.Context, code 
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	if bars, source, err := fetchMinuteBarsWithTencentContext(ctx, code, start, end); err == nil && len(bars) > 0 {
+	if bars, source, err := minuteProvidersForStocks(p.stocks).fetchMinuteBarsWithTencentContext(ctx, code, start, end); err == nil && len(bars) > 0 {
 		clean := sanitizeResearch2MinuteBars(bars, source, start, end)
 		if len(clean) >= research2MinimumMinuteBars {
 			return clean, source, nil
@@ -185,17 +185,16 @@ type research2CompactMetrics struct {
 }
 
 type research2CompactCandidate struct {
-	EntityID       string                           `json:"entityId"`
-	Code           string                           `json:"code"`
-	Name           string                           `json:"name"`
-	CoreEligible   bool                             `json:"coreEligible"`
-	Quote          *research2CompactQuote           `json:"quote,omitempty"`
-	MinuteBarCount int                              `json:"minuteBarCount"`
-	MinuteSource   string                           `json:"minuteSource,omitempty"`
-	Metrics        research2CompactMetrics          `json:"metrics"`
-	SourceIDs      []string                         `json:"sourceIds"`
-	Missing        []string                         `json:"missing,omitempty"`
-	ScoreEvidence  research2.CandidateScoreEvidence `json:"scoreEvidence"`
+	EntityID       string                  `json:"entityId"`
+	Code           string                  `json:"code"`
+	Name           string                  `json:"name"`
+	CoreEligible   bool                    `json:"coreEligible"`
+	Quote          *research2CompactQuote  `json:"quote,omitempty"`
+	MinuteBarCount int                     `json:"minuteBarCount"`
+	MinuteSource   string                  `json:"minuteSource,omitempty"`
+	Metrics        research2CompactMetrics `json:"metrics"`
+	SourceIDs      []string                `json:"sourceIds"`
+	Missing        []string                `json:"missing,omitempty"`
 }
 
 type research2CompactSnapshot struct {
@@ -494,7 +493,7 @@ func research2DocumentIsEmpty(document researchevidence.SourceDocument) bool {
 	if json.Unmarshal([]byte(content), &value) != nil {
 		return false
 	}
-	return research2JSONValueEmpty(value)
+	return researchevidence.JSONValueEmpty(value)
 }
 
 func research2DocumentEmptyKind(document researchevidence.SourceDocument) string {
@@ -544,44 +543,6 @@ func research2DocumentEmbeddedStatus(document researchevidence.SourceDocument) s
 			return marketdata.StatusFailed
 		}
 		return ""
-	}
-}
-
-func research2JSONValueEmpty(value any) bool {
-	switch typed := value.(type) {
-	case nil:
-		return true
-	case string:
-		return strings.TrimSpace(typed) == ""
-	case []any:
-		if len(typed) == 0 {
-			return true
-		}
-		for _, item := range typed {
-			if !research2JSONValueEmpty(item) {
-				return false
-			}
-		}
-		return true
-	case map[string]any:
-		if len(typed) == 0 {
-			return true
-		}
-		if data, exists := typed["data"]; exists && research2JSONValueEmpty(data) {
-			return true
-		}
-		for key, item := range typed {
-			switch strings.ToLower(strings.TrimSpace(key)) {
-			case "code", "rc", "status", "success", "message", "warning", "total", "count", "page", "pagesize":
-				continue
-			}
-			if !research2JSONValueEmpty(item) {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
 	}
 }
 
@@ -979,7 +940,7 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		}
 		candidateRows = append(candidateRows, row)
 	}
-	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes)
+	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes, minuteProvidersForStocks(c.stocks).calendar.cacheForTask().isTradingDayStrict)
 	windows := collectResearch2CandidateWindows(collectionCtx, c.minuteWindows, selected, marketSnapshot.Rows, windowStart, windowEnd)
 
 	type documentsResult struct {
@@ -1153,11 +1114,6 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 			if source.EntityID == entityID {
 				compactCandidates[candidateIndex].SourceIDs = append(compactCandidates[candidateIndex].SourceIDs, source.SourceID)
 			}
-		}
-		support := research2.BuildCandidateScoreEvidence(compactCandidates[candidateIndex].Code, frozenDocuments, cutoff, freezeAt, time.Time{})
-		compactCandidates[candidateIndex].ScoreEvidence = support
-		for _, link := range append(append([]research2.ScoreEvidenceLink{}, support.Sector...), support.Catalyst...) {
-			compactCandidates[candidateIndex].SourceIDs = append(compactCandidates[candidateIndex].SourceIDs, link.SourceID)
 		}
 		compactCandidates[candidateIndex].SourceIDs = uniqueBreadthStrings(compactCandidates[candidateIndex].SourceIDs)
 	}

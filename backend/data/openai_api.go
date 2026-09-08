@@ -13,6 +13,7 @@ import (
 	"go-stock/backend/util"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 // -----------------------------------------------------------------------------------
 type OpenAi struct {
 	ctx              context.Context
+	proxyEnvironment []string
 	BaseUrl          string  `json:"base_url"`
 	ApiKey           string  `json:"api_key"`
 	ApiProtocol      string  `json:"api_protocol"`
@@ -73,10 +75,20 @@ func NewDeepSeekOpenAi(ctx context.Context, aiConfigId int) *OpenAi {
 }
 
 func NewOpenAiWithConfig(ctx context.Context, aiConfig *AIConfig) *OpenAi {
+	return NewOpenAiWithSettings(ctx, aiConfig, GetSettingConfig())
+}
+
+func NewOpenAiWithSettings(ctx context.Context, aiConfig *AIConfig, setting *models.SettingConfig) *OpenAi {
+	return newOpenAiWithEnvironment(ctx, aiConfig, setting, os.Environ())
+}
+
+func newOpenAiWithEnvironment(ctx context.Context, aiConfig *AIConfig, setting *models.SettingConfig, environment []string) *OpenAi {
 	if aiConfig == nil {
 		aiConfig = &AIConfig{}
 	}
-	settingConfig := GetSettingConfig()
+	model := *aiConfig
+	aiConfig = &model
+	settingConfig := cloneProviderSettings(setting)
 	if aiConfig.TimeOut <= 0 {
 		aiConfig.TimeOut = 60 * 5
 	}
@@ -89,6 +101,7 @@ func NewOpenAiWithConfig(ctx context.Context, aiConfig *AIConfig) *OpenAi {
 
 	o := &OpenAi{
 		ctx:              ctx,
+		proxyEnvironment: append([]string(nil), environment...),
 		BaseUrl:          aiConfig.BaseUrl,
 		ApiKey:           aiConfig.ApiKey,
 		ApiProtocol:      NormalizeAIAPIProtocol(aiConfig.ApiProtocol),
@@ -256,7 +269,10 @@ func (o *OpenAi) newAIClient() *resty.Client {
 
 func (o *OpenAi) newAIClientWithProxy(enableProxy bool) *resty.Client {
 	timeoutSeconds := o.requestTimeoutSeconds()
-	client := resty.New()
+	client := newNoProxyRestyClient()
+	if enableProxy {
+		restyApplyCapturedEnvProxy(client, o.proxyEnvironment)
+	}
 	client.SetBaseURL(strutil.Trim(o.BaseUrl))
 	client.SetHeader("Authorization", "Bearer "+o.ApiKey)
 	client.SetHeader("Content-Type", "application/json")
@@ -305,7 +321,8 @@ func (o *OpenAi) formatAIRequestError(err error) string {
 }
 
 func (o *OpenAi) newAnthropicClient() *resty.Client {
-	client := resty.New()
+	client := newNoProxyRestyClient()
+	restyApplyCapturedEnvProxy(client, o.proxyEnvironment)
 	client.SetBaseURL(strutil.Trim(o.BaseUrl))
 	client.SetHeader("x-api-key", o.ApiKey)
 	client.SetHeader("anthropic-version", "2023-06-01")

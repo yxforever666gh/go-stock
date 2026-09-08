@@ -193,7 +193,7 @@ func probeDiemengMode(mode string) DiemengSelfCheckProbe {
 		return probe
 	}
 
-	apiKey := strings.TrimSpace(diemengAPIKey())
+	apiKey := strings.TrimSpace(newGlobalMinuteProviders().diemengAPIKey())
 	if apiKey == "" {
 		probe.Summary = "缺少 apiKey"
 		return probe
@@ -234,8 +234,8 @@ func diemengSelfCheckModeLabel(mode string) string {
 
 func newDiemengSelfCheckClient(mode string) (*resty.Client, string, error) {
 	client := resty.New().
-		SetBaseURL(diemengEffectiveBaseURL()).
-		SetTimeout(min(diemengTimeout(), 12*time.Second)).
+		SetBaseURL(newGlobalMinuteProviders().diemengEffectiveBaseURL()).
+		SetTimeout(min(newGlobalMinuteProviders().diemengTimeout(), 12*time.Second)).
 		SetRetryCount(0).
 		SetHeader("Content-Type", "application/json")
 
@@ -246,7 +246,7 @@ func newDiemengSelfCheckClient(mode string) (*resty.Client, string, error) {
 	case "inherit":
 		return client, "", nil
 	case "settings":
-		settingsProxy := diemengProxyFromSettings()
+		settingsProxy := newGlobalMinuteProviders().diemengProxyFromSettings()
 		if settingsProxy == "" {
 			return client, "代理未配置", nil
 		}

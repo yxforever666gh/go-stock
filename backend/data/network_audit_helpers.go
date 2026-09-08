@@ -15,22 +15,22 @@ type MinuteProviderAuditResult struct {
 }
 
 func AuditAkShareMinuteBars(tsCode string, start, end time.Time) (*MinuteProviderAuditResult, error) {
-	bars, source, err := fetchMinuteBarsWithAkShare(tsCode, start, end)
+	bars, source, err := newGlobalMinuteProviders().fetchMinuteBarsWithAkShare(tsCode, start, end)
 	return auditMinuteProvider("akshare", start, end, bars, source, err)
 }
 
 func AuditTencentMinuteBars(tsCode string, start, end time.Time) (*MinuteProviderAuditResult, error) {
-	bars, source, err := fetchMinuteBarsWithTencent(tsCode, start, end)
+	bars, source, err := newGlobalMinuteProviders().fetchMinuteBarsWithTencent(tsCode, start, end)
 	return auditMinuteProvider("tencent", start, end, bars, source, err)
 }
 
 func AuditSinaMinuteBars(tsCode string, start, end time.Time) (*MinuteProviderAuditResult, error) {
-	bars, source, err := fetchMinuteBarsWithSina(tsCode, start, end)
+	bars, source, err := newGlobalMinuteProviders().fetchMinuteBarsWithSina(tsCode, start, end)
 	return auditMinuteProvider("sina", start, end, bars, source, err)
 }
 
 func AuditDiemengMinuteBars(tsCode string, start, end time.Time) (*MinuteProviderAuditResult, error) {
-	bars, source, err := fetchMinuteBarsWithDiemeng(tsCode, start, end)
+	bars, source, err := newGlobalMinuteProviders().fetchMinuteBarsWithDiemeng(tsCode, start, end)
 	return auditMinuteProvider("diemeng", start, end, bars, source, err)
 }
 

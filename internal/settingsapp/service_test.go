@@ -51,3 +51,11 @@ func TestServicePreservesValidationAndMissingFingerprintErrors(t *testing.T) {
 		t.Fatalf("missing fingerprint err=%v", err)
 	}
 }
+
+func TestStorageFailureCannotBeReportedAsSaved(t *testing.T) {
+	provider := &settingsProviderFixture{updateResult: "更新配置失败: database is locked"}
+	message, err := NewService(provider).UpdateConfig(nil)
+	if message != provider.updateResult || !errors.Is(err, appservice.ErrOperationFailed) {
+		t.Fatalf("message=%q err=%v", message, err)
+	}
+}

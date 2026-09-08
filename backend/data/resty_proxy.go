@@ -7,6 +7,8 @@ import (
 
 	"github.com/go-resty/resty/v2"
 	"go-stock/backend/logger"
+	"go-stock/backend/models"
+	"golang.org/x/net/http/httpproxy"
 )
 
 func forceNoProxyForFetchEnabled() bool {
@@ -18,8 +20,16 @@ func forceNoProxyForFetchEnabled() bool {
 }
 
 func newFetchRestyClient() *resty.Client {
-	client := resty.New()
-	restyApplyFetchProxyPolicy(client)
+	return newFetchRestyClientForSettings(GetSettingConfig())
+}
+
+func newFetchRestyClientForSettings(config *models.SettingConfig) *resty.Client {
+	client := newNoProxyRestyClient()
+	if config != nil && config.Settings != nil && !config.ForceNoProxyForFetch {
+		if proxy, ok := settingsProxyURLForSettings(config); ok {
+			client.SetProxy(proxy)
+		}
+	}
 	return client
 }
 
@@ -41,7 +51,11 @@ func newNoProxyRestyClient() *resty.Client {
 }
 
 func newSettingsProxyRestyClientIfConfigured() (*resty.Client, bool) {
-	proxyURL, ok := settingsProxyURL()
+	return newSettingsProxyRestyClientForSettings(GetSettingConfig())
+}
+
+func newSettingsProxyRestyClientForSettings(config *models.SettingConfig) (*resty.Client, bool) {
+	proxyURL, ok := settingsProxyURLForSettings(config)
 	if !ok {
 		return nil, false
 	}
@@ -91,7 +105,10 @@ func restyApplyProxyFromSettingsOrDisable(client *resty.Client) {
 }
 
 func settingsProxyURL() (string, bool) {
-	config := GetSettingConfig()
+	return settingsProxyURLForSettings(GetSettingConfig())
+}
+
+func settingsProxyURLForSettings(config *models.SettingConfig) (string, bool) {
 	if config == nil || config.Settings == nil || !config.HttpProxyEnabled {
 		return "", false
 	}
@@ -103,8 +120,21 @@ func settingsProxyURL() (string, bool) {
 
 	u, err := url.Parse(proxyURL)
 	if err != nil || u == nil || strings.TrimSpace(u.Scheme) == "" || strings.TrimSpace(u.Host) == "" {
-		logger.SugaredLogger.Warnf("invalid settings http proxy url=%q (need scheme://host:port); fallback to no-proxy: %v", proxyURL, err)
+		logger.SugaredLogger.Warn("invalid settings http proxy URL; fallback to no-proxy")
 		return "", false
 	}
 	return proxyURL, true
+}
+func restyApplyCapturedEnvProxy(client *resty.Client, environment []string) {
+	values := map[string]string{}
+	for _, item := range environment {
+		if key, value, ok := strings.Cut(item, "="); ok {
+			values[strings.ToUpper(key)] = value
+		}
+	}
+	config := httpproxy.Config{HTTPProxy: values["HTTP_PROXY"], HTTPSProxy: values["HTTPS_PROXY"], NoProxy: values["NO_PROXY"], CGI: values["REQUEST_METHOD"] != ""}
+	proxy := config.ProxyFunc()
+	transport := client.GetClient().Transport.(*http.Transport).Clone()
+	transport.Proxy = func(request *http.Request) (*url.URL, error) { return proxy(request.URL) }
+	client.SetTransport(transport)
 }

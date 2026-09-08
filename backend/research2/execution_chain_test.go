@@ -540,12 +540,10 @@ func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{failed}); err != nil {
 		t.Fatal(err)
 	}
-	collector := &filteredEvidenceRecorder{value: Evidence{
-		Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: now,
-		Candidates:               []researchevidence.StockCandidate{{Code: "sh600042", Name: "replacement"}},
-		CandidateReferencePrices: map[string]float64{"sh600042": 10},
-	}}
-	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"refill","recommendations":[{"code":"sh600042","marketScore":20,"sectorScore":20,"stockScore":20,"catalystScore":0,"riskDeduction":0,"finalScore":60,"referencePrice":10}]}`}}
+	evidence := scoreFixtureEvidence(now, researchevidence.StockCandidate{Code: "sh600042", Name: "replacement"})
+	evidence.CandidateReferencePrices = map[string]float64{"sh600042": 10}
+	collector := &filteredEvidenceRecorder{value: evidence}
+	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"refill","recommendations":[{"code":"sh600042","marketScore":20,"sectorScore":20,"stockScore":20,"catalystScore":0,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600042","概念 sh600042"]}]}`}}
 	runner := NewRunner(repository, ai, collector, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return now }, nil)
 	run, err := runner.RunRefill(context.Background(), now, chain.ChainID, first.RunID)

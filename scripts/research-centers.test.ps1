@@ -1,63 +1,77 @@
 [CmdletBinding()]
-param()
+param([switch]$CheckProductionDatabases)
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
-$VerifyScript = Join-Path $ScriptDir "verify.ps1"
+$ProjectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$VerifyScript = Join-Path $PSScriptRoot "verify.ps1"
+$SharedFrontendTests = @(
+    "src/composables/useResearchRequests.test.mjs",
+    "src/components/settings/research-settings.test.mjs",
+    "src/components/research-pages.test.mjs",
+    "src/components/research-audit/audit-model.test.mjs",
+    "src/utils/research-performance.test.mjs",
+    "src/utils/research-trade-chart.test.mjs",
+    "src/charting/research-chart-adapter.test.mjs"
+)
+
+function Read-Git {
+    param([string[]]$Arguments)
+    $result = @(& git -C $ProjectRoot -c core.quotepath=false -c core.safecrlf=false @Arguments)
+    if ($LASTEXITCODE -ne 0) { throw "Cannot inspect Git workspace: $($Arguments -join ' ')" }
+    return ($result -join [Environment]::NewLine)
+}
 
 function Get-WorkspaceSnapshot {
-    return @(& git -C $ProjectRoot status --porcelain=v1)
+    $untracked = (Read-Git @("ls-files", "--others", "--exclude-standard", "-z")).Split([char]0, [StringSplitOptions]::RemoveEmptyEntries)
+    $files = foreach ($relative in ($untracked | Sort-Object)) {
+        $path = Join-Path $ProjectRoot $relative
+        [pscustomobject]@{ Path = $relative; SHA256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash }
+    }
+    return ([ordered]@{
+        Status = Read-Git @("status", "--porcelain=v1", "--untracked-files=all")
+        Index = Read-Git @("diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv")
+        Working = Read-Git @("diff", "--binary", "--no-ext-diff", "--no-textconv")
+        Untracked = @($files)
+    } | ConvertTo-Json -Compress -Depth 4)
 }
 
 function Get-DatabaseSnapshot {
-    $names = @("stock.db", "stock.db-wal", "stock.db-shm", "minute.db", "minute.db-wal", "minute.db-shm")
-    $rows = foreach ($name in $names) {
+    $rows = foreach ($name in @("stock.db", "stock.db-wal", "stock.db-shm", "minute.db", "minute.db-wal", "minute.db-shm")) {
         $path = Join-Path (Join-Path $ProjectRoot "data") $name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            [pscustomobject]@{ Name = $name; Exists = $false; Length = 0; SHA256 = "" }
-            continue
-        }
-        $item = Get-Item -LiteralPath $path
-        [pscustomobject]@{
-            Name = $name
-            Exists = $true
-            Length = $item.Length
-            SHA256 = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
-        }
+        $hash = if (Test-Path -LiteralPath $path -PathType Leaf) { (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash } else { "absent" }
+        [pscustomobject]@{ Name = $name; SHA256 = $hash }
     }
-    return @($rows)
+    return ($rows | ConvertTo-Json -Compress)
 }
 
-function Convert-SnapshotToJSON {
-    param([Parameter(Mandatory = $true)]$Value)
-    return ($Value | ConvertTo-Json -Compress -Depth 4)
-}
-
-function Invoke-ResearchDomain {
-    param([Parameter(Mandatory = $true)][ValidateSet("research", "research2")][string]$Domain)
-    & pwsh -NoProfile -File $VerifyScript -Tier domain -Domain $Domain
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Domain offline verification failed with exit code $LASTEXITCODE"
+$workspaceBefore = Get-WorkspaceSnapshot
+$databasesBefore = if ($CheckProductionDatabases) { Get-DatabaseSnapshot } else { $null }
+$failures = [Collections.Generic.List[string]]::new()
+try {
+    # Every Go test owns a temporary fixture. The shared domain runs both
+    # centers and their shared dependencies once, including concurrent cases.
+    & pwsh -NoProfile -File $VerifyScript -Tier domain -Domain research-shared
+    if ($LASTEXITCODE -ne 0) { throw "Research Go verification failed with exit code $LASTEXITCODE" }
+    & $VerifyScript -Tier fast -FrontendTest $SharedFrontendTests
+    if ($LASTEXITCODE -ne 0) { throw "Shared frontend research verification failed with exit code $LASTEXITCODE" }
+} catch {
+    $failures.Add($_.Exception.Message)
+} finally {
+    try {
+        if ((Get-WorkspaceSnapshot) -ne $workspaceBefore) {
+            $failures.Add("Workspace content or staging changed during verification, including existing dirty and untracked files.")
+        }
+    } catch { $failures.Add("Workspace comparison could not complete: $($_.Exception.Message)") }
+    if ($CheckProductionDatabases) {
+        try {
+            if ((Get-DatabaseSnapshot) -ne $databasesBefore) {
+                $failures.Add("Production database/WAL/SHM changes were observed. Concurrent application writes are possible; hashes do not attribute these changes to tests.")
+            }
+        } catch { $failures.Add("Production database observation could not complete: $($_.Exception.Message)") }
     }
 }
-
-$workspaceBefore = Convert-SnapshotToJSON (Get-WorkspaceSnapshot)
-$databasesBefore = Convert-SnapshotToJSON (Get-DatabaseSnapshot)
-
-Invoke-ResearchDomain "research"
-Invoke-ResearchDomain "research2"
-
-$workspaceAfter = Convert-SnapshotToJSON (Get-WorkspaceSnapshot)
-$databasesAfter = Convert-SnapshotToJSON (Get-DatabaseSnapshot)
-
-if ($workspaceAfter -ne $workspaceBefore) {
-    throw "research verification changed the Git working tree"
-}
-if ($databasesAfter -ne $databasesBefore) {
-    throw "research verification changed a production database, WAL, or SHM file"
-}
-
-Write-Host "Research 1 and Research 2 offline verification passed without production database changes."
+if ($failures.Count -ne 0) { throw ($failures -join [Environment]::NewLine) }
+Write-Host "Research 1, Research 2, and shared behavior verification passed using disposable test fixtures."
+if ($CheckProductionDatabases) { Write-Host "Optional production database observation: hashes unchanged." }

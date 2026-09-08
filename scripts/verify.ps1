@@ -4,7 +4,7 @@ param(
     [ValidateSet("fast", "domain", "release")]
     [string]$Tier,
 
-    [ValidateSet("data", "research", "research2", "migrations", "frontend", "api", "tools")]
+    [ValidateSet("data", "research", "research2", "research-shared", "migrations", "frontend", "api", "tools")]
     [string]$Domain = "",
 
     [string[]]$GoPackage = @(),
@@ -208,6 +208,11 @@ try {
         "fast" {
             if ($GoPackage.Count -ne 0) {
                 Invoke-GoTest "targeted Go tests" $GoPackage $GoTest
+                $researchBoundary = @($GoPackage | Where-Object { $_ -match '^(\.|\./backend/(data|research|research2|researchapp|research2app|researchconfig|ai|\.\.\.)(/\.\.\.)?|\./internal/(trading|marketquote|researchevidence|recommendationchart|sqlitedb)(/\.\.\.)?)$' }).Count -gt 0
+                $architectureIncluded = $GoPackage -contains "./internal/architecture" -or $GoPackage -contains "./internal/..."
+                if ($researchBoundary -and (-not $architectureIncluded -or $GoTest)) {
+                    Invoke-GoTest "research import boundaries" @("./internal/architecture")
+                }
             }
             if ($FrontendTest.Count -ne 0) {
                 Invoke-FrontendTests "targeted frontend tests" $FrontendTest
@@ -216,20 +221,29 @@ try {
         }
         "domain" {
             switch ($Domain) {
-                "data" { Invoke-GoTest "data domain tests" @("./backend/data") }
+                "data" { Invoke-GoTest "data domain tests" @("./backend/data", "./internal/architecture") }
                 "research" {
-                    Invoke-GoTest "research domain tests" @("./backend/research")
+                    Invoke-GoTest "research domain tests" @("./backend/research", "./backend/researchapp", "./internal/architecture")
                     Invoke-GoTest "research boundary tests" @("./backend/data", ".") "Research"
                 }
                 "research2" {
-                    Invoke-GoTest "research2 domain tests" @("./backend/research2")
+                    Invoke-GoTest "research2 domain tests" @("./backend/research2", "./backend/research2app", "./internal/architecture")
                     Invoke-GoTest "research2 boundary tests" @("./backend/data", ".") "Research2"
+                }
+                "research-shared" {
+                    Invoke-GoTest "shared research and both center tests" @(
+                        "./backend/ai", "./backend/researchconfig",
+                        "./internal/trading", "./internal/marketquote", "./internal/researchevidence",
+                        "./internal/recommendationchart", "./internal/sqlitedb", "./internal/architecture",
+                        "./backend/research", "./backend/researchapp", "./backend/research2", "./backend/research2app",
+                        "./backend/data", "."
+                    )
                 }
                 "migrations" { Invoke-GoTest "migration domain tests" @("./internal/migrations") }
                 "frontend" { Invoke-FrontendTests "frontend runtime tests" }
                 "api" {
                     Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
-                    Invoke-GoTest "API boundary tests" @(".")
+                    Invoke-GoTest "API boundary tests" @(".", "./internal/architecture")
                 }
                 "tools" {
                     Invoke-GoTest "tool build checks" @("./tools/...")

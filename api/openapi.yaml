@@ -33,10 +33,23 @@ paths:
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
       responses: {"200": {description: Settings updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/ai/configs:
-    get: {operationId: listAIConfigs, responses: {"200": {description: AI configurations}}}
+    get:
+      operationId: listAIConfigs
+      parameters: [{name: center, in: query, schema: {type: string, enum: [global, research1, research2], default: global}}]
+      responses: {"200": {description: Enabled models belonging to the requested center}, "400": {$ref: "#/components/responses/BadRequest"}}
+  /api/v1/research-centers/{center}/settings:
+    parameters: [{name: center, in: path, required: true, schema: {type: string, enum: [research1, research2]}}]
+    get:
+      operationId: getResearchSettings
+      responses: {"200": {description: Independent research configuration, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchSettings"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+    put:
+      operationId: updateResearchSettings
+      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchSettings"}}}}
+      responses: {"200": {description: Saved configuration and new revision, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchSettings"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "409": {$ref: "#/components/responses/Conflict"}}
   /api/v1/ai/configs/test:
     post:
       operationId: testAIConfig
+      parameters: [{name: center, in: query, schema: {type: string, enum: [global, research1, research2], default: global}}]
       requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AIConfigTestRequest"}}}}
       responses: {"200": {description: AI configuration test result}, "400": {$ref: "#/components/responses/BadRequest"}}
   /api/v1/groups:
@@ -718,6 +731,14 @@ components:
       description: Request is not from the bound loopback origin
       content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
   schemas:
+    ResearchSettings:
+      type: object
+      additionalProperties: false
+      required: [revision, config, aiConfigs]
+      properties:
+        revision: {type: integer, minimum: 1}
+        config: {$ref: "#/components/schemas/JsonObject"}
+        aiConfigs: {type: array, items: {$ref: "#/components/schemas/JsonObject"}}
     JsonObject:
       type: object
       description: Provider- or configuration-defined JSON object whose stable fields are not owned by this transport layer.

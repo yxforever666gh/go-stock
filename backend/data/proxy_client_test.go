@@ -76,7 +76,7 @@ func TestDataFetchClientsDisableProxyByDefault(t *testing.T) {
 	tushareAPI := NewTushareApi(&SettingConfig{})
 	assertRestyProxyDisabled(t, tushareAPI.client)
 
-	diemengClient := newDiemengClient()
+	diemengClient := newGlobalMinuteProviders().newDiemengClient()
 	assertRestyProxyDisabled(t, diemengClient)
 
 	sinaClient := newSinaMinuteClient()
@@ -135,7 +135,7 @@ func TestDiemengEffectiveBaseURLKeepsConfiguredHostWithMohomopartyProxy(t *testi
 }
 
 func TestGetMarketNewsFetchMetaReturnsCopy(t *testing.T) {
-	marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{
+	(MarketNewsApi{}).marketNewsSetFetchMeta("cls_telegraph_api", marketNewsFetchMeta{
 		NetworkPath:  "proxy",
 		FallbackUsed: true,
 	})

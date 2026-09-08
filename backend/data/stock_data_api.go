@@ -42,8 +42,9 @@ const tushareApiUrl = "https://api.tushare.pro"
 var ErrInvalidDataFormat = errors.New("invalid data format")
 
 type StockDataApi struct {
-	client *resty.Client
-	config *SettingConfig
+	client  *resty.Client
+	config  *SettingConfig
+	minutes *minuteProviders
 }
 
 type TushareRequest struct {
@@ -92,10 +93,16 @@ type StockBasicResponse struct {
 }
 
 func NewStockDataApi() *StockDataApi {
+	return NewStockDataApiWithSettings(GetSettingConfig())
+}
+
+func NewStockDataApiWithSettings(setting *models.SettingConfig) *StockDataApi {
 	client := newRealtimeRestyClient()
+	snapshot := cloneProviderSettings(setting)
 	return &StockDataApi{
-		client: client,
-		config: GetSettingConfig(),
+		client:  client,
+		config:  snapshot,
+		minutes: newMinuteProviders(snapshot),
 	}
 }
 

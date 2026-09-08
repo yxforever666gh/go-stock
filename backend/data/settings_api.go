@@ -8,6 +8,7 @@ import (
 	"go-stock/backend/logger"
 	"go-stock/backend/models"
 	"go-stock/backend/research2"
+	"go-stock/backend/researchconfig"
 	appconfig "go-stock/internal/config"
 	"os"
 	"regexp"
@@ -210,79 +211,7 @@ func UpdateConfig(s *SettingConfig) string {
 }
 
 func updateAiConfigs(tx *gorm.DB, aiConfigs []*AIConfig) error {
-	if len(aiConfigs) == 0 {
-		return tx.Exec("DELETE FROM ai_config").Error
-	}
-	for index, item := range aiConfigs {
-		if item == nil {
-			return fmt.Errorf("AI 配置第 %d 项为空", index+1)
-		}
-	}
-	var ids []uint
-	lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
-		ids = append(ids, item.ID)
-	})
-	var existAiConfigs []*AIConfig
-	err := tx.Model(&AIConfig{}).Select("id").Where("id in (?) ", ids).Find(&existAiConfigs).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
-	}
-	idMap := make(map[uint]bool)
-	lo.ForEach(existAiConfigs, func(item *AIConfig, index int) {
-		idMap[item.ID] = true
-	})
-	var addAiConfigs []*AIConfig
-	var notDeleteIds []uint
-	var e error
-	lo.ForEach(aiConfigs, func(item *AIConfig, index int) {
-		if e != nil {
-			return
-		}
-		item.Sort = index + 1
-		item.ApiProtocol = NormalizeAIAPIProtocol(item.ApiProtocol)
-		if !idMap[item.ID] {
-			addAiConfigs = append(addAiConfigs, item)
-		} else {
-			notDeleteIds = append(notDeleteIds, item.ID)
-			e = tx.Model(&AIConfig{}).Where("id=?", item.ID).Updates(map[string]interface{}{
-				"sort":               item.Sort,
-				"disabled":           item.Disabled,
-				"name":               item.Name,
-				"base_url":           item.BaseUrl,
-				"api_key":            item.ApiKey,
-				"model_name":         item.ModelName,
-				"api_protocol":       item.ApiProtocol,
-				"max_tokens":         item.MaxTokens,
-				"temperature":        item.Temperature,
-				"time_out":           item.TimeOut,
-				"http_proxy":         item.HttpProxy,
-				"http_proxy_enabled": item.HttpProxyEnabled,
-			}).Error
-			if e != nil {
-				return
-			}
-		}
-	})
-	if e != nil {
-		return e
-	}
-	//删除旧的配置
-	if len(notDeleteIds) > 0 {
-		err = tx.Exec("DELETE FROM ai_config WHERE id NOT IN ?", notDeleteIds).Error
-		if err != nil {
-			return err
-		}
-	} else {
-		err = tx.Exec("DELETE FROM ai_config").Error
-		if err != nil {
-			return err
-		}
-	}
-	//批量新增的配置
-	if len(addAiConfigs) == 0 {
-		return nil
-	}
-	return tx.CreateInBatches(addAiConfigs, len(addAiConfigs)).Error
+	return researchconfig.SaveModels(tx, researchconfig.Global, aiConfigs)
 }
 
 func GetSettingConfig() *SettingConfig {
@@ -304,7 +233,7 @@ func GetSettingConfig() *SettingConfig {
 	} else {
 		settings = persistedSettings
 	}
-	err = db.Dao.Model(&AIConfig{}).
+	err = researchconfig.ActiveModels(db.Dao, researchconfig.Global).
 		Order("CASE WHEN sort <= 0 THEN id ELSE sort END ASC").
 		Order("id ASC").
 		Find(&aiConfigs).Error

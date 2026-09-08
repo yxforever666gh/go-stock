@@ -55,8 +55,11 @@ func ensureAkShareRuntimeImpl() error {
 }
 
 func resolvePythonExecutable() (string, bool, error) {
-	cfg := appconfig.Load()
-	configured := strings.TrimSpace(cfg.Python.Bin)
+	return resolvePythonExecutableForConfig(appconfig.Load().Python.Bin)
+}
+
+func resolvePythonExecutableForConfig(configured string) (string, bool, error) {
+	configured = strings.TrimSpace(configured)
 	if configured != "" {
 		if resolved, err := resolveConfiguredPythonPath(configured); err == nil {
 			return resolved, true, nil

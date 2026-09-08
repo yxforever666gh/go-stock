@@ -10,29 +10,8 @@ import (
 
 func TestFetchMinuteBarsWithTencentParsesRecentM1(t *testing.T) {
 	oldURL := tencentMinuteMKLineURL
-	oldCircuitUntil := tencentMinuteCircuitOpenUntil
-	oldCircuitFailCount := tencentMinuteCircuitFailCount
-	oldCircuitLastErr := tencentMinuteCircuitLastErr
-	oldLastFetch := tencentMinuteLastFetch
-	defer func() {
-		tencentMinuteMKLineURL = oldURL
-		tencentMinuteCircuitMu.Lock()
-		tencentMinuteCircuitOpenUntil = oldCircuitUntil
-		tencentMinuteCircuitFailCount = oldCircuitFailCount
-		tencentMinuteCircuitLastErr = oldCircuitLastErr
-		tencentMinuteCircuitMu.Unlock()
-		tencentMinuteFetchMu.Lock()
-		tencentMinuteLastFetch = oldLastFetch
-		tencentMinuteFetchMu.Unlock()
-	}()
-	tencentMinuteCircuitMu.Lock()
-	tencentMinuteCircuitOpenUntil = time.Time{}
-	tencentMinuteCircuitFailCount = 0
-	tencentMinuteCircuitLastErr = ""
-	tencentMinuteCircuitMu.Unlock()
-	tencentMinuteFetchMu.Lock()
-	tencentMinuteLastFetch = time.Time{}
-	tencentMinuteFetchMu.Unlock()
+	t.Cleanup(func() { tencentMinuteMKLineURL = oldURL })
+	provider := newMinuteProviders(nil)
 
 	loc := cnLocation()
 	now := normalizeMinuteTime(time.Now().In(loc))
@@ -54,7 +33,7 @@ func TestFetchMinuteBarsWithTencentParsesRecentM1(t *testing.T) {
 	defer srv.Close()
 	tencentMinuteMKLineURL = srv.URL
 
-	bars, source, err := fetchMinuteBarsWithTencent("600519.SH", start, end)
+	bars, source, err := provider.fetchMinuteBarsWithTencent("600519.SH", start, end)
 	if err != nil {
 		t.Fatalf("fetchMinuteBarsWithTencent err: %v", err)
 	}
@@ -80,7 +59,7 @@ func TestFetchMinuteBarsWithTencentRejectsOldWindow(t *testing.T) {
 	end := time.Now().In(loc).Add(-9 * 24 * time.Hour)
 	start := end.Add(-30 * time.Minute)
 
-	bars, source, err := fetchMinuteBarsWithTencent("600519.SH", start, end)
+	bars, source, err := newGlobalMinuteProviders().fetchMinuteBarsWithTencent("600519.SH", start, end)
 	if err == nil {
 		t.Fatal("expected old window error")
 	}

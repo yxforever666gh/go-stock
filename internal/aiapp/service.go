@@ -9,6 +9,7 @@ import (
 
 	"go-stock/backend/data"
 	"go-stock/backend/models"
+	"go-stock/backend/researchconfig"
 	cliports "go-stock/internal/cli/ports"
 	"go-stock/internal/service"
 
@@ -116,7 +117,7 @@ func resolveCommandAIConfig(ctx context.Context, main *gorm.DB, opts cliports.Co
 		return nil, errors.New("main database is not initialized")
 	}
 	cfg := &models.AIConfig{}
-	tx := main.WithContext(ctx).Model(&models.AIConfig{})
+	tx := researchconfig.ActiveModels(main.WithContext(ctx), researchconfig.Global)
 	var err error
 	if opts.AIConfigID > 0 {
 		err = tx.Where("id = ?", opts.AIConfigID).First(cfg).Error

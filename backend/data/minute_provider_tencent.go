@@ -7,12 +7,10 @@ import (
 	"net/http"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
 	"go-stock/backend/logger"
-	appconfig "go-stock/internal/config"
 )
 
 const (
@@ -21,18 +19,6 @@ const (
 )
 
 var tencentMinuteMKLineURL = "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
-
-var (
-	tencentMinuteFetchMu   sync.Mutex
-	tencentMinuteLastFetch time.Time
-)
-
-var (
-	tencentMinuteCircuitMu        sync.Mutex
-	tencentMinuteCircuitOpenUntil time.Time
-	tencentMinuteCircuitFailCount int
-	tencentMinuteCircuitLastErr   string
-)
 
 type tencentMinuteResp struct {
 	Code int                          `json:"code"`
@@ -45,23 +31,23 @@ type tencentMinuteData struct {
 	Prec string  `json:"prec"`
 }
 
-func tencentMinuteFetchMinInterval() time.Duration {
-	return time.Duration(appconfig.Load().Minute.TencentMinIntervalMS) * time.Millisecond
+func (p *minuteProviders) tencentMinuteFetchMinInterval() time.Duration {
+	return time.Duration(p.environment.Minute.TencentMinIntervalMS) * time.Millisecond
 }
 
-func waitForTencentMinuteFetchWindow() {
-	_ = waitForTencentMinuteFetchWindowContext(context.Background())
+func (p *minuteProviders) waitForTencentMinuteFetchWindow() {
+	_ = p.waitForTencentMinuteFetchWindowContext(context.Background())
 }
 
-func waitForTencentMinuteFetchWindowContext(ctx context.Context) error {
-	interval := tencentMinuteFetchMinInterval()
+func (p *minuteProviders) waitForTencentMinuteFetchWindowContext(ctx context.Context) error {
+	interval := p.tencentMinuteFetchMinInterval()
 	if interval <= 0 {
 		return nil
 	}
-	tencentMinuteFetchMu.Lock()
-	defer tencentMinuteFetchMu.Unlock()
-	if !tencentMinuteLastFetch.IsZero() {
-		elapsed := time.Since(tencentMinuteLastFetch)
+	p.state.tencentMinuteFetchMu.Lock()
+	defer p.state.tencentMinuteFetchMu.Unlock()
+	if !p.state.tencentMinuteLastFetch.IsZero() {
+		elapsed := time.Since(p.state.tencentMinuteLastFetch)
 		if elapsed < interval {
 			timer := time.NewTimer(interval - elapsed)
 			defer timer.Stop()
@@ -72,30 +58,30 @@ func waitForTencentMinuteFetchWindowContext(ctx context.Context) error {
 			}
 		}
 	}
-	tencentMinuteLastFetch = time.Now()
+	p.state.tencentMinuteLastFetch = time.Now()
 	return nil
 }
 
-func tencentMinuteCircuitCheck() error {
-	tencentMinuteCircuitMu.Lock()
-	defer tencentMinuteCircuitMu.Unlock()
-	if tencentMinuteCircuitOpenUntil.IsZero() {
+func (p *minuteProviders) tencentMinuteCircuitCheck() error {
+	p.state.tencentMinuteCircuitMu.Lock()
+	defer p.state.tencentMinuteCircuitMu.Unlock()
+	if p.state.tencentMinuteCircuitOpenUntil.IsZero() {
 		return nil
 	}
-	if time.Now().Before(tencentMinuteCircuitOpenUntil) {
-		msg := strings.TrimSpace(tencentMinuteCircuitLastErr)
+	if time.Now().Before(p.state.tencentMinuteCircuitOpenUntil) {
+		msg := strings.TrimSpace(p.state.tencentMinuteCircuitLastErr)
 		if msg == "" {
 			msg = "tencent minute api unavailable"
 		}
-		return fmt.Errorf("tencent minute api temporarily disabled until %s: %s", tencentMinuteCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
+		return fmt.Errorf("tencent minute api temporarily disabled until %s: %s", p.state.tencentMinuteCircuitOpenUntil.Format("2006-01-02 15:04:05"), msg)
 	}
-	tencentMinuteCircuitOpenUntil = time.Time{}
-	tencentMinuteCircuitFailCount = 0
-	tencentMinuteCircuitLastErr = ""
+	p.state.tencentMinuteCircuitOpenUntil = time.Time{}
+	p.state.tencentMinuteCircuitFailCount = 0
+	p.state.tencentMinuteCircuitLastErr = ""
 	return nil
 }
 
-func tencentMinuteCircuitRecordFailure(err error) {
+func (p *minuteProviders) tencentMinuteCircuitRecordFailure(err error) {
 	if err == nil {
 		return
 	}
@@ -128,29 +114,29 @@ func tencentMinuteCircuitRecordFailure(err error) {
 		return
 	}
 
-	tencentMinuteCircuitMu.Lock()
-	defer tencentMinuteCircuitMu.Unlock()
-	tencentMinuteCircuitFailCount++
-	tencentMinuteCircuitLastErr = err.Error()
-	if tencentMinuteCircuitFailCount < 2 {
+	p.state.tencentMinuteCircuitMu.Lock()
+	defer p.state.tencentMinuteCircuitMu.Unlock()
+	p.state.tencentMinuteCircuitFailCount++
+	p.state.tencentMinuteCircuitLastErr = err.Error()
+	if p.state.tencentMinuteCircuitFailCount < 2 {
 		return
 	}
 	backoff := 2 * time.Minute
-	if tencentMinuteCircuitFailCount >= 4 {
+	if p.state.tencentMinuteCircuitFailCount >= 4 {
 		backoff = 5 * time.Minute
 	}
-	if tencentMinuteCircuitFailCount >= 8 {
+	if p.state.tencentMinuteCircuitFailCount >= 8 {
 		backoff = 10 * time.Minute
 	}
-	tencentMinuteCircuitOpenUntil = time.Now().Add(backoff)
+	p.state.tencentMinuteCircuitOpenUntil = time.Now().Add(backoff)
 }
 
-func tencentMinuteCircuitRecordSuccess() {
-	tencentMinuteCircuitMu.Lock()
-	defer tencentMinuteCircuitMu.Unlock()
-	tencentMinuteCircuitOpenUntil = time.Time{}
-	tencentMinuteCircuitFailCount = 0
-	tencentMinuteCircuitLastErr = ""
+func (p *minuteProviders) tencentMinuteCircuitRecordSuccess() {
+	p.state.tencentMinuteCircuitMu.Lock()
+	defer p.state.tencentMinuteCircuitMu.Unlock()
+	p.state.tencentMinuteCircuitOpenUntil = time.Time{}
+	p.state.tencentMinuteCircuitFailCount = 0
+	p.state.tencentMinuteCircuitLastErr = ""
 }
 
 func newTencentMinuteClient() *resty.Client {
@@ -198,11 +184,11 @@ func tencentMinuteRecentWindow(end time.Time) bool {
 	return end.After(now.Add(-7 * 24 * time.Hour))
 }
 
-func fetchMinuteBarsWithTencent(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
-	return fetchMinuteBarsWithTencentContext(context.Background(), tsCode, start, end)
+func (p *minuteProviders) fetchMinuteBarsWithTencent(tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+	return p.fetchMinuteBarsWithTencentContext(context.Background(), tsCode, start, end)
 }
 
-func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start, end time.Time) ([]minuteBar, string, error) {
+func (p *minuteProviders) fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start, end time.Time) ([]minuteBar, string, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -212,7 +198,7 @@ func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start
 	if !tencentMinuteRecentWindow(end) {
 		return []minuteBar{}, "tencent", fmt.Errorf("tencent minute provider only enabled for recent windows")
 	}
-	if err := tencentMinuteCircuitCheck(); err != nil {
+	if err := p.tencentMinuteCircuitCheck(); err != nil {
 		return []minuteBar{}, "tencent", err
 	}
 
@@ -239,7 +225,7 @@ func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start
 
 	url := fmt.Sprintf("%s?param=%s,m1,,,%d", strings.TrimRight(tencentMinuteMKLineURL, "/"), symbol, datalen)
 
-	if err := waitForTencentMinuteFetchWindowContext(ctx); err != nil {
+	if err := p.waitForTencentMinuteFetchWindowContext(ctx); err != nil {
 		return []minuteBar{}, "tencent", err
 	}
 	client := newTencentMinuteClient()
@@ -250,7 +236,7 @@ func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start
 		resp, reqErr := client.R().SetContext(ctx).Get(url)
 		if reqErr != nil {
 			lastErr = reqErr
-			tencentMinuteCircuitRecordFailure(reqErr)
+			p.tencentMinuteCircuitRecordFailure(reqErr)
 			if attempt < 2 {
 				timer := time.NewTimer(time.Duration(attempt) * 900 * time.Millisecond)
 				select {
@@ -264,17 +250,17 @@ func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start
 		}
 		if resp == nil {
 			lastErr = fmt.Errorf("empty http response")
-			tencentMinuteCircuitRecordFailure(lastErr)
+			p.tencentMinuteCircuitRecordFailure(lastErr)
 			break
 		}
 		if resp.StatusCode() == http.StatusTooManyRequests {
 			lastErr = fmt.Errorf("tencent rate limited (HTTP 429)")
-			tencentMinuteCircuitRecordFailure(lastErr)
+			p.tencentMinuteCircuitRecordFailure(lastErr)
 			break
 		}
 		if resp.StatusCode() >= 400 {
 			lastErr = fmt.Errorf("tencent http status %d", resp.StatusCode())
-			tencentMinuteCircuitRecordFailure(lastErr)
+			p.tencentMinuteCircuitRecordFailure(lastErr)
 			break
 		}
 		body = resp.Body()
@@ -286,27 +272,27 @@ func fetchMinuteBarsWithTencentContext(ctx context.Context, tsCode string, start
 	}
 	if len(body) == 0 {
 		err := fmt.Errorf("tencent empty body")
-		tencentMinuteCircuitRecordFailure(err)
+		p.tencentMinuteCircuitRecordFailure(err)
 		return []minuteBar{}, "tencent", err
 	}
 
 	var result tencentMinuteResp
 	if err := json.Unmarshal(body, &result); err != nil {
-		tencentMinuteCircuitRecordFailure(err)
+		p.tencentMinuteCircuitRecordFailure(err)
 		return []minuteBar{}, "tencent", fmt.Errorf("decode tencent minute json failed: %w", err)
 	}
 	if result.Code != 0 {
 		err := fmt.Errorf("tencent minute api error (code=%d): %s", result.Code, strings.TrimSpace(result.Msg))
-		tencentMinuteCircuitRecordFailure(err)
+		p.tencentMinuteCircuitRecordFailure(err)
 		return []minuteBar{}, "tencent", err
 	}
 	payload, ok := result.Data[symbol]
 	if !ok {
 		err := fmt.Errorf("tencent minute missing data for %s", symbol)
-		tencentMinuteCircuitRecordFailure(err)
+		p.tencentMinuteCircuitRecordFailure(err)
 		return []minuteBar{}, "tencent", err
 	}
-	tencentMinuteCircuitRecordSuccess()
+	p.tencentMinuteCircuitRecordSuccess()
 
 	bars := make([]minuteBar, 0, len(payload.M1))
 	for _, row := range payload.M1 {

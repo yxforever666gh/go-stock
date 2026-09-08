@@ -45,6 +45,7 @@ func IsCapitalDeploymentAnalysisWindow(value time.Time) bool {
 }
 
 type AnalysisRequest struct {
+	BuyPermit          *AnalysisBuyPermit `json:"-"`
 	ScheduledFor       time.Time
 	AIConfigID         uint
 	ProviderName       string
@@ -269,6 +270,9 @@ func recentRecommendationContext(source []RecommendationHistoryItem) string {
 }
 
 func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (result AnalysisRun, resultErr error) {
+	if request.BuyPermit != nil {
+		ctx = context.WithValue(ctx, analysisBuyPermitKey{}, request.BuyPermit)
+	}
 	r.service.analysisMu.Lock()
 	defer r.service.analysisMu.Unlock()
 	now := r.service.now()
@@ -744,10 +748,10 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 			enqueueErr = r.service.EnqueueRecommendation(ctx, &recommendation, initial, quote)
 		}
 		if err := enqueueErr; err != nil {
-			if errors.Is(err, trading.ErrInsufficientCash) || errors.Is(err, trading.ErrMinimumOrder) || errors.Is(err, ErrDuplicateStockExposure) {
+			if errors.Is(err, trading.ErrNewPositionsDisabled) || errors.Is(err, trading.ErrInsufficientCash) || errors.Is(err, trading.ErrMinimumOrder) || errors.Is(err, ErrDuplicateStockExposure) {
 				opportunity.Action, opportunity.Status, opportunity.ValidationReason = OpportunityActionReject, "closed", err.Error()
 				if updateErr := r.service.repository.UpdateBuyOpportunity(ctx, opportunity.OpportunityID, map[string]any{
-					"action": opportunity.Action, "status": opportunity.Status, "validation_reason": opportunity.ValidationReason,
+					"action": opportunity.Action, "status": opportunity.Status, "validation_reason": opportunity.ValidationReason, "reanalysis_at": nil, "expires_at": nil,
 				}); updateErr != nil {
 					opportunities = append(opportunities, opportunity)
 					return finishExecutionFailure(errors.Join(err, updateErr))
@@ -1020,8 +1024,12 @@ func finalDecisionMarkdown(analysis string, opportunities []BuyOpportunity) stri
 		if item.PriceLow > 0 && item.PriceHigh >= item.PriceLow {
 			priceRange = fmt.Sprintf("%.3f-%.3f", item.PriceLow, item.PriceHigh)
 		}
+		timingReason := item.TimingReason
+		if item.ValidationReason != "" {
+			timingReason += "；执行约束：" + item.ValidationReason
+		}
 		builder.WriteString(fmt.Sprintf("\n| %s | %s | %s | %s | %s | %s | %s | %s |", item.Action, item.StockName, item.StockCode,
-			priceRange, item.AISummary, item.TimingReason, item.MainRisk, item.SourceRefs))
+			priceRange, item.AISummary, timingReason, item.MainRisk, item.SourceRefs))
 	}
 	return builder.String()
 }

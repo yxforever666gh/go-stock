@@ -31,6 +31,9 @@ func (s *Service) UpdateConfig(config *models.SettingConfig) (string, error) {
 	if strings.HasPrefix(message, "保存失败") {
 		return message, fmt.Errorf("%w: %s", service.ErrInvalidInput, message)
 	}
+	if strings.HasPrefix(message, "更新配置失败") {
+		return message, fmt.Errorf("%w: %s", service.ErrOperationFailed, message)
+	}
 	return message, nil
 }
 

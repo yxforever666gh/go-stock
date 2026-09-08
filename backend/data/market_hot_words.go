@@ -210,7 +210,7 @@ func (s *MarketHotWordsService) compute(ctx context.Context, query HotWordsQuery
 	if len(currentDocuments) == 0 {
 		status := marketdata.StatusEmpty
 		warnings := []string{"最近窗口内没有可分析的新闻"}
-		if fetchErr := marketNewsFetchFailureForWindow(nil, currentFrom, now); fetchErr != nil {
+		if fetchErr := (MarketNewsApi{}).marketNewsFetchFailureForWindow(nil, currentFrom, now); fetchErr != nil {
 			return unavailableHotWordsWithData(now, data, "market_news_fetch_failed", fetchErr)
 		}
 		return marketdata.DataEnvelope[HotWordsData]{Data: data, Source: "market_news", FetchedAt: now,

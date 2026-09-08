@@ -36,6 +36,9 @@ import (
 // -----------------------------------------------------------------------------------
 type MarketNewsApi struct {
 	client *resty.Client
+	config *models.SettingConfig
+	mainDB *gorm.DB
+	state  *marketNewsFetchState
 }
 
 // Exported market getters retain the existing marketapp/CLI response shapes.
@@ -96,33 +99,55 @@ type marketNewsFetchAttempt struct {
 	client *resty.Client
 }
 
+type marketNewsFetchState struct {
+	mu       sync.RWMutex
+	bySource map[string]marketNewsFetchMeta
+	sequence uint64
+}
+
+var globalMarketNewsFetchState = &marketNewsFetchState{bySource: map[string]marketNewsFetchMeta{}}
+
 var (
-	marketNewsFetchMetaMu       sync.RWMutex
-	marketNewsFetchMetaBySource = map[string]marketNewsFetchMeta{}
-	marketNewsFetchSequence     uint64
-	sinaJSONPEnvelopeRegexp     = regexp.MustCompile(`(?s)^try\{callback\((.*)\);\}catch\(e\)\{\};?$`)
-	sinaJSONPCallbackRegexp     = regexp.MustCompile(`(?s)^callback\((.*)\)$`)
+	sinaJSONPEnvelopeRegexp = regexp.MustCompile(`(?s)^try\{callback\((.*)\);\}catch\(e\)\{\};?$`)
+	sinaJSONPCallbackRegexp = regexp.MustCompile(`(?s)^callback\((.*)\)$`)
 )
 
 func NewMarketNewsApi() *MarketNewsApi {
-	return &MarketNewsApi{}
+	api := NewMarketNewsApiWithSettings(GetSettingConfig(), db.Dao)
+	api.state = globalMarketNewsFetchState
+	return api
 }
 
-func marketNewsSetFetchMeta(source string, meta marketNewsFetchMeta) {
+func NewMarketNewsApiWithSettings(setting *models.SettingConfig, mainDB *gorm.DB) *MarketNewsApi {
+	return &MarketNewsApi{config: cloneProviderSettings(setting), mainDB: mainDB, state: &marketNewsFetchState{bySource: map[string]marketNewsFetchMeta{}}}
+}
+
+func (m MarketNewsApi) fetchState() *marketNewsFetchState {
+	if m.state == nil {
+		return globalMarketNewsFetchState
+	}
+	return m.state
+}
+
+func GetMarketNewsFetchMeta(source string) map[string]any {
+	return (MarketNewsApi{state: globalMarketNewsFetchState}).GetMarketNewsFetchMeta(source)
+}
+
+func (m MarketNewsApi) marketNewsSetFetchMeta(source string, meta marketNewsFetchMeta) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return
 	}
-	marketNewsFetchMetaMu.Lock()
-	defer marketNewsFetchMetaMu.Unlock()
-	marketNewsFetchMetaBySource[source] = meta
+	m.fetchState().mu.Lock()
+	defer m.fetchState().mu.Unlock()
+	m.fetchState().bySource[source] = meta
 }
 
-func GetMarketNewsFetchMeta(source string) map[string]any {
+func (m MarketNewsApi) GetMarketNewsFetchMeta(source string) map[string]any {
 	source = strings.TrimSpace(source)
-	marketNewsFetchMetaMu.RLock()
-	defer marketNewsFetchMetaMu.RUnlock()
-	meta, ok := marketNewsFetchMetaBySource[source]
+	m.fetchState().mu.RLock()
+	defer m.fetchState().mu.RUnlock()
+	meta, ok := m.fetchState().bySource[source]
 	if !ok {
 		return map[string]any{}
 	}
@@ -155,17 +180,17 @@ func GetMarketNewsFetchMeta(source string) map[string]any {
 	return result
 }
 
-func marketNewsBeginFetch(key, source string) uint64 {
+func (m MarketNewsApi) marketNewsBeginFetch(key, source string) uint64 {
 	key = strings.TrimSpace(key)
 	source = strings.TrimSpace(source)
 	if key == "" || source == "" {
 		return 0
 	}
-	marketNewsFetchMetaMu.Lock()
-	defer marketNewsFetchMetaMu.Unlock()
-	marketNewsFetchSequence++
-	sequence := marketNewsFetchSequence
-	marketNewsFetchMetaBySource[key] = marketNewsFetchMeta{
+	m.fetchState().mu.Lock()
+	defer m.fetchState().mu.Unlock()
+	m.fetchState().sequence++
+	sequence := m.fetchState().sequence
+	m.fetchState().bySource[key] = marketNewsFetchMeta{
 		Source:      source,
 		AttemptedAt: time.Now(),
 		sequence:    sequence,
@@ -173,14 +198,14 @@ func marketNewsBeginFetch(key, source string) uint64 {
 	return sequence
 }
 
-func marketNewsFinishFetch(key string, sequence uint64, networkPath string, fallbackUsed bool, fetchErr error) {
+func (m MarketNewsApi) marketNewsFinishFetch(key string, sequence uint64, networkPath string, fallbackUsed bool, fetchErr error) {
 	key = strings.TrimSpace(key)
 	if key == "" || sequence == 0 {
 		return
 	}
-	marketNewsFetchMetaMu.Lock()
-	defer marketNewsFetchMetaMu.Unlock()
-	meta, exists := marketNewsFetchMetaBySource[key]
+	m.fetchState().mu.Lock()
+	defer m.fetchState().mu.Unlock()
+	meta, exists := m.fetchState().bySource[key]
 	// A slow older request must never overwrite a newer observation for the
 	// same endpoint. The sequence is allocated under the same mutex at start.
 	if !exists || meta.sequence != sequence {
@@ -196,14 +221,14 @@ func marketNewsFinishFetch(key string, sequence uint64, networkPath string, fall
 	} else {
 		meta.Error = ""
 	}
-	marketNewsFetchMetaBySource[key] = meta
+	m.fetchState().bySource[key] = meta
 }
 
-func marketNewsFetchURL(url string, timeout time.Duration, configure func(*resty.Request)) (*marketNewsFetchOutcome, error) {
+func (m MarketNewsApi) marketNewsFetchURL(url string, timeout time.Duration, configure func(*resty.Request)) (*marketNewsFetchOutcome, error) {
 	attempts := []marketNewsFetchAttempt{
 		{label: "direct", client: newNoProxyRestyClient()},
 	}
-	if proxyClient, ok := newSettingsProxyRestyClientIfConfigured(); ok {
+	if proxyClient, ok := newSettingsProxyRestyClientForSettings(m.config); ok {
 		attempts = append(attempts, marketNewsFetchAttempt{label: "proxy", client: proxyClient})
 	}
 	if len(attempts) == 0 {
@@ -359,14 +384,14 @@ func normalizeSinaJSONPBody(body []byte) ([]byte, error) {
 
 func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 	var telegraphs []models.Telegraph
-	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphAPI, marketNewsSourceCLSTelegraph)
+	fetchSequence := m.marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphAPI, marketNewsSourceCLSTelegraph)
 	fetchErr := errors.New("CLS telegraph API fetch did not complete")
 	networkPath := ""
 	defer func() {
-		marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphAPI, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
+		m.marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphAPI, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
 	}()
 	url := "https://www.cls.cn/nodeapi/telegraphList"
-	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
+	outcome, err := m.marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
 		req.SetHeader("Referer", "https://www.cls.cn/").
 			SetHeader("User-Agent", stringsBuilderUserAgent())
 	})
@@ -423,15 +448,15 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 			}
 			cnt := int64(0)
 			if telegraph.Title == "" {
-				db.Dao.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
+				m.mainDB.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
 			} else {
-				db.Dao.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
+				m.mainDB.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
 			}
 			if cnt > 0 {
 				continue
 			}
 			telegraphs = append(telegraphs, telegraph)
-			db.Dao.Model(&models.Telegraph{}).Create(&telegraph)
+			m.mainDB.Model(&models.Telegraph{}).Create(&telegraph)
 			logger.SugaredLogger.Debugf("telegraph: %+v", &telegraph)
 			subjects := safeSlice(news["subjects"])
 			if len(subjects) == 0 {
@@ -446,15 +471,15 @@ func (m MarketNewsApi) TelegraphList(crawlTimeOut int64) *[]models.Telegraph {
 					Name: name,
 					Type: "subject",
 				}
-				db.Dao.Model(tag).Where("name=? and type=?", name, "subject").FirstOrCreate(&tag)
-				db.Dao.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tag.ID).FirstOrCreate(&models.TelegraphTags{
+				m.mainDB.Model(tag).Where("name=? and type=?", name, "subject").FirstOrCreate(&tag)
+				m.mainDB.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tag.ID).FirstOrCreate(&models.TelegraphTags{
 					TelegraphId: telegraph.ID,
 					TagId:       tag.ID,
 				})
 			}
 
 		}
-		//db.Dao.Model(&models.Telegraph{}).Create(&telegraphs)
+		//m.mainDB.Model(&models.Telegraph{}).Create(&telegraphs)
 		//logger.SugaredLogger.Debugf("telegraphs: %+v", &telegraphs)
 	} else {
 		fetchErr = fmt.Errorf("CLS telegraph API returned error code %d", v)
@@ -501,13 +526,13 @@ func (m MarketNewsApi) RefreshResearchNews(ctx context.Context, timeout time.Dur
 func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 	url := "https://www.cls.cn/telegraph"
 	var telegraphs []models.Telegraph
-	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphWeb, marketNewsSourceCLSTelegraph)
+	fetchSequence := m.marketNewsBeginFetch(marketNewsFetchKeyCLSTelegraphWeb, marketNewsSourceCLSTelegraph)
 	fetchErr := errors.New("CLS telegraph web fetch did not complete")
 	networkPath := ""
 	defer func() {
-		marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphWeb, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
+		m.marketNewsFinishFetch(marketNewsFetchKeyCLSTelegraphWeb, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
 	}()
-	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
+	outcome, err := m.marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
 		req.SetHeader("Referer", "https://www.cls.cn/").
 			SetHeader("User-Agent", stringsBuilderUserAgent())
 	})
@@ -549,7 +574,7 @@ func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 					Name: selection.Text(),
 					Type: "subject",
 				}
-				db.Dao.Model(tag).Where("name=? and type=?", selection.Text(), "subject").FirstOrCreate(&tag)
+				m.mainDB.Model(tag).Where("name=? and type=?", selection.Text(), "subject").FirstOrCreate(&tag)
 				telegraph.SubjectTags = append(telegraph.SubjectTags, selection.Text())
 			}
 		})
@@ -561,15 +586,15 @@ func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 		if telegraph.Content != "" {
 			telegraph.SentimentResult = AnalyzeSentiment(telegraph.Content).Description
 			cnt := int64(0)
-			db.Dao.Model(telegraph).Where("time=? and content=?", telegraph.Time, telegraph.Content).Count(&cnt)
+			m.mainDB.Model(telegraph).Where("time=? and content=?", telegraph.Time, telegraph.Content).Count(&cnt)
 			if cnt == 0 {
-				db.Dao.Create(&telegraph)
+				m.mainDB.Create(&telegraph)
 				telegraphs = append(telegraphs, telegraph)
 				for _, tag := range telegraph.SubjectTags {
 					tagInfo := &models.Tags{}
-					db.Dao.Model(models.Tags{}).Where("name=? and type=?", tag, "subject").First(&tagInfo)
+					m.mainDB.Model(models.Tags{}).Where("name=? and type=?", tag, "subject").First(&tagInfo)
 					if tagInfo.ID > 0 {
-						db.Dao.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tagInfo.ID).FirstOrCreate(&models.TelegraphTags{
+						m.mainDB.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tagInfo.ID).FirstOrCreate(&models.TelegraphTags{
 							TelegraphId: telegraph.ID,
 							TagId:       tagInfo.ID,
 						})
@@ -585,13 +610,13 @@ func (m MarketNewsApi) GetNewTelegraph(crawlTimeOut int64) *[]models.Telegraph {
 func (m MarketNewsApi) GetNewsList(source string, limit int) *[]*models.Telegraph {
 	news := &[]*models.Telegraph{}
 	if source != "" {
-		db.Dao.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,time desc").Limit(limit).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,time desc").Limit(limit).Find(news)
 	} else {
-		db.Dao.Model(news).Preload("TelegraphTags").Order("data_time desc,time desc").Limit(limit).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Order("data_time desc,time desc").Limit(limit).Find(news)
 	}
 	for _, item := range *news {
 		tags := &[]models.Tags{}
-		db.Dao.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
+		m.mainDB.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
 			return item.TagId
 		})).Find(&tags)
 		tagNames := lo.Map(*tags, func(item models.Tags, index int) string {
@@ -603,16 +628,16 @@ func (m MarketNewsApi) GetNewsList(source string, limit int) *[]*models.Telegrap
 	return news
 }
 func (m MarketNewsApi) GetNewsList2(source string, limit int) *[]*models.Telegraph {
-	NewMarketNewsApi().TelegraphList(30)
+	m.TelegraphList(30)
 	news := &[]*models.Telegraph{}
 	if source != "" {
-		db.Dao.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,is_red desc").Limit(limit).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,is_red desc").Limit(limit).Find(news)
 	} else {
-		db.Dao.Model(news).Preload("TelegraphTags").Order("data_time desc,is_red desc").Limit(limit).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Order("data_time desc,is_red desc").Limit(limit).Find(news)
 	}
 	for _, item := range *news {
 		tags := &[]models.Tags{}
-		db.Dao.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
+		m.mainDB.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
 			return item.TagId
 		})).Find(&tags)
 		tagNames := lo.Map(*tags, func(item models.Tags, index int) string {
@@ -627,13 +652,13 @@ func (m MarketNewsApi) GetNewsList2(source string, limit int) *[]*models.Telegra
 func (m MarketNewsApi) GetTelegraphList(source string) *[]*models.Telegraph {
 	news := &[]*models.Telegraph{}
 	if source != "" {
-		db.Dao.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,time desc").Limit(50).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,time desc").Limit(50).Find(news)
 	} else {
-		db.Dao.Model(news).Preload("TelegraphTags").Order("data_time desc,time desc").Limit(50).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Order("data_time desc,time desc").Limit(50).Find(news)
 	}
 	for _, item := range *news {
 		tags := &[]models.Tags{}
-		db.Dao.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
+		m.mainDB.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
 			return item.TagId
 		})).Find(&tags)
 		tagNames := lo.Map(*tags, func(item models.Tags, index int) string {
@@ -650,13 +675,13 @@ func (m MarketNewsApi) GetTelegraphListWithPaging(source string, page, pageSize 
 
 	news := &[]*models.Telegraph{}
 	if source != "" {
-		db.Dao.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,time desc").Limit(pageSize).Offset(offset).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Where("source=?", source).Order("data_time desc,time desc").Limit(pageSize).Offset(offset).Find(news)
 	} else {
-		db.Dao.Model(news).Preload("TelegraphTags").Order("data_time desc,time desc").Limit(pageSize).Offset(offset).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Order("data_time desc,time desc").Limit(pageSize).Offset(offset).Find(news)
 	}
 	for _, item := range *news {
 		tags := &[]models.Tags{}
-		db.Dao.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
+		m.mainDB.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
 			return item.TagId
 		})).Find(&tags)
 		tagNames := lo.Map(*tags, func(item models.Tags, index int) string {
@@ -670,14 +695,14 @@ func (m MarketNewsApi) GetTelegraphListWithPaging(source string, page, pageSize 
 
 func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 	news := &[]models.Telegraph{}
-	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
+	fetchSequence := m.marketNewsBeginFetch(marketNewsFetchKeySinaLive, marketNewsSourceSina)
 	fetchErr := errors.New("Sina live news fetch did not complete")
 	networkPath := ""
 	defer func() {
-		marketNewsFinishFetch(marketNewsFetchKeySinaLive, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
+		m.marketNewsFinishFetch(marketNewsFetchKeySinaLive, fetchSequence, networkPath, networkPath != "" && networkPath != "direct", fetchErr)
 	}()
 	url := "https://zhibo.sina.com.cn/api/zhibo/feed?callback=callback&page=1&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1&pagesize=20&id=4161089&type=0&_=" + strconv.FormatInt(time.Now().Unix(), 10)
-	outcome, err := marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
+	outcome, err := m.marketNewsFetchURL(url, time.Duration(crawlTimeOut)*time.Second, func(req *resty.Request) {
 		req.SetHeader("Referer", "https://finance.sina.com.cn").
 			SetHeader("User-Agent", stringsBuilderUserAgent())
 	})
@@ -744,7 +769,7 @@ func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 				Name: name,
 				Type: "sina_subject",
 			}
-			db.Dao.Model(tag).Where("name=? and type=?", name, "sina_subject").FirstOrCreate(&tag)
+			m.mainDB.Model(tag).Where("name=? and type=?", name, "sina_subject").FirstOrCreate(&tag)
 			telegraph.SubjectTags = append(telegraph.SubjectTags, name)
 		}
 		if _, ok := lo.Find(telegraph.SubjectTags, func(item string) bool { return item == "焦点" }); ok {
@@ -756,18 +781,18 @@ func (m MarketNewsApi) GetSinaNews(crawlTimeOut uint) *[]models.Telegraph {
 			telegraph.SentimentResult = AnalyzeSentiment(telegraph.Content).Description
 			cnt := int64(0)
 			if telegraph.Title == "" {
-				db.Dao.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
+				m.mainDB.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
 			} else {
-				db.Dao.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
+				m.mainDB.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
 			}
 			if cnt == 0 {
-				db.Dao.Create(&telegraph)
+				m.mainDB.Create(&telegraph)
 				telegraphs = append(telegraphs, telegraph)
 				for _, tag := range telegraph.SubjectTags {
 					tagInfo := &models.Tags{}
-					db.Dao.Model(models.Tags{}).Where("name=? and type=?", tag, "sina_subject").First(&tagInfo)
+					m.mainDB.Model(models.Tags{}).Where("name=? and type=?", tag, "sina_subject").First(&tagInfo)
 					if tagInfo.ID > 0 {
-						db.Dao.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tagInfo.ID).FirstOrCreate(&models.TelegraphTags{
+						m.mainDB.Model(models.TelegraphTags{}).Where("telegraph_id=? and tag_id=?", telegraph.ID, tagInfo.ID).FirstOrCreate(&models.TelegraphTags{
 							TelegraphId: telegraph.ID,
 							TagId:       tagInfo.ID,
 						})
@@ -921,7 +946,7 @@ func (m MarketNewsApi) requestMarketJSON(ctx context.Context, timeout time.Durat
 	}
 	client := m.client
 	if client == nil {
-		client = newFetchRestyClient()
+		client = newFetchRestyClientForSettings(m.config)
 	}
 	response, err := send(client.R().SetContext(ctx).SetHeader("User-Agent", stringsBuilderUserAgent()))
 	if err != nil {
@@ -944,7 +969,7 @@ func (m MarketNewsApi) requestMarketJSON(ctx context.Context, timeout time.Durat
 
 func (m MarketNewsApi) TopStocksRankingList(date string) {
 	url := fmt.Sprintf("http://vip.stock.finance.sina.com.cn/q/go.php/vInvestConsult/kind/lhb/index.phtml?tradedate=%s", date)
-	response, _ := newFetchRestyClient().SetTimeout(time.Duration(5)*time.Second).R().
+	response, _ := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(5)*time.Second).R().
 		SetHeader("Host", "vip.stock.finance.sina.com.cn").
 		SetHeader("Referer", "https://finance.sina.com.cn").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/117.0.0.0 Safari/537.36 Edg/117.0.2045.60").Get(url)
@@ -980,7 +1005,7 @@ func (m MarketNewsApi) LongTiger(date string) *[]models.LongTigerRankData {
 	params["source"] = "WEB"
 	params["client"] = "WEB"
 	params["filter"] = fmt.Sprintf("(TRADE_DATE<='%s')(TRADE_DATE>='%s')", date, date)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(15)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(15)*time.Second).R().
 		SetHeader("Host", "datacenter-web.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/stock/tradedetail.html").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0").
@@ -1017,12 +1042,12 @@ func (m MarketNewsApi) LongTiger(date string) *[]models.LongTigerRankData {
 	}
 	for _, rankData := range *ranks {
 		temp := &models.LongTigerRankData{}
-		db.Dao.Model(temp).Where(&models.LongTigerRankData{
+		m.mainDB.Model(temp).Where(&models.LongTigerRankData{
 			TRADEDATE: rankData.TRADEDATE,
 			SECUCODE:  rankData.SECUCODE,
 		}).First(temp)
 		if temp.SECURITYTYPECODE == "" {
-			db.Dao.Model(temp).Create(&rankData)
+			m.mainDB.Model(temp).Create(&rankData)
 		}
 	}
 	return ranks
@@ -1052,7 +1077,7 @@ func (m MarketNewsApi) IndustryResearchReport(industryCode string, days int) []a
 	url := "https://reportapi.eastmoney.com/report/list"
 
 	logger.SugaredLogger.Infof("beginDate:%s endDate:%s", beginDate, endDate)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(15)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(15)*time.Second).R().
 		SetHeader("Host", "reportapi.eastmoney.com").
 		SetHeader("Origin", "https://data.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/report/stock.jshtml").
@@ -1121,7 +1146,7 @@ func (m MarketNewsApi) stockResearchReportAtTimes(stockCode string, days int, en
 	url := "https://reportapi.eastmoney.com/report/list2"
 
 	logger.SugaredLogger.Infof("beginDate:%s endDate:%s", beginDate, endDate)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(15)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(15)*time.Second).R().
 		SetHeader("Host", "reportapi.eastmoney.com").
 		SetHeader("Origin", "https://data.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/report/stock.jshtml").
@@ -1213,7 +1238,7 @@ func (m MarketNewsApi) EMDictCode(code string, cache *freecache.Cache) []any {
 	params := map[string]string{
 		"bkCode": code,
 	}
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(15)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(15)*time.Second).R().
 		SetHeader("Host", "reportapi.eastmoney.com").
 		SetHeader("Origin", "https://data.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/report/industry.jshtml").
@@ -1235,13 +1260,13 @@ func (m MarketNewsApi) EMDictCode(code string, cache *freecache.Cache) []any {
 }
 
 func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
-	client := newFetchRestyClient()
+	client := newFetchRestyClientForSettings(m.config)
 	TVNews := &[]models.TVNews{}
 	news := &[]models.Telegraph{}
-	fetchSequence := marketNewsBeginFetch(marketNewsFetchKeyTradingView, marketNewsSourceTradingView)
+	fetchSequence := m.marketNewsBeginFetch(marketNewsFetchKeyTradingView, marketNewsSourceTradingView)
 	fetchErr := errors.New("TradingView news fetch did not complete")
 	defer func() {
-		marketNewsFinishFetch(marketNewsFetchKeyTradingView, fetchSequence, "", false, fetchErr)
+		m.marketNewsFinishFetch(marketNewsFetchKeyTradingView, fetchSequence, "", false, fetchErr)
 	}()
 	//	url := "https://news-mediator.tradingview.com/news-flow/v2/news?filter=lang:zh-Hans&filter=area:WLD&client=screener&streaming=false"
 	//url := "https://news-mediator.tradingview.com/news-flow/v2/news?filter=area%3AWLD&filter=lang%3Azh-Hans&client=screener&streaming=false"
@@ -1299,7 +1324,7 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 		if i > 10 {
 			break
 		}
-		detail := NewMarketNewsApi().TradingViewNewsDetail(a.Id)
+		detail := m.TradingViewNewsDetail(a.Id)
 		dataTime := time.Unix(int64(a.Published), 0).Local()
 		description := ""
 		sentimentResult := ""
@@ -1322,14 +1347,14 @@ func (m MarketNewsApi) TradingViewNews() *[]models.Telegraph {
 		}
 		cnt := int64(0)
 		if telegraph.Title == "" {
-			db.Dao.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
+			m.mainDB.Model(telegraph).Where("content=?", telegraph.Content).Count(&cnt)
 		} else {
-			db.Dao.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
+			m.mainDB.Model(telegraph).Where("title=?", telegraph.Title).Count(&cnt)
 		}
 		if cnt > 0 {
 			continue
 		}
-		db.Dao.Model(&models.Telegraph{}).Where("time=? and title=? and source=?", telegraph.Time, telegraph.Title, marketNewsSourceTradingView).FirstOrCreate(&telegraph)
+		m.mainDB.Model(&models.Telegraph{}).Where("time=? and title=? and source=?", telegraph.Time, telegraph.Title, marketNewsSourceTradingView).FirstOrCreate(&telegraph)
 		*news = append(*news, *telegraph)
 	}
 	fetchErr = nil
@@ -1340,7 +1365,7 @@ func (m MarketNewsApi) TradingViewNewsDetail(id string) *models.TVNewsDetail {
 	newsDetail := &models.TVNewsDetail{}
 	newsUrl := fmt.Sprintf("https://news-headlines.tradingview.com/v3/story?id=%s&lang=zh-Hans", url.QueryEscape(id))
 
-	client := newFetchRestyClient()
+	client := newFetchRestyClientForSettings(m.config)
 	request := client.SetTimeout(time.Duration(3) * time.Second).R()
 	_, err := request.
 		SetHeader("Host", "news-headlines.tradingview.com").
@@ -1361,7 +1386,7 @@ func (m MarketNewsApi) TradingViewNewsDetail(id string) *models.TVNewsDetail {
 }
 
 func (m MarketNewsApi) XUEQIUHotStock(size int, marketType string) *[]models.HotItem {
-	request := newFetchRestyClient().SetTimeout(time.Duration(30) * time.Second).R()
+	request := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30) * time.Second).R()
 	_, _ = request.
 		SetHeader("Host", "xueqiu.com").
 		SetHeader("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:140.0) Gecko/20100101 Firefox/140.0").
@@ -1391,7 +1416,7 @@ func (m MarketNewsApi) XUEQIUHotStock(size int, marketType string) *[]models.Hot
 func (m MarketNewsApi) HotEvent(size int) *[]models.HotEvent {
 	events := &[]models.HotEvent{}
 	url := fmt.Sprintf("https://xueqiu.com/hot_event/list.json?count=%d", size)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "xueqiu.com").
 		SetHeader("Origin", "https://xueqiu.com").
 		SetHeader("Referer", "https://xueqiu.com/").
@@ -1420,7 +1445,7 @@ func (m MarketNewsApi) HotEvent(size int) *[]models.HotEvent {
 
 func (m MarketNewsApi) HotTopic(size int) []any {
 	url := "https://gubatopic.eastmoney.com/interface/GetData.aspx?path=newtopic/api/Topic/HomePageListRead"
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "gubatopic.eastmoney.com").
 		SetHeader("Origin", "https://gubatopic.eastmoney.com").
 		SetHeader("Referer", "https://gubatopic.eastmoney.com/").
@@ -1453,7 +1478,7 @@ func (m MarketNewsApi) InvestCalendar(yearMonth string) []any {
 	}
 
 	url := "https://app.jiuyangongshe.com/jystock-app/api/v1/timeline/list"
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "app.jiuyangongshe.com").
 		SetHeader("Origin", "https://www.jiuyangongshe.com").
 		SetHeader("Referer", "https://www.jiuyangongshe.com/").
@@ -1486,7 +1511,7 @@ func (m MarketNewsApi) InvestCalendar(yearMonth string) []any {
 
 func (m MarketNewsApi) ClsCalendar() []any {
 	url := "https://www.cls.cn/api/calendar/web/list?app=CailianpressWeb&flag=0&os=web&sv=8.4.6&type=0&sign=4b839750dc2f6b803d1c8ca00d2b40be"
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "www.cls.cn").
 		SetHeader("Origin", "https://www.cls.cn").
 		SetHeader("Referer", "https://www.cls.cn/").
@@ -1516,7 +1541,7 @@ func (m MarketNewsApi) GetGDP() *models.GDPResp {
 	res := &models.GDPResp{}
 
 	url := "https://datacenter-web.eastmoney.com/api/data/v1/get?callback=data&columns=REPORT_DATE%2CTIME%2CDOMESTICL_PRODUCT_BASE%2CFIRST_PRODUCT_BASE%2CSECOND_PRODUCT_BASE%2CTHIRD_PRODUCT_BASE%2CSUM_SAME%2CFIRST_SAME%2CSECOND_SAME%2CTHIRD_SAME&pageNumber=1&pageSize=20&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB&reportName=RPT_ECONOMY_GDP&p=1&pageNo=1&pageNum=1&_=" + strconv.FormatInt(time.Now().Unix(), 10)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "datacenter-web.eastmoney.com").
 		SetHeader("Origin", "https://datacenter.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/cjsj/gdp.html").
@@ -1561,7 +1586,7 @@ func (m MarketNewsApi) GetCPI() *models.CPIResp {
 	res := &models.CPIResp{}
 
 	url := "https://datacenter-web.eastmoney.com/api/data/v1/get?callback=data&columns=REPORT_DATE%2CTIME%2CNATIONAL_SAME%2CNATIONAL_BASE%2CNATIONAL_SEQUENTIAL%2CNATIONAL_ACCUMULATE%2CCITY_SAME%2CCITY_BASE%2CCITY_SEQUENTIAL%2CCITY_ACCUMULATE%2CRURAL_SAME%2CRURAL_BASE%2CRURAL_SEQUENTIAL%2CRURAL_ACCUMULATE&pageNumber=1&pageSize=20&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB&reportName=RPT_ECONOMY_CPI&p=1&pageNo=1&pageNum=1&_=" + strconv.FormatInt(time.Now().Unix(), 10)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "datacenter-web.eastmoney.com").
 		SetHeader("Origin", "https://datacenter.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/cjsj/gdp.html").
@@ -1606,7 +1631,7 @@ func (m MarketNewsApi) GetCPI() *models.CPIResp {
 func (m MarketNewsApi) GetPPI() *models.PPIResp {
 	res := &models.PPIResp{}
 	url := "https://datacenter-web.eastmoney.com/api/data/v1/get?callback=data&columns=REPORT_DATE,TIME,BASE,BASE_SAME,BASE_ACCUMULATE&pageNumber=1&pageSize=20&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB&reportName=RPT_ECONOMY_PPI&p=1&pageNo=1&pageNum=1&_=" + strconv.FormatInt(time.Now().Unix(), 10)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "datacenter-web.eastmoney.com").
 		SetHeader("Origin", "https://datacenter.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/cjsj/gdp.html").
@@ -1646,7 +1671,7 @@ func (m MarketNewsApi) GetPPI() *models.PPIResp {
 func (m MarketNewsApi) GetPMI() *models.PMIResp {
 	res := &models.PMIResp{}
 	url := "https://datacenter-web.eastmoney.com/api/data/v1/get?callback=data&columns=REPORT_DATE%2CTIME%2CMAKE_INDEX%2CMAKE_SAME%2CNMAKE_INDEX%2CNMAKE_SAME&pageNumber=1&pageSize=20&sortColumns=REPORT_DATE&sortTypes=-1&source=WEB&client=WEB&reportName=RPT_ECONOMY_PMI&p=1&pageNo=1&pageNum=1&_=" + strconv.FormatInt(time.Now().Unix(), 10)
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "datacenter-web.eastmoney.com").
 		SetHeader("Origin", "https://datacenter.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/cjsj/gdp.html").
@@ -1684,7 +1709,7 @@ func (m MarketNewsApi) GetPMI() *models.PMIResp {
 }
 func (m MarketNewsApi) GetIndustryReportInfo(infoCode string) string {
 	url := "https://data.eastmoney.com/report/zw_industry.jshtml?infocode=" + infoCode
-	resp, err := newFetchRestyClient().SetTimeout(time.Duration(30)*time.Second).R().
+	resp, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Duration(30)*time.Second).R().
 		SetHeader("Host", "data.eastmoney.com").
 		SetHeader("Origin", "https://data.eastmoney.com").
 		SetHeader("Referer", "https://data.eastmoney.com/report/industry.jshtml").
@@ -1713,7 +1738,7 @@ func (m MarketNewsApi) GetIndustryReportInfo(infoCode string) string {
 }
 
 func (m MarketNewsApi) ReutersNew() *models.ReutersNews {
-	client := newFetchRestyClient()
+	client := newFetchRestyClientForSettings(m.config)
 	news := &models.ReutersNews{}
 	//url := "https://www.reuters.com/pf/api/v3/content/fetch/articles-by-section-alias-or-id-v1?query={\"arc-site\":\"reuters\",\"fetch_type\":\"collection\",\"offset\":0,\"section_id\":\"/world/\",\"size\":9,\"uri\":\"/world/\",\"website\":\"reuters\"}&d=300&mxId=00000000&_website=reuters"
 	url := "https://www.reuters.com/pf/api/v3/content/fetch/recent-stories-by-sections-v1?query=%7B%22section_ids%22%3A%22%2Fworld%2F%22%2C%22size%22%3A4%2C%22website%22%3A%22reuters%22%7D&d=334&mxId=00000000&_website=reuters"
@@ -1765,7 +1790,7 @@ func (m MarketNewsApi) interactiveAnswer(ctx context.Context, page, pageSize int
 
 func (m MarketNewsApi) CailianpressWeb(searchWords string) *models.CailianpressWeb {
 	res := &models.CailianpressWeb{}
-	_, err := newFetchRestyClient().SetTimeout(time.Second*10).R().
+	_, err := newFetchRestyClientForSettings(m.config).SetTimeout(time.Second*10).R().
 		SetHeader("Content-Type", "application/json").
 		SetHeader("Host", "www.cls.cn").
 		SetHeader("Origin", "https://www.cls.cn").
@@ -1807,7 +1832,7 @@ func (m MarketNewsApi) GetNewsWindow(sources []string, from, to time.Time) (News
 		return result, err
 	}
 	limit := defaultNewsWindowLimit
-	if db.Dao == nil {
+	if m.mainDB == nil {
 		err := errors.New("market news database is not initialized")
 		result.Status = NewsWindowStatusFailed
 		result.Warning = err.Error()
@@ -1816,7 +1841,7 @@ func (m MarketNewsApi) GetNewsWindow(sources []string, from, to time.Time) (News
 
 	zeroTimeCutoff := time.Date(2, time.January, 1, 0, 0, 0, 0, time.UTC)
 	baseQuery := func() *gorm.DB {
-		query := db.Dao.Model(&models.Telegraph{}).Preload("TelegraphTags")
+		query := m.mainDB.Model(&models.Telegraph{}).Preload("TelegraphTags")
 		if len(sources) > 0 {
 			query = query.Where("source IN ?", sources)
 		}
@@ -1841,7 +1866,7 @@ func (m MarketNewsApi) GetNewsWindow(sources []string, from, to time.Time) (News
 		// Query success alone cannot distinguish an upstream-empty feed from a
 		// failed refresh. Only a completed fetch attempt that belongs to this
 		// event-time window can promote an otherwise empty read to failed.
-		if fetchErr := marketNewsFetchFailureForWindow(sources, from, to); fetchErr != nil {
+		if fetchErr := m.marketNewsFetchFailureForWindow(sources, from, to); fetchErr != nil {
 			result.Status = NewsWindowStatusFailed
 			result.Warning = fetchErr.Error()
 			return result, fetchErr
@@ -1869,7 +1894,7 @@ func (m MarketNewsApi) GetNewsWindow(sources []string, from, to time.Time) (News
 			return result, nil
 		}
 	}
-	if err := hydrateNewsWindowSubjectTags(result.Items); err != nil {
+	if err := m.hydrateNewsWindowSubjectTags(result.Items); err != nil {
 		wrapped := fmt.Errorf("load market news tags: %w", err)
 		result.Status = NewsWindowStatusFailed
 		result.Warning = wrapped.Error()
@@ -1884,7 +1909,7 @@ func (m MarketNewsApi) GetNewsWindow(sources []string, from, to time.Time) (News
 	return result, nil
 }
 
-func marketNewsFetchFailureForWindow(sources []string, from, to time.Time) error {
+func (m MarketNewsApi) marketNewsFetchFailureForWindow(sources []string, from, to time.Time) error {
 	selectedSources := make(map[string]struct{}, len(sources))
 	for _, source := range sources {
 		selectedSources[strings.TrimSpace(source)] = struct{}{}
@@ -1897,9 +1922,9 @@ func marketNewsFetchFailureForWindow(sources []string, from, to time.Time) error
 		marketNewsFetchKeySinaLive,
 		marketNewsFetchKeyTradingView,
 	}
-	marketNewsFetchMetaMu.RLock()
+	m.fetchState().mu.RLock()
 	for _, key := range keys {
-		meta, ok := marketNewsFetchMetaBySource[key]
+		meta, ok := m.fetchState().bySource[key]
 		if !ok || !meta.Completed || meta.AttemptedAt.IsZero() {
 			continue
 		}
@@ -1918,7 +1943,7 @@ func marketNewsFetchFailureForWindow(sources []string, from, to time.Time) error
 			latestBySource[meta.Source] = meta
 		}
 	}
-	marketNewsFetchMetaMu.RUnlock()
+	m.fetchState().mu.RUnlock()
 
 	failures := make([]string, 0, len(latestBySource))
 	for _, source := range []string{marketNewsSourceCLSTelegraph, marketNewsSourceSina, marketNewsSourceTradingView} {
@@ -1977,7 +2002,7 @@ func dedupeNewsWindowItems(rows []*models.Telegraph) []*models.Telegraph {
 	return result
 }
 
-func hydrateNewsWindowSubjectTags(items []*models.Telegraph) error {
+func (m MarketNewsApi) hydrateNewsWindowSubjectTags(items []*models.Telegraph) error {
 	for _, item := range items {
 		if item == nil || len(item.TelegraphTags) == 0 {
 			continue
@@ -1986,7 +2011,7 @@ func hydrateNewsWindowSubjectTags(items []*models.Telegraph) error {
 		tagIDs := lo.Map(item.TelegraphTags, func(item models.TelegraphTags, _ int) uint {
 			return item.TagId
 		})
-		if err := db.Dao.Model(&models.Tags{}).Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
+		if err := m.mainDB.Model(&models.Tags{}).Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
 			return err
 		}
 		item.SubjectTags = lo.Map(tags, func(item models.Tags, _ int) string {
@@ -2023,16 +2048,16 @@ func newsWindowItemsAreStale(items []*models.Telegraph, from time.Time) bool {
 func (m MarketNewsApi) GetNews24HoursList(source string, limit int) *[]*models.Telegraph {
 	news := &[]*models.Telegraph{}
 	if source != "" {
-		db.Dao.Model(news).Preload("TelegraphTags").Where("source=? and created_at>?", source, time.Now().Add(-24*time.Hour)).Order("data_time desc,is_red desc").Limit(limit).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Where("source=? and created_at>?", source, time.Now().Add(-24*time.Hour)).Order("data_time desc,is_red desc").Limit(limit).Find(news)
 	} else {
-		db.Dao.Model(news).Preload("TelegraphTags").Where("created_at>?", time.Now().Add(-24*time.Hour)).Order("data_time desc,is_red desc").Limit(limit).Find(news)
+		m.mainDB.Model(news).Preload("TelegraphTags").Where("created_at>?", time.Now().Add(-24*time.Hour)).Order("data_time desc,is_red desc").Limit(limit).Find(news)
 	}
 	// 内容去重
 	uniqueNews := make([]*models.Telegraph, 0)
 	seenContent := make(map[string]bool)
 	for _, item := range *news {
 		tags := &[]models.Tags{}
-		db.Dao.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
+		m.mainDB.Model(&models.Tags{}).Where("id in ?", lo.Map(item.TelegraphTags, func(item models.TelegraphTags, index int) uint {
 			return item.TagId
 		})).Find(&tags)
 		tagNames := lo.Map(*tags, func(item models.Tags, index int) string {

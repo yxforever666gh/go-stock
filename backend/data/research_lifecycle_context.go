@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"go-stock/backend/db"
 	"go-stock/backend/models"
 	"go-stock/backend/research"
+	"go-stock/internal/researchevidence"
 )
 
 const lifecycleSourceTimeout = 20 * time.Second
@@ -324,7 +324,7 @@ func (collector *ResearchLifecycleContextCollector) sharedMarketSources(ctx cont
 }
 
 func (collector *ResearchLifecycleContextCollector) incrementalNews(ctx context.Context, request research.LifecycleContextRequest) (any, error) {
-	if db.Dao == nil {
+	if collector.news.mainDB == nil {
 		return nil, errors.New("market news database is not initialized")
 	}
 	if request.Now.Before(request.WindowFrom) {
@@ -338,7 +338,7 @@ func (collector *ResearchLifecycleContextCollector) incrementalNews(ctx context.
 	zero := time.Date(2, time.January, 1, 0, 0, 0, 0, time.UTC)
 	// Event time defines when the news happened; CreatedAt also admits late
 	// arrivals since the last successful coverage, without relabelling events.
-	query := db.Dao.WithContext(ctx).Model(&models.Telegraph{}).Preload("TelegraphTags").
+	query := collector.news.mainDB.WithContext(ctx).Model(&models.Telegraph{}).Preload("TelegraphTags").
 		Where("created_at <= ?", request.Now).
 		Where(`((data_time > ? AND data_time <= ? AND (data_time >= ? OR created_at >= ?))
 			OR ((data_time IS NULL OR data_time <= ?) AND created_at >= ?))`, zero, request.Now, request.WindowFrom, request.WindowFrom, zero, request.WindowFrom).
@@ -385,7 +385,7 @@ func (collector *ResearchLifecycleContextCollector) incrementalNews(ctx context.
 		payload["status"], payload["warning"], payload["coverageComplete"] = "ok", "", true
 	}
 	if len(rows) == 0 {
-		if err := marketNewsFetchFailureForWindow(nil, request.WindowFrom, request.Now); err != nil {
+		if err := collector.news.marketNewsFetchFailureForWindow(nil, request.WindowFrom, request.Now); err != nil {
 			return nil, err
 		}
 		payload["status"] = "empty"
@@ -443,7 +443,7 @@ func newLifecycleSource(id, name, category string, now time.Time, value any, sou
 		source.Error = strings.TrimSpace(source.Error + " 来源内容超过预算，已压缩截断")
 	}
 	var decoded any
-	empty := len(data) == 0 || (json.Unmarshal(data, &decoded) == nil && research2JSONValueEmpty(decoded))
+	empty := len(data) == 0 || (json.Unmarshal(data, &decoded) == nil && researchevidence.JSONValueEmpty(decoded))
 	if empty {
 		if source.Status == "ok" {
 			source.Status = "empty"

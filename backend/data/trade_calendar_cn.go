@@ -8,6 +8,8 @@ import (
 )
 
 type cnTradeCalCache struct {
+	setting   *SettingConfig
+	fetch     func(string, time.Time, time.Time, int64) (map[string]bool, error)
 	mu        sync.Mutex
 	startDay  time.Time
 	endDay    time.Time
@@ -66,7 +68,10 @@ func (c *cnTradeCalCache) ensureRange(startDay, endDay time.Time) map[string]boo
 		return nil
 	}
 
-	setting := GetSettingConfig()
+	setting := c.setting
+	if c == globalCNTradeCalCache {
+		setting = GetSettingConfig()
+	}
 	timeout := int64(60)
 	if setting != nil && setting.CrawlTimeOut > 0 {
 		timeout = setting.CrawlTimeOut
@@ -74,8 +79,11 @@ func (c *cnTradeCalCache) ensureRange(startDay, endDay time.Time) map[string]boo
 	if timeout > cnTradeCalMaxFetchSecond {
 		timeout = cnTradeCalMaxFetchSecond
 	}
-	tushare := NewTushareApi(setting)
-	openMap, err := tushare.GetTradeCalOpenMap("SSE", startDay, endDay, timeout)
+	fetch := c.fetch
+	if fetch == nil {
+		fetch = NewTushareApi(setting).GetTradeCalOpenMap
+	}
+	openMap, err := fetch("SSE", startDay, endDay, timeout)
 	if err != nil {
 		// Fall back to weekday-only behavior if trade calendar cannot be loaded.
 		c.openDays = nil
@@ -129,6 +137,10 @@ func IsCNOpenTradeDay(day time.Time) bool {
 // 与 IsCNOpenTradeDay 不同，该方法在交易日历不可用时返回错误，
 // 供不能接受“按工作日回退”的调用方使用。
 func IsCNOpenTradeDayStrict(day time.Time) (bool, error) {
+	return globalCNTradeCalCache.isTradingDayStrict(day)
+}
+
+func (c *cnTradeCalCache) isTradingDayStrict(day time.Time) (bool, error) {
 	loc := cnLocation()
 	day = day.In(loc)
 	d0 := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
@@ -136,16 +148,16 @@ func IsCNOpenTradeDayStrict(day time.Time) (bool, error) {
 		return false, nil
 	}
 
-	if open, ok := globalCNTradeCalCache.lookup(d0); ok {
+	if open, ok := c.lookup(d0); ok {
 		return open, nil
 	}
 
 	window := 550
-	openMap := globalCNTradeCalCache.ensureRange(d0.AddDate(0, 0, -window), d0.AddDate(0, 0, window))
+	openMap := c.ensureRange(d0.AddDate(0, 0, -window), d0.AddDate(0, 0, window))
 	if openMap == nil {
-		globalCNTradeCalCache.mu.Lock()
-		lastErr := globalCNTradeCalCache.lastError
-		globalCNTradeCalCache.mu.Unlock()
+		c.mu.Lock()
+		lastErr := c.lastError
+		c.mu.Unlock()
 		return false, ensureTradeCalReadable(fmt.Errorf("%s", strings.TrimSpace(lastErr)))
 	}
 	return openMap[d0.Format("2006-01-02")], nil

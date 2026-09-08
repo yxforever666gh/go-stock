@@ -174,7 +174,7 @@ func TestFinalizeRunRollsBackRunWhenRecommendationsFail(t *testing.T) {
 		{RecommendationID: recommendationID, AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "one", SignalAt: now, FinalScore: 60, ReferencePrice: 10, Status: "buy_pending", TargetBuyAt: now},
 		{RecommendationID: recommendationID, AnalysisRunID: run.RunID, StockCode: "sz000001", StockName: "two", SignalAt: now, FinalScore: 60, ReferencePrice: 10, Status: "buy_pending", TargetBuyAt: now},
 	}
-	if err := repository.FinalizeRun(context.Background(), &run, items); err == nil {
+	if err := repository.FinalizeRun(context.Background(), &run, items, func() string { return "report" }); err == nil {
 		t.Fatal("expected duplicate recommendation to fail finalization")
 	}
 	var stored AnalysisRun

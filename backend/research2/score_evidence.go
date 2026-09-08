@@ -162,8 +162,6 @@ func shortScoreFact(value any) any {
 	return value
 }
 
-type scoreEvidenceWindow struct{ MarketCutoff, FreshSince time.Time }
-
 func scoreSourceAvailable(document researchevidence.SourceDocument, freeze time.Time) bool {
 	return document.Error == "" && document.AvailableAt != nil && !document.AvailableAt.After(freeze) && research2CitationPayloadUsable(document.Content) && !scorePayloadEmpty(scorePayload(document))
 }
@@ -290,10 +288,10 @@ func scoreCatalystFacts(document researchevidence.SourceDocument, code string, c
 	return result
 }
 
-// BuildCandidateScoreEvidence binds only exact board names/codes and explicit
+// buildCandidateScoreEvidence binds only exact board names/codes and explicit
 // theme constituents. FreshSince is the verified previous trading close; zero
 // means freshness is not independently known, not that material is fresh.
-func BuildCandidateScoreEvidence(code string, documents []researchevidence.SourceDocument, cutoff, freeze, freshSince time.Time) CandidateScoreEvidence {
+func buildCandidateScoreEvidence(code string, documents []researchevidence.SourceDocument, cutoff, freeze, freshSince time.Time) CandidateScoreEvidence {
 	result := CandidateScoreEvidence{SectorState: "membership_unverified", Sector: []ScoreEvidenceLink{}, CatalystState: "source_missing", Catalyst: []ScoreEvidenceLink{}}
 	members := map[string]bool{}
 	themes := scoreThemeMembers(documents, code, freeze)
@@ -468,12 +466,9 @@ func scoreStateText(state string) string {
 	}
 }
 
-func scoreReportLines(item Recommendation, value modelRecommendation, evidence Evidence) []string {
+func scoreReportLines(item Recommendation, value modelRecommendation, evidence preparedEvidence) []string {
 	freeze := evidence.FreezeAt
-	if freeze.IsZero() {
-		freeze = evidence.CutoffAt
-	}
-	support := BuildCandidateScoreEvidence(item.StockCode, evidence.Documents, evidence.CutoffAt, freeze, evidence.CatalystWindowStartAt)
+	support := evidence.scoreEvidence[item.StockCode]
 	refs := map[string][]string{}
 	cited := map[string]bool{}
 	for _, id := range strings.Split(item.SourceRefs, "\n") {

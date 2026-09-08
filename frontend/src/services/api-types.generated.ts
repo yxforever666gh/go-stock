@@ -50,6 +50,7 @@ export const API_PATHS = {
   getResearch2RecommendationChart: "/api/v1/research2/recommendations/{id}/chart",
   getResearchAnalysisRunAudit: "/api/v1/research/analysis-runs/{id}/audit",
   getResearchReplay: "/api/v1/research/replays/{id}",
+  getResearchSettings: "/api/v1/research-centers/{center}/settings",
   getSettings: "/api/v1/settings",
   getSimulatedAccount: "/api/v1/research/account",
   getStockKLine: "/api/v1/stocks/{code}/kline",
@@ -110,6 +111,7 @@ export const API_PATHS = {
   unfollowFund: "/api/v1/watchlist/funds/{code}",
   unfollowStock: "/api/v1/watchlist/stocks/{code}",
   updateGroupSort: "/api/v1/groups/{id}/sort",
+  updateResearchSettings: "/api/v1/research-centers/{center}/settings",
   updateSettings: "/api/v1/settings",
   updateStockAlarm: "/api/v1/watchlist/stocks/{code}/alarm",
   updateStockPosition: "/api/v1/watchlist/stocks/{code}/position",
@@ -1282,6 +1284,12 @@ export type ResearchReplay = {
   sourceOwnerType: "research1" | "research2"
   startedAt?: string | null
   status: "queued" | "running" | "completed" | "failed"
+}
+
+export type ResearchSettings = {
+  aiConfigs: Array<JsonObject>
+  config: JsonObject
+  revision: number
 }
 
 export type SentimentRequest = {

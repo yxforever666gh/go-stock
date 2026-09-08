@@ -16,7 +16,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type Repository struct{ db *gorm.DB }
+type Repository struct {
+	db                     *gorm.DB
+	newPositionsPermission func(context.Context, *gorm.DB) error
+}
 
 var (
 	ErrDailyBuyLimitReached = errors.New("research2 daily buy limit is already reached")
@@ -45,6 +48,23 @@ func research2TransactionWithWriteRetry(ctx context.Context, database *gorm.DB, 
 
 func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
 func (r *Repository) DB() *gorm.DB                { return r.db }
+
+// ConfigureNewPositionsPermission is called before publishing the runtime.
+// The callback must read its setting from the supplied database/transaction.
+func (r *Repository) ConfigureNewPositionsPermission(permission func(context.Context, *gorm.DB) error) {
+	r.newPositionsPermission = permission
+}
+
+func (r *Repository) CheckNewPositionsAllowed(ctx context.Context) error {
+	return r.checkNewPositionsAllowed(ctx, r.db.WithContext(ctx))
+}
+
+func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gorm.DB) error {
+	if r.newPositionsPermission == nil {
+		return nil
+	}
+	return r.newPositionsPermission(ctx, database)
+}
 
 func (r *Repository) EnsureAccount(ctx context.Context) error {
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&Account{ID: 1, InitialCash: InitialCash, Cash: InitialCash}).Error
@@ -134,11 +154,43 @@ func (r *Repository) CreateRecommendations(ctx context.Context, items []Recommen
 // FinalizeRun publishes a completed analysis and its executable recommendations
 // in one transaction. A trading poll can therefore never observe recommendations
 // belonging to a run that is still running or failed to persist.
-func (r *Repository) FinalizeRun(ctx context.Context, run *AnalysisRun, items []Recommendation) error {
+// renderReport must be pure; it observes the final permission-adjusted items.
+func (r *Repository) FinalizeRun(ctx context.Context, run *AnalysisRun, items []Recommendation, renderReport func() string) error {
 	if run == nil {
 		return errors.New("research2 analysis run is required")
 	}
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := lockResearch2AccountForWrite(tx); err != nil {
+			return err
+		}
+		permissionErr := r.checkNewPositionsAllowed(ctx, tx)
+		if permissionErr != nil && !errors.Is(permissionErr, trading.ErrNewPositionsDisabled) {
+			return permissionErr
+		}
+		disabled := errors.Is(permissionErr, trading.ErrNewPositionsDisabled)
+		if run.ChainID != "" {
+			var chain ExecutionChain
+			if err := tx.Where("chain_id = ?", run.ChainID).First(&chain).Error; err != nil {
+				return err
+			}
+			disabled = disabled || chain.Status == "disabled"
+			if disabled && chain.Status == "running" {
+				if err := tx.Model(&chain).Updates(map[string]any{"status": "disabled", "stop_reason": trading.ErrNewPositionsDisabled.Error(), "completed_at": run.GeneratedAt}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if disabled {
+			for index := range items {
+				if items[index].Status == "buy_pending" || items[index].Status == "standby" {
+					items[index].Status, items[index].FailureReason = "analysis_only", trading.ErrNewPositionsDisabled.Error()
+				}
+			}
+		}
+		run.ReportMarkdown = renderReport()
+		if disabled {
+			run.ReportMarkdown += "\n\n> " + trading.ErrNewPositionsDisabled.Error()
+		}
 		if err := tx.Save(run).Error; err != nil {
 			return err
 		}
@@ -363,6 +415,9 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 		if err := lockResearch2AccountForWrite(tx); err != nil {
 			return err
 		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
+			return err
+		}
 		var recommendation Recommendation
 		if err := tx.Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").First(&recommendation).Error; err != nil {
 			return err
@@ -467,7 +522,11 @@ func (r *Repository) RecordSell(ctx context.Context, recommendationID string, tr
 
 func (r *Repository) MarkStatus(ctx context.Context, id, status, reason string) error {
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Model(&Recommendation{}).Where("recommendation_id = ?", id).Updates(map[string]any{"status": status, "failure_reason": reason}).Error
+		query := tx.Model(&Recommendation{}).Where("recommendation_id = ?", id)
+		if status == "analysis_only" {
+			query = query.Where("status IN ? AND buy_at IS NULL", []string{"buy_pending", "standby"})
+		}
+		return query.Updates(map[string]any{"status": status, "failure_reason": reason}).Error
 	})
 }
 
