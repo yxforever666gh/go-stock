@@ -4,8 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"go-stock/backend/models"
+	"go-stock/backend/researchconfig"
 	cliports "go-stock/internal/cli/ports"
 
 	"github.com/glebarez/sqlite"
@@ -111,5 +113,25 @@ func TestCommandAIResolverConstructsClient(t *testing.T) {
 func TestNewCommandResolverRequiresDatabase(t *testing.T) {
 	if _, err := NewCommandResolver(nil); err == nil {
 		t.Fatal("expected missing database error")
+	}
+}
+
+func TestCommandResolverRejectsResearchAndArchivedModelIDs(t *testing.T) {
+	database := openCommandAITestDB(t)
+	now := time.Now()
+	for _, model := range []*models.AIConfig{
+		{Owner: researchconfig.Research1, BaseUrl: "https://example.invalid", ApiKey: "fixture", ModelName: "r1"},
+		{Owner: researchconfig.Research2, BaseUrl: "https://example.invalid", ApiKey: "fixture", ModelName: "r2"},
+		{Owner: researchconfig.Global, ArchivedAt: &now, BaseUrl: "https://example.invalid", ApiKey: "fixture", ModelName: "archived"},
+	} {
+		if err := database.Create(model).Error; err != nil {
+			t.Fatal(err)
+		}
+		if _, err := resolveCommandAIConfig(t.Context(), database, cliports.CommandAIOptions{AIConfigID: int(model.ID)}); err == nil {
+			t.Fatalf("accepted non-global active model ID %d", model.ID)
+		}
+	}
+	if _, err := resolveCommandAIConfig(t.Context(), database, cliports.CommandAIOptions{}); err == nil {
+		t.Fatal("automatic resolver selected non-global active model")
 	}
 }
