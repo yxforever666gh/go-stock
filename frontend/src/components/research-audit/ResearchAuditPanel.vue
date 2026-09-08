@@ -48,6 +48,7 @@ const replayPollError = ref('')
 const replay = ref(null)
 let auditRequestVersion = 0
 let replayRequestVersion = 0
+let modelRequestVersion = 0
 let auditTimer = null
 let replayTimer = null
 
@@ -107,20 +108,28 @@ function resetReplay() {
 
 async function loadModelConfigs() {
   if (modelOptions.value.length || modelConfigsLoading.value) return
+  const requestVersion = ++modelRequestVersion
   modelConfigsLoading.value = true
   modelConfigError.value = ''
   try {
-    modelOptions.value = modelConfigOptions(await ListResearchReplayModelConfigs())
+    const models = await ListResearchReplayModelConfigs(props.ownerType)
+    if (requestVersion !== modelRequestVersion) return
+    modelOptions.value = modelConfigOptions(models)
     if (!modelConfigId.value && modelOptions.value.length) modelConfigId.value = modelOptions.value[0].value
   } catch (error) {
-    modelConfigError.value = error?.message || String(error)
+    if (requestVersion === modelRequestVersion) modelConfigError.value = error?.message || String(error)
   } finally {
-    modelConfigsLoading.value = false
+    if (requestVersion === modelRequestVersion) modelConfigsLoading.value = false
   }
 }
 
 async function loadAudit() {
   const requestVersion = ++auditRequestVersion
+  modelRequestVersion++
+  modelOptions.value = []
+  modelConfigId.value = null
+  modelConfigsLoading.value = false
+  modelConfigError.value = ''
   stopAuditPolling()
   loadError.value = ''
   loading.value = false
@@ -221,6 +230,7 @@ watch(() => [props.ownerType, props.ownerId, props.active], loadAudit, {immediat
 onBeforeUnmount(() => {
   auditRequestVersion++
   replayRequestVersion++
+  modelRequestVersion++
   stopAuditPolling()
   stopReplayPolling()
 })

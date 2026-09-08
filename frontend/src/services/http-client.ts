@@ -37,7 +37,7 @@ export async function requestJSON<T = unknown>(path: string, { method = 'GET', b
     }
   }
   if (!response.ok) {
-    throw new Error(responseErrorMessage(payload, response.status))
+    throw Object.assign(new Error(responseErrorMessage(payload, response.status)), {status: response.status})
   }
   return payload as T
 }

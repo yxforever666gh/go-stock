@@ -5,7 +5,7 @@ import type {
   ResearchReplay,
 } from './api-types.generated'
 import {responseErrorMessage} from './http-error.js'
-import {requestJSON, withPath} from './http-client'
+import {requestJSON, withPath, withQuery} from './http-client'
 
 export type ResearchAuditOwnerType = CreateResearchReplayRequest['sourceOwnerType']
 
@@ -28,8 +28,8 @@ function auditPath(ownerType: ResearchAuditOwnerType, operation: 'get' | 'export
 export const GetResearchRunAudit = (ownerType: ResearchAuditOwnerType, ownerId: string): Promise<ResearchAuditDetail> =>
   requestJSON<ResearchAuditDetail>(auditPath(ownerType, 'get', ownerId))
 
-export const ListResearchReplayModelConfigs = (): Promise<ReplayModelConfig[]> =>
-  requestJSON<ReplayModelConfig[]>(API_PATHS.listAIConfigs)
+export const ListResearchReplayModelConfigs = (center: ResearchAuditOwnerType): Promise<ReplayModelConfig[]> =>
+  requestJSON<ReplayModelConfig[]>(withQuery(API_PATHS.listAIConfigs, {center}))
 
 export const CreateResearchReplay = (
   sourceOwnerType: ResearchAuditOwnerType,

@@ -1,11 +1,11 @@
 <script setup>
-import {h, onBeforeUnmount, onMounted, ref} from 'vue'
+import {h, onBeforeUnmount, ref, watch} from 'vue'
 import {NTag, useMessage} from 'naive-ui'
-import {GetConfig, TestAIConfig, TestResearch2Email, UpdateConfig} from '../services/settings-api'
-import {ExportConfig} from '../services/exports-api'
+import {GetConfig, GetResearchConfig, TestAIConfig, TestResearch2Email, UpdateConfig, UpdateResearchConfig} from '../services/settings-api'
 import {EventsEmit} from '../services/browser-runtime.mjs'
 import MinuteProviderSettings from './settings/MinuteProviderSettings.vue'
 import AiConfigSettings from './settings/AiConfigSettings.vue'
+import {acceptSavedModelIDs, importResearchSettings, researchPayload} from './settings/research-settings.js'
 
 const props = defineProps({
   settingsScope: {
@@ -18,7 +18,6 @@ const props = defineProps({
 const message = useMessage()
 const formRef = ref(null)
 const formValue = ref({
-  ID: 1,
   darkTheme: true,
   enableFund: false,
   tushareToken: '',
@@ -64,13 +63,16 @@ const formValue = ref({
 
 const aiConfigTestStates = ref({})
 const settingsLoaded = ref(false)
-const persistedConfig = ref({})
+const persistedConfig = ref({revision: 0, config: {}, aiConfigs: []})
+const draftConfig = ref({})
 const autoSaveState = ref('idle')
 const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
 const research2EmailTesting = ref(false)
 let activeSavePromise = null
 let queuedAutoSave = false
+let pageVersion = 0
+let globalSavePromise = Promise.resolve()
 let nextAiConfigLocalKey = 1
 const aiConfigLocalKeys = new WeakMap()
 
@@ -123,20 +125,10 @@ function normalizeProviderOrder(order) {
   return normalized
 }
 
-function primaryAiConfigId(configs = formValue.value.openAI.aiConfigs) {
-  return (configs || []).find(item => item?.disabled !== true)?.ID || 0
-}
-
 function applyConfigToForm(config) {
   const aiConfigs = normalizeAiConfigs(config?.aiConfigs || [])
-  persistedConfig.value = {...(config || {}), aiConfigs}
-  formValue.value.ID = config?.ID || 1
-  formValue.value.darkTheme = config?.darkTheme === true
-  formValue.value.enableFund = config?.enableFund === true
   formValue.value.tushareToken = config?.tushareToken || ''
   formValue.value.qgqpBId = config?.qgqpBId || ''
-  formValue.value.updateBasicInfoOnStart = config?.updateBasicInfoOnStart === true
-  formValue.value.refreshInterval = Number.isFinite(config?.refreshInterval) ? config.refreshInterval : 1
   formValue.value.minuteLongHistoryHintEnabled = config?.minuteLongHistoryHintEnabled !== false
   formValue.value.minuteProviderOrder = normalizeProviderOrder(config?.minuteProviderOrder)
   formValue.value.akshareEnabled = config?.akshareEnabled !== false
@@ -175,9 +167,8 @@ function applyConfigToForm(config) {
 }
 
 function aiConfigRowKey(aiConfig) {
-  if (aiConfig?.ID) return `id-${aiConfig.ID}`
   if (!aiConfig || typeof aiConfig !== 'object') return `new-${nextAiConfigLocalKey++}`
-  if (!aiConfigLocalKeys.has(aiConfig)) aiConfigLocalKeys.set(aiConfig, `new-${nextAiConfigLocalKey++}`)
+  if (!aiConfigLocalKeys.has(aiConfig)) aiConfigLocalKeys.set(aiConfig, aiConfig.ID ? `id-${aiConfig.ID}` : `new-${nextAiConfigLocalKey++}`)
   return aiConfigLocalKeys.get(aiConfig)
 }
 
@@ -241,35 +232,33 @@ function aiConfigTestState(aiConfig, index) {
 
 async function testAiConfig(index) {
   const current = formValue.value.openAI.aiConfigs[index]
+  const version = pageVersion
   const key = aiConfigTestKey(current, index)
   aiConfigTestStates.value = {...aiConfigTestStates.value, [key]: {loading: true, result: null}}
   try {
     if (!await saveCurrentConfig({notifyError: true})) return
-    const latest = await GetConfig()
-    formValue.value.openAI.aiConfigs = normalizeAiConfigs(latest.aiConfigs || [])
-    const savedConfig = formValue.value.openAI.aiConfigs[index]
-    const savedKey = aiConfigTestKey(savedConfig, index)
-    if (!savedConfig?.ID) throw new Error('请先保存 AI 配置后再测试')
-    const result = await TestAIConfig(Number(savedConfig.ID))
+    if (version !== pageVersion || !formValue.value.openAI.aiConfigs.includes(current)) return
+    const savedKey = aiConfigTestKey(current, index)
+    if (!current?.ID) throw new Error('请先保存 AI 配置后再测试')
+    const result = await TestAIConfig(Number(current.ID), props.settingsScope)
+    if (version !== pageVersion) return
     aiConfigTestStates.value = {...aiConfigTestStates.value, [key]: {loading: false}, [savedKey]: {loading: false, result}}
     result?.success ? message.success(`模型测试成功：${result.contentPreview || result.message}`) : message.error(result?.message || '模型测试失败')
   } catch (error) {
+    if (version !== pageVersion) return
     aiConfigTestStates.value = {...aiConfigTestStates.value, [key]: {loading: false, result: {success: false, message: error?.message || String(error)}}}
     message.error(error?.message || String(error || '模型测试失败'))
+  } finally {
+    if (version === pageVersion) aiConfigTestStates.value = {...aiConfigTestStates.value, [key]: {...aiConfigTestStates.value[key], loading: false}}
   }
 }
 
 function buildConfigPayload() {
   renumberAiConfigSorts()
-  return {
-    ...persistedConfig.value,
-    ID: formValue.value.ID,
-    darkTheme: formValue.value.darkTheme,
-    enableFund: formValue.value.enableFund,
+  const values = {
+    ...draftConfig.value,
     tushareToken: formValue.value.tushareToken,
     qgqpBId: formValue.value.qgqpBId,
-    updateBasicInfoOnStart: formValue.value.updateBasicInfoOnStart,
-    refreshInterval: formValue.value.refreshInterval,
     minuteLongHistoryHintEnabled: formValue.value.minuteLongHistoryHintEnabled,
     minuteProviderOrder: formValue.value.minuteProviderOrder,
     akshareEnabled: formValue.value.akshareEnabled,
@@ -283,12 +272,10 @@ function buildConfigPayload() {
     privateMinuteMinIntervalMs: formValue.value.privateMinute.minIntervalMs,
     privateMinuteProxyMode: formValue.value.privateMinute.proxyMode,
     privateMinuteLevel: formValue.value.privateMinute.level,
-    aiConfigs: formValue.value.openAI.aiConfigs,
     aiCapitalDeploymentEnabled: formValue.value.capitalDeployment.enabled,
     aiTargetCapitalUtilization: formValue.value.capitalDeployment.targetCapitalUtilization / 100,
     aiMaxImmediateBuysPerRun: formValue.value.capitalDeployment.maxImmediateBuysPerRun,
     aiReanalysisIntervalMinutes: formValue.value.capitalDeployment.reanalysisIntervalMinutes,
-    aiAnalysisConfigId: primaryAiConfigId(),
     aiReviewStartTime: formValue.value.capitalDeployment.reviewStartTime,
     aiReviewIntervalMinutes: formValue.value.capitalDeployment.reviewIntervalMinutes,
     experimentalEvidenceEnabled: formValue.value.experimentalEvidenceEnabled === true,
@@ -301,6 +288,7 @@ function buildConfigPayload() {
     research2EmailSmtpUsername: formValue.value.research2Email.smtpUsername,
     research2EmailSmtpPassword: formValue.value.research2Email.smtpPassword,
   }
+  return researchPayload(persistedConfig.value, values, formValue.value.openAI.aiConfigs)
 }
 
 function getResearch2EmailConfigError(requireConfig = formValue.value.research2Email.enabled) {
@@ -327,60 +315,69 @@ function formatSaveTime(date = new Date()) {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
-async function runPersist({showSuccess = false, notifyError = false, recordAutoSaveError = false} = {}) {
-  if (recordAutoSaveError) autoSaveError.value = ''
-  const validationError = getMinuteSourceConfigError()
-    || getResearch2EmailConfigError()
+async function runPersist({notifyError = false} = {}) {
+  if (!settingsLoaded.value || autoSaveState.value === 'conflict') return false
+  const version = pageVersion
+  const validationError = getMinuteSourceConfigError() || getResearch2EmailConfigError()
+  autoSaveError.value = ''
   if (validationError) {
+    autoSaveState.value = 'error'
+    autoSaveError.value = validationError
     if (notifyError) message.error(validationError)
-    if (recordAutoSaveError) {
-      autoSaveState.value = 'error'
-      autoSaveError.value = validationError
-    }
     return false
   }
+  const submittedRows = [...formValue.value.openAI.aiConfigs]
+  const payload = buildConfigPayload()
   try {
-    const result = await UpdateConfig(buildConfigPayload())
-    if (String(result || '').includes('失败')) throw new Error(result)
-    EventsEmit('updateSettings')
-    if (showSuccess) message.success(result)
-    if (recordAutoSaveError) {
-      autoSaveState.value = 'saved'
-      autoSaveLastSavedAt.value = formatSaveTime()
-    }
+    const result = await UpdateResearchConfig(props.settingsScope, payload)
+    if (version !== pageVersion) return false
+    acceptSavedModelIDs(formValue.value.openAI.aiConfigs, submittedRows, payload.aiConfigs, result.aiConfigs)
+    persistedConfig.value = result
+    autoSaveState.value = 'saved'
+    autoSaveLastSavedAt.value = formatSaveTime()
     return true
   } catch (error) {
-    const text = error?.message || String(error || '保存失败')
-    if (notifyError) message.error(text)
-    if (recordAutoSaveError) {
-      autoSaveState.value = 'error'
-      autoSaveError.value = text
-    }
+    if (version !== pageVersion) return false
+    autoSaveState.value = error?.status === 409 ? 'conflict' : 'error'
+    autoSaveError.value = error?.status === 409
+      ? '此中心的设置已在其他页面更新。当前草稿已保留；重新加载会放弃草稿并读取最新设置。'
+      : error?.message || String(error || '保存失败')
+    if (notifyError) message.error(autoSaveError.value)
     return false
   }
 }
 
-function queueAutoSave() {
-  if (!settingsLoaded.value) return Promise.resolve(false)
+function queueAutoSave(options = {}) {
+  if (!settingsLoaded.value || autoSaveState.value === 'conflict') return Promise.resolve(false)
   queuedAutoSave = true
   if (activeSavePromise) return activeSavePromise
-  activeSavePromise = (async () => {
+  const version = pageVersion
+  const promise = (async () => {
     let saved = true
-    while (queuedAutoSave) {
+    while (queuedAutoSave && version === pageVersion) {
       queuedAutoSave = false
       autoSaveState.value = 'saving'
-      saved = await runPersist({recordAutoSaveError: true})
+      saved = await runPersist(options)
       if (!saved) break
     }
     return saved
-  })().finally(() => { activeSavePromise = null })
-  return activeSavePromise
+  })().finally(() => { if (activeSavePromise === promise) activeSavePromise = null })
+  activeSavePromise = promise
+  return promise
 }
 
-async function saveCurrentConfig(options = {}) {
-  if (activeSavePromise) await activeSavePromise
-  autoSaveState.value = 'saving'
-  return runPersist({showSuccess: options.showSuccess, notifyError: options.notifyError, recordAutoSaveError: true})
+function saveCurrentConfig(options = {}) {
+  return queueAutoSave(options)
+}
+
+function saveGlobalSettings(field) {
+  if (!settingsLoaded.value) return
+  const payload = {[field]: formValue.value[field]}
+  globalSavePromise = globalSavePromise.then(async () => {
+    const result = await UpdateConfig(payload)
+    if (String(result || '').includes('失败')) throw new Error(result)
+    EventsEmit('updateSettings')
+  }).catch(error => { message.error(`通用设置保存失败：${error?.message || error}`) })
 }
 
 async function testResearch2Email() {
@@ -405,55 +402,99 @@ function handleImmediateFieldChange() { queueAutoSave() }
 function handleTextFieldBlur() { queueAutoSave() }
 
 function exportConfig() {
-  saveCurrentConfig({notifyError: true}).then(saved => saved ? ExportConfig() : null).then(result => {
-    if (result) message.info(result)
-  })
+  if (!settingsLoaded.value) return
+  const payload = {center: props.settingsScope, ...buildConfigPayload()}
+  const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'}))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `go-stock-${props.settingsScope}-settings.json`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
 }
 
 function importConfig() {
+  if (!settingsLoaded.value || autoSaveState.value === 'conflict') return
+  const version = pageVersion
   const input = document.createElement('input')
   input.type = 'file'
   input.accept = '.json'
   input.onchange = event => {
+    const file = event.target.files?.[0]
+    if (!file) return
     const reader = new FileReader()
     reader.onload = loadEvent => {
+      if (version !== pageVersion) return
       try {
-        applyConfigToForm(JSON.parse(loadEvent.target.result))
+        const imported = importResearchSettings(buildConfigPayload(), JSON.parse(loadEvent.target.result), props.settingsScope)
+        draftConfig.value = imported.config
+        applyConfigToForm({...imported.config, aiConfigs: imported.aiConfigs})
         queueAutoSave()
       } catch (error) {
         message.error(`配置文件无效：${error?.message || error}`)
       }
     }
-    reader.readAsText(event.target.files[0])
+    reader.readAsText(file)
   }
   input.click()
 }
 
-onMounted(async () => {
+async function loadSettings() {
+  const version = ++pageVersion
+  settingsLoaded.value = false
+  queuedAutoSave = false
+  activeSavePromise = null
+  autoSaveState.value = 'idle'
+  autoSaveError.value = ''
+  aiConfigTestStates.value = {}
+  formValue.value.openAI.aiConfigs = []
   try {
-    applyConfigToForm(await GetConfig())
+    const [global, center] = await Promise.all([GetConfig(), GetResearchConfig(props.settingsScope)])
+    if (version !== pageVersion) return
+    persistedConfig.value = center
+    draftConfig.value = {...center.config}
+    applyConfigToForm({...center.config, aiConfigs: center.aiConfigs})
+    for (const key of ['darkTheme', 'enableFund', 'updateBasicInfoOnStart', 'refreshInterval']) formValue.value[key] = global[key]
     settingsLoaded.value = true
   } catch (error) {
-    message.error(`读取设置失败：${error?.message || error}`)
+    if (version === pageVersion) message.error(`读取设置失败：${error?.message || error}`)
   }
-})
+}
 
-onBeforeUnmount(() => message.destroyAll())
+watch(() => props.settingsScope, loadSettings, {immediate: true})
+onBeforeUnmount(() => {
+  pageVersion++
+  queuedAutoSave = false
+  message.destroyAll()
+})
 </script>
 
 <template>
   <n-flex justify="left" style="text-align: left">
-    <n-form ref="formRef" label-placement="left" label-align="left" style="width: 100%">
+    <n-form ref="formRef" :disabled="!settingsLoaded" label-placement="left" label-align="left" style="width: 100%">
       <n-space vertical size="large">
+        <n-alert type="info" :show-icon="false">
+          当前为研究中心{{ settingsScope === 'research1' ? '1' : '2' }}独立设置。模型、数据接口和普通策略参数从下一轮任务生效；关闭自动策略后停止新分析和新买入，当前分析可完成报告，已有持仓继续按退出规则管理。
+        </n-alert>
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '通用设置')" size="small">
           <n-grid :cols="24" :x-gap="24">
             <n-form-item-gi :span="8" label="暗黑主题：" path="darkTheme">
-              <n-switch v-model:value="formValue.darkTheme" @update:value="handleImmediateFieldChange"/>
+              <n-switch v-model:value="formValue.darkTheme" @update:value="saveGlobalSettings('darkTheme')"/>
             </n-form-item-gi>
             <n-form-item-gi :span="8" label="启用基金模块：" path="enableFund">
-              <n-switch v-model:value="formValue.enableFund" @update:value="handleImmediateFieldChange"/>
+              <n-switch v-model:value="formValue.enableFund" @update:value="saveGlobalSettings('enableFund')"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="8" label="启动时更新基础信息：" path="updateBasicInfoOnStart">
+              <n-switch v-model:value="formValue.updateBasicInfoOnStart" @update:value="saveGlobalSettings('updateBasicInfoOnStart')"/>
+            </n-form-item-gi>
+            <n-form-item-gi :span="8" label="数据刷新间隔：" path="refreshInterval">
+              <n-input-number v-model:value="formValue.refreshInterval" :min="1" @update:value="saveGlobalSettings('refreshInterval')">
+                <template #suffix>秒</template>
+              </n-input-number>
             </n-form-item-gi>
           </n-grid>
+          <n-text depth="3">这四项为应用通用设置，独立保存，不改变任一研究中心的策略配置。</n-text>
         </n-card>
 
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '数据接口设置')" size="small">
@@ -465,19 +506,14 @@ onBeforeUnmount(() => message.destroyAll())
             <n-form-item-gi :span="12" label="东财唯一标识：" path="qgqpBId">
               <n-input v-model:value="formValue.qgqpBId" placeholder="东财唯一标识" clearable @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="8" label="启动时更新基础信息：" path="updateBasicInfoOnStart">
-              <n-switch v-model:value="formValue.updateBasicInfoOnStart" @update:value="handleImmediateFieldChange"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" label="数据刷新间隔：" path="refreshInterval">
-              <n-input-number v-model:value="formValue.refreshInterval" :min="1" @update:value="handleImmediateFieldChange">
-                <template #suffix>秒</template>
-              </n-input-number>
-            </n-form-item-gi>
             <n-form-item-gi :span="8" label="长历史提示：" path="minuteLongHistoryHintEnabled">
               <n-switch v-model:value="formValue.minuteLongHistoryHintEnabled" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-gi :span="24">
               <n-divider title-placement="left">分钟线数据接口</n-divider>
+              <n-alert v-if="settingsScope === 'research2'" type="info" :show-icon="false" style="margin-bottom:12px">
+                此处来源排序只用于图表。研究中心2分析和成交分钟链继续按腾讯、东方财富、本地缓存的固定顺序运行。
+              </n-alert>
               <MinuteProviderSettings
                   :form-value="formValue"
                   :akshare-minute-source-options="akshareMinuteSourceOptions"
@@ -498,7 +534,7 @@ onBeforeUnmount(() => message.destroyAll())
             </n-form-item-gi>
             <n-form-item-gi :span="24" label="实验市场证据：" path="experimentalEvidenceEnabled">
               <n-switch v-model:value="formValue.experimentalEvidenceEnabled" @update:value="handleImmediateFieldChange"/>
-              <n-text depth="3" style="margin-left: 12px">默认关闭；开启后两套研究会接入实验市场证据并可能改变研究结果，市场行情页面不受影响。</n-text>
+              <n-text depth="3" style="margin-left: 12px">默认关闭；开启后仅当前研究中心接入实验市场证据并可能改变研究结果，市场行情页面不受影响。</n-text>
             </n-form-item-gi>
             <template v-if="settingsScope === 'research1'">
               <n-form-item-gi :span="6" label="资金补位：" path="capitalDeployment.enabled">
@@ -583,13 +619,17 @@ onBeforeUnmount(() => message.destroyAll())
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '配置管理')" size="small">
           <n-space vertical align="center">
             <n-space>
-              <n-button type="info" @click="exportConfig">导出配置</n-button>
-              <n-button type="warning" @click="importConfig">导入配置</n-button>
+              <n-button type="info" :disabled="!settingsLoaded" @click="exportConfig">导出本中心配置</n-button>
+              <n-button type="warning" :disabled="!settingsLoaded || autoSaveState === 'conflict'" @click="importConfig">导入本中心配置</n-button>
             </n-space>
             <n-text type="error">导出的 JSON 包含完整明文 API Key、Token 和 SMTP 授权码，请仅保存在可信设备。</n-text>
             <n-text depth="3" v-if="autoSaveState === 'saving'">正在自动保存...</n-text>
             <n-text type="success" v-else-if="autoSaveState === 'saved'">已自动保存 {{ autoSaveLastSavedAt }}</n-text>
             <n-text type="error" v-else-if="autoSaveState === 'error'">自动保存失败：{{ autoSaveError }}</n-text>
+            <template v-else-if="autoSaveState === 'conflict'">
+              <n-text type="warning">{{ autoSaveError }}</n-text>
+              <n-button type="warning" @click="loadSettings">放弃草稿并重新加载</n-button>
+            </template>
           </n-space>
         </n-card>
       </n-space>
