@@ -1,15 +1,18 @@
 param(
-    [ValidateSet("build", "deploy", "activate", "rollback")]
+    [ValidateSet("build", "deploy", "activate", "rollback", "publish")]
     [string]$Command = "build",
     [string]$MainDB = "data\stock.db",
     [string]$MinuteDB = "data\minute.db",
     [string]$WebAddr = "127.0.0.1:34115",
     [string]$RollbackReceipt = "",
-    [string]$RuntimeRootOverride = ""
+    [string]$RuntimeRootOverride = "",
+    [string]$NotesFile = '',
+    [string]$Resume = ''
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if ($PSVersionTable.PSVersion -lt [version]'7.2') { throw 'Release commands require PowerShell 7.2 or later (pwsh)' }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
@@ -27,6 +30,14 @@ $MinuteDB = [System.IO.Path]::GetFullPath($(if ([System.IO.Path]::IsPathRooted($
 $ManifestPath = Join-Path $ProjectRoot "internal\releaseinfo\release_manifest.json"
 $CurrentPointer = Join-Path $RuntimeRoot "current.json"
 $PidFile = Join-Path $RuntimeRoot "go-stock-web.pid"
+$script:DeploymentReceiptPath = ''
+. (Join-Path $ScriptDir 'release-state.ps1')
+
+function Enter-ReleaseLock {
+    New-Item -ItemType Directory -Force -Path $DeploymentsRoot | Out-Null
+    try { return [IO.File]::Open((Join-Path $DeploymentsRoot '.publish.lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None) }
+    catch { throw 'Another release operation holds this project lock' }
+}
 
 function Assert-ChildPath {
     param([string]$Path, [string]$Root)
@@ -50,9 +61,12 @@ function Assert-DatabasePaths {
 
 function Invoke-Checked {
     param([string]$Program, [string[]]$Arguments, [string]$Failure)
-    & $Program @Arguments | Out-Host
+    Push-Location $ProjectRoot
+    try {
+    & $Program @Arguments
     $exitCode = $LASTEXITCODE
     if ($exitCode -ne 0) { throw "$Failure (exit $exitCode)" }
+    } finally { Pop-Location }
 }
 
 function Get-SHA256 {
@@ -89,19 +103,23 @@ function Assert-VersionTagMatchesCommit {
     $tagExitCode = $LASTEXITCODE
     $tagCommit = $tagCommit.Trim()
     if ($tagExitCode -ne 0 -or -not $tagCommit) {
-        throw "Release tag $version is required before build or deploy"
+        throw "Release tag $version is required before promotion or deploy"
     }
     if (-not $tagCommit.Equals([string]$Context.Commit, [System.StringComparison]::OrdinalIgnoreCase)) {
         throw "Release tag $version points to $tagCommit, expected $($Context.Commit)"
     }
+    if (((& git -C $ProjectRoot cat-file -t $tagRef) -join '') -ne 'tag') { throw "Release tag $version must be annotated" }
 }
 
 function Get-ZoneInfoSource {
+    Push-Location $ProjectRoot
+    try {
     $goRoot = (& go env GOROOT).Trim()
     if ($LASTEXITCODE -ne 0) { throw "Cannot resolve GOROOT" }
     $source = Join-Path $goRoot "lib\time\zoneinfo.zip"
     if (-not (Test-Path -LiteralPath $source)) { throw "Go zoneinfo.zip is unavailable" }
     return $source
+    } finally { Pop-Location }
 }
 
 function Write-JSONAtomic {
@@ -148,27 +166,151 @@ function Invoke-Build {
     $dirty = (& git -C $ProjectRoot status --porcelain)
     if ($LASTEXITCODE -ne 0) { throw "Cannot inspect git worktree" }
     if ($dirty) { throw "Release builds require a clean git worktree" }
-    Invoke-Checked "pwsh" @("-NoProfile", "-File", (Join-Path $ScriptDir "verify.ps1"), "-Tier", "release", "-SkipGoBuild") "Release verification failed"
-    New-Item -ItemType Directory -Force -Path $context.ReleaseDir | Out-Null
-    $buildTime = [DateTime]::UtcNow.ToString("o")
-    $ldflags = "-s -w -X go-stock/internal/releaseinfo.Commit=$($context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
-    Invoke-Checked "go" @("build", "-trimpath", "-ldflags", $ldflags, "-o", $context.Binary, ".") "Release build failed"
-    Copy-Item -LiteralPath (Get-ZoneInfoSource) -Destination $context.ZoneInfo -Force
-    $pointer = New-Pointer $context
-    Write-JSONAtomic (Join-Path $context.ReleaseDir "build.json") $pointer
-    Write-Host "Built App $($pointer.appVersion): $($pointer.binary)"
+    if (Test-Path -LiteralPath $context.ReleaseDir) { return Read-BuildArtifact $context }
+    $recordPath = Join-Path $DeploymentsRoot "build-$($context.Commit).json"
+    if (-not (Test-Path -LiteralPath $recordPath)) {
+        Write-ReleaseState $recordPath @{formatVersion=1; projectRoot=$ProjectRoot; commit=$context.Commit; steps=@{}; verificationIdentity=''; frontendHash=''}
+    }
+    Invoke-ReleaseValidation $recordPath
+    Invoke-ReleaseCandidateBuild $context $recordPath
+    return Read-BuildArtifact $context
+}
+
+function Invoke-ReleaseValidation {
+    param([string]$RecordPath)
+    $record = Read-ReleaseState $RecordPath
+    $inputs = Get-ReleaseInputs $ProjectRoot
+    if ($record.verificationIdentity -eq $inputs.identity -and $record.frontendHash -and $record.frontendHash -eq (Get-ReleaseTreeHash (Join-Path $ProjectRoot 'frontend/dist'))) {
+        Write-Host 'REUSE complete verification'
+        return
+    }
+    $oldHTTP, $oldHTTPS = $env:HTTP_PROXY, $env:HTTPS_PROXY
+    try {
+        $env:HTTP_PROXY, $env:HTTPS_PROXY = 'http://127.0.0.1:7890', 'http://127.0.0.1:7890'
+        Invoke-Checked 'pwsh' @('-NoProfile','-File',(Join-Path $ScriptDir 'verify.ps1'),'-Tier','release','-SkipGoBuild','-ReleaseRecord',$RecordPath) 'Release verification failed'
+    } finally { $env:HTTP_PROXY, $env:HTTPS_PROXY = $oldHTTP, $oldHTTPS }
+}
+
+function Get-ArtifactInspection {
+    param([string]$Binary)
+    $output = @(& $Binary release inspect)
+    if ($LASTEXITCODE -ne 0) { throw 'Artifact release inspect failed' }
+    return (($output -join "`n") | ConvertFrom-Json)
+}
+
+function Assert-ArtifactIdentity {
+    param($Pointer)
+    $inspect = Get-ArtifactInspection $Pointer.binary
+    if ($inspect.manifest.appVersion -ne $Pointer.appVersion -or $inspect.build.commit -ne $Pointer.commit -or
+        [int]$inspect.manifest.mainSchemaVersion -ne [int]$Pointer.mainSchemaVersion -or
+        [int]$inspect.manifest.minuteSchemaVersion -ne [int]$Pointer.minuteSchemaVersion -or
+        ([string]$inspect.build.artifactSHA256).ToLowerInvariant() -ne ([string]$Pointer.artifactSHA256).ToLowerInvariant() -or [bool]$inspect.build.dirty) {
+        throw 'Artifact embedded identity does not match build.json'
+    }
+}
+
+function Read-BuildArtifact {
+    param($Context)
+    $pointer = Read-ReleasePointer (Join-Path $Context.ReleaseDir 'build.json')
+    if ($pointer.appVersion -ne $Context.Manifest.appVersion -or $pointer.commit -ne $Context.Commit -or
+        [int]$pointer.mainSchemaVersion -ne [int]$Context.Manifest.mainSchemaVersion -or
+        [int]$pointer.minuteSchemaVersion -ne [int]$Context.Manifest.minuteSchemaVersion -or
+        $pointer.binary -ne $Context.Binary -or $pointer.zoneInfo -ne $Context.ZoneInfo) { throw 'Build metadata does not match the requested release' }
+    Assert-ArtifactIdentity $pointer
     return $pointer
 }
 
+function Invoke-CandidateCompiler {
+    param($Context, [string]$Binary)
+    $buildTime = [DateTime]::UtcNow.ToString("o")
+    $ldflags = "-s -w -X go-stock/internal/releaseinfo.Commit=$($Context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
+    Invoke-Checked 'go' @('build','-trimpath','-ldflags',$ldflags,'-o',$Binary,'.') 'Candidate build failed'
+    $signature = Get-AuthenticodeSignature -LiteralPath $Binary
+    if ([string]$signature.Status -notin @('Valid','NotSigned')) { throw "Candidate has invalid signature: $($signature.Status)" }
+}
+
+function Invoke-ReleaseCandidateBuild {
+    param($Context, [string]$RecordPath)
+    $record = Read-ReleaseState $RecordPath
+    $inputs = Get-ReleaseInputs $ProjectRoot
+    if ($record.commit -ne $Context.Commit -or $record.verificationIdentity -ne $inputs.identity -or
+        -not $record.frontendHash -or $record.frontendHash -ne (Get-ReleaseTreeHash (Join-Path $ProjectRoot 'frontend/dist'))) { throw 'Candidate inputs have not passed verification' }
+    if (@(& git -C $ProjectRoot status --porcelain).Count) { throw 'Candidate build requires a clean checkout' }
+    if (Test-Path -LiteralPath $Context.ReleaseDir) {
+        $existing = Read-BuildArtifact $Context
+        if ($existing.PSObject.Properties.Name -contains 'verificationIdentity' -and
+            ($existing.verificationIdentity -ne $inputs.identity -or $existing.PSObject.Properties.Name -notcontains 'frontendHash' -or $existing.frontendHash -ne $record.frontendHash)) {
+            throw 'Immutable artifact has different build inputs; restore its toolchain or prepare a new commit/version'
+        }
+        Write-Host 'REUSE immutable candidate artifact'
+        return
+    }
+    $stagingRoot = Join-Path $ReleaseRoot '.staging'
+    $staging = Assert-ChildPath (Join-Path $stagingRoot ([Guid]::NewGuid().ToString('N'))) $ReleaseRoot
+    New-Item -ItemType Directory -Force -Path $staging | Out-Null
+    try {
+        $candidate = [pscustomobject]@{Manifest=$Context.Manifest; Commit=$Context.Commit; Binary=(Join-Path $staging 'go-stock-web.exe'); ZoneInfo=(Join-Path $staging 'zoneinfo.zip')}
+        Invoke-CandidateCompiler $Context $candidate.Binary
+        Copy-Item -LiteralPath (Get-ZoneInfoSource) -Destination $candidate.ZoneInfo
+        $pointer = New-Pointer $candidate
+        Assert-ArtifactIdentity $pointer
+        $pointer.binary, $pointer.zoneInfo = $Context.Binary, $Context.ZoneInfo
+        $pointer | Add-Member -NotePropertyName verificationIdentity -NotePropertyValue $inputs.identity
+        $pointer | Add-Member -NotePropertyName frontendHash -NotePropertyValue $record.frontendHash
+        Write-JSONAtomic (Join-Path $staging 'build.json') $pointer
+        if ((& git -C $ProjectRoot rev-parse HEAD).Trim() -ne $Context.Commit -or @(& git -C $ProjectRoot status --porcelain).Count) { throw 'Checkout changed during candidate build' }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Context.ReleaseDir) | Out-Null
+        # Same-volume directory rename fails rather than nesting or overwriting.
+        [IO.Directory]::Move($staging, $Context.ReleaseDir)
+    } finally {
+        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath (Assert-ChildPath $staging $stagingRoot) -Recurse -Force }
+    }
+}
+
+function Get-ReleaseListener {
+    $port = ([Uri]("http://"+$WebAddr)).Port
+    $ids = @(Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique)
+    if ($ids.Count -eq 0) { return $null }
+    if ($ids.Count -ne 1) { throw 'Multiple processes own the release port' }
+    return Get-CimInstance Win32_Process -Filter "ProcessId = $($ids[0])" -ErrorAction Stop
+}
+
+function Assert-ReleaseProcess {
+    param($Pointer, $Process, [int]$ExpectedID = 0)
+    if (-not $Process -or -not $Process.ExecutablePath -or
+        -not ([IO.Path]::GetFullPath($Process.ExecutablePath)).Equals([IO.Path]::GetFullPath($Pointer.binary), [StringComparison]::OrdinalIgnoreCase) -or
+        ($ExpectedID -and [int]$Process.ProcessId -ne $ExpectedID)) { throw 'Listener process does not match the exact release artifact/PID' }
+}
+
+function Get-ExactReleaseStatus {
+    param($Pointer, [int]$ExpectedID = 0)
+    if (-not $ExpectedID -and (Test-Path -LiteralPath $PidFile)) { $ExpectedID = [int](Get-Content -LiteralPath $PidFile -Raw) }
+    Assert-ReleaseProcess $Pointer (Get-ReleaseListener) $ExpectedID
+    $status = Invoke-RestMethod -Uri "http://$WebAddr/readyz" -TimeoutSec 2
+    if ($status.appVersion -ne $Pointer.appVersion -or $status.commit -ne $Pointer.commit -or
+        ([string]$status.artifactSHA256).ToLowerInvariant() -ne ([string]$Pointer.artifactSHA256).ToLowerInvariant() -or $status.dirty -or
+        [int]$status.mainSchemaVersion -ne [int]$Pointer.mainSchemaVersion -or [int]$status.minuteSchemaVersion -ne [int]$Pointer.minuteSchemaVersion) { throw 'Runtime identity differs from release artifact' }
+    foreach ($flag in @('migrations','database','services','scheduler','ready')) { if (-not $status.readiness.$flag) { throw "Readiness $flag is false" } }
+    return $status
+}
+
 function Stop-Current {
-    if (-not (Test-Path -LiteralPath $PidFile)) { return }
-    $processID = [int](Get-Content -LiteralPath $PidFile -Raw)
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processID" -ErrorAction SilentlyContinue
+    $pointer = Read-ReleasePointer $CurrentPointer
+    $process = Get-ReleaseListener
+    $fileID = if (Test-Path -LiteralPath $PidFile) { [int](Get-Content -LiteralPath $PidFile -Raw) } else { 0 }
+    if (-not $process -and $fileID) { $process = Get-CimInstance Win32_Process -Filter "ProcessId = $fileID" -ErrorAction SilentlyContinue }
     if ($process) {
-        $executable = Assert-ChildPath ([string]$process.ExecutablePath) $ReleaseRoot
+        Assert-ReleaseProcess $pointer $process $fileID
+        $processID = [int]$process.ProcessId
         Stop-Process -Id $processID -Force
         try { Wait-Process -Id $processID -Timeout 15 -ErrorAction SilentlyContinue } catch {}
-        Write-Host "Stopped $executable (PID $processID)"
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while ($listener = Get-ReleaseListener) {
+            Assert-ReleaseProcess $pointer $listener $processID
+            if ([DateTime]::UtcNow -ge $deadline) { throw 'Release port did not close' }
+            Start-Sleep -Milliseconds 100
+        }
+        Write-Host "Stopped $($pointer.binary) (PID $processID)"
     }
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
 }
@@ -196,8 +338,8 @@ function Start-Pointer {
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) { throw "Released process exited during startup" }
         try {
-            $status = Invoke-RestMethod -Uri "http://$WebAddr/readyz" -TimeoutSec 2
-            if ($status.appVersion -eq $Pointer.appVersion -and [int]$status.mainSchemaVersion -eq [int]$Pointer.mainSchemaVersion -and [int]$status.minuteSchemaVersion -eq [int]$Pointer.minuteSchemaVersion -and [bool]$status.readiness.ready) { return }
+            [void](Get-ExactReleaseStatus $Pointer $process.Id)
+            return
         } catch {}
         Start-Sleep -Seconds 1
     }
@@ -393,15 +535,46 @@ function Remove-RestorationSafetyCopy {
     if (Test-Path -LiteralPath $path -PathType Container) { Remove-Item -LiteralPath $path -Recurse -Force }
 }
 
+function Get-PendingSchemaMaintenance {
+    foreach ($file in @(Get-ChildItem -LiteralPath $DeploymentsRoot -Filter 'maintenance-*.json' -File -ErrorAction SilentlyContinue)) {
+        $state = Read-ReleaseState $file.FullName
+        if ($state.status -eq 'started') { [pscustomobject]@{ Path=$file.FullName; State=$state } }
+    }
+}
+
+function Complete-SchemaMaintenance {
+    param([string]$ReceiptPath, [string]$Status)
+    foreach ($pending in @(Get-PendingSchemaMaintenance)) {
+        if ([IO.Path]::GetFullPath($pending.State.rollbackReceipt) -eq [IO.Path]::GetFullPath($ReceiptPath)) {
+            $pending.State.status = $Status
+            Write-ReleaseState $pending.Path $pending.State
+        }
+    }
+}
+
 function Invoke-Deploy {
     Assert-DatabasePaths
     $context = Get-Context
     Assert-VersionTagMatchesCommit $context
-    if (-not (Test-Path -LiteralPath $context.Binary) -or -not (Test-Path -LiteralPath $context.ZoneInfo)) { $pointer = Invoke-Build }
-    else { $pointer = New-Pointer $context }
+    $pointer = Read-BuildArtifact $context
     $previous = if (Test-Path -LiteralPath $CurrentPointer) { Read-ReleasePointer $CurrentPointer } else { $null }
+    foreach ($pending in @(Get-PendingSchemaMaintenance)) {
+        $reconciled = $false
+        if ($previous -and $previous.commit -eq $pending.State.commit -and $previous.artifactSHA256 -eq $pending.State.artifactSHA256) {
+            try { [void](Get-ExactReleaseStatus $previous); $reconciled = $true } catch {}
+        }
+        if (-not $reconciled) {
+            $script:DeploymentReceiptPath = Assert-ChildPath $pending.State.rollbackReceipt $DeploymentsRoot
+            throw "Interrupted schema maintenance; restore the original archive with -Command rollback -RollbackReceipt `"$script:DeploymentReceiptPath`", then resume publish"
+        }
+        Complete-SchemaMaintenance $pending.State.rollbackReceipt 'complete'
+    }
+    if ($previous -and $previous.commit -eq $pointer.commit -and $previous.artifactSHA256 -eq $pointer.artifactSHA256) {
+        try { [void](Get-ExactReleaseStatus $pointer); Write-Host 'REUSE already running exact release'; return } catch {}
+    }
     $schemaTransition = if ($null -ne $previous) { Get-SchemaTransition $previous $pointer } else { $null }
-    $receiptPath = Join-Path $DeploymentsRoot ("previous-" + [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss") + ".json")
+    $receiptPath = Join-Path $DeploymentsRoot ("previous-" + [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss") + '-' + [Guid]::NewGuid().ToString('N') + ".json")
+    $script:DeploymentReceiptPath = $receiptPath
     $archive = $null
     $maintenanceReceipt = $null
     $migrationStarted = $false
@@ -412,6 +585,9 @@ function Invoke-Deploy {
             $archive = New-DatabaseArchive $previous $pointer
             $maintenanceReceipt = New-RollbackReceipt $previous $archive.Path $archive.SHA256
             Write-JSONAtomic $receiptPath $maintenanceReceipt
+            Write-ReleaseState (Join-Path $DeploymentsRoot ("maintenance-" + [Guid]::NewGuid().ToString('N') + '.json')) @{
+                status='started'; commit=$pointer.commit; artifactSHA256=$pointer.artifactSHA256; rollbackReceipt=$receiptPath
+            }
             $migrationStarted = $true
             [void](Invoke-DatabaseJSON $pointer.binary @("db", "migrate"))
             if ($schemaTransition.MainChanged) {
@@ -435,12 +611,14 @@ function Invoke-Deploy {
                 Write-JSONAtomic $CurrentPointer $previous
                 Start-Pointer $previous
                 Remove-RestorationSafetyCopy $safetyCopy
+                if ($migrationStarted) { Complete-SchemaMaintenance $receiptPath 'rolled_back' }
             }
         } catch {
             throw "Deployment failed: $($deployError.Exception.Message). Automatic rollback also failed: $($_.Exception.Message)"
         }
         throw "Deployment failed and was rolled back safely: $($deployError.Exception.Message)"
     }
+    if ($migrationStarted) { Complete-SchemaMaintenance $receiptPath 'complete' }
     Write-Output "Deployed App $($pointer.appVersion) to http://$WebAddr"
     if ($archive) { Write-Output "Permanent pre-schema archive: $($archive.Path)" }
 }
@@ -461,6 +639,7 @@ function Invoke-Rollback {
         Write-JSONAtomic $CurrentPointer $pointer
         Start-Pointer $pointer
         Remove-RestorationSafetyCopy $safetyCopy
+        if ($hasArchive) { Complete-SchemaMaintenance $receiptPath 'rolled_back' }
     } catch {
         throw "Rollback failed; retained database safety copy at '$safetyCopy': $($_.Exception.Message)"
     }
@@ -468,11 +647,15 @@ function Invoke-Rollback {
     if ($hasArchive) { Write-Output "Restored both databases from $($pointer.databaseArchive)" }
 }
 
+. (Join-Path $ScriptDir 'release-publish.ps1')
 if ($MyInvocation.InvocationName -ne ".") {
-    switch ($Command) {
+    if (($NotesFile -or $Resume) -and $Command -ne 'publish') { throw 'NotesFile and Resume belong to publish' }
+    $releaseLock = Enter-ReleaseLock
+    try { switch ($Command) {
+        'publish' { Invoke-Publish }
         "build" { Invoke-Build | Out-Null }
         "deploy" { Invoke-Deploy }
         "activate" { Invoke-Deploy }
         "rollback" { Invoke-Rollback }
-    }
+    } } finally { $releaseLock.Dispose() }
 }

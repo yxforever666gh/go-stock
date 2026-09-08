@@ -11,17 +11,21 @@ param(
     [string]$GoTest = "",
     [string[]]$FrontendTest = @(),
 
-    [switch]$SkipGoBuild
+    [switch]$SkipGoBuild,
+    [string]$ReleaseRecord = ''
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if ($PSVersionTable.PSVersion -lt [version]'7.2') { throw 'Verification requires PowerShell 7.2 or later (pwsh)' }
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
 $FrontendRoot = Join-Path $ProjectRoot "frontend"
 $MainGoPackages = @(".", "./backend/...", "./internal/...", "./cmd/...", "./tools/...")
 $NpmProgram = if ($IsWindows) { "npm.cmd" } else { "npm" }
+. (Join-Path $ScriptDir 'release-state.ps1')
+$VerificationInputs = $null
 
 function Invoke-Step {
     param(
@@ -31,20 +35,50 @@ function Invoke-Step {
         [Parameter(Mandatory = $true)][string]$WorkingDirectory
     )
 
+    if ($ReleaseRecord) {
+        $identity = $VerificationInputs.identity
+        if ($Program -eq 'go') { $identity += ':' + (Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist')) }
+        $action = { Invoke-VerificationCommand $Program $Arguments $WorkingDirectory }.GetNewClosure()
+        $outputHash = if ($Name -eq 'frontend production build') { { Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist') }.GetNewClosure() } else { $null }
+        Invoke-ReleaseStage $ReleaseRecord ('verify-' + $Name) $identity $action $outputHash
+        return
+    }
     Write-Host "==> $Name"
     $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+    try { Invoke-VerificationCommand $Program $Arguments $WorkingDirectory }
+    finally { $stopwatch.Stop() }
+    Write-Host "PASS $Name ($([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s)"
+}
+
+function Invoke-VerificationCommand {
+    param([string]$Program, [string[]]$Arguments, [string]$WorkingDirectory)
     Push-Location $WorkingDirectory
     try {
-        & $Program @Arguments | Out-Host
+        & $Program @Arguments
         $exitCode = $LASTEXITCODE
     } finally {
         Pop-Location
-        $stopwatch.Stop()
     }
     if ($exitCode -ne 0) {
-        throw "$Name failed with exit code $exitCode after $([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s"
+        throw "$Program failed with exit code $exitCode"
     }
-    Write-Host "PASS $Name ($([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s)"
+}
+
+function Invoke-ReleaseVerification {
+    # The root Go package embeds dist. Build fresh frontend assets before any
+    # Go checks, including on a clean checkout with no old dist directory.
+    Invoke-FrontendTests 'frontend runtime tests'
+    Invoke-Step 'frontend lint' $NpmProgram @('run', 'lint') $FrontendRoot
+    Invoke-Step 'frontend production build' $NpmProgram @('run', 'build') $FrontendRoot
+    Invoke-GoTest 'main Go tests' $MainGoPackages
+    Invoke-Step 'Go vet' 'go' (@('vet') + $MainGoPackages) $ProjectRoot
+    Invoke-Step 'root go.mod check' 'go' @('mod', 'tidy', '-diff') $ProjectRoot
+    Invoke-Step 'release schema transition tests' 'pwsh' @('-NoProfile', '-File', (Join-Path $ScriptDir 'release-schema-transition.test.ps1')) $ProjectRoot
+    Invoke-Step 'OpenAPI contract check' 'go' @('run', './cmd/openapi-contract') $ProjectRoot
+    if (-not $SkipGoBuild) {
+        $binaryName = if ($IsWindows) { 'go-stock-verify.exe' } else { 'go-stock-verify' }
+        Invoke-Step 'Go production build' 'go' @('build', '-trimpath', '-o', (Join-Path $validationRun $binaryName), '.') $ProjectRoot
+    }
 }
 
 function Assert-GoPackages {
@@ -106,6 +140,8 @@ function Invoke-FrontendTests {
     Invoke-Step $Name "node" (@("--test") + $resolved) $FrontendRoot
 }
 
+if ($MyInvocation.InvocationName -eq '.') { return }
+if ($ReleaseRecord -and ($Tier -ne 'release' -or -not $SkipGoBuild)) { throw 'ReleaseRecord requires release verification with SkipGoBuild' }
 if ($Tier -eq "fast" -and $GoPackage.Count -eq 0 -and $FrontendTest.Count -eq 0) {
     throw "fast verification requires -GoPackage and/or -FrontendTest"
 }
@@ -156,6 +192,15 @@ try {
     # processes from sharing one validation database.
     [Environment]::SetEnvironmentVariable("GO_STOCK_DB_PATH", $null, "Process")
     [Environment]::SetEnvironmentVariable("GO_STOCK_MINUTE_DB_PATH", $null, "Process")
+    if ($ReleaseRecord) {
+        $VerificationInputs = Get-ReleaseInputs $ProjectRoot
+        $record = Read-ReleaseState $ReleaseRecord
+        if ($record.projectRoot -ne $ProjectRoot -or $record.commit -ne $VerificationInputs.values.commit) { throw 'Verification receipt does not match this checkout' }
+        $dirty = @(& git status --porcelain)
+        if ($LASTEXITCODE -ne 0 -or $dirty.Count) { throw 'Cached release verification requires a clean checkout' }
+        $record.verificationIdentity = ''
+        Write-ReleaseState $ReleaseRecord $record
+    }
 
     Invoke-Step "diff whitespace check" "git" @("-c", "core.safecrlf=false", "diff", "--check") $ProjectRoot
 
@@ -186,28 +231,28 @@ try {
                     Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
                     Invoke-GoTest "API boundary tests" @(".")
                 }
-                "tools" { Invoke-GoTest "tool build checks" @("./tools/...") }
+                "tools" {
+                    Invoke-GoTest "tool build checks" @("./tools/...")
+                    Invoke-Step 'release pipeline tests' 'pwsh' @('-NoProfile','-File',(Join-Path $ScriptDir 'release-pipeline.test.ps1')) $ProjectRoot
+                }
             }
             Write-Host "Not run: release verification."
         }
         "release" {
-            Invoke-GoTest "main Go tests" $MainGoPackages
-            Invoke-Step "Go vet" "go" (@("vet") + $MainGoPackages) $ProjectRoot
-            Invoke-Step "root go.mod check" "go" @("mod", "tidy", "-diff") $ProjectRoot
-            Invoke-Step "release schema transition tests" "pwsh" @("-NoProfile", "-File", (Join-Path $ScriptDir "release-schema-transition.test.ps1")) $ProjectRoot
-            Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
-            Invoke-FrontendTests "frontend runtime tests"
-            Invoke-Step "frontend lint" $NpmProgram @("run", "lint") $FrontendRoot
-            Invoke-Step "frontend production build" $NpmProgram @("run", "build") $FrontendRoot
-            if (-not $SkipGoBuild) {
-                $binaryName = if ($IsWindows) { "go-stock-verify.exe" } else { "go-stock-verify" }
-                Invoke-Step "Go production build" "go" @("build", "-trimpath", "-o", (Join-Path $validationRun $binaryName), ".") $ProjectRoot
-            }
+            Invoke-ReleaseVerification
             Write-Host "Full local release gate passed. Deployment was not run."
         }
     }
 
     $overall.Stop()
+    if ($ReleaseRecord) {
+        $record = Read-ReleaseState $ReleaseRecord
+        $head = (& git -C $ProjectRoot rev-parse HEAD).Trim()
+        if ($head -ne $VerificationInputs.values.commit -or @(& git -C $ProjectRoot status --porcelain).Count) { throw 'Checkout changed during release verification' }
+        $record.verificationIdentity = $VerificationInputs.identity
+        $record.frontendHash = Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist')
+        Write-ReleaseState $ReleaseRecord $record
+    }
     Write-Host "Verification tier '$Tier' passed in $([math]::Round($overall.Elapsed.TotalSeconds, 2))s."
 } catch {
     $overall.Stop()

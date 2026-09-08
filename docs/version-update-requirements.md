@@ -5,7 +5,7 @@
 - 文档类型：产品与工程需求文档
 - 适用范围：Go-Stock 桌面端、本地 Web 服务、前端静态资源、Git 仓库及 Windows 发布流程
 - 目标读者：开发、测试、发布和运维人员
-- 状态：待实施
+- 状态：已实施，Windows发布以 `scripts/release.ps1 -Command publish` 为统一入口
 
 ## 2. 背景与问题
 
@@ -68,7 +68,7 @@ runtime/releases/<version>/<full-commit>/
 
 1. 应以 `internal/releaseinfo/release_manifest.json` 中的 `appVersion` 作为应用版本唯一来源。
 2. 后端运行状态、系统信息接口和前端页面必须读取该版本，不得各自写死。
-3. 前端 `package.json`、`package-lock.json`、OpenAPI、README、CHANGELOG 和发布说明必须通过一致性测试与发布清单保持同步。
+3. App 版本由 release manifest 唯一声明，并与发布说明顶部版本一致；前端私有包不跟随 App 版本，OpenAPI 使用独立合同版本，README 不另行维护当前版本。
 4. 数据库 schema 版本与应用版本分别管理，不得因为 App 版本升级而自动增加 schema 版本。
 
 ### FR-02：界面版本展示
@@ -80,9 +80,9 @@ runtime/releases/<version>/<full-commit>/
 
 ### FR-03：Git tag 门禁
 
-1. 正式构建和部署前必须存在与 `appVersion` 完全同名的 tag。
-2. tag 必须指向当前准备构建的完整 commit。
-3. tag 不存在、指向其他 commit 或版本格式不合法时，发布流程必须立即失败。
+1. 干净且通过验证的提交可以先构建候选制品；制品转为正式发布、推送和部署前必须存在与 `appVersion` 完全同名的 annotated tag。
+2. tag 必须指向候选制品内嵌的完整 commit。独立 `build` 命令继续要求先有对应 tag。
+3. 应检查版本格式及tag冲突；不允许移动既有tag。缺少部署tag或tag指向其他commit时立即失败。
 4. 发布完成前必须验证远端 `main` 和远端 tag 均已指向预期 commit。
 5. 禁止通过 `--force` 移动已发布 tag。
 
@@ -92,9 +92,9 @@ runtime/releases/<version>/<full-commit>/
 
 1. 发布相关文件不存在未提交改动。
 2. 版本一致性测试通过。
-3. 后端单元测试、Go vet 和 OpenAPI 合约检查通过。
-4. 前端运行时测试、lint 和生产构建通过。
-5. 前端生产构建必须先于 Go 二进制构建完成，确保 Go 内嵌的是当前版本静态资源。
+3. 前端运行时测试、lint 和生产构建通过。
+4. 随后执行后端单元测试、Go vet、模块、迁移规则和 OpenAPI 合约检查。
+5. 前端生产构建先于所有Go检查，解决干净检出没有嵌入资源的问题。统一发布使用 `-SkipGoBuild` 跳过验证用二进制，随后只构建一次带身份的候选制品。
 6. 已知例外测试必须有明确记录；不得把新增失败伪装成已知失败。
 
 ### FR-05：制品身份
@@ -199,30 +199,30 @@ runtime/releases/<version>/<full-commit>/
 
 ## 7. 标准发布流程
 
-### 7.1 开发完成
+### 7.1 准备与单入口
 
-1. 修改代码和测试。
-2. 决定新的版本号。
-3. 同步版本清单、前端、OpenAPI、README、CHANGELOG 和发布说明。
-4. 完成全套验证。
+1. 提交开发改动，保持工作区干净；在仓库外准备发布说明正文。
+2. 运行 `pwsh -NoProfile -File scripts/release.ps1 -Command publish -NotesFile <说明文件>`。
+3. 脚本获取项目发布锁，检查工具链、SSH密钥权限、代理及远端快进关系；不自动合并冲突或提交其他文件。
+4. 没有新提交时确认当前已发布版本；有新提交时增加PATCH版本，仅提交版本清单与发布说明。准备内容先记入发布记录，以便文件写入或提交中断后恢复。
 
-### 7.2 Git 发布
+### 7.2 验证、构建和Git发布
 
-1. 提交发布相关改动。
-2. 推送 `main`。
-3. 创建与版本号同名的 annotated tag。
-4. 推送 tag。
-5. 验证远端 `main` 和 tag 指向同一 commit。
+1. 前端测试、lint、前端构建各一次，再运行完整Go、版本、迁移规则与接口检查。
+2. 构建一次带commit、构建时间和dirty=false的Go候选制品，检查哈希、时区与现有签名状态。
+3. 候选在同卷暂存目录生成，完整验证后原子移入不可变制品目录；已有目录必须通过build.json、真实哈希和内嵌身份核验，不允许覆盖。
+4. 创建annotated tag，校验commit后原子推送main和该tag，核对远端tag对象及其解引用commit。
 
-### 7.3 构建与部署
+### 7.3 部署与续跑
 
-1. 从 tag 对应的干净 worktree 构建前端。
-2. 构建带 commit、构建时间和 dirty 标志的 Go 二进制。
-3. 生成 `build.json` 并核对真实 SHA-256。
-4. 执行标准部署命令。
-5. 核对 `/readyz`、进程路径和 `runtime/current.json`。
-6. 使用真实浏览器确认页面展示新版本。
-7. 清理临时 worktree，但保留不可变制品和发布凭据。
+1. deploy/activate要求已有合格制品，不再隐式启动构建。执行已有同schema切换或跨schema归档迁移及回滚流程。
+2. 部署只停止旧进程、切换指针并启动新进程一次；普通发布不追加restart。核验精确PID、路径、版本、commit、哈希、schema和所有readiness子状态。
+3. 使用真实浏览器确认一次页面版本。发布记录和阶段日志保存在runtime/deployments，正式制品及回滚凭据保留。
+4. 用 `-Resume <发布记录路径>` 续跑，或直接重跑publish自动匹配同一提交的未完成记录；不重复增加版本或创建tag。
+5. 成功阶段只在完整提交、工具链及相关输出一致时复用；输入改变则重新验证相关阶段及其依赖。已有不可变制品输入冲突时停止，需恢复原工具链或准备新提交/版本。
+6. 远端可能已收到失败响应的push，续跑先对账；部署成功但记录写入中断时，先检查实际运行身份，相同制品不再次重启。
+7. 跨schema迁移前持久化维护记录及原始归档回滚凭据。强制中断后，只有已运行且身份和readiness完全匹配的目标版本可以确认完成；否则停止并提示使用原始凭据rollback，然后Resume。禁止重新归档未知迁移状态的数据库。常规异常继续自动回滚。
+8. 发布脚本变更运行离线release-pipeline.test.ps1及工具领域验证。普通业务发布不增加重复的编排模拟测试；阶段耗时如实记录，3—5分钟仅为热缓存与正常网络下的目标。
 
 ## 8. 验收标准
 

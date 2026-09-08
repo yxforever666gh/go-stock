@@ -80,6 +80,33 @@ go run .
 .\启动项目.cmd -NoBrowser
 ```
 
+## Windows 本地发布
+
+使用 PowerShell 7.2+。先提交开发改动，并在仓库外准备发布说明正文（例如 `H:\Download\go-stock-release-notes.md`，不需要写版本标题），再执行：
+
+```powershell
+pwsh -NoProfile -File scripts/release.ps1 -Command publish -NotesFile H:\Download\go-stock-release-notes.md
+```
+
+入口检查干净工作区、main快进关系及统一SSH代理，自动增加补丁版本，只提交版本清单和发布说明。它依次运行前端测试、lint、前端构建及完整Go/接口门禁，然后构建一次带提交身份的候选制品，创建annotated tag，原子推送main与该tag，部署并重启一次，核验进程与readiness。普通“部署并restart”不需要再运行第二次restart。
+
+没有新提交时只确认现有发布；未完成发布会自动匹配记录，不重复升版本。跨 schema 迁移被强制中断且无法确认新版本已正常运行时，脚本停止并给出原始归档的 rollback 命令；先恢复，再续跑，避免误备份已升级的数据库。也可以按失败输出显式续跑：
+
+```powershell
+pwsh -NoProfile -File scripts/release.ps1 -Command publish -Resume "runtime\deployments\publish-记录ID.json"
+```
+
+记录和分阶段日志保存在 `runtime/deployments`。成功阶段只在提交、工具链和相关产物一致时复用；代码变化需要新发布，已存在的不同输入制品或冲突tag不会被覆盖。推送结果不确定时先核对远端；已运行的相同制品不会再次重启。完整制品存于 `runtime/releases`，构建暂存目录位于同卷的 `runtime/releases/.staging`，成功后原子移入正式目录。
+
+独立 `build` 仍适用于已有对应tag的构建；`deploy`/`activate`只部署已核验的现有制品，不再隐式构建；`rollback`和日常`restart`保留。发布脚本改动使用离线流程测试或工具领域验证：
+
+```powershell
+pwsh -NoProfile -File scripts/release-pipeline.test.ps1
+pwsh -NoProfile -File scripts/verify.ps1 -Tier domain -Domain tools
+```
+
+这些流程测试使用临时Git仓库和模拟编译、网络与进程，不触碰运行服务或生产数据库。常规发布保留原有完整门禁，不重复运行整套发布编排模拟。热缓存、网络正常时以3—5分钟为目标；脚本记录实际验证、前端构建、Go构建、Git网络、部署启动和总耗时。Codex发布任务结束前再做一次浏览器版本核对。
+
 网络来源审计已从主程序移到独立开发工具，需要时运行：
 
 ```powershell
