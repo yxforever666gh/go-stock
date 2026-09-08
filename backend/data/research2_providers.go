@@ -49,16 +49,20 @@ func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *
 	collector := &research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
-		themes:        newThemeEvidenceReader(mainDB),
 	}
 	market := &research2MarketProvider{quotes: quoteProvider, stocks: stocks, cache: chartProvider}
-	return research2app.Dependencies{
+	dependencies := research2app.Dependencies{
 		Quotes: quoteProvider, Chart: chartProvider, ChartCalendar: calendar,
 		AI: ai.NewResearchClient(configID, ResearchAIClientOptionsForSettings(setting)), Evidence: collector, EvidenceStore: marketdata.NewRepository(mainDB),
 		EvidenceBuild: buildResearch2EvidenceItem, EvidenceProfile: research2EvidenceProfileV7,
 		Calendar: calendar, Market: market,
-		Audit: researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)), Knowledge: NewKnowledgeService(mainDB),
-	}, nil
+		Audit: researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)),
+	}
+	if setting.ExperimentalEvidenceEnabled {
+		collector.themes = newThemeEvidenceReader(mainDB)
+		dependencies.Knowledge = NewKnowledgeService(mainDB)
+	}
+	return dependencies, nil
 }
 
 type research2MarketRow struct {
