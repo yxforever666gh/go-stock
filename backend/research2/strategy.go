@@ -818,20 +818,7 @@ func validateRecommendationScoreEvidence(code string, value modelRecommendation,
 	for _, ref := range value.SourceRefs {
 		cited[strings.TrimSpace(ref)] = true
 	}
-	supported["sector"], supported["catalyst"] = false, false
-	for _, link := range proof.Sector {
-		if !cited[link.SourceID] {
-			continue
-		}
-		if link.Relation == "exact_board_match" || link.Relation == "verified_theme_constituent" {
-			supported["sector"] = true
-		}
-		for _, fact := range link.Facts {
-			if scoreNumberAvailable(fact["BOARD_YIELD"]) {
-				supported["sector"] = true
-			}
-		}
-	}
+	supported["catalyst"] = false
 	for _, link := range proof.Catalyst {
 		if cited[link.SourceID] && link.Relation == "fresh_available" {
 			supported["catalyst"] = true
@@ -844,7 +831,6 @@ func validateRecommendationScoreEvidence(code string, value modelRecommendation,
 		label string
 	}{
 		{name: "market", score: value.MarketScore, label: "市场"},
-		{name: "sector", score: value.SectorScore, label: "板块"},
 		{name: "stock", score: value.StockScore, label: "个股"},
 		{name: "catalyst", score: value.CatalystScore, label: "催化"},
 	} {

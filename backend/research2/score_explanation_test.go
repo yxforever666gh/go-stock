@@ -250,6 +250,7 @@ func TestResearch2ScoreAvailableSubEvidenceStillSupportsPositiveScore(t *testing
 			d.Content = `{"BOARD_NAME":"fixture","SECURITY_CODE":"sh600343"}`
 		}},
 		{"other_stock", func(d *researchevidence.SourceDocument) {
+			d.SourceID, d.SourceName = "概念 sh600000", "概念 sh600000"
 			d.Content = `{"BOARD_NAME":"fixture","SECURITY_CODE":"sh600000","BOARD_YIELD":1.5}`
 		}},
 		{"failed", func(d *researchevidence.SourceDocument) { d.Error = "source failure" }},
@@ -262,8 +263,49 @@ func TestResearch2ScoreAvailableSubEvidenceStillSupportsPositiveScore(t *testing
 			raw := scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: "sh600343"})
 			sample.edit(&raw.Documents[2])
 			proof := prepareEvidence(raw, at.Add(-19*time.Hour))
-			if got := validateRecommendationScoreEvidence(value.Code, value, proof); len(got) == 0 {
-				t.Fatal("unsupported sector score accepted")
+			candidate := value
+			candidate.SourceRefs = append([]string(nil), value.SourceRefs...)
+			candidate.SourceRefs[2] = raw.Documents[2].SourceID
+			items, warnings := validateRecommendations("fixture", at, proof, []modelRecommendation{candidate})
+			if sample.name == "membership_only" {
+				if len(items) != 1 || len(warnings) != 0 {
+					t.Fatalf("sector-specific gate remains: %v", warnings)
+				}
+			} else if len(items) != 0 || len(warnings) == 0 {
+				t.Fatal("invalid general source reference accepted")
+			}
+		})
+	}
+}
+
+func TestSectorScoreWithoutSpecialProofKeepsOtherGuards(t *testing.T) {
+	at := time.Date(2026, 9, 9, 12, 0, 0, 0, shanghai())
+	evidence := prepareEvidence(scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: "sh600343"}), at.Add(-19*time.Hour))
+	base := modelRecommendation{Code: "sh600343", MarketScore: 10, SectorScore: 25, StockScore: 25, FinalScore: 60, ReferencePrice: 10, SourceRefs: []string{"market", "quote-sh600343"}}
+	for _, sample := range []struct {
+		name string
+		edit func(*modelRecommendation)
+		want bool
+	}{
+		{"no sector citation", func(v *modelRecommendation) {}, true},
+		{"recalculate", func(v *modelRecommendation) { v.FinalScore = 49 }, true},
+		{"sector above 30", func(v *modelRecommendation) { v.SectorScore = 31 }, false},
+		{"sector negative", func(v *modelRecommendation) { v.SectorScore = -1 }, false},
+		{"exactly 50", func(v *modelRecommendation) { v.SectorScore = 15; v.FinalScore = 80 }, false},
+		{"invalid reference", func(v *modelRecommendation) { v.SourceRefs = []string{"missing"} }, false},
+		{"market unsupported", func(v *modelRecommendation) { v.SourceRefs = []string{"quote-sh600343"} }, false},
+		{"stock unsupported", func(v *modelRecommendation) { v.SourceRefs = []string{"market"} }, false},
+		{"catalyst unsupported", func(v *modelRecommendation) { v.CatalystScore = 1 }, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			v := base
+			sample.edit(&v)
+			items, _ := validateRecommendations("fixture", at, evidence, []modelRecommendation{v})
+			if (len(items) == 1) != sample.want {
+				t.Fatalf("items=%+v", items)
+			}
+			if sample.want && items[0].FinalScore != 60 {
+				t.Fatalf("sum not recalculated: %v", items[0].FinalScore)
 			}
 		})
 	}
