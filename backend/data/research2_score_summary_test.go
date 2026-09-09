@@ -1,11 +1,81 @@
 package data
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"go-stock/internal/researchevidence"
 )
+
+type research2IndexFixture struct {
+	*research2StructuredSourceFixture
+	indexes string
+}
+
+func (f research2IndexFixture) CollectMarket(context.Context, time.Time) ([]researchevidence.SourceDocument, error) {
+	available := f.cutoff.Add(time.Second)
+	return []researchevidence.SourceDocument{{SourceName: "全球与国内指数", Category: "market", Content: f.indexes, AvailableAt: &available, CollectedAt: available}}, nil
+}
+
+func TestResearch2ScoreIndexNumbersSurviveCollectorSummaryCap(t *testing.T) {
+	at := time.Date(2026, 9, 9, 10, 32, 0, 0, shanghaiDataLocation())
+	overseas := make([]map[string]any, 9)
+	for index := range overseas {
+		overseas[index] = map[string]any{"code": fmt.Sprint(index), "qtcode": fmt.Sprint("us", index), "name": "海外", "zxj": "100", "zdf": "-1", "state": "close"}
+	}
+	domestic := []map[string]any{
+		{"code": "000001", "qtcode": "sh000001", "name": "上证指数", "zxj": "4000.12", "zdf": "-0.32", "state": "open"},
+		{"code": "399001", "qtcode": "sz399001", "name": "深证成指", "zxj": "12000.34", "zdf": "0.27", "state": "open"},
+		{"code": "399006", "qtcode": "sz399006", "name": "创业板指", "zxj": "2600.56", "zdf": "0.52", "state": "open"},
+	}
+	encoded, _ := json.Marshal(map[string]any{"america": overseas, "asia": domestic, "common": domestic})
+	collector := newResearch2StructuredCollector(t, at, research2StructuredRows(at, 20), 20, 5)
+	collector.sources = research2IndexFixture{&research2StructuredSourceFixture{cutoff: at}, string(encoded)}
+	evidence, err := collector.Collect(context.Background(), at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var compact research2CompactSnapshot
+	if err = json.Unmarshal([]byte(evidence.Prompt), &compact); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, source := range compact.Sources {
+		if source.SourceName != "全球与国内指数" {
+			continue
+		}
+		found = true
+		var summary struct {
+			Rows    []map[string]any `json:"rows"`
+			Omitted int              `json:"omittedRows"`
+		}
+		if err := json.Unmarshal([]byte(source.Summary), &summary); err != nil {
+			t.Fatal(err)
+		}
+		if len(summary.Rows) != 8 || summary.Omitted != 4 || source.Status != "ok" {
+			t.Fatalf("summary=%+v status=%s", summary, source.Status)
+		}
+		for index, want := range domestic {
+			for key, value := range want {
+				if summary.Rows[index][key] != value {
+					t.Fatalf("index field %s lost: %+v", key, summary.Rows[index])
+				}
+			}
+		}
+	}
+	if !found {
+		t.Fatal("index source missing from model evidence")
+	}
+	for _, document := range evidence.Documents {
+		if document.SourceName == "全球与国内指数" && document.Content != string(encoded) {
+			t.Fatal("raw audit source changed")
+		}
+	}
+}
 
 // These shapes are reduced from the saved September 8 research audit. They
 // contain no runtime database or provider credentials.

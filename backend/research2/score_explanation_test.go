@@ -198,10 +198,30 @@ func TestResearch2ScoreCatalystKeepsEachEventDateAndCompanyReplyTime(t *testing.
 	if byTitle["诉讼公告"]["relation"] != "fresh_available" || byTitle["大订单旧公告"]["relation"] != "old_background" || byTitle["大订单旧公告"]["eventTime"] != "2026-08-27" {
 		t.Fatalf("source-level freshness leaked to old event: %+v", byTitle)
 	}
-	for _, sample := range []struct{ question, reply, want string }{
+	for _, sample := range []struct {
+		question string
+		reply    any
+		want     string
+	}{
 		{"2026-08-27 10:00:00", "2026-09-08 09:30:00", "fresh_available"},
 		{"2026-09-08 09:30:00", "2026-08-27 10:00:00", "old_background"},
 		{"2026-09-08 09:30:00", "", "time_unverified"},
+		{"2026-09-08 09:30:00", "1781080143000", "old_background"},
+		{"2026-09-08 09:30:00", int64(1781080143000), "old_background"},
+		{"2026-09-08 09:30:00", int64(1781080143), "old_background"},
+		{"2026-09-08 09:30:00", "1781080143", "old_background"},
+		{"2026-09-08 09:30:00", since.UnixMilli(), "fresh_available"},
+		{"2026-09-08 09:30:00", fmt.Sprint(since.Unix()), "fresh_available"},
+		{"2026-09-08 09:30:00", t0.Unix(), "fresh_available"},
+		{"2026-09-08 09:30:00", fmt.Sprint(t0.UnixMilli()), "fresh_available"},
+		{"2026-09-08 09:30:00", t0.Add(time.Second).Unix(), "after_snapshot"},
+		{"2026-09-08 09:30:00", fmt.Sprint(t0.Add(time.Millisecond).UnixMilli()), "after_snapshot"},
+		{"2026-09-08 09:30:00", nil, "time_unverified"},
+		{"2026-09-08 09:30:00", "invalid", "time_unverified"},
+		{"2026-09-08 09:30:00", -1781080143000, "time_unverified"},
+		{"2026-09-08 09:30:00", 1781080143.5, "time_unverified"},
+		{"2026-09-08 09:30:00", "17810801430", "time_unverified"},
+		{"2026-09-08 09:30:00", "178108014300", "time_unverified"},
 	} {
 		payload, _ := json.Marshal(map[string]any{"results": []any{map[string]any{"stockCode": "600343", "mainContent": "投资者问题", "attachedContent": "公司答复", "pubDate": sample.question, "attachedPubDate": sample.reply}}})
 		doc := scoreAuditDocument("互动易 sh600343", "stock", string(payload), t0)
@@ -209,6 +229,43 @@ func TestResearch2ScoreCatalystKeepsEachEventDateAndCompanyReplyTime(t *testing.
 		if proof.CatalystState != sample.want {
 			t.Fatalf("question was treated as company reply: %+v", proof)
 		}
+	}
+}
+
+func TestResearch2ScoreAvailableSubEvidenceStillSupportsPositiveScore(t *testing.T) {
+	at := time.Date(2026, 9, 9, 10, 0, 0, 0, shanghai())
+	evidence := prepareEvidence(scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: "sh600343"}), at.Add(-19*time.Hour))
+	value := modelRecommendation{Code: "sh600343", MarketScore: 10, SectorScore: 10, StockScore: 35, FinalScore: 55, ReferencePrice: 10, SourceRefs: scoreFixtureRefs("sh600343")}
+	// The fixture has breadth and a verified board yield, but no historical
+	// baseline, failed-limit-up ratio, or within-board breadth/ranking.
+	items, warnings := validateRecommendations("fixture", at, evidence, []modelRecommendation{value})
+	if len(items) != 1 || items[0].FinalScore != 55 || len(warnings) != 0 {
+		t.Fatalf("available evidence rejected: %v %v", items, warnings)
+	}
+	for _, sample := range []struct {
+		name string
+		edit func(*researchevidence.SourceDocument)
+	}{
+		{"membership_only", func(d *researchevidence.SourceDocument) {
+			d.Content = `{"BOARD_NAME":"fixture","SECURITY_CODE":"sh600343"}`
+		}},
+		{"other_stock", func(d *researchevidence.SourceDocument) {
+			d.Content = `{"BOARD_NAME":"fixture","SECURITY_CODE":"sh600000","BOARD_YIELD":1.5}`
+		}},
+		{"failed", func(d *researchevidence.SourceDocument) { d.Error = "source failure" }},
+		{"stale", func(d *researchevidence.SourceDocument) {
+			d.Content = `{"status":"stale","BOARD_NAME":"fixture","SECURITY_CODE":"sh600343","BOARD_YIELD":1.5}`
+		}},
+		{"after_freeze", func(d *researchevidence.SourceDocument) { future := at.Add(time.Second); d.AvailableAt = &future }},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			raw := scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: "sh600343"})
+			sample.edit(&raw.Documents[2])
+			proof := prepareEvidence(raw, at.Add(-19*time.Hour))
+			if got := validateRecommendationScoreEvidence(value.Code, value, proof); len(got) == 0 {
+				t.Fatal("unsupported sector score accepted")
+			}
+		})
 	}
 }
 

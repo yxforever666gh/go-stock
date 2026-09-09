@@ -103,6 +103,36 @@ func scoreObjectOwns(row map[string]any, code string) bool {
 // ScoreSourceFacts preserves provider field names and numeric units. In
 // particular a leading stock in a sector ranking does not prove membership.
 func ScoreSourceFacts(document researchevidence.SourceDocument) []map[string]any {
+	if document.SourceName == "全球与国内指数" {
+		rows := make([]map[string]any, 0)
+		seen := map[string]bool{}
+		scoreObjects(scorePayload(document), func(row map[string]any) {
+			if scoreText(row["code"]) == "" || scoreText(row["qtcode"]) == "" || scoreText(row["name"]) == "" {
+				return
+			}
+			quoteCode := scoreText(row["qtcode"])
+			if seen[quoteCode] {
+				return
+			}
+			seen[quoteCode] = true
+			fact := map[string]any{}
+			for _, key := range []string{"code", "qtcode", "name", "zxj", "zdf", "state"} {
+				if value, exists := row[key]; exists {
+					fact[key] = value
+				}
+			}
+			rows = append(rows, fact)
+		})
+		// Keep mainland indices ahead of overseas rows before the summary's cap.
+		sort.SliceStable(rows, func(i, j int) bool {
+			mainland := func(row map[string]any) bool {
+				code := scoreText(row["qtcode"])
+				return strings.HasPrefix(code, "sh") || strings.HasPrefix(code, "sz")
+			}
+			return mainland(rows[i]) && !mainland(rows[j])
+		})
+		return rows
+	}
 	if scoreCatalystDocument(document) {
 		facts := scoreCatalystFacts(document, "", time.Time{}, time.Time{})
 		for _, fact := range facts {
@@ -260,18 +290,12 @@ func scoreCatalystFacts(document researchevidence.SourceDocument, code string, c
 		}
 		raw, field := "", ""
 		for _, key := range keys {
-			if value := scoreText(row[key]); value != "" {
+			if value := scoreEventTimeText(row[key]); value != "" {
 				raw, field = value, key
 				break
 			}
 		}
-		var eventAt time.Time
-		for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02", "20060102"} {
-			if at, err := time.ParseInLocation(layout, raw, shanghai()); err == nil {
-				eventAt = at
-				break
-			}
-		}
+		eventAt := parseScoreEventTime(raw)
 		state := "time_unverified"
 		if !eventAt.IsZero() && !freshSince.IsZero() && !cutoff.IsZero() {
 			switch {
@@ -286,6 +310,44 @@ func scoreCatalystFacts(document researchevidence.SourceDocument, code string, c
 		result = append(result, map[string]any{"title": shortScoreFact(title), "summary": shortScoreFact(summary), "eventTime": raw, "timeField": field, "relation": state})
 	})
 	return result
+}
+
+func scoreEventTimeText(value any) string {
+	switch value := value.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case json.Number:
+		return value.String()
+	case float64:
+		if !math.IsNaN(value) && !math.IsInf(value, 0) && value == math.Trunc(value) {
+			return strconv.FormatFloat(value, 'f', -1, 64)
+		}
+	}
+	return ""
+}
+
+func parseScoreEventTime(raw string) time.Time {
+	for _, layout := range []string{time.RFC3339Nano, "2006-01-02 15:04:05", "2006-01-02", "20060102"} {
+		if at, err := time.ParseInLocation(layout, raw, shanghai()); err == nil {
+			return at
+		}
+	}
+	if len(raw) != 10 && len(raw) != 13 {
+		return time.Time{}
+	}
+	for _, digit := range raw {
+		if digit < '0' || digit > '9' {
+			return time.Time{}
+		}
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return time.Time{}
+	}
+	if len(raw) == 13 {
+		return time.UnixMilli(value).In(shanghai())
+	}
+	return time.Unix(value, 0).In(shanghai())
 }
 
 // buildCandidateScoreEvidence binds only exact board names/codes and explicit
