@@ -220,6 +220,11 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	return r.run(ctx, scheduledFor, "", "", "")
 }
 
+// Rerun starts a new persisted attempt only for the latest exhausted run.
+func (r *Runner) Rerun(ctx context.Context, scheduledFor time.Time, parentRunID string) (AnalysisRun, error) {
+	return r.run(ctx, scheduledFor, "manual_rerun", "", parentRunID)
+}
+
 func (r *Runner) RunRefill(ctx context.Context, scheduledFor time.Time, chainID, parentRunID string) (AnalysisRun, error) {
 	return r.run(ctx, scheduledFor, "untradable_refill", chainID, parentRunID)
 }

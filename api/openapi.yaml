@@ -507,6 +507,15 @@ paths:
       operationId: getResearch2AnalysisRun
       responses:
         "200": {description: Research Center 2 analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AnalysisRun"}}}}
+  /api/v1/research2/analysis-runs/{id}/rerun:
+    post:
+      operationId: rerunResearch2AnalysisRun
+      parameters:
+        - {name: id, in: path, required: true, schema: {type: string}}
+      responses:
+        "200": {description: New persisted research run, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AnalysisRun"}}}}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "500": {$ref: "#/components/responses/InternalServerError"}
   /api/v1/research2/analysis-runs/{id}/audit:
     get:
       operationId: getResearch2AnalysisRunAudit

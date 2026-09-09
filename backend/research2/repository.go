@@ -90,6 +90,30 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 		created = false
 		var latest AnalysisRun
 		err := tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&latest).Error
+		if run.TriggerSource == "manual_rerun" {
+			if err != nil || latest.RunID != run.ParentRunID || latest.Status != "no_recommendation" || latest.ChainID == "" {
+				return ErrExecutionChainClosed
+			}
+			var buys int64
+			dayStart, parseErr := time.ParseInLocation("2006-01-02", run.TradingDate, shanghai())
+			if parseErr != nil {
+				return parseErr
+			}
+			if err := tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&buys).Error; err != nil {
+				return err
+			}
+			if buys >= DailyTargetSlots {
+				return ErrDailyBuyLimitReached
+			}
+			result := tx.Model(&ExecutionChain{}).Where("chain_id = ? AND status = ? AND filled_slots < target_slots", latest.ChainID, "exhausted").Updates(map[string]any{"status": "running", "completed_at": nil, "stop_reason": "", "updated_at": run.StartedAt})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				return ErrExecutionChainClosed
+			}
+			run.ChainID = latest.ChainID
+		}
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			run.AttemptNo = 1
@@ -98,7 +122,7 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 		case latest.Status == "running":
 			selected = latest
 			return nil
-		case !allowRetry || (run.TriggerSource != "untradable_refill" && latest.Status != "failed" &&
+		case !allowRetry || (run.TriggerSource != "untradable_refill" && run.TriggerSource != "manual_rerun" && latest.Status != "failed" &&
 			!(latest.Status == "no_recommendation" && latest.StrategyVersion != run.StrategyVersion)):
 			selected = latest
 			return nil

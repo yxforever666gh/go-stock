@@ -102,6 +102,7 @@ export const API_PATHS = {
   refreshResearch2RecommendationChart: "/api/v1/research2/recommendations/{id}/chart/refresh",
   refreshTelegraphs: "/api/v1/market/telegraphs/refresh",
   removeGroupStock: "/api/v1/groups/{id}/stocks/{code}",
+  rerunResearch2AnalysisRun: "/api/v1/research2/analysis-runs/{id}/rerun",
   searchFunds: "/api/v1/funds/search",
   searchStockMaster: "/api/v1/stocks/search",
   shutdownSystem: "/api/v1/system/shutdown",
