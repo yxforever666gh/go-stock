@@ -392,7 +392,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			phase += "_repair"
 		}
 		if r.audit != nil {
-			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v9"})
+			prepared, prepareErr := r.audit.Prepare(modelCtx, researchaudit.CallInput{OwnerType: researchaudit.OwnerResearch2, OwnerID: run.RunID, Phase: phase, CallSequence: structureAttempt, Attempt: 1, CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{}, Template: strategyPrompt})
 			err = prepareErr
 			if err != nil {
 				return finishFailure("failed", "准备研究审计载荷失败: "+err.Error(), err)
@@ -570,7 +570,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 		prepared, err := r.audit.Prepare(ctx, researchaudit.CallInput{
 			OwnerType: researchaudit.OwnerResearch2, OwnerID: runID, Phase: phase, CallSequence: callSequence, Attempt: 1,
 			CutoffAt: &cutoff, Prompt: prompt, Evidence: research2AuditEvidence(evidence), Tools: []string{},
-			ModelParameters: map[string]any{}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v9",
+			ModelParameters: map[string]any{}, Template: strategyPrompt,
 		})
 		if err != nil {
 			return err
@@ -587,7 +587,7 @@ func (r *Runner) recordResearch2Attempts(ctx context.Context, runID, phase strin
 			ProviderName: attempt.ProviderName, ModelName: attempt.ModelName, CutoffAt: &cutoff, Prompt: prompt,
 			Evidence: research2AuditEvidence(evidence), Tools: []string{}, ModelParameters: map[string]any{
 				"attempt": attempt,
-			}, Template: strategyPrompt, TemplateVersion: "research2-trailing5-v9",
+			}, Template: strategyPrompt,
 		})
 		if err != nil {
 			return err
