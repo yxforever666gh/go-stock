@@ -27,12 +27,8 @@ const columns = [
   {title: '批次', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
   {title: '触发', key: 'triggerSource', width: 125, render: row => row.triggerSource || '--'},
   {title: '主/备', key: 'selectionCounts', width: 90, render: row => `${row.primaryCount || 0}/${row.standbyCount || 0}`},
-  {title: '补位链', key: 'executionChain', width: 145, render: row => row.executionChain ? `${row.executionChain.status} ${row.executionChain.filledSlots}/${row.executionChain.targetSlots}` : '--'},
-  {title: '计划时间', key: 'scheduledFor', width: 170, render: row => dateTime(row.scheduledFor)},
-  {title: '实际启动', key: 'startedAt', width: 170, render: row => dateTime(row.startedAt)},
-  {title: '窗口开始', key: 'evidenceWindowStartAt', width: 170, render: row => dateTime(row.evidenceWindowStartAt)},
-  {title: '证据截止', key: 'evidenceCutoffAt', width: 170, render: row => dateTime(row.evidenceCutoffAt)},
-  {title: '报告生成', key: 'generatedAt', width: 170, render: row => dateTime(row.generatedAt)},
+  {title: '启动时间', key: 'startedAt', width: 170, render: row => dateTime(row.startedAt)},
+  {title: '报告产生时间', key: 'generatedAt', width: 170, render: row => dateTime(row.generatedAt)},
   {title: '证据覆盖', key: 'evidenceCoveragePct', width: 105, render: row => coverage(row.evidenceCoveragePct)},
   {title: '证据质量', key: 'degraded', width: 100, render: row => h(NTag, {type: qualityType(row.degraded), bordered: false}, {default: () => qualityLabel(row.degraded)})},
   {title: '时效', key: 'onTime', width: 90, render: row => h(NTag, {type: row.onTime ? 'success' : 'warning', bordered: false}, {default: () => row.onTime ? '准时' : '迟到'})},
@@ -70,13 +66,8 @@ onMounted(() => { void refresh(); polling.start({immediate: false}) })
                   <n-descriptions-item label="分析批次">第{{detail.attemptNo || 1}}次</n-descriptions-item>
                   <n-descriptions-item label="补位触发">{{detail.triggerSource || '--'}}</n-descriptions-item>
                   <n-descriptions-item label="请求席位 / 主备">{{detail.requestedSlots || 0}} / {{detail.primaryCount || 0}}+{{detail.standbyCount || 0}}</n-descriptions-item>
-                  <n-descriptions-item label="补位链状态">{{detail.executionChain ? `${detail.executionChain.status}（${detail.executionChain.filledSlots}/${detail.executionChain.targetSlots}）` : '--'}}</n-descriptions-item>
-                  <n-descriptions-item v-if="detail.executionChain?.stopReason" label="补位结束原因" :span="3">{{detail.executionChain.stopReason}}</n-descriptions-item>
-                  <n-descriptions-item label="计划时间">{{dateTime(detail.scheduledFor)}}</n-descriptions-item>
-                  <n-descriptions-item label="实际启动">{{dateTime(detail.startedAt)}}</n-descriptions-item>
-                  <n-descriptions-item label="报告生成">{{dateTime(detail.generatedAt)}}</n-descriptions-item>
-                  <n-descriptions-item label="窗口开始">{{dateTime(detail.evidenceWindowStartAt)}}</n-descriptions-item>
-                  <n-descriptions-item label="证据截止">{{dateTime(detail.evidenceCutoffAt)}}</n-descriptions-item>
+                  <n-descriptions-item label="启动时间">{{dateTime(detail.startedAt)}}</n-descriptions-item>
+                  <n-descriptions-item label="报告产生时间">{{dateTime(detail.generatedAt)}}</n-descriptions-item>
                   <n-descriptions-item label="证据覆盖">{{coverage(detail.evidenceCoveragePct)}}</n-descriptions-item>
                   <n-descriptions-item label="证据质量" :span="3">
                     <n-tag :type="qualityType(detail.degraded)" :bordered="false">{{qualityLabel(detail.degraded)}}</n-tag>

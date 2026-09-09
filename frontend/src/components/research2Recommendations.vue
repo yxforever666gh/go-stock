@@ -79,11 +79,8 @@ onMounted(refresh)
               <n-descriptions-item label="涨停距离">{{detail.recommendation.executionLimitDistancePct === null || detail.recommendation.executionLimitDistancePct === undefined ? '--' : `${formatNumber(detail.recommendation.executionLimitDistancePct, 3)}%`}}</n-descriptions-item>
               <n-descriptions-item v-if="detail.recommendation.executionFailureCode" label="不成交原因" :span="3">{{detail.recommendation.executionFailureCode}}；{{detail.recommendation.failureReason}}</n-descriptions-item>
               <n-descriptions-item v-if="detail.recommendation.promotionReason" label="递补说明" :span="3">{{detail.recommendation.promotionReason}}</n-descriptions-item>
-              <n-descriptions-item label="计划分析">{{dateTime(detail.analysis.scheduledFor)}}</n-descriptions-item>
-              <n-descriptions-item label="实际启动">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>
-              <n-descriptions-item label="证据窗口">{{dateTime(detail.analysis.evidenceWindowStartAt)}} — {{dateTime(detail.analysis.evidenceCutoffAt)}}</n-descriptions-item>
-              <n-descriptions-item label="补位链">{{detail.analysis.executionChain ? `${detail.analysis.executionChain.status}（${detail.analysis.executionChain.filledSlots}/${detail.analysis.executionChain.targetSlots}）` : '--'}}</n-descriptions-item>
-              <n-descriptions-item label="报告生成">{{dateTime(detail.analysis.generatedAt)}}</n-descriptions-item>
+              <n-descriptions-item label="启动时间">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>
+              <n-descriptions-item label="报告产生时间">{{dateTime(detail.analysis.generatedAt)}}</n-descriptions-item>
               <n-descriptions-item label="目标 / 实际买入">{{dateTime(detail.recommendation.targetBuyAt)}} / {{dateTime(detail.recommendation.buyAt)}}</n-descriptions-item>
               <n-descriptions-item label="目标 / 实际卖出">{{dateTime(detail.recommendation.targetSellAt)}} / {{dateTime(detail.recommendation.sellAt)}}</n-descriptions-item>
               <n-descriptions-item label="证据降级" :span="3">{{degradedReason(detail.analysis)}}</n-descriptions-item>
