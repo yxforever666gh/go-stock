@@ -117,6 +117,9 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 		{"disabled chain", "disabled", "failed", 10, 0, true, false},
 		{"cutoff chain", "cutoff", "failed", 10, 0, true, false},
 		{"exhausted chain", "exhausted", "failed", 10, 0, true, false},
+		{"legacy empty chain", "exhausted", "no_recommendation", 10, 0, true, false},
+		{"disabled legacy empty chain", "exhausted", "no_recommendation", 10, 0, false, false},
+		{"legacy empty chain at cutoff", "exhausted", "no_recommendation", 13, 0, true, false},
 		{"nonfailure without chain", "", "no_recommendation", 10, 0, true, false},
 		{"nonfailure with failed chain", "failed", "success", 10, 0, true, false},
 		{"before window", "", "failed", 9, 54, true, false},
@@ -190,10 +193,18 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 			}
 			if tc.chainStatus != "" && !tc.wantRetry {
 				chain, err := repository.ExecutionChain(context.Background(), old.ChainID)
-				if err != nil || chain.Status != tc.chainStatus {
+				wantStatus := tc.chainStatus
+				if tc.name == "legacy empty chain" {
+					wantStatus = "running"
+				}
+				if err != nil || chain.Status != wantStatus {
 					t.Fatalf("terminal chain changed: %+v err=%v", chain, err)
 				}
 			}
+			if !app.research2RunMu.TryLock() {
+				t.Fatal("resume retained the run lock while waiting")
+			}
+			app.research2RunMu.Unlock()
 		})
 	}
 }

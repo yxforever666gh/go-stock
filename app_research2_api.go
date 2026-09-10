@@ -261,6 +261,17 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 		logger.SugaredLogger.Errorf("读取研究中心2补位链失败: %v", err)
 		return
 	}
+	if exists && chain.Status == "exhausted" && withinResearch2RecoveryWindow(now) {
+		if err := runtime.Repository.RecoverEmptyExecutionChain(a.ctx, now); err != nil {
+			logger.SugaredLogger.Errorf("恢复研究中心2空仓补位失败: %v", err)
+			return
+		}
+		chain, err = runtime.Repository.ExecutionChain(a.ctx, chain.ChainID)
+		if err != nil {
+			logger.SugaredLogger.Errorf("读取研究中心2恢复状态失败: %v", err)
+			return
+		}
+	}
 	if exists && chain.Status != "running" && chain.Status != "failed" {
 		a.queueResearch2FinalEmail(runtime, chain)
 		return

@@ -537,7 +537,8 @@ func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
 	now := time.Date(2026, 9, 4, 10, 5, 0, 0, shanghai())
 	chain, first := createChainRun(t, repository, now)
 	failed := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: first.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600041", StockName: "blocked", SignalAt: now.Add(-time.Minute), Status: "missed_untradable", TargetBuyAt: now, ExecutionFailureCode: "near_limit_up"}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{failed}); err != nil {
+	bought := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: first.RunID, StockCode: "sh600040", Status: "active", BuyAt: &now, SignalAt: now, TargetBuyAt: now}
+	if err := repository.CreateRecommendations(context.Background(), []Recommendation{failed, bought}); err != nil {
 		t.Fatal(err)
 	}
 	evidence := scoreFixtureEvidence(now, researchevidence.StockCandidate{Code: "sh600042", Name: "replacement"})
@@ -550,7 +551,7 @@ func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.AttemptNo != 2 || run.ParentRunID != first.RunID || run.TriggerSource != "untradable_refill" || run.RequestedSlots != 3 || run.PrimaryCount != 1 {
+	if run.AttemptNo != 2 || run.ParentRunID != first.RunID || run.TriggerSource != "untradable_refill" || run.RequestedSlots != 2 || run.PrimaryCount != 1 {
 		t.Fatalf("refill run=%+v", run)
 	}
 	if _, ok := collector.excluded[failed.StockCode]; !ok {
@@ -562,7 +563,7 @@ func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
 	}
 }
 
-func TestNoRecommendationTerminatesChainInsteadOfHotLooping(t *testing.T) {
+func TestNoRecommendationWaitsThenRefillsInsteadOfHotLooping(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 9, 55, 0, 0, shanghai())
 	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"证据不足","recommendations":[]}`}}
@@ -573,11 +574,35 @@ func TestNoRecommendationTerminatesChainInsteadOfHotLooping(t *testing.T) {
 		t.Fatalf("run=%+v calls=%d err=%v", run, ai.calls, err)
 	}
 	chain, exists, err := repository.ExecutionChainForDate(context.Background(), now.Format("2006-01-02"))
-	if err != nil || !exists || chain.Status != "exhausted" {
+	if err != nil || !exists || chain.Status != "running" {
 		t.Fatalf("chain=%+v exists=%v err=%v", chain, exists, err)
 	}
 	ready, err := repository.ExecutionChainsReadyForRefill(context.Background(), now)
 	if err != nil || len(ready) != 0 {
-		t.Fatalf("no-recommendation chain remained refillable: %+v err=%v", ready, err)
+		t.Fatalf("empty run did not enter cooldown: %+v err=%v", ready, err)
+	}
+	first := run
+	for attempt := 2; attempt <= 3; attempt++ {
+		now = run.GeneratedAt.Add(10*time.Minute - time.Nanosecond)
+		ready, err = repository.ExecutionChainsReadyForRefill(context.Background(), now)
+		if err != nil || len(ready) != 0 {
+			t.Fatalf("early refill: %+v %v", ready, err)
+		}
+		if _, err := runner.RunRefill(context.Background(), now, chain.ChainID, run.RunID); !errors.Is(err, ErrExecutionChainClosed) {
+			t.Fatalf("direct early claim: %v", err)
+		}
+		now = now.Add(time.Nanosecond)
+		ready, err = repository.ExecutionChainsReadyForRefill(context.Background(), now)
+		if err != nil || len(ready) != 1 {
+			t.Fatalf("due refill missing: %+v %v", ready, err)
+		}
+		run, err = runner.RunRefill(context.Background(), now, chain.ChainID, run.RunID)
+		if err != nil || run.AttemptNo != attempt || run.Status != "no_recommendation" || ai.calls != attempt {
+			t.Fatalf("run=%+v calls=%d err=%v", run, ai.calls, err)
+		}
+	}
+	stored, err := repository.AnalysisRunByID(context.Background(), first.RunID)
+	if err != nil || stored.ReportMarkdown != first.ReportMarkdown || stored.Status != first.Status {
+		t.Fatalf("original report changed: %+v %v", stored, err)
 	}
 }

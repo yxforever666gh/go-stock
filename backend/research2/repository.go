@@ -88,29 +88,41 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 	err := research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		selected = AnalysisRun{}
 		created = false
-		var latest AnalysisRun
-		err := tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&latest).Error
-		if run.TriggerSource == "manual_rerun" {
-			if err != nil || latest.RunID != run.ParentRunID || latest.Status != "no_recommendation" || latest.ChainID == "" {
-				return ErrExecutionChainClosed
-			}
-			var buys int64
-			dayStart, parseErr := time.ParseInLocation("2006-01-02", run.TradingDate, shanghai())
-			if parseErr != nil {
-				return parseErr
-			}
-			if err := tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&buys).Error; err != nil {
+		refill := run.TriggerSource == "untradable_refill" || run.TriggerSource == "manual_rerun"
+		if refill {
+			if err := lockResearch2AccountForWrite(tx); err != nil {
 				return err
 			}
-			if buys >= DailyTargetSlots {
-				return ErrDailyBuyLimitReached
+			if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
+				return err
 			}
-			result := tx.Model(&ExecutionChain{}).Where("chain_id = ? AND status = ? AND filled_slots < target_slots", latest.ChainID, "exhausted").Updates(map[string]any{"status": "running", "completed_at": nil, "stop_reason": "", "updated_at": run.StartedAt})
-			if result.Error != nil {
-				return result.Error
-			}
-			if result.RowsAffected != 1 {
+		}
+		var latest AnalysisRun
+		err := tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&latest).Error
+		if refill {
+			manual := run.TriggerSource == "manual_rerun"
+			if err != nil || latest.RunID != run.ParentRunID || latest.ChainID == "" ||
+				(manual && latest.Status != "no_recommendation") || (!manual && latest.ChainID != run.ChainID) {
 				return ErrExecutionChainClosed
+			}
+			var chain ExecutionChain
+			if err := tx.Where("chain_id = ?", latest.ChainID).First(&chain).Error; err != nil {
+				return err
+			}
+			if manual && chain.Status == "exhausted" {
+				chain.Status = "running"
+			}
+			ready, buys, checkErr := refillReady(tx, chain, latest, run.StartedAt, manual)
+			if checkErr != nil {
+				return checkErr
+			}
+			if !ready {
+				return ErrExecutionChainClosed
+			}
+			if err := tx.Model(&ExecutionChain{}).Where("chain_id = ?", chain.ChainID).Updates(map[string]any{
+				"status": "running", "filled_slots": buys, "completed_at": nil, "stop_reason": "", "updated_at": run.StartedAt,
+			}).Error; err != nil {
+				return err
 			}
 			run.ChainID = latest.ChainID
 		}

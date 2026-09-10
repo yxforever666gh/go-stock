@@ -7,12 +7,104 @@ import (
 	"strings"
 	"time"
 
+	"go-stock/internal/trading"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const DailyTargetSlots = 3
+
+const emptyRunRefillDelay = 10 * time.Minute
+
+func refillWindowOpen(now time.Time, tradingDate string) bool {
+	local := now.In(shanghai())
+	return local.Format("2006-01-02") == tradingDate &&
+		!local.Before(time.Date(local.Year(), local.Month(), local.Day(), 9, 55, 0, 0, shanghai())) &&
+		local.Before(time.Date(local.Year(), local.Month(), local.Day(), 13, 0, 0, 0, shanghai()))
+}
+
+// refillReady is shared by polling and the transactional attempt claim.
+func refillReady(tx *gorm.DB, chain ExecutionChain, latest AnalysisRun, now time.Time, manual bool) (bool, int, error) {
+	if !refillWindowOpen(now, chain.TradingDate) || chain.Status != "running" ||
+		latest.RunID != chain.LatestRunID || latest.ChainID != chain.ChainID ||
+		(latest.Status != "success" && latest.Status != "no_recommendation") {
+		return false, 0, nil
+	}
+	if latest.Status == "no_recommendation" && !manual {
+		completed := latest.StartedAt
+		if !latest.UpdatedAt.IsZero() {
+			completed = latest.UpdatedAt
+		}
+		if latest.GeneratedAt != nil && !latest.GeneratedAt.IsZero() {
+			completed = *latest.GeneratedAt
+		}
+		if completed.IsZero() || now.Before(completed.Add(emptyRunRefillDelay)) {
+			return false, 0, nil
+		}
+	}
+	dayStart, err := time.ParseInLocation("2006-01-02", chain.TradingDate, shanghai())
+	if err != nil {
+		return false, 0, err
+	}
+	var buys, pending, running int64
+	if err = tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&buys).Error; err != nil {
+		return false, 0, err
+	}
+	if err = tx.Table("research2_recommendations AS recommendations").
+		Joins("JOIN research2_analysis_runs AS runs ON runs.run_id = recommendations.analysis_run_id").
+		Where("runs.chain_id = ? AND recommendations.status IN ?", chain.ChainID, []string{"buy_pending", "standby"}).Count(&pending).Error; err != nil {
+		return false, 0, err
+	}
+	if err = tx.Model(&AnalysisRun{}).Where("trading_date = ? AND status = ?", chain.TradingDate, "running").Count(&running).Error; err != nil {
+		return false, 0, err
+	}
+	return buys < int64(min(DailyTargetSlots, chain.TargetSlots)) && pending == 0 && running == 0, int(buys), nil
+}
+
+// RecoverEmptyExecutionChain reopens only today's legacy empty terminal chain.
+// The caller must have checked that automatic research is enabled.
+func (r *Repository) RecoverEmptyExecutionChain(ctx context.Context, now time.Time) error {
+	date := now.In(shanghai()).Format("2006-01-02")
+	if !refillWindowOpen(now, date) {
+		return nil
+	}
+	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := lockResearch2AccountForWrite(tx); err != nil {
+			return err
+		}
+		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
+			if errors.Is(err, trading.ErrNewPositionsDisabled) {
+				return nil
+			}
+			return err
+		}
+		var chain ExecutionChain
+		err := tx.Where("trading_date = ? AND status = ?", date, "exhausted").First(&chain).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var latest AnalysisRun
+		if err = tx.Where("trading_date = ?", date).Order("attempt_no DESC, id DESC").First(&latest).Error; err != nil {
+			return err
+		}
+		if latest.Status != "no_recommendation" {
+			return nil
+		}
+		chain.Status = "running"
+		ready, buys, err := refillReady(tx, chain, latest, now, true)
+		if err != nil || !ready {
+			return err
+		}
+		return tx.Model(&ExecutionChain{}).Where("chain_id = ? AND status = ?", chain.ChainID, "exhausted").Updates(map[string]any{
+			"status": "running", "filled_slots": buys, "stop_reason": "", "completed_at": nil, "updated_at": now,
+		}).Error
+	})
+}
 
 var hardExecutionFailureCodes = []string{
 	"limit_up",
@@ -175,21 +267,12 @@ func (r *Repository) ExecutionChainsReadyForRefill(ctx context.Context, now time
 		if err := r.db.WithContext(ctx).Where("run_id = ?", chain.LatestRunID).First(&latest).Error; err != nil {
 			return nil, err
 		}
-		if latest.Status != "success" && latest.Status != "no_recommendation" {
-			continue
-		}
-		var pending int64
-		if err := r.db.WithContext(ctx).Table("research2_recommendations AS recommendations").
-			Joins("JOIN research2_analysis_runs AS runs ON runs.run_id = recommendations.analysis_run_id").
-			Where("runs.chain_id = ? AND recommendations.status IN ?", chain.ChainID, []string{"buy_pending", "standby"}).
-			Count(&pending).Error; err != nil {
+		eligible, buys, err := refillReady(r.db.WithContext(ctx), chain, latest, now, false)
+		if err != nil {
 			return nil, err
 		}
-		var running int64
-		if err := r.db.WithContext(ctx).Model(&AnalysisRun{}).Where("chain_id = ? AND status = ?", chain.ChainID, "running").Count(&running).Error; err != nil {
-			return nil, err
-		}
-		if pending == 0 && running == 0 {
+		if eligible {
+			chain.FilledSlots = buys
 			ready = append(ready, chain)
 		}
 	}

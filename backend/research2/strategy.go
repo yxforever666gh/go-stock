@@ -220,7 +220,7 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	return r.run(ctx, scheduledFor, "", "", "")
 }
 
-// Rerun starts a new persisted attempt only for the latest exhausted run.
+// Rerun starts a new persisted attempt for the latest empty run, bypassing its cooldown.
 func (r *Runner) Rerun(ctx context.Context, scheduledFor time.Time, parentRunID string) (AnalysisRun, error) {
 	return r.run(ctx, scheduledFor, "manual_rerun", "", parentRunID)
 }
@@ -512,18 +512,6 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			_ = r.audit.Fail(context.Background(), researchaudit.OwnerResearch2, run.RunID, err)
 		}
 		return run, err
-	}
-	if len(items) == 0 && chain.Status == "running" {
-		reason := strings.TrimSpace(run.FailureReason)
-		if reason == "" {
-			reason = "本轮没有形成满足评分和证据约束的推荐"
-		}
-		if err = r.repository.CompleteExecutionChain(context.Background(), chain.ChainID, "exhausted", reason, generated); err != nil {
-			if auditStarted {
-				_ = r.audit.Fail(context.Background(), researchaudit.OwnerResearch2, run.RunID, err)
-			}
-			return run, err
-		}
 	}
 	if auditStarted {
 		auditCtx, cancelAudit := context.WithTimeout(context.Background(), 5*time.Second)
