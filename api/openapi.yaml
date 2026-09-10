@@ -2173,7 +2173,7 @@ components:
         analysisRunId: {type: string}
         selectionRole: {type: string}
         selectionRank: {type: integer, minimum: 0}
-        displaySelectionRole: {type: string, readOnly: true, enum: [primary, standby, pending, ""]}
+        displaySelectionRole: {type: string, readOnly: true, enum: [primary, candidate, ""]}
         displaySelectionRank: {type: integer, readOnly: true, minimum: 0}
         replacesRecommendationId: {type: string}
         promotionReason: {type: string}

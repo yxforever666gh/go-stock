@@ -566,8 +566,8 @@ func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
 func TestNoRecommendationWaitsThenRefillsInsteadOfHotLooping(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 9, 55, 0, 0, shanghai())
-	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"证据不足","recommendations":[]}`}}
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, Candidates: []researchevidence.StockCandidate{{Code: "sh600061", Name: "candidate"}}}}, testCalendar{})
+	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"证据不足","recommendations":[{"code":"sh600061","stockScore":20,"finalScore":20,"referencePrice":10,"sourceRefs":["quote-sh600061"]}]}`}}
+	runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(now, researchevidence.StockCandidate{Code: "sh600061", Name: "candidate"})}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return now }, nil)
 	run, err := runner.Run(context.Background(), now)
 	if err != nil || run.Status != "no_recommendation" || ai.calls != 1 {

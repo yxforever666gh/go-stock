@@ -409,7 +409,7 @@ func (r *Repository) RecordExecutionQuote(ctx context.Context, recommendationID 
 
 func (r *Repository) PromoteStandby(ctx context.Context, recommendationID, replacesRecommendationID, reason string) error {
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		result := tx.Model(&Recommendation{}).Where("recommendation_id = ? AND status = ?", recommendationID, "standby").Updates(map[string]any{
+		result := tx.Model(&Recommendation{}).Where("recommendation_id = ? AND status = ? AND coalesce(selection_role, '') <> ?", recommendationID, "standby", "observation").Updates(map[string]any{
 			"status": "buy_pending", "replaces_recommendation_id": replacesRecommendationID,
 			"promotion_reason": reason, "failure_reason": "",
 		})
@@ -479,6 +479,9 @@ func (r *Repository) ExecutionChainEmailRun(ctx context.Context, chainID string)
 	if len(recommendations) > 0 {
 		summary.WriteString("\n### 全部候选与执行结果\n\n")
 		for _, item := range recommendations {
+			if item.SelectionRole == "observation" {
+				item.SelectionRole, item.Status = "候选", "仅观察"
+			}
 			line := fmt.Sprintf("- 第%d轮 #%d %s %s（%s）：%s", attemptForRun(runs, item.AnalysisRunID), item.SelectionRank, item.StockCode, item.StockName, item.SelectionRole, item.Status)
 			if strings.TrimSpace(item.ExecutionFailureCode) != "" {
 				line += " / " + item.ExecutionFailureCode

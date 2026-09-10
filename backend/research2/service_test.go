@@ -148,7 +148,7 @@ func TestServiceRefreshesHoldingsConcurrentlyAndFallsBackToLastMark(t *testing.T
 func TestClosedRecommendationKeepsRealizedReturn(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 8, 31, 10, 0, 0, 0, shanghai())
-	item := Recommendation{RecommendationID: "closed", AnalysisRunID: "run", StockCode: "sh600000", StockName: "test", SignalAt: now, Status: "closed", BuyPrice: 10, BuyFees: 5, Quantity: 100, CurrentPrice: 99, NetPnL: 83, NetYieldRate: 83.0 / 1005}
+	item := Recommendation{RecommendationID: "closed", AnalysisRunID: "run", StockCode: "sh600000", StockName: "test", SignalAt: now, BuyAt: &now, Status: "closed", BuyPrice: 10, BuyFees: 5, Quantity: 100, CurrentPrice: 99, NetPnL: 83, NetYieldRate: 83.0 / 1005}
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}

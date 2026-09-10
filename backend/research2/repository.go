@@ -388,7 +388,7 @@ func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int)
 		limit = -1
 	}
 	query := dailySelectionQuery + ", displayed AS (SELECT * FROM ranked v WHERE " + dailySelectionVisible + dailySelectionOrder + " LIMIT ? OFFSET ?)" + dailySelectionProjection + dailySelectionOrder
-	err := r.db.WithContext(ctx).Raw(query, DailyTargetSlots, limit, max(0, offset), DailyTargetSlots, DailyTargetSlots, DailyTargetSlots).Scan(&items).Error
+	err := r.db.WithContext(ctx).Raw(query, DailyTargetSlots, limit, max(0, offset), DailyTargetSlots, DailyTargetSlots).Scan(&items).Error
 	for index := range items {
 		enrichLiveRecommendation(&items[index])
 	}
@@ -397,7 +397,7 @@ func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int)
 func (r *Repository) GetRecommendation(ctx context.Context, id string) (RecommendationDetail, error) {
 	var result RecommendationDetail
 	query := r.db.WithContext(ctx).Raw(dailySelectionQuery+", displayed AS (SELECT * FROM ranked WHERE recommendation_id = ?)"+dailySelectionProjection,
-		id, DailyTargetSlots, DailyTargetSlots, DailyTargetSlots).Scan(&result.Recommendation)
+		id, DailyTargetSlots, DailyTargetSlots).Scan(&result.Recommendation)
 	if query.Error != nil {
 		return result, query.Error
 	}
@@ -455,7 +455,7 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 			return err
 		}
 		var recommendation Recommendation
-		if err := tx.Where("recommendation_id = ? AND status = ?", recommendationID, "buy_pending").First(&recommendation).Error; err != nil {
+		if err := tx.Where("recommendation_id = ? AND status = ? AND coalesce(selection_role, '') <> ?", recommendationID, "buy_pending", "observation").First(&recommendation).Error; err != nil {
 			return err
 		}
 		tradeDay := trade.TradedAt.In(shanghai())
@@ -717,7 +717,7 @@ func (r *Repository) UnfinalizedMetrics(ctx context.Context) ([]Recommendation, 
 }
 
 func (r *Repository) FinalizeMetrics(ctx context.Context, id string, five, limitUp, minusThree bool) error {
-	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ? AND metrics_finalized = ?", id, false).Updates(map[string]any{"hit_five_before_sell": five, "hit_limit_up_full_day": limitUp, "hit_minus_three": minusThree, "metrics_finalized": true}).Error
+	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ? AND metrics_finalized = ? AND status = ?", id, false, "closed").Updates(map[string]any{"hit_five_before_sell": five, "hit_limit_up_full_day": limitUp, "hit_minus_three": minusThree, "metrics_finalized": true}).Error
 }
 
 func shanghai() *time.Location {

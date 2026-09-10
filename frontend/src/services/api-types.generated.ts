@@ -1164,7 +1164,7 @@ export type Research2Recommendation = {
   currentPrice?: number
   currentPriceAt?: string
   displaySelectionRank?: number
-  displaySelectionRole?: "primary" | "standby" | "pending" | ""
+  displaySelectionRole?: "primary" | "candidate" | ""
   estimatedLotCost?: number
   executionFailureCode?: string
   executionLimitDistancePct?: number | null

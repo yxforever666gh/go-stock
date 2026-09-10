@@ -465,6 +465,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	// Complete all source, score, candidate and price validation before taking
 	// the authoritative server-side signal timestamp.
 	items, validationMessages := validateRecommendations(run.RunID, cutoff, evidence, output.Recommendations)
+	validationMessages = append(validationMessages, sourceValidationMessages...)
 	assignResearch2SelectionRoles(items, run.RequestedSlots)
 	generated := r.now().In(shanghai())
 	run.GeneratedAt = &generated
@@ -477,6 +478,9 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 		items[index].SignalAt = generated
 		items[index].Late = late
 		items[index].TargetBuyAt = target
+		if items[index].SelectionRole == "observation" {
+			continue
+		}
 		if status == "analysis_only" {
 			items[index].Status = status
 		} else if items[index].SelectionRole == "standby" {
@@ -488,7 +492,12 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			items[index].FailureReason = "报告在13:00及以后完成，仅保存分析，不进入模拟交易及收益统计"
 		}
 	}
-	if len(items) == 0 {
+	for _, item := range items {
+		if item.SelectionRole != "observation" {
+			run.RecommendationCount++
+		}
+	}
+	if run.RecommendationCount == 0 {
 		run.Status = "no_recommendation"
 		run.FailureReason = strings.TrimSpace(output.Conclusion)
 		if run.FailureReason == "" {
@@ -496,7 +505,6 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 		}
 	} else {
 		run.Status = "success"
-		run.RecommendationCount = len(items)
 	}
 	for _, item := range items {
 		if item.SelectionRole == "primary" {
@@ -532,7 +540,13 @@ func assignResearch2SelectionRoles(items []Recommendation, requestedSlots int) {
 	}
 	for index := range items {
 		items[index].SelectionRank = index + 1
-		if index < requestedSlots {
+		if items[index].FinalScore <= 50 || index >= 6 {
+			items[index].SelectionRole, items[index].Status = "observation", "analysis_only"
+			items[index].FailureReason = "最终分未超过50，仅观察，不进入模拟交易"
+			if items[index].FinalScore > 50 {
+				items[index].FailureReason = "超出本轮最多6只可执行名单，仅观察"
+			}
+		} else if index < requestedSlots {
 			items[index].SelectionRole = "primary"
 			items[index].Status = "buy_pending"
 		} else {
@@ -647,10 +661,10 @@ func buildPrompt(evidence preparedEvidence, cutoff time.Time) string {
 		"- 新催化参考起点（上一交易日收盘；--表示未核验）：" + formatResearch2Time(evidence.catalystWindowStartAt),
 		"- 13:00前启动的任务允许跨越13:00继续完成；完成时间只用于执行归类，不得导致分析失败。",
 		"- 程序将在报告校验完成后获取第一笔有效行情买入；午休期间完成的报告统一在13:00买入；13:00及以后完成的推荐仅保存分析、不交易；已买入标的卖出目标固定为下一交易日10:00。",
-		"- 独立账户初始资金12,000元；最多输出6只唯一股票，服务端按最终分排序为主选与备选；一手100股含费用成本不得超过账户资金。",
+		"- 独立账户初始资金12,000元；服务端从完整评分中选取最多6只可执行股票并划分主选与备选；一手100股含费用成本不得超过账户资金。",
 		"- 不得访问外部地址、推算缺失值或编造行情；只能使用下方注入的结构化证据。",
 		"- sourceRefs只能填写证据sources中存在且适用于该股票的sourceId，不得填写来源名称或URL。先读本轮候选评分依据中的明确板块、题材和催化关联；一般板块排行榜不是股票归属证明。",
-		"- recommendations是按优先级生成的候选清单：程序将按分项重新计算最终分，计算结果>50才可入库；不足6只时只输出确有证据支持的股票，不得凑数。",
+		"- recommendations必须逐只覆盖冻结候选集合，包含50分及以下股票，不得只输出过线股票或空数组。逐项给出评分和scoreReasons；缺失证据不加分，不为凑数抬分。程序重新计算总分，仅>50且位于前6名的股票可进入执行名单，其余仅作候选展示。",
 		"- 不要输出报告生成时间、买入时间、买入区间或Markdown报告，这些由服务端生成。",
 		"\n# 输出协议（只输出JSON，不加代码围栏）",
 		`{"tradingDay":true,"conclusion":"简洁结论，不含时间","recommendations":[{"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["source-id"],"scoreReasons":{"market":"依据及0分原因","sector":"依据及0分原因","stock":"依据及0分原因","catalyst":"来源缺失/只有旧背景/核实无新催化/可用新催化及质量","risk":"扣分依据，0分说明未发现可核验风险"}}]}`,
@@ -699,6 +713,7 @@ func validateRecommendations(runID string, generated time.Time, evidence prepare
 			continue
 		}
 		if _, exists := seen[code]; exists {
+			warnings = append(warnings, code+"重复评分，忽略重复项")
 			continue
 		}
 		seen[code] = struct{}{}
@@ -722,10 +737,6 @@ func validateRecommendations(runID string, generated time.Time, evidence prepare
 		calculated := value.MarketScore + value.SectorScore + value.StockScore + value.CatalystScore - value.RiskDeduction
 		if math.Abs(value.FinalScore-calculated) > 0.01 {
 			warnings = append(warnings, code+"分项加总与最终分不一致，已按分项重新计算")
-		}
-		if calculated <= 50 {
-			warnings = append(warnings, code+"重新计算后的最终分未超过50")
-			continue
 		}
 		referencePrice := value.ReferencePrice
 		if evidence.CandidateReferencePrices != nil {
@@ -758,9 +769,6 @@ func validateRecommendations(runID string, generated time.Time, evidence prepare
 		}
 		return items[i].FinalScore > items[j].FinalScore
 	})
-	if len(items) > 6 {
-		items = items[:6]
-	}
 	return items, warnings
 }
 
@@ -770,14 +778,26 @@ func validScoreComponent(value, maximum float64) bool {
 
 func validateModelSourceRefs(values []modelRecommendation, evidence preparedEvidence) []string {
 	warnings := make([]string, 0)
+	seen := make(map[string]bool, len(values))
 	for _, value := range values {
 		code, ok := trading.NormalizeMainlandCode(value.Code)
 		if !ok {
 			code = strings.TrimSpace(value.Code)
 		}
+		if seen[code] {
+			warnings = append(warnings, code+"重复评分")
+		}
+		seen[code] = true
 		warnings = append(warnings, validateRecommendationSourceRefs(code, value.SourceRefs, evidence.Documents, evidence.FreezeAt, evidence.Candidates)...)
 		warnings = append(warnings, validateRecommendationScoreEvidence(code, value, evidence)...)
 	}
+	for _, candidate := range evidence.Candidates {
+		if code := scoreCode(candidate.Code); !seen[code] {
+			warnings = append(warnings, code+"缺少评分，必须覆盖全部冻结候选")
+		}
+	}
+	_, invalid := validateRecommendations("", evidence.CutoffAt, evidence, values)
+	warnings = append(warnings, invalid...)
 	return warnings
 }
 
@@ -982,7 +1002,7 @@ func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output mod
 	}
 	if len(items) > 0 {
 		lines = append(lines,
-			"", "## 入选标的", "",
+			"", "## 候选评分与执行安排", "",
 			"| 排名 | 角色 | 代码 | 名称 | 最终分 | 参考价 | 100股预计成本 | 市场/板块/个股/催化 | 风险扣分 | 执行安排 |",
 			"|---:|---|---|---|---:|---:|---:|---|---:|---|",
 		)
@@ -994,6 +1014,8 @@ func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output mod
 			role := "主选"
 			if item.SelectionRole == "standby" {
 				role = "备选"
+			} else if item.SelectionRole == "observation" {
+				role, execution = "候选", item.FailureReason
 			}
 			lines = append(lines, fmt.Sprintf("| %d | %s | %s | %s | %.2f | %.3f | %.2f | %.1f / %.1f / %.1f / %.1f | %.1f | %s |", item.SelectionRank, role, item.StockCode, escapeMarkdownCell(item.StockName), item.FinalScore, item.ReferencePrice, item.EstimatedLotCost, item.MarketScore, item.SectorScore, item.StockScore, item.CatalystScore, item.RiskDeduction, execution))
 		}
@@ -1018,7 +1040,7 @@ func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output mod
 			lines = append(lines, scoreReportLines(item, modelValue, evidence)...)
 		}
 	}
-	lines = append(lines, "", "评分范围说明：这里的分数只代表本轮AI输出及入库样本，不代表全部候选或全市场。入库门槛保持总分严格大于50；同一冻结快照内市场分相同是正常现象，缺失分项不折算满分，也不为补位调分。")
+	lines = append(lines, "", "评分范围说明：保存通过校验的本轮候选评分，缺失或无效评分见数据校验，不代表全市场。执行门槛保持总分严格大于50，最多6只进入可执行名单；其余仅观察，不参与成交与收益。相同市场分是正常现象，缺失分项不折算满分，也不为补位调分。")
 	if len(warnings) > 0 {
 		lines = append(lines, "", "> 数据校验："+strings.Join(warnings, "；"))
 	}

@@ -43,8 +43,8 @@ test('research2 shows daily buy slots without reusing original batch ranks, and 
     {recommendationId: 'first', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'primary', displaySelectionRank: 1},
     {recommendationId: 'second', selectionRole: 'primary', selectionRank: 2, displaySelectionRole: 'primary', displaySelectionRank: 2},
     {recommendationId: 'promoted', selectionRole: 'standby', selectionRank: 4, displaySelectionRole: 'primary', displaySelectionRank: 3},
-    {recommendationId: 'pending', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'pending', displaySelectionRank: 0},
-    {recommendationId: 'standby', selectionRole: 'standby', selectionRank: 5, displaySelectionRole: 'standby', displaySelectionRank: 1},
+    {recommendationId: 'pending', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'candidate', displaySelectionRank: 2},
+    {recommendationId: 'standby', selectionRole: 'observation', status: 'analysis_only', selectionRank: 5, displaySelectionRole: 'candidate', displaySelectionRank: 3},
     {recommendationId: 'failed', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: '', displaySelectionRank: 0},
   ]
   globalThis.__researchPageFixtures = {GetResearch2Account: async () => ({}), ListResearch2Recommendations: async () => rows}
@@ -54,11 +54,17 @@ test('research2 shows daily buy slots without reusing original batch ranks, and 
     await flush()
     const state = vm.$.setupState
     const role = state.columnsRef.find(column => column.key === 'selectionRole')
-    assert.deepEqual(state.rows.map(role.render), ['主选 #1', '主选 #2', '主选 #3', '待补位', '备选 #1', '--'])
+    assert.equal(role.title, '主选 / 候选')
+    assert.deepEqual(state.rows.map(state.selectionLabel), ['主选 1', '主选 2', '主选 3', '候选 2', '候选 3', '--'])
+    assert.equal(role.render(rows[0]).props.type, 'success')
+    assert.equal(role.render(rows[4]).props.type, 'info')
+    assert.equal(state.statusLabel(rows[4]), '仅观察')
+    assert.equal(state.columnsRef.find(column => column.key === 'quantity').render(rows[4]), '--')
+    assert.equal(state.columnsRef.find(column => column.key === 'netYieldRate').render(rows[4]), '--')
     assert.equal(state.hasScoreExplanation({reportMarkdown: '# 历史报告'}), false)
     assert.equal(state.hasScoreExplanation({reportMarkdown: '# 报告\n\n## 分项评分依据\n市场18分'}), true)
     const source = await readFile(new URL('research2Recommendations.vue', import.meta.url), 'utf8')
-    assert.match(source, /原始批次主备/)
+    assert.match(source, /原始批次主选 \/ 候选/)
     assert.match(source, /历史未记录逐项评分说明/)
     for (const field of ['marketScore', 'sectorScore', 'stockScore', 'catalystScore', 'riskDeduction']) assert.ok(source.includes(`detail.recommendation.${field}`))
   } finally {

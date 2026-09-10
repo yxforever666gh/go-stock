@@ -291,7 +291,7 @@ func TestSectorScoreWithoutSpecialProofKeepsOtherGuards(t *testing.T) {
 		{"recalculate", func(v *modelRecommendation) { v.FinalScore = 49 }, true},
 		{"sector above 30", func(v *modelRecommendation) { v.SectorScore = 31 }, false},
 		{"sector negative", func(v *modelRecommendation) { v.SectorScore = -1 }, false},
-		{"exactly 50", func(v *modelRecommendation) { v.SectorScore = 15; v.FinalScore = 80 }, false},
+		{"exactly 50", func(v *modelRecommendation) { v.SectorScore = 15; v.FinalScore = 80 }, true},
 		{"invalid reference", func(v *modelRecommendation) { v.SourceRefs = []string{"missing"} }, false},
 		{"market unsupported", func(v *modelRecommendation) { v.SourceRefs = []string{"quote-sh600343"} }, false},
 		{"stock unsupported", func(v *modelRecommendation) { v.SourceRefs = []string{"market"} }, false},
@@ -304,7 +304,7 @@ func TestSectorScoreWithoutSpecialProofKeepsOtherGuards(t *testing.T) {
 			if (len(items) == 1) != sample.want {
 				t.Fatalf("items=%+v", items)
 			}
-			if sample.want && items[0].FinalScore != 60 {
+			if sample.want && items[0].FinalScore != v.MarketScore+v.SectorScore+v.StockScore+v.CatalystScore-v.RiskDeduction {
 				t.Fatalf("sum not recalculated: %v", items[0].FinalScore)
 			}
 		})
@@ -385,7 +385,9 @@ func TestResearch2ScoreSourceValidationKeepsThresholdAndExplainsZero(t *testing.
 	value.CatalystScore = 0
 	value.StockScore = 35
 	value.FinalScore = 50
-	if items, _ = validateRecommendations("run", t0, evidence, []modelRecommendation{value}); len(items) != 0 {
-		t.Fatal("50-point threshold changed")
+	items, _ = validateRecommendations("run", t0, evidence, []modelRecommendation{value})
+	assignResearch2SelectionRoles(items, 3)
+	if len(items) != 1 || items[0].SelectionRole != "observation" || items[0].Status != "analysis_only" {
+		t.Fatal("50-point candidate became executable")
 	}
 }
