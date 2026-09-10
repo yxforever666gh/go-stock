@@ -401,7 +401,8 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 54, 59, 0, loc)},
 		{name: "open", started: time.Date(2026, 8, 27, 9, 55, 0, 0, loc), accept: true},
 		{name: "11:30 remains open", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc), accept: true},
-		{name: "last second", started: time.Date(2026, 8, 27, 12, 59, 59, 0, loc), accept: true},
+		{name: "last second", started: time.Date(2026, 8, 27, 11, 49, 59, 0, loc), accept: true},
+		{name: "analysis cutoff", started: time.Date(2026, 8, 27, 11, 50, 0, 0, loc)},
 		{name: "close", started: time.Date(2026, 8, 27, 13, 0, 0, 0, loc)},
 	}
 	for _, test := range tests {
@@ -489,7 +490,7 @@ func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 			runner.ConfigureReplayClock(func() time.Time { return current }, nil)
 
 			run, err := runner.Run(context.Background(), scheduled)
-			items, listErr := repository.ListRecommendations(context.Background(), 10, 0)
+			items, listErr := repository.RunRecommendations(context.Background(), run.RunID)
 			if err != nil || listErr != nil || run.Status != "success" || len(items) != 1 || items[0].Status != "analysis_only" {
 				t.Fatalf("run=%+v items=%+v err=%v listErr=%v", run, items, err, listErr)
 			}

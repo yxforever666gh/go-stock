@@ -137,7 +137,7 @@ func TestDisableDuringAnalysisPreservesRunningStateAndCompletesAnalysisOnly(t *t
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	items, err := repo.ListRecommendations(ctx, 10, 0)
+	items, err := repo.RunRecommendations(ctx, run.RunID)
 	chain, chainErr := repo.ExecutionChain(ctx, chains[0].ChainID)
 	if err != nil || chainErr != nil || run.Status != "success" || len(items) != 1 || items[0].Status != "analysis_only" || chain.Status != "disabled" || !strings.Contains(run.ReportMarkdown, "仅分析，不交易") || !strings.Contains(run.ReportMarkdown, "自动策略已关闭") {
 		t.Fatalf("disabled run did not finalize cleanly: run=%+v items=%+v chain=%+v err=%v/%v", run, items, chain, err, chainErr)

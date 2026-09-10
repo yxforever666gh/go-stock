@@ -28,7 +28,8 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 		{name: "start", at: time.Date(2026, 9, 3, 9, 55, 0, 0, location), want: true},
 		{name: "during", at: time.Date(2026, 9, 3, 10, 14, 0, 0, location), want: true},
 		{name: "morning close", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: true},
-		{name: "last second", at: time.Date(2026, 9, 3, 12, 59, 59, 0, location), want: true},
+		{name: "last second", at: time.Date(2026, 9, 3, 11, 49, 59, 0, location), want: true},
+		{name: "analysis cutoff", at: time.Date(2026, 9, 3, 11, 50, 0, 0, location), want: false},
 		{name: "end", at: time.Date(2026, 9, 3, 13, 0, 0, 0, location), want: false},
 	}
 	for _, test := range tests {

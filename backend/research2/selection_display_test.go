@@ -93,7 +93,7 @@ func TestDailySelectionLatestCompletedRunAndExactScores(t *testing.T) {
 	rows := []Recommendation{
 		{RecommendationID: "bought", AnalysisRunID: "old", StockCode: "sh600001", SignalAt: at, BuyAt: &utc, Status: "active"},
 		{RecommendationID: "duplicate-buy", AnalysisRunID: "old", StockCode: "sh600001", SignalAt: at, BuyAt: &at, Status: "closed"},
-		{RecommendationID: "old-candidate", AnalysisRunID: "old", StockCode: "sh600002", SignalAt: at, Status: "standby", FinalScore: 60},
+		{RecommendationID: "old-candidate", AnalysisRunID: "old", StockCode: "sh600002", SignalAt: at, Status: "analysis_only", SelectionRole: "observation", FinalScore: 49},
 		{RecommendationID: "already-bought", AnalysisRunID: "new", StockCode: "sh600001", SignalAt: at, Status: "analysis_only", SelectionRole: "observation", FinalScore: 50},
 		{RecommendationID: "new1", AnalysisRunID: "new", StockCode: "sh600003", SignalAt: at, Status: "analysis_only", SelectionRole: "observation", FinalScore: 49.04},
 		{RecommendationID: "new2", AnalysisRunID: "new", StockCode: "sh600004", SignalAt: at, Status: "analysis_only", SelectionRole: "observation", FinalScore: 49.03},

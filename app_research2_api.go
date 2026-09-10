@@ -276,6 +276,17 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 		a.queueResearch2FinalEmail(runtime, chain)
 		return
 	}
+	if exists && chain.Status == "running" {
+		chain, err = runtime.Repository.RefreshExecutionChainFilled(a.ctx, chain.ChainID)
+		if err != nil {
+			logger.SugaredLogger.Errorf("刷新研究中心2展示名额失败: %v", err)
+			return
+		}
+		if chain.Status != "running" {
+			a.queueResearch2FinalEmail(runtime, chain)
+			return
+		}
+	}
 	if !exists || chain.Status == "failed" {
 		// Audit/calendar failures can occur before a chain exists. Older builds
 		// also closed chains for retryable failures. Resume only the latest
@@ -329,7 +340,7 @@ func (a *App) queueResearch2FinalEmail(runtime *research2app.Runtime, chain rese
 func withinResearch2RecoveryWindow(value time.Time) bool {
 	local := value.In(research2Location())
 	minutes := local.Hour()*60 + local.Minute()
-	return minutes >= research2AnalysisStartHour*60+research2AnalysisStartMinute && minutes < 13*60
+	return minutes >= research2AnalysisStartHour*60+research2AnalysisStartMinute && minutes < 11*60+50
 }
 
 func research2ScheduledRoot(value time.Time) time.Time {

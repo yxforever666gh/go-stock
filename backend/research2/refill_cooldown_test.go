@@ -60,9 +60,9 @@ func TestLegacyEmptyRefillRecoveryPreservesRun(t *testing.T) {
 			case "cooling":
 				at = now.Add(time.Minute)
 			case "lunch":
-				at = time.Date(2026, 9, 10, 12, 0, 0, 0, shanghai())
+				at = time.Date(2026, 9, 10, 11, 40, 0, 0, shanghai())
 			case "cutoff":
-				at = time.Date(2026, 9, 10, 13, 0, 0, 0, shanghai())
+				at = time.Date(2026, 9, 10, 11, 50, 0, 0, shanghai())
 			case "prior_day":
 				at = at.AddDate(0, 0, 1)
 			case "disabled", "completed":

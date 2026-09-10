@@ -49,7 +49,7 @@ onMounted(() => { void refresh(); polling.start({immediate: false}) })
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:55,13:00)，使用最近5个已闭合交易分钟；09:55正常运行对应09:50—09:55，午休启动固定使用 11:25—11:30。主备执行仍不足三笔时立即补位；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析。</n-alert>
+    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:55,11:50)，使用最近5个已闭合交易分钟；09:55正常运行对应09:50—09:55，午休启动固定使用 11:25—11:30。主选与候选展示满三只停止分析；不足时等待10分钟补位，执行失败沿用递补规则；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>

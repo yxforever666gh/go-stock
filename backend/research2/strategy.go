@@ -236,7 +236,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	tradingDate := local.Format("2006-01-02")
 	now := r.now().In(shanghai())
 	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 55, 0, 0, shanghai())
-	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 13, 0, 0, 0, shanghai())
+	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 50, 0, 0, shanghai())
 	if !r.diagnosticWindowBypass && (now.Before(startWindow) || !now.Before(lastStartExclusive)) {
 		return AnalysisRun{}, ErrOutsideAnalysisStartWindow
 	}
@@ -659,7 +659,7 @@ func buildPrompt(evidence preparedEvidence, cutoff time.Time) string {
 		"- 证据冻结时间：" + freezeAt.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 辅助来源在冻结前完成即可按标注状态评估；不能把行情快照时点误作辅助采集截止。",
 		"- 新催化参考起点（上一交易日收盘；--表示未核验）：" + formatResearch2Time(evidence.catalystWindowStartAt),
-		"- 13:00前启动的任务允许跨越13:00继续完成；完成时间只用于执行归类，不得导致分析失败。",
+		"- 11:50起不再启动分析；此前启动的任务允许继续完成，完成时间只用于执行归类，不得导致分析失败。",
 		"- 程序将在报告校验完成后获取第一笔有效行情买入；午休期间完成的报告统一在13:00买入；13:00及以后完成的推荐仅保存分析、不交易；已买入标的卖出目标固定为下一交易日10:00。",
 		"- 独立账户初始资金12,000元；服务端从完整评分中选取最多6只可执行股票并划分主选与备选；一手100股含费用成本不得超过账户资金。",
 		"- 不得访问外部地址、推算缺失值或编造行情；只能使用下方注入的结构化证据。",

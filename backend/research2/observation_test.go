@@ -70,8 +70,12 @@ func TestObservationOnlyRunDoesNotTradeOrStopRefill(t *testing.T) {
 		t.Fatalf("chain=%v %v", chain, err)
 	}
 	ready, err := r.ExecutionChainsReadyForRefill(ctx, at.Add(10*time.Minute))
-	if err != nil || len(ready) != 1 {
+	if err != nil || len(ready) != 0 {
 		t.Fatalf("ready=%v %v", ready, err)
+	}
+	chain, err = r.RefreshExecutionChainFilled(ctx, run.ChainID)
+	if err != nil || chain.Status != "completed" || chain.FilledSlots != 0 || chain.StopReason != "主选与候选已满额" {
+		t.Fatalf("full observation list not completed: %+v %v", chain, err)
 	}
 	var account Account
 	if err := r.DB().First(&account, 1).Error; err != nil {
