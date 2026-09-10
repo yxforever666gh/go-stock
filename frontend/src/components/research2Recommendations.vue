@@ -31,6 +31,19 @@ const hasScoreExplanation = analysis => /^#{1,6}\s+分项评分依据\s*$/m.test
 
 const show = row => detailRequest.show(row.recommendationId)
 
+const signalDateFormatter = new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'})
+function signalDate(value) {
+  if (!value) return ''
+  const text = String(value)
+  const date = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text.replace(' ', 'T')}${text.length === 10 ? 'T00:00:00' : ''}+08:00`)
+  return Number.isNaN(date.getTime()) ? '' : signalDateFormatter.format(date)
+}
+function recommendationRowClass(row, index) {
+  if (index === 0) return ''
+  const currentDate = signalDate(row.signalAt), previousDate = signalDate(rows.value[index - 1]?.signalAt)
+  return currentDate && previousDate && currentDate !== previousDate ? 'recommendation-date-start' : ''
+}
+
 const defaultColumns = [
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
   {title: '主选 / 候选', key: 'selectionRole', width: 115, render: row => h(NTag, {type: row.displaySelectionRole === 'primary' ? 'success' : 'info', bordered: false}, {default: () => selectionLabel(row)})},
@@ -52,13 +65,13 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">每天最多成交3只。已成交主选与最新完成轮次的候选合计展示前三，末位同分全部保留；新一轮完成后更新候选。50分及以下仅观察，不参与成交或收益；高分候选仍须满足执行约束。空仓后等待10分钟继续补位，午休继续，13:00停止启动。各轮完整评分保留在报告中。</n-alert>
+    <n-alert type="info" :bordered="false">每天最多成交3只。已选入买入名单的股票显示为主选，包括待买入；主选不足时由最新完成轮次的低分候选补足前三，末位同分全部保留。50分及以下仅观察，不参与成交或收益。主选与候选满额后停止新分析；不足且无待执行或分析任务时，报告完成10分钟后继续补位。11:50停止启动新分析，已启动任务可完成，午休待买入主选仍在13:00按规则尝试成交。各轮完整评分保留在报告中。</n-alert>
     <n-flex justify="space-between" align="center">
       <n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用；当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">
-      <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1185" :row-key="row => row.recommendationId"/>
+      <n-data-table :columns="columnsRef" :data="rows" :row-class-name="recommendationRowClass" :loading="loading" :scroll-x="1185" :row-key="row => row.recommendationId"/>
     </div>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
@@ -115,6 +128,10 @@ onMounted(refresh)
 </template>
 
 <style scoped>
+:deep(.recommendation-date-start > td) {
+  border-top: 2px solid #000;
+}
+
 :deep(.draggable-column-title) {
   display: inline-flex;
   width: 100%;

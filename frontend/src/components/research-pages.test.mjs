@@ -38,12 +38,12 @@ async function pageComponent(filename) {
   return {...component, render: () => null}
 }
 
-test('research2 shows daily buy slots without reusing original batch ranks, and explains historical scores', async () => {
+test('research2 shows selected primary slots before buying and explains historical scores', async () => {
   const rows = [
     {recommendationId: 'first', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'primary', displaySelectionRank: 1},
     {recommendationId: 'second', selectionRole: 'primary', selectionRank: 2, displaySelectionRole: 'primary', displaySelectionRank: 2},
     {recommendationId: 'promoted', selectionRole: 'standby', selectionRank: 4, displaySelectionRole: 'primary', displaySelectionRank: 3},
-    {recommendationId: 'pending', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'candidate', displaySelectionRank: 2},
+    {recommendationId: 'pending', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'primary', displaySelectionRank: 3, finalScore: 57, status: 'buy_pending'},
     {recommendationId: 'standby', selectionRole: 'observation', status: 'analysis_only', selectionRank: 5, displaySelectionRole: 'candidate', displaySelectionRank: 3},
     {recommendationId: 'failed', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: '', displaySelectionRank: 0},
   ]
@@ -55,9 +55,11 @@ test('research2 shows daily buy slots without reusing original batch ranks, and 
     const state = vm.$.setupState
     const role = state.columnsRef.find(column => column.key === 'selectionRole')
     assert.equal(role.title, '主选 / 候选')
-    assert.deepEqual(state.rows.map(state.selectionLabel), ['主选 1', '主选 2', '主选 3', '候选 2', '候选 3', '--'])
+    assert.deepEqual(state.rows.map(state.selectionLabel), ['主选 1', '主选 2', '主选 3', '主选 3', '候选 3', '--'])
     assert.equal(role.render(rows[0]).props.type, 'success')
     assert.equal(role.render(rows[4]).props.type, 'info')
+    assert.equal(state.statusLabel(rows[3]), '待买入')
+    assert.equal(role.render(rows[3]).props.type, 'success')
     assert.equal(state.statusLabel(rows[4]), '仅观察')
     assert.equal(state.columnsRef.find(column => column.key === 'quantity').render(rows[4]), '--')
     assert.equal(state.columnsRef.find(column => column.key === 'netYieldRate').render(rows[4]), '--')
@@ -132,3 +134,40 @@ test('research2 refreshes a pending detail when its list reaches a terminal stat
     delete globalThis.__researchPageFixtures
   }
 })
+
+for (const filename of ['researchRecommendations.vue', 'research2Recommendations.vue']) {
+  test(`${filename}: Shanghai date separators span loaded pages and tolerate missing dates`, async () => {
+    const rows = Array.from({length: 200}, (_, index) => ({recommendationId: `r${index}`, signalAt: '2026-09-10T00:05:00+08:00'}))
+    rows.push(
+      {recommendationId: 'older', signalAt: '2026-09-09T15:59:00Z'},
+      {recommendationId: 'same', signalAt: '2026-09-09 23:58:00'},
+      {recommendationId: 'missing'},
+      {recommendationId: 'after-missing', signalAt: '2026-09-08'},
+      {recommendationId: 'invalid', signalAt: 'invalid'},
+    )
+    globalThis.__researchPageFixtures = new Proxy({}, {get: (_, name) => String(name).startsWith('List') ? async (limit, offset) => rows.slice(offset, offset + limit) : async () => ({})})
+    const app = renderer.createApp(await pageComponent(filename))
+    const vm = app.mount({})
+    try {
+      await flush()
+      const state = vm.$.setupState
+      assert.equal(state.rows.length, 200)
+      assert.equal(state.recommendationRowClass(state.rows[0], 0), '')
+      assert.equal(state.recommendationRowClass(state.rows[199], 199), '')
+      assert.equal(state.signalDate('2026-09-09T16:05:00Z'), state.signalDate(state.rows[0].signalAt))
+      await state.history.loadMore()
+      assert.equal(state.recommendationRowClass(state.rows[200], 200), 'recommendation-date-start')
+      assert.equal(state.recommendationRowClass(state.rows[201], 201), '')
+      for (const index of [202, 203, 204]) assert.equal(state.recommendationRowClass(state.rows[index], index), '')
+      const source = await readFile(new URL(filename, import.meta.url), 'utf8')
+      assert.equal((source.match(/:row-class-name="recommendationRowClass"/g) || []).length, 1)
+      assert.match(source, /:deep\(\.recommendation-date-start > td\)\s*\{\s*border-top: 2px solid #000;/)
+      rows.length = 0
+      await state.history.refresh()
+      assert.deepEqual(state.rows, [])
+    } finally {
+      app.unmount()
+      delete globalThis.__researchPageFixtures
+    }
+  })
+}

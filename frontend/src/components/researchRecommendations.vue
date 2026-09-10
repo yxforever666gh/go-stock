@@ -24,6 +24,19 @@ function hasBuy(row) { return Boolean(row.activatedAt) && Number(row.buyPrice ||
 function colorType(value) { return Number(value || 0) >= 0 ? 'error' : 'success' }
 function statusType(status) { if (status === 'active') return 'success'; if (status === 'closed') return 'info'; if (status === 'buy_pending' || status === 'pending' || status === 'sell_pending') return 'warning'; return 'error' }
 
+const signalDateFormatter = new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit'})
+function signalDate(value) {
+  if (!value) return ''
+  const text = String(value)
+  const date = new Date(/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? text : `${text.replace(' ', 'T')}${text.length === 10 ? 'T00:00:00' : ''}+08:00`)
+  return Number.isNaN(date.getTime()) ? '' : signalDateFormatter.format(date)
+}
+function recommendationRowClass(row, index) {
+  if (index === 0) return ''
+  const currentDate = signalDate(row.signalAt), previousDate = signalDate(rows.value[index - 1]?.signalAt)
+  return currentDate && previousDate && currentDate !== previousDate ? 'recommendation-date-start' : ''
+}
+
 const defaultColumns = [
   {title: '股票名称', key: 'stockName', width: 120, render: row => h(NButton, {text: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => row.stockName})},
   {title: '股票代码', key: 'stockCode', width: 115},
@@ -52,7 +65,7 @@ onMounted(refresh)
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">
-      <n-data-table :columns="columnsRef" :data="rows" :loading="loading" :scroll-x="1890" :row-key="row => row.recommendationId"/>
+      <n-data-table :columns="columnsRef" :data="rows" :row-class-name="recommendationRowClass" :loading="loading" :scroll-x="1890" :row-key="row => row.recommendationId"/>
     </div>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
@@ -95,6 +108,10 @@ onMounted(refresh)
 </template>
 
 <style scoped>
+:deep(.recommendation-date-start > td) {
+  border-top: 2px solid #000;
+}
+
 :deep(.draggable-column-title) {
   display: inline-flex;
   width: 100%;
