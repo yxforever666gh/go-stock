@@ -212,6 +212,23 @@ func sourcesAvailableAtCutoff(sources []researchevidence.SourceDocument, cutoff 
 	result := append([]researchevidence.SourceDocument(nil), sources...)
 	for index := range result {
 		source := &result[index]
+		// A successful news search with no matches is not a provider failure.
+		if strings.HasPrefix(source.SourceName, "相关市场新闻 ") && source.Error == "来源返回空数据" {
+			var news struct {
+				Status string            `json:"status"`
+				Items  []json.RawMessage `json:"items"`
+			}
+			if json.Unmarshal([]byte(source.Content), &news) == nil && news.Status == "ok" && news.Items != nil && len(news.Items) == 0 {
+				source.Error, source.CollectionStatus = "", "no_match"
+				source.PromptContent = `{"status":"no_match","message":"本次未匹配到相关新闻，不代表公司没有风险"}`
+			}
+		}
+		if source.CollectionStatus == "" {
+			source.CollectionStatus = "ok"
+			if source.Error != "" {
+				source.CollectionStatus = "failed"
+			}
+		}
 		if source.AvailableAt == nil {
 			if !requireAvailableAt && !source.CollectedAt.IsZero() {
 				available := source.CollectedAt
@@ -228,7 +245,8 @@ func sourcesAvailableAtCutoff(sources []researchevidence.SourceDocument, cutoff 
 			continue
 		}
 		if err := validateStockPromptMarketTime(*source, cutoff); err != nil {
-			source.Content, source.PromptContent = "", ""
+			// Keep the collected snapshot for diagnosis; failed evidence never enters the prompt.
+			source.PromptContent = ""
 			source.Error = appendSourceError(source.Error, err.Error())
 		}
 	}

@@ -810,13 +810,17 @@ func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]Ana
 	result := make([]AnalysisRunSummary, 0, len(runs))
 	for _, run := range runs {
 		var sources []struct {
-			Error string `json:"error"`
+			Error            string `json:"error"`
+			CollectionStatus string `json:"collectionStatus"`
 		}
 		_ = json.Unmarshal([]byte(run.SourceStatusJSON), &sources)
 		failed := 0
+		noMatch := 0
 		for _, source := range sources {
 			if source.Error != "" {
 				failed++
+			} else if source.CollectionStatus == "no_match" {
+				noMatch++
 			}
 		}
 		result = append(result, AnalysisRunSummary{
@@ -825,7 +829,8 @@ func (r *Repository) ListAnalysis(ctx context.Context, limit, offset int) ([]Ana
 			Status: run.Status, ProviderName: run.ProviderName, ModelName: run.ModelName,
 			RecommendationCount: run.RecommendationCount, FailureReason: run.FailureReason,
 			SourceCount: len(sources), FailedSourceCount: failed,
-			TriggerSource: run.TriggerSource, TriggerReason: run.TriggerReason,
+			NoMatchNewsCount: noMatch,
+			TriggerSource:    run.TriggerSource, TriggerReason: run.TriggerReason,
 			BuyNowCount: run.BuyNowCount, WaitCount: run.WaitCount, RejectCount: run.RejectCount,
 		})
 	}

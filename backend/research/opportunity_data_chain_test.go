@@ -3,6 +3,7 @@ package research
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,44 @@ func TestStockPromptRevalidatesInternalMarketTimeAtStageBoundary(t *testing.T) {
 	filtered := sourcesAvailableAtCutoff(sources, cutoff, false)
 	if len(filtered) != 1 || filtered[0].Error == "" || filtered[0].PromptContent != "" {
 		t.Fatalf("stale internal market timestamp reached prompt: %+v", filtered)
+	}
+}
+
+func TestResearchInputNewsNoMatchAndMinuteCutoffs(t *testing.T) {
+	cutoff := time.Date(2026, 9, 14, 13, 4, 33, 0, shanghaiLocation)
+	for _, sample := range []struct {
+		name, content, prompt, failure string
+		noMatch, failed                bool
+	}{
+		{"相关市场新闻 sh600000", `{"status":"ok","items":[],"warning":""}`, "", "来源返回空数据", true, false},
+		{"相关市场新闻 sh600000", `{"status":"failed","items":[]}`, "", "timeout", false, true},
+		{"相关市场新闻 sh600000", `{"status":"stale","items":[]}`, "", "来源返回空数据", false, true},
+		{"其他资料 sh600000", `{"status":"ok","items":[]}`, "", "来源返回空数据", false, true},
+		{"Tencent分钟K sh600000", "original", `{"asOf":"2026-09-14T13:04:00+08:00"}`, "", false, false},
+		{"Tencent分钟K sh600000", "original", `{"barCount":0,"bars":[]}`, "", false, true},
+		{"Tencent分钟K sh600000", "original", `{"asOf":"2026-09-13T13:04:00+08:00"}`, "", false, true},
+		{"Tencent分钟K sh600000", "original", `{"asOf":"2026-09-14T13:05:00+08:00"}`, "", false, true},
+	} {
+		source := researchevidence.SourceDocument{SourceID: "S1", SourceName: sample.name, CollectedAt: cutoff, AvailableAt: &cutoff, Content: sample.content, PromptContent: sample.prompt, Error: sample.failure}
+		actual := sourcesAvailableAtCutoff([]researchevidence.SourceDocument{source}, cutoff, false)[0]
+		if (actual.CollectionStatus == "no_match") != sample.noMatch || (actual.Error != "") != sample.failed {
+			t.Fatalf("sample=%+v actual=%+v", sample, actual)
+		}
+		if sample.noMatch && !strings.Contains(actual.PromptContent, "不代表公司没有风险") {
+			t.Fatal("no-match meaning missing from prompt")
+		}
+		if source.Error != sample.failure {
+			t.Fatal("shared source mutated")
+		}
+		if strings.Contains(sample.name, "分钟K") && actual.Content != "original" {
+			t.Fatal("audit snapshot erased")
+		}
+	}
+	available := cutoff.Add(time.Second)
+	source := researchevidence.SourceDocument{SourceName: "Tencent分钟K sh600000", AvailableAt: &available, Content: "raw", PromptContent: `{"asOf":"2026-09-14T13:04:00+08:00"}`}
+	actual := sourcesAvailableAtCutoff([]researchevidence.SourceDocument{source}, effectivePromptCutoff(available, cutoff), false)[0]
+	if actual.Error == "" || actual.PromptContent != "" {
+		t.Fatal("explicit cutoff allowed late evidence")
 	}
 }
 

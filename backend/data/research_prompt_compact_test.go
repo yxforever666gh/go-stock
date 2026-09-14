@@ -61,6 +61,55 @@ func TestCompactResearchMinutePromptKeepsProviderMinuteLabel(t *testing.T) {
 	}
 }
 
+func TestResearchMinutePromptFiltersFutureBeforeWindowCalculation(t *testing.T) {
+	at := time.Date(2026, 9, 14, 13, 4, 33, 0, shanghaiDataLocation())
+	rows := []MinuteData{{Time: "13:05", Price: 999}, {Time: "13:03", Price: 10}, {Time: "13:04", Price: 11}}
+	value := map[string]any{"source": "20260914", "rows": &rows}
+	document := researchDocument("Tencent分钟K sh600000", "stock", at, value)
+	if document.Error != "" || document.FilteredMinuteCount != 1 || !strings.Contains(document.Content, "999") || strings.Contains(document.PromptContent, "999") || !strings.Contains(document.PromptContent, `"asOf":"2026-09-14T13:04:00+08:00"`) {
+		t.Fatalf("document=%+v", document)
+	}
+	var prompt struct {
+		Windows []struct {
+			High       float64
+			ReturnRate float64
+		}
+		BarCount int
+	}
+	_ = json.Unmarshal([]byte(document.PromptContent), &prompt)
+	if prompt.BarCount != 2 || len(prompt.Windows) != 3 || prompt.Windows[0].High != 11 || prompt.Windows[0].ReturnRate < 0.099 || prompt.Windows[0].ReturnRate > 0.101 {
+		t.Fatalf("future bar contaminated windows: %s", document.PromptContent)
+	}
+	if rows[0].Price != 999 {
+		t.Fatal("provider rows mutated")
+	}
+	allFuture := researchDocument("Tencent分钟K sh600000", "stock", at.Add(-5*time.Minute), value)
+	if allFuture.Error != "" || allFuture.FilteredMinuteCount != 3 || !strings.Contains(allFuture.Content, "999") || strings.Contains(allFuture.PromptContent, "asOf") {
+		t.Fatalf("shared snapshot or empty filtered result changed: %+v", allFuture)
+	}
+	old := researchDocument("Tencent分钟K sh600000", "stock", at.AddDate(0, 0, 1), value)
+	if old.FilteredMinuteCount != 0 || !strings.Contains(old.PromptContent, "2026-09-14") {
+		t.Fatalf("old date rewritten: %+v", old)
+	}
+}
+
+func TestResearchFinancialPromptPreservesRawMissingMetrics(t *testing.T) {
+	raw := []byte(`{"success":true,"result":{"data":[{"REPORT_DATE":"2026-06-30","NETPROFIT":0,"ROE":null,"OPERATE_INCOME":123}]}}`)
+	var response models.StockFinancialInfoResp
+	if err := json.Unmarshal(raw, &response); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 14, 13, 0, 0, 0, shanghaiDataLocation())
+	document := researchDocument("东方财富财务 sh600000", "stock", now, researchFinancialSource{value: &response, raw: raw})
+	legacy := researchDocument("东方财富财务 sh600000", "stock", now, &response)
+	if document.Content != legacy.Content || document.Error != legacy.Error {
+		t.Fatal("Research 2 shared snapshot changed")
+	}
+	if document.PromptContent != string(raw) {
+		t.Fatalf("raw nulls/aliases lost: %s", document.PromptContent)
+	}
+}
+
 func TestCompactResearchOptionalListsKeepNewestWholeRecords(t *testing.T) {
 	rows := make([]map[string]any, 0, 8)
 	for index := 1; index <= 8; index++ {

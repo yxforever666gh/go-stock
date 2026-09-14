@@ -242,7 +242,10 @@ func (collector *ResearchSourceCollector) CollectStocks(ctx context.Context, now
 				}},
 				{"东方财富公告 " + code, func() any { return researchSourceResult(collector.news.stockNotice(ctx, digits)) }},
 				{"东方财富研报 " + code, func() any { return collector.news.StockResearchReportAt(digits, 30, now) }},
-				{"东方财富财务 " + code, func() any { return collector.stocks.GetStockFinancialInfo(code) }},
+				{"东方财富财务 " + code, func() any {
+					value, raw := collector.stocks.stockFinancialInfo(code)
+					return researchFinancialSource{value: value, raw: raw}
+				}},
 				{"东方财富概念 " + code, func() any { return collector.stocks.GetStockConceptInfo(code) }},
 				{"Sina资金流 " + code, func() any { return researchSourceResult(collector.news.stockMoneyTrendByDay(ctx, code, 10)) }},
 				{"巨潮互动易 " + code, func() any { return researchSourceResult(collector.news.interactiveAnswer(ctx, 1, 30, candidate.Name)) }},
@@ -378,7 +381,16 @@ func researchSourceResult(value any, err error) any {
 	return value
 }
 
+type researchFinancialSource struct {
+	value *models.StockFinancialInfoResp
+	raw   []byte
+}
+
 func researchDocument(name, category string, now time.Time, value any) researchevidence.SourceDocument {
+	var financialJSON []byte
+	if financial, ok := value.(researchFinancialSource); ok {
+		value, financialJSON = financial.value, financial.raw
+	}
 	document := researchevidence.SourceDocument{SourceName: name, Category: category, CollectedAt: now}
 	if value == nil {
 		document.Error = "来源返回空值"
@@ -393,7 +405,16 @@ func researchDocument(name, category string, now time.Time, value any) researche
 	if category == "stock" {
 		document.PromptContent = compactResearchPromptValue(name, value)
 		document.Content = document.PromptContent
-		if sourceErr := validateCompactStockSource(name, document.PromptContent); sourceErr != nil {
+		// Preserve the shared snapshot; only Research 1 consumes PromptContent.
+		if strings.Contains(name, "分钟K") {
+			document.PromptContent, document.FilteredMinuteCount = compactMinutePromptAt(value, now)
+		} else if strings.Contains(name, "财务") || strings.Contains(name, "公告") {
+			document.PromptContent = string(data)
+			if len(financialJSON) > 0 {
+				document.PromptContent = string(financialJSON)
+			}
+		}
+		if sourceErr := validateCompactStockSource(name, document.Content); sourceErr != nil {
 			document.Error = appendSourceDocumentError(document.Error, sourceErr.Error())
 		}
 	} else {

@@ -433,7 +433,11 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 
 	r.auditCutoff = effectivePromptCutoff(marketStageAt, request.EvidenceCutoffAt)
-	marketResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "market_analysis", Prompt: marketStagePrompt(marketStageAt, filterSources(allSources, "market"))})
+	marketInput := filterSources(allSources, "market")
+	marketPrompt := marketStagePrompt(marketStageAt, marketInput)
+	copySourceInputStatus(allSources, marketInput)
+	run.SourceStatusJSON = sourceStatusJSON(allSources)
+	marketResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "market_analysis", Prompt: marketPrompt})
 	if err != nil {
 		return finishFailure(fmt.Errorf("大盘层失败: %w", err))
 	}
@@ -474,7 +478,11 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 	allSources = dedupeSources(append(allSources, sectorSources...))
 	run.SourceStatusJSON = sourceStatusJSON(allSources)
 	r.auditCutoff = effectivePromptCutoff(sectorStageAt, request.EvidenceCutoffAt)
-	sectorResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "sector_analysis", Prompt: appendKnowledgeContext(sectorStagePrompt(sectorStageAt, run.MarketReport, filterSources(allSources, "sector"), recentHistoryContext), knowledgeContext)})
+	sectorInput := filterSources(allSources, "sector")
+	sectorPrompt := sectorStagePrompt(sectorStageAt, run.MarketReport, sectorInput, recentHistoryContext)
+	copySourceInputStatus(allSources, sectorInput)
+	run.SourceStatusJSON = sourceStatusJSON(allSources)
+	sectorResult, err := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "sector_analysis", Prompt: appendKnowledgeContext(sectorPrompt, knowledgeContext)})
 	if err != nil {
 		return finishFailure(fmt.Errorf("板块层失败: %w", err))
 	}
@@ -520,10 +528,11 @@ func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (resu
 				return finishFailure(err)
 			}
 		}
+		r.auditCutoff = effectivePromptCutoff(stockStageAt, request.EvidenceCutoffAt)
+		stockPrompt := stockStagePrompt(stockStageAt, run.MarketReport, run.SectorReport, batch, stockSources, recentHistoryContext)
 		allSources = dedupeSources(append(allSources, stockSources...))
 		run.SourceStatusJSON = sourceStatusJSON(allSources)
-		r.auditCutoff = effectivePromptCutoff(stockStageAt, request.EvidenceCutoffAt)
-		batchResult, callErr := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "stock_analysis", Prompt: appendKnowledgeContext(stockStagePrompt(stockStageAt, run.MarketReport, run.SectorReport, batch, stockSources, recentHistoryContext), knowledgeContext)})
+		batchResult, callErr := r.completeAIForRun(ctx, &run, sharedai.CompletionRequest{Phase: "stock_analysis", Prompt: appendKnowledgeContext(stockPrompt, knowledgeContext)})
 		if callErr != nil {
 			allSources = append(allSources, failedSource("stock", fmt.Sprintf("个股分析批次%d", start/10+1), r.service.now(), callErr))
 			continue
@@ -1300,6 +1309,9 @@ func isGeneratedSourceID(value string) bool {
 }
 
 func sourceCorpus(sources []researchevidence.SourceDocument, maxBytes int) string {
+	for index := range sources {
+		sources[index].InputStatus, sources[index].InputReason = "omitted", "输入预算不足"
+	}
 	if len(sources) == 0 || maxBytes <= 0 {
 		return ""
 	}
@@ -1348,12 +1360,34 @@ func sourceCorpus(sources []researchevidence.SourceDocument, maxBytes int) strin
 	}
 	contentBudget := (maxBytes - fixedBytes) / len(entries)
 	var builder strings.Builder
-	for _, entry := range entries {
+	for index, entry := range entries {
+		content := truncateUTF8(entry.content, contentBudget)
+		sources[index].InputStatus, sources[index].InputReason = "included", ""
+		switch {
+		case sources[index].Error != "":
+			sources[index].InputStatus, sources[index].InputReason = "unavailable", sources[index].Error
+		case entry.content == "":
+			sources[index].InputStatus, sources[index].InputReason = "unavailable", "没有可用内容"
+		case content == "":
+			sources[index].InputStatus, sources[index].InputReason = "omitted", "输入预算不足"
+		case content != entry.content:
+			sources[index].InputStatus, sources[index].InputReason = "summarized", "受输入预算限制，内容已截短"
+		}
 		builder.WriteString(entry.prefix)
-		builder.WriteString(truncateUTF8(entry.content, contentBudget))
+		builder.WriteString(content)
 		builder.WriteByte('\n')
 	}
 	return builder.String()
+}
+
+func copySourceInputStatus(target, input []researchevidence.SourceDocument) {
+	for _, source := range input {
+		for index := range target {
+			if target[index].SourceID == source.SourceID {
+				target[index].InputStatus, target[index].InputReason = source.InputStatus, source.InputReason
+			}
+		}
+	}
 }
 
 func truncateUTF8(value string, maxBytes int) string {

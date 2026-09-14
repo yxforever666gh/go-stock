@@ -49,7 +49,8 @@ function sourceSummary(value) {
   try {
     const sources = JSON.parse(value || '[]')
     const failed = sources.filter(item => item.error)
-    return `${formatInteger(sources.length)} 个来源，${formatInteger(failed.length)} 个失败`
+    const noMatch = sources.filter(item => !item.error && item.collectionStatus === 'no_match').length
+    return `${formatInteger(sources.length)} 个来源，${formatInteger(failed.length)} 个失败，${formatInteger(noMatch)} 个无匹配新闻`
   } catch (_) {
     return '--'
   }
@@ -58,7 +59,7 @@ function sourceSummary(value) {
 function summarySourceStatus(row) {
   const total = Number(row?.sourceCount || 0)
   const failed = Number(row?.failedSourceCount || 0)
-  return `${formatInteger(total)} 个来源，${formatInteger(failed)} 个失败`
+  return `${formatInteger(total)} 个来源，${formatInteger(failed)} 个失败，${formatInteger(row?.noMatchNewsCount || 0)} 个无匹配新闻`
 }
 
 function runOrigin(row) {
@@ -81,7 +82,9 @@ function sourceRows(value) {
       sourceName: item.sourceName,
       category: item.category,
       collectedAt: item.collectedAt,
-      status: item.error ? '失败' : '成功',
+      status: item.collectionStatus === 'no_match' && !item.error ? '无匹配新闻' : item.collectionStatus === 'ok' ? '成功' : item.error ? '失败' : '成功',
+      inputStatus: ({included: '已提供', summarized: '已摘要', omitted: '省略', unavailable: '不可用'})[item.inputStatus] || '历史未记录',
+      inputReason: item.inputReason || (item.filteredMinuteCount ? `已过滤 ${item.filteredMinuteCount} 条超前或无效分钟记录` : item.collectionStatus === 'no_match' ? '本次未匹配到相关新闻，不代表公司没有风险' : ''),
       error: item.error || '',
     })) : []
   } catch (_) {
@@ -132,7 +135,9 @@ const sourceColumns = [
   {title: '来源', key: 'sourceName', minWidth: 150},
   {title: '分类', key: 'category', width: 110},
   {title: '采集时间', key: 'collectedAt', width: 170, render: row => dateTime(row.collectedAt)},
-  {title: '状态', key: 'status', width: 80, render: row => h(NTag, {type: row.error ? 'error' : 'success', bordered: false}, {default: () => row.status})},
+  {title: '采集结果', key: 'status', width: 120, render: row => h(NTag, {type: row.status === '失败' ? 'error' : row.status === '成功' ? 'success' : 'default', bordered: false}, {default: () => row.status})},
+  {title: 'AI 输入', key: 'inputStatus', width: 110},
+  {title: '输入说明', key: 'inputReason', minWidth: 230, ellipsis: {tooltip: true}, render: row => row.inputReason || '--'},
   {title: '失败原因', key: 'error', minWidth: 220, ellipsis: {tooltip: true}, render: row => row.error || '--'},
 ]
 
@@ -153,7 +158,7 @@ const columns = [
   {title: 'Provider / 模型', key: 'modelName', minWidth: 190, render: row => `${row.providerName || '--'} / ${row.modelName || '--'}`},
   {title: '状态', key: 'status', width: 130, render: row => h(NTag, {type: statusType(row.status), bordered: false}, {default: () => statusLabels[row.status] || row.status})},
   {title: '候选决策', key: 'buyNowCount', width: 215, render: row => decisionSummary(row)},
-  {title: '来源状态', key: 'sourceCount', minWidth: 150, render: row => summarySourceStatus(row)},
+  {title: '来源状态', key: 'sourceCount', minWidth: 280, render: row => summarySourceStatus(row)},
   {title: '空仓/失败原因', key: 'failureReason', minWidth: 210, ellipsis: {tooltip: true}, render: row => row.failureReason || '--'},
   {title: '操作', key: 'actions', width: 110, render: row => h(NButton, {size: 'small', tertiary: true, type: 'primary', onClick: () => showDetail(row)}, {default: () => '查看报告'})},
 ]
@@ -266,7 +271,7 @@ onBeforeUnmount(() => { active = false })
                     <n-data-table :columns="attemptColumns" :data="attemptRows(detail.modelAttemptLogJson)" :scroll-x="1650" size="small"/>
                   </n-collapse-item>
                   <n-collapse-item title="来源状态" name="sources">
-                    <n-data-table :columns="sourceColumns" :data="sourceRows(detail.sourceStatusJson)" :scroll-x="900" size="small"/>
+                    <n-data-table :columns="sourceColumns" :data="sourceRows(detail.sourceStatusJson)" :scroll-x="1400" size="small"/>
                   </n-collapse-item>
                 </n-collapse>
               </template>

@@ -78,6 +78,7 @@ type AnalysisRunSummary struct {
 	FailureReason       string     `json:"failureReason"`
 	SourceCount         int        `json:"sourceCount"`
 	FailedSourceCount   int        `json:"failedSourceCount"`
+	NoMatchNewsCount    int        `json:"noMatchNewsCount"`
 	TriggerSource       string     `json:"triggerSource,omitempty"`
 	TriggerReason       string     `json:"triggerReason,omitempty"`
 	BuyNowCount         int        `json:"buyNowCount"`

@@ -15,6 +15,38 @@ const renderer = createRenderer({
 })
 const flush = async () => { await new Promise(setImmediate); await new Promise(setImmediate) }
 
+test('research1 separates collection, input coverage and no-match news', async () => {
+  globalThis.__researchPageFixtures = {ListAIAnalysisReports: async () => [], GetAICapitalDeploymentStatus: async () => ({})}
+  const app = renderer.createApp(await pageComponent('researchReport.vue'))
+  const vm = app.mount({})
+  try {
+    await flush()
+    const state = vm.$.setupState
+    const sources = [
+      {sourceId: 'S1', collectionStatus: 'ok', inputStatus: 'summarized'},
+      {sourceId: 'S2', collectionStatus: 'no_match', inputStatus: 'included'},
+      {sourceId: 'S3', collectionStatus: 'ok', error: 'stale', inputStatus: 'unavailable', inputReason: 'stale'},
+      {sourceId: 'S4', collectionStatus: 'ok', inputStatus: 'omitted', inputReason: '超出每股输入预算'},
+      {sourceId: 'S5'},
+      {sourceId: 'S6', collectionStatus: 'failed', error: 'timeout'},
+      {sourceId: 'S7', collectionStatus: 'ok', inputStatus: 'included', filteredMinuteCount: 1},
+    ]
+    const rows = state.sourceRows(JSON.stringify(sources))
+    assert.deepEqual(rows.map(row => row.inputStatus), ['已摘要', '已提供', '不可用', '省略', '历史未记录', '历史未记录', '已提供'])
+    assert.equal(rows[1].status, '无匹配新闻')
+    assert.match(rows[1].inputReason, /不代表公司没有风险/)
+    assert.equal(rows[2].status, '成功')
+    assert.equal(rows[5].status, '失败')
+    assert.match(rows[6].inputReason, /已过滤 1 条/)
+    assert.equal(state.sourceSummary(JSON.stringify(sources)), '7 个来源，2 个失败，1 个无匹配新闻')
+    assert.equal(state.summarySourceStatus({sourceCount: 7, failedSourceCount: 2, noMatchNewsCount: 1}), '7 个来源，2 个失败，1 个无匹配新闻')
+    assert.equal(state.summarySourceStatus({sourceCount: 2, failedSourceCount: 1}), '2 个来源，1 个失败，0 个无匹配新闻')
+  } finally {
+    app.unmount()
+    delete globalThis.__researchPageFixtures
+  }
+})
+
 async function pageComponent(filename) {
   const url = new URL(filename, import.meta.url)
   const {descriptor} = parse(await readFile(url, 'utf8'), {filename})

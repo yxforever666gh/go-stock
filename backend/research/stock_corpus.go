@@ -22,6 +22,7 @@ type compactStockPromptSource struct {
 	CollectedAt time.Time       `json:"collectedAt"`
 	DataAsOf    string          `json:"dataAsOf,omitempty"`
 	Content     json.RawMessage `json:"content,omitempty"`
+	InputStatus string          `json:"inputStatus"`
 }
 
 type compactStockPromptCandidate struct {
@@ -40,7 +41,7 @@ type compactStockPromptBatch struct {
 }
 
 // stockSourceCorpus emits complete JSON records instead of slicing a flat
-// source corpus by bytes. Mandatory quote/K-line payloads are packed first;
+// source corpus by bytes. Key-category summaries are packed before details;
 // optional payloads are admitted only while the per-candidate budget holds.
 // Source metadata remains present even when an optional payload is omitted.
 func stockSourceCorpus(sources []researchevidence.SourceDocument, candidates []researchevidence.StockCandidate, maxBytes, candidateMaxBytes int) string {
@@ -71,6 +72,33 @@ func stockSourceCorpus(sources []researchevidence.SourceDocument, candidates []r
 		batch.Candidates = batch.Candidates[:len(batch.Candidates)-1]
 		encoded, _ = json.Marshal(batch)
 	}
+	// Derive audit state from the final serialized input, including batch omissions.
+	for index := range sources {
+		sources[index].InputStatus, sources[index].InputReason = "omitted", "超出本批输入预算或不属于本批候选"
+	}
+	for _, raw := range batch.Candidates {
+		var candidate compactStockPromptCandidate
+		_ = json.Unmarshal(raw, &candidate)
+		for _, entry := range candidate.Sources {
+			for index := range sources {
+				if sources[index].SourceID != entry.SourceID {
+					continue
+				}
+				sources[index].InputStatus = entry.InputStatus
+				switch entry.InputStatus {
+				case "omitted":
+					sources[index].InputReason = "超出每股输入预算"
+				case "unavailable":
+					sources[index].InputReason = sources[index].Error
+					if sources[index].InputReason == "" {
+						sources[index].InputReason = "没有可用内容"
+					}
+				default:
+					sources[index].InputReason = ""
+				}
+			}
+		}
+	}
 	return string(encoded)
 }
 
@@ -96,15 +124,21 @@ func compactCandidateSources(candidate researchevidence.StockCandidate, sources 
 		status := "ok"
 		if source.Error != "" {
 			status = "failed"
+		} else if source.CollectionStatus == "no_match" {
+			status = "no_match"
 		}
 		dataAsOf := promptDataAsOf(source.PromptContent)
-		entry := compactStockPromptSource{SourceID: source.SourceID, SourceName: source.SourceName, Status: status, CollectedAt: source.CollectedAt, DataAsOf: dataAsOf}
+		entry := compactStockPromptSource{SourceID: source.SourceID, SourceName: source.SourceName, Status: status, CollectedAt: source.CollectedAt, DataAsOf: dataAsOf, InputStatus: "omitted"}
+		if source.Error != "" {
+			entry.InputStatus = "unavailable"
+		}
 		result.Sources = append(result.Sources, entry)
 		if status == "ok" && dataAsOf != "" && (stockSourcePriority(source.SourceName) == 0 || result.AsOf == "") {
 			result.AsOf = dataAsOf
 		}
 	}
 	result.SourceCount = len(result.Sources)
+	payloads := make([]json.RawMessage, len(matched))
 	for index, source := range matched {
 		if source.Error != "" {
 			continue
@@ -114,6 +148,7 @@ func compactCandidateSources(candidate researchevidence.StockCandidate, sources 
 			content = strings.TrimSpace(source.Content)
 		}
 		if content == "" {
+			result.Sources[index].InputStatus = "unavailable"
 			continue
 		}
 		var payload json.RawMessage
@@ -123,18 +158,42 @@ func compactCandidateSources(candidate researchevidence.StockCandidate, sources 
 			encoded, _ := json.Marshal(content)
 			payload = encoded
 		}
+		payloads[index] = payload
+	}
+	admit := func(index int, payload json.RawMessage, status string) {
+		if len(payload) == 0 || string(payload) == `{"truncated":true}` {
+			return
+		}
 		trial := result
 		trial.Sources = append([]compactStockPromptSource(nil), result.Sources...)
-		trial.Sources[index].Content = payload
-		trial.IncludedCount = result.IncludedCount + 1
-		encoded, _ := json.Marshal(trial)
-		if len(encoded) > maxBytes && stockSourcePriority(source.SourceName) <= 2 {
-			trial.Sources[index].Content = compactPromptRawJSON(payload, maxBytes/4)
-			encoded, _ = json.Marshal(trial)
+		if len(trial.Sources[index].Content) == 0 {
+			trial.IncludedCount++
 		}
+		trial.Sources[index].Content, trial.Sources[index].InputStatus = payload, status
+		encoded, _ := json.Marshal(trial)
 		if len(encoded) <= maxBytes {
 			result = trial
 		}
+	}
+	// First reserve compact facts for all categories. Large history arrays cannot
+	// consume space intended for financial metrics and announcement titles.
+	for index, payload := range payloads {
+		if len(payload) == 0 {
+			continue
+		}
+		summary := stockSourceSummary(matched[index].SourceName, payload)
+		status := "summarized"
+		if string(summary) == string(payload) {
+			status = "included"
+		}
+		admit(index, summary, status)
+	}
+	for index, payload := range payloads {
+		priority := stockSourcePriority(matched[index].SourceName)
+		if priority == 3 || priority == 5 {
+			continue
+		}
+		admit(index, payload, "included")
 	}
 	encoded, _ := json.Marshal(result)
 	if len(encoded) <= maxBytes {

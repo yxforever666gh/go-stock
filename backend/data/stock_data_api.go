@@ -1226,6 +1226,12 @@ func (receiver StockDataApi) GetStockConceptInfo(stockCode string) models.StockC
 }
 
 func (receiver StockDataApi) GetStockFinancialInfo(stockCode string) *models.StockFinancialInfoResp {
+	data, _ := receiver.stockFinancialInfo(stockCode)
+	return data
+}
+
+// Return the original JSON too, so research can distinguish missing metrics from zero.
+func (receiver StockDataApi) stockFinancialInfo(stockCode string) (*models.StockFinancialInfoResp, []byte) {
 
 	if !strutil.ContainsAny(stockCode, []string{"."}) {
 		stockCode = ConvertStockCodeToTushareCode(stockCode)
@@ -1243,15 +1249,16 @@ func (receiver StockDataApi) GetStockFinancialInfo(stockCode string) *models.Sto
 		Get(url)
 	if err != nil {
 		logger.SugaredLogger.Errorf("err:%s", err.Error())
+		return &models.StockFinancialInfoResp{}, nil
 	}
 	//logger.SugaredLogger.Infof("resp:%s", string(resp.Body()))
 	err = json.Unmarshal(resp.Body(), &data)
 	if err != nil {
 		logger.SugaredLogger.Errorf("err:%s", err.Error())
-		return &models.StockFinancialInfoResp{}
+		return &models.StockFinancialInfoResp{}, nil
 	}
 	logger.SugaredLogger.Infof("data:%v", data)
-	return &data
+	return &data, append([]byte(nil), resp.Body()...)
 }
 
 func (receiver StockDataApi) GetStockHolderNum(stockCode string) *models.StockHolderNumResp {

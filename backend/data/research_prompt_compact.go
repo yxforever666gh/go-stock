@@ -186,6 +186,27 @@ func compactTradingDate(value string) string {
 	return value
 }
 
+// Filter the full series before computing windows, without mutating the provider snapshot.
+func compactMinutePromptAt(value any, at time.Time) (string, int) {
+	payload, ok := value.(map[string]any)
+	if !ok {
+		return compactResearchPromptValue("分钟K", value), 0
+	}
+	rows, ok := payload["rows"].(*[]MinuteData)
+	if !ok || rows == nil {
+		return compactResearchPromptValue("分钟K", value), 0
+	}
+	date, _ := payload["source"].(string)
+	filtered := make([]MinuteData, 0, len(*rows))
+	for _, row := range *rows {
+		stamp, err := time.ParseInLocation("2006-01-02 15:04", compactTradingDate(date)+" "+row.Time, shanghaiDataLocation())
+		if err == nil && !stamp.After(at) {
+			filtered = append(filtered, row)
+		}
+	}
+	return compactResearchPromptValue("分钟K", map[string]any{"source": date, "rows": &filtered}), len(*rows) - len(filtered)
+}
+
 func validateCompactStockSource(name, content string) error {
 	lower := strings.ToLower(name)
 	if !strings.Contains(lower, "实时行情") && !strings.Contains(lower, "分钟k") {

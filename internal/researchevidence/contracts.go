@@ -15,8 +15,12 @@ type SourceDocument struct {
 	Content     string     `json:"content"`
 	// PromptContent is a compact, structurally valid representation used only
 	// while composing model input. Content remains the audit/source snapshot.
-	PromptContent string `json:"-"`
-	Error         string `json:"error,omitempty"`
+	PromptContent       string `json:"-"`
+	Error               string `json:"error,omitempty"`
+	CollectionStatus    string `json:"collectionStatus,omitempty"`
+	InputStatus         string `json:"inputStatus,omitempty"`
+	InputReason         string `json:"inputReason,omitempty"`
+	FilteredMinuteCount int    `json:"filteredMinuteCount,omitempty"`
 }
 
 type StockCandidate struct {

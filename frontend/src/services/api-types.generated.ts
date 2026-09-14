@@ -224,6 +224,7 @@ export type AnalysisRunSummary = {
   failedSourceCount: number
   failureReason?: string
   modelName?: string
+  noMatchNewsCount?: number
   providerName?: string
   recommendationCount: number
   rejectCount?: number

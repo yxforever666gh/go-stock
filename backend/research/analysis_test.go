@@ -458,6 +458,7 @@ func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 		MarketReport: strings.Repeat("full report", 100), SourceStatusJSON: sourceStatusJSON([]researchevidence.SourceDocument{
 			{SourceID: "S001", SourceName: "成功来源", Category: "market", CollectedAt: now, Content: "large payload"},
 			{SourceID: "S002", SourceName: "失败来源", Category: "sector", CollectedAt: now, Error: "timeout"},
+			{SourceID: "S003", SourceName: "相关市场新闻 sh600000", Category: "stock", CollectionStatus: "no_match"},
 		}),
 	}
 	if err := repo.CreateAnalysis(context.Background(), &run); err != nil {
@@ -467,7 +468,7 @@ func TestListAnalysisReturnsLightweightSourceCounts(t *testing.T) {
 	if err != nil || len(summaries) != 1 {
 		t.Fatalf("summaries=%+v err=%v", summaries, err)
 	}
-	if summaries[0].SourceCount != 2 || summaries[0].FailedSourceCount != 1 || summaries[0].RunID != run.RunID {
+	if summaries[0].SourceCount != 3 || summaries[0].FailedSourceCount != 1 || summaries[0].NoMatchNewsCount != 1 || summaries[0].RunID != run.RunID {
 		t.Fatalf("summary=%+v", summaries[0])
 	}
 }
@@ -676,6 +677,9 @@ func TestSourceCorpusBalancesEverySourceAndTruncatesUTF8Safely(t *testing.T) {
 	}
 	if !strings.Contains(corpus, "失败") || !strings.Contains(corpus, "Upstream request failed") {
 		t.Fatalf("failed source was not retained: %q", corpus)
+	}
+	if sources[0].InputStatus != "summarized" || sources[1].InputStatus != "summarized" || sources[2].InputStatus != "unavailable" {
+		t.Fatalf("market input audit disagrees with actual prompt: %+v", sources)
 	}
 }
 

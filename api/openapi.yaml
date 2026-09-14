@@ -1594,6 +1594,7 @@ components:
         failureReason: {type: string}
         sourceCount: {type: integer}
         failedSourceCount: {type: integer}
+        noMatchNewsCount: {type: integer, description: Successful stock news searches with no matches; not provider failures.}
         triggerSource: {type: string, description: Trigger source; absent on legacy scheduled runs.}
         triggerReason: {type: string}
         buyNowCount: {type: integer}
