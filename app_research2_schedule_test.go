@@ -23,9 +23,8 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 		at   time.Time
 		want bool
 	}{
-		{name: "old start", at: time.Date(2026, 9, 3, 9, 50, 0, 0, location), want: false},
-		{name: "before", at: time.Date(2026, 9, 3, 9, 54, 59, 0, location), want: false},
-		{name: "start", at: time.Date(2026, 9, 3, 9, 55, 0, 0, location), want: true},
+		{name: "before", at: time.Date(2026, 9, 3, 9, 49, 59, 0, location), want: false},
+		{name: "start", at: time.Date(2026, 9, 3, 9, 50, 0, 0, location), want: true},
 		{name: "during", at: time.Date(2026, 9, 3, 10, 14, 0, 0, location), want: true},
 		{name: "morning close", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: true},
 		{name: "last second", at: time.Date(2026, 9, 3, 11, 49, 59, 0, location), want: true},
@@ -42,12 +41,12 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 }
 
 func TestResearch2AnalysisCronAndScheduledRootUse0955(t *testing.T) {
-	if research2AnalysisCronSpec != "0 55 9 * * 1-5" {
-		t.Fatalf("analysis cron=%q want 09:55 on weekdays", research2AnalysisCronSpec)
+	if research2AnalysisCronSpec != "0 50 9 * * 1-5" {
+		t.Fatalf("analysis cron=%q want 09:50 on weekdays", research2AnalysisCronSpec)
 	}
 	location := research2Location()
 	root := research2ScheduledRoot(time.Date(2026, 9, 3, 12, 34, 56, 0, location))
-	want := time.Date(2026, 9, 3, 9, 55, 0, 0, location)
+	want := time.Date(2026, 9, 3, 9, 50, 0, 0, location)
 	if !root.Equal(want) {
 		t.Fatalf("scheduled root=%s want=%s", root, want)
 	}
@@ -65,7 +64,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 	}
 	for _, at := range []time.Time{
 		time.Date(2026, 9, 3, 9, 50, 0, 0, location),
-		time.Date(2026, 9, 3, 9, 54, 59, 0, location),
+		time.Date(2026, 9, 3, 9, 49, 59, 0, location),
 		time.Date(2026, 9, 3, 13, 0, 0, 0, location),
 		time.Date(2026, 9, 5, 10, 0, 0, 0, location),
 	} {
@@ -78,7 +77,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 
 type research2ResumeEvidence struct{ calls int }
 
-func (e *research2ResumeEvidence) Collect(_ context.Context, at time.Time) (research2.Evidence, error) {
+func (e *research2ResumeEvidence) Collect(_ context.Context, at time.Time, _ float64) (research2.Evidence, error) {
 	e.calls++
 	return research2.Evidence{CutoffAt: at, Prompt: "{}", SourceStatusJSON: "[]"}, nil
 }
@@ -123,7 +122,7 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 		{"legacy empty chain at cutoff", "exhausted", "no_recommendation", 13, 0, true, false},
 		{"nonfailure without chain", "", "no_recommendation", 10, 0, true, false},
 		{"nonfailure with failed chain", "failed", "success", 10, 0, true, false},
-		{"before window", "", "failed", 9, 54, true, false},
+		{"before window", "", "failed", 9, 49, true, false},
 		{"at cutoff", "", "failed", 13, 0, true, false},
 		{"automatic strategy disabled", "", "failed", 10, 0, false, false},
 	} {
@@ -185,7 +184,8 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 			if tc.wantRetry {
 				wantCalls, wantAttempt = 1, 2
 			}
-			if collector.calls != wantCalls || model.calls != wantCalls || latest.AttemptNo != wantAttempt {
+			// This fixture collects an empty candidate set: it completes without a model call.
+			if collector.calls != wantCalls || model.calls != 0 || latest.AttemptNo != wantAttempt {
 				t.Fatalf("collector=%d AI=%d attempt=%d want=%d/%d", collector.calls, model.calls, latest.AttemptNo, wantCalls, wantAttempt)
 			}
 			original, err := repository.AnalysisRunByID(context.Background(), old.RunID)
@@ -195,9 +195,6 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 			if tc.chainStatus != "" && !tc.wantRetry {
 				chain, err := repository.ExecutionChain(context.Background(), old.ChainID)
 				wantStatus := tc.chainStatus
-				if tc.name == "legacy empty chain" {
-					wantStatus = "running"
-				}
 				if err != nil || chain.Status != wantStatus {
 					t.Fatalf("terminal chain changed: %+v err=%v", chain, err)
 				}

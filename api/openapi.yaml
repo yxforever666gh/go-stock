@@ -510,6 +510,7 @@ paths:
   /api/v1/research2/analysis-runs/{id}/rerun:
     post:
       operationId: rerunResearch2AnalysisRun
+      description: Retry the latest failed attempt only when this trading day has no valid report. Successful and empty reports cannot be rerun.
       parameters:
         - {name: id, in: path, required: true, schema: {type: string}}
       responses:
@@ -2174,7 +2175,7 @@ components:
         analysisRunId: {type: string}
         selectionRole: {type: string}
         selectionRank: {type: integer, minimum: 0}
-        displaySelectionRole: {type: string, readOnly: true, enum: [primary, candidate, ""]}
+        displaySelectionRole: {type: string, readOnly: true, deprecated: true, description: Historical role metadata; new daily rankings return an empty string., enum: [primary, candidate, ""]}
         displaySelectionRank: {type: integer, readOnly: true, minimum: 0}
         replacesRecommendationId: {type: string}
         promotionReason: {type: string}

@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	research2AnalysisCronSpec    = "0 55 9 * * 1-5"
+	research2AnalysisCronSpec    = "0 50 9 * * 1-5"
 	research2AnalysisStartHour   = 9
-	research2AnalysisStartMinute = 55
+	research2AnalysisStartMinute = 50
 )
 
 func (a *App) ensureResearch2Runtime(cfg *models.SettingConfig) (*research2app.Runtime, error) {
@@ -183,66 +183,32 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 		return
 	}
 	defer a.research2RunMu.Unlock()
-	chainID, parentRunID := "", ""
-	for {
-		setting := a.loadResearch2Settings()
-		if setting == nil || !setting.Research2AutoEnabled {
-			return
-		}
-		runtime, err := a.ensureResearch2Runtime(setting)
-		if err != nil {
-			logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
-			return
-		}
-		var run research2.AnalysisRun
-		if chainID == "" {
-			run, err = runtime.Runner.Run(a.ctx, scheduledFor)
-		} else {
-			run, err = runtime.Runner.RunRefill(a.ctx, time.Now(), chainID, parentRunID)
-		}
-		if err != nil {
-			if errors.Is(err, research2.ErrOutsideAnalysisStartWindow) {
-				return
-			}
+	setting := a.loadResearch2Settings()
+	if setting == nil || !setting.Research2AutoEnabled {
+		return
+	}
+	runtime, err := a.ensureResearch2Runtime(setting)
+	if err != nil {
+		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
+		return
+	}
+	run, err := runtime.Runner.Run(a.ctx, scheduledFor)
+	if err != nil {
+		if !errors.Is(err, research2.ErrOutsideAnalysisStartWindow) {
 			logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
-			if run.ChainID != "" {
-				if failedChain, chainErr := runtime.Repository.ExecutionChain(a.ctx, run.ChainID); chainErr == nil && failedChain.Status != "running" {
-					a.queueResearch2FinalEmail(runtime, failedChain)
-				}
-			}
-			return
 		}
-		// Complete the time-sensitive simulated trade path before deciding whether
-		// the durable chain needs an immediate replacement round.
-		a.processResearch2Trades(time.Now())
-		if run.ChainID == "" {
-			return
-		}
-		chain, chainErr := runtime.Repository.RefreshExecutionChainFilled(a.ctx, run.ChainID)
-		if chainErr != nil {
-			logger.SugaredLogger.Errorf("刷新研究中心2补位链失败: %v", chainErr)
+		return
+	}
+	a.processResearch2Trades(time.Now())
+	if run.ChainID != "" {
+		chain, err := runtime.Repository.RefreshExecutionChainFilled(a.ctx, run.ChainID)
+		if err != nil {
+			logger.SugaredLogger.Errorf("刷新研究中心2执行状态失败: %v", err)
 			return
 		}
 		if chain.Status != "running" {
 			a.queueResearch2FinalEmail(runtime, chain)
-			return
 		}
-		ready, readyErr := runtime.Repository.ExecutionChainsReadyForRefill(a.ctx, time.Now())
-		if readyErr != nil {
-			logger.SugaredLogger.Errorf("检查研究中心2补位任务失败: %v", readyErr)
-			return
-		}
-		refill := false
-		for _, candidate := range ready {
-			if candidate.ChainID == chain.ChainID {
-				refill = true
-				break
-			}
-		}
-		if !refill {
-			return
-		}
-		chainID, parentRunID = chain.ChainID, chain.LatestRunID
 	}
 }
 
@@ -261,17 +227,7 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 		logger.SugaredLogger.Errorf("读取研究中心2补位链失败: %v", err)
 		return
 	}
-	if exists && chain.Status == "exhausted" && withinResearch2RecoveryWindow(now) {
-		if err := runtime.Repository.RecoverEmptyExecutionChain(a.ctx, now); err != nil {
-			logger.SugaredLogger.Errorf("恢复研究中心2空仓补位失败: %v", err)
-			return
-		}
-		chain, err = runtime.Repository.ExecutionChain(a.ctx, chain.ChainID)
-		if err != nil {
-			logger.SugaredLogger.Errorf("读取研究中心2恢复状态失败: %v", err)
-			return
-		}
-	}
+
 	if exists && chain.Status != "running" && chain.Status != "failed" {
 		a.queueResearch2FinalEmail(runtime, chain)
 		return
@@ -317,7 +273,14 @@ func (a *App) resumeResearch2ExecutionChain(now time.Time) {
 	if !withinResearch2RecoveryWindow(now) {
 		return
 	}
-	a.runResearch2Analysis(research2ScheduledRoot(now))
+	latest, found, runErr := runtime.Repository.RunForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
+	if runErr != nil {
+		logger.SugaredLogger.Errorf("读取研究中心2失败任务失败: %v", runErr)
+		return
+	}
+	if found && latest.Status == "failed" {
+		a.runResearch2Analysis(research2ScheduledRoot(now))
+	}
 }
 
 func (a *App) queueResearch2FinalEmail(runtime *research2app.Runtime, chain research2.ExecutionChain) {

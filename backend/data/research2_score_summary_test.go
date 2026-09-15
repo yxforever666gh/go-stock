@@ -35,7 +35,7 @@ func TestResearch2ScoreIndexNumbersSurviveCollectorSummaryCap(t *testing.T) {
 	encoded, _ := json.Marshal(map[string]any{"america": overseas, "asia": domestic, "common": domestic})
 	collector := newResearch2StructuredCollector(t, at, research2StructuredRows(at, 20), 20, 5)
 	collector.sources = research2IndexFixture{&research2StructuredSourceFixture{cutoff: at}, string(encoded)}
-	evidence, err := collector.Collect(context.Background(), at)
+	evidence, err := collector.Collect(context.Background(), at, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}

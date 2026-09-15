@@ -24,9 +24,8 @@ const type = status => status === 'success' ? 'success' : status === 'failed' ? 
 const show = row => detailRequest.show(row.runId)
 const columns = [
   {title: '交易日', key: 'tradingDate', width: 110},
-  {title: '批次', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
+  {title: '尝试', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
   {title: '触发', key: 'triggerSource', width: 125, render: row => row.triggerSource || '--'},
-  {title: '主/备', key: 'selectionCounts', width: 90, render: row => `${row.primaryCount || 0}/${row.standbyCount || 0}`},
   {title: '启动时间', key: 'startedAt', width: 170, render: row => dateTime(row.startedAt)},
   {title: '报告产生时间', key: 'generatedAt', width: 170, render: row => dateTime(row.generatedAt)},
   {title: '证据覆盖', key: 'evidenceCoveragePct', width: 105, render: row => coverage(row.evidenceCoveragePct)},
@@ -49,7 +48,7 @@ onMounted(() => { void refresh(); polling.start({immediate: false}) })
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">任务启动窗口为交易日 [09:55,11:50)，使用最近5个已闭合交易分钟；09:55正常运行对应09:50—09:55，午休启动固定使用 11:25—11:30。主选与候选展示满三只停止分析；不足时等待10分钟补位，执行失败沿用递补规则；报告在 13:00 前生成才进入模拟执行，13:00 起生成的推荐仅用于分析。</n-alert>
+    <n-alert type="info" :bordered="false">交易日09:50启动，任务启动窗口为 [09:50,11:50)，使用最近5个已闭合交易分钟；09:50正常运行对应09:45—09:50，午休启动固定使用11:25—11:30。每天最多生成一份有效报告，失败不计入次数，可在启动窗口内重试；报告生成后不再重新分析。按分数排序尝试买入，最多成交3只，不设置最低分数。报告在13:00前生成才进入模拟执行，13:00起生成的推荐仅用于分析。</n-alert>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>
@@ -63,9 +62,9 @@ onMounted(() => { void refresh(); polling.start({immediate: false}) })
             <ResearchAuditPanel owner-type="research2" :owner-id="String(detail.runId)" :active="visible">
               <template #final-result>
                 <n-descriptions bordered :column="3" style="margin-bottom:12px">
-                  <n-descriptions-item label="分析批次">第{{detail.attemptNo || 1}}次</n-descriptions-item>
-                  <n-descriptions-item label="补位触发">{{detail.triggerSource || '--'}}</n-descriptions-item>
-                  <n-descriptions-item label="请求席位 / 主备">{{detail.requestedSlots || 0}} / {{detail.primaryCount || 0}}+{{detail.standbyCount || 0}}</n-descriptions-item>
+                  <n-descriptions-item label="分析尝试">第{{detail.attemptNo || 1}}次</n-descriptions-item>
+                  <n-descriptions-item label="触发来源">{{detail.triggerSource || '--'}}</n-descriptions-item>
+                  <n-descriptions-item label="本次可买名额">{{detail.requestedSlots || 0}}</n-descriptions-item>
                   <n-descriptions-item label="启动时间">{{dateTime(detail.startedAt)}}</n-descriptions-item>
                   <n-descriptions-item label="报告产生时间">{{dateTime(detail.generatedAt)}}</n-descriptions-item>
                   <n-descriptions-item label="证据覆盖">{{coverage(detail.evidenceCoveragePct)}}</n-descriptions-item>

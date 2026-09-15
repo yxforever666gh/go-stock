@@ -70,11 +70,11 @@ async function pageComponent(filename) {
   return {...component, render: () => null}
 }
 
-test('research2 shows selected primary slots before buying and explains historical scores', async () => {
+test('research2 uses server ranks and execution states without selection roles or score gates', async () => {
   const rows = [
-    {recommendationId: 'first', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'primary', displaySelectionRank: 1},
-    {recommendationId: 'second', selectionRole: 'primary', selectionRank: 2, displaySelectionRole: 'primary', displaySelectionRank: 2},
-    {recommendationId: 'promoted', selectionRole: 'standby', selectionRank: 4, displaySelectionRole: 'primary', displaySelectionRank: 3},
+    {recommendationId: 'first', selectionRank: 1, displaySelectionRank: 1, finalScore: 51, status: 'buy_pending'},
+    {recommendationId: 'second', selectionRank: 2, displaySelectionRank: 2, finalScore: 50, status: 'buy_pending'},
+    {recommendationId: 'promoted', selectionRole: 'observation', selectionRank: 4, displaySelectionRank: 3, finalScore: 30, status: 'active', buyAt: '2026-09-15T09:52:00+08:00', buyPrice: 10, quantity: 100},
     {recommendationId: 'pending', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: 'primary', displaySelectionRank: 3, finalScore: 57, status: 'buy_pending'},
     {recommendationId: 'standby', selectionRole: 'observation', status: 'analysis_only', selectionRank: 5, displaySelectionRole: 'candidate', displaySelectionRank: 3},
     {recommendationId: 'failed', selectionRole: 'primary', selectionRank: 1, displaySelectionRole: '', displaySelectionRank: 0},
@@ -85,22 +85,76 @@ test('research2 shows selected primary slots before buying and explains historic
   try {
     await flush()
     const state = vm.$.setupState
-    const role = state.columnsRef.find(column => column.key === 'selectionRole')
-    assert.equal(role.title, '主选 / 候选')
-    assert.deepEqual(state.rows.map(state.selectionLabel), ['主选 1', '主选 2', '主选 3', '主选 3', '候选 3', '--'])
-    assert.equal(role.render(rows[0]).props.type, 'success')
-    assert.equal(role.render(rows[4]).props.type, 'info')
+    const rank = state.columnsRef.find(column => column.key === 'displaySelectionRank')
+    assert.equal(rank.title, '排名')
+    assert.equal(state.columnsRef.some(column => column.key === 'selectionRole'), false)
+    assert.deepEqual(state.rows.map(rank.render), ['1', '2', '3', '3', '3', '--'])
+    assert.equal(state.statusLabel(rows[0]), '待买入')
+    assert.equal(state.statusLabel(rows[1]), '待买入')
+    assert.equal(state.statusLabel(rows[2]), '持仓中')
     assert.equal(state.statusLabel(rows[3]), '待买入')
-    assert.equal(role.render(rows[3]).props.type, 'success')
-    assert.equal(state.statusLabel(rows[4]), '仅观察')
+    assert.equal(state.statusLabel(rows[4]), '仅分析')
     assert.equal(state.columnsRef.find(column => column.key === 'quantity').render(rows[4]), '--')
     assert.equal(state.columnsRef.find(column => column.key === 'netYieldRate').render(rows[4]), '--')
     assert.equal(state.hasScoreExplanation({reportMarkdown: '# 历史报告'}), false)
     assert.equal(state.hasScoreExplanation({reportMarkdown: '# 报告\n\n## 分项评分依据\n市场18分'}), true)
     const source = await readFile(new URL('research2Recommendations.vue', import.meta.url), 'utf8')
-    assert.match(source, /原始批次主选 \/ 候选/)
+    assert.match(source, /报告排名/)
+    assert.doesNotMatch(source, /主选|候选|selectionRole|displaySelectionRole/)
+    assert.match(source, /当前现金不足一手时跳过/)
+    assert.match(source, /含费总成本不得超过当前可用现金/)
     assert.match(source, /历史未记录逐项评分说明/)
     for (const field of ['marketScore', 'sectorScore', 'stockScore', 'catalystScore', 'riskDeduction']) assert.ok(source.includes(`detail.recommendation.${field}`))
+  } finally {
+    app.unmount()
+    delete globalThis.__researchPageFixtures
+  }
+})
+
+test('research2 report explains the one-report daily limit and does not offer another analysis', async () => {
+  globalThis.__researchPageFixtures = {ListResearch2Runs: async () => [], GetResearch2Run: async () => ({})}
+  const app = renderer.createApp(await pageComponent('research2Report.vue'))
+  const vm = app.mount({})
+  try {
+    await flush()
+    const state = vm.$.setupState
+    assert.equal(state.columns.some(column => column.key === 'selectionCounts'), false)
+    assert.equal(state.columns.find(column => column.key === 'attemptNo').title, '尝试')
+    for (const status of ['failed', 'success', 'no_recommendation']) {
+      const action = state.columns.find(column => column.key === 'action').render({status, runId: status})
+      assert.equal(action.children, '查看')
+    }
+    const source = await readFile(new URL('research2Report.vue', import.meta.url), 'utf8')
+    assert.match(source, /\[09:50,11:50\)/)
+    assert.match(source, /09:45—09:50/)
+    assert.match(source, /每天最多生成一份有效报告，失败不计入次数/)
+    assert.doesNotMatch(source, /主选|候选|补位|主备|主\/备|09:55/)
+  } finally {
+    app.unmount()
+    delete globalThis.__researchPageFixtures
+  }
+})
+
+test('research2 yield keeps unbought rows out of displayed returns regardless of score and legacy role', async () => {
+  const rows = [
+    {recommendationId: 'pending', status: 'buy_pending', finalScore: 10, netPnl: 0, netYieldRate: 0},
+    {recommendationId: 'skipped', status: 'missed_cash', finalScore: 90, netPnl: 0, netYieldRate: 0},
+    {recommendationId: 'analysis', status: 'analysis_only', selectionRole: 'observation', netPnl: 0, netYieldRate: 0},
+    {recommendationId: 'bought', status: 'active', selectionRole: 'observation', finalScore: 0, buyAt: '2026-09-15T09:52:00+08:00', buyPrice: 10, quantity: 100, netPnl: 8, netYieldRate: 0.008},
+  ]
+  globalThis.__researchPageFixtures = {GetResearch2Performance: async () => ({}), ListResearch2Recommendations: async () => rows}
+  const app = renderer.createApp(await pageComponent('research2Yield.vue'))
+  const vm = app.mount({})
+  try {
+    await flush()
+    const state = vm.$.setupState
+    for (const key of ['quantity', 'netPnl', 'netYieldRate', 'hitFiveBeforeSell', 'hitLimitUpFullDay', 'hitMinusThree']) {
+      const column = state.columns.find(column => column.key === key)
+      for (const row of rows.slice(0, 3)) assert.equal(column.render(row), '--')
+    }
+    assert.equal(state.columns.find(column => column.key === 'quantity').render(rows[3]), '100')
+    assert.notEqual(state.columns.find(column => column.key === 'netPnl').render(rows[3]), '--')
+    assert.equal(state.hasBuy(rows[3]), true)
   } finally {
     app.unmount()
     delete globalThis.__researchPageFixtures

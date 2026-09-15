@@ -14,7 +14,7 @@ import (
 func TestResearch2ScorePromptSeparatesSnapshotAndFreeze(t *testing.T) {
 	t0 := time.Date(2026, 9, 8, 10, 0, 2, 0, shanghai())
 	freeze := time.Date(2026, 9, 8, 10, 0, 21, 455695000, shanghai())
-	prompt := buildPrompt(prepareEvidence(Evidence{CutoffAt: t0, FreezeAt: freeze, Prompt: `{}`}, time.Time{}), t0)
+	prompt := buildPrompt(prepareEvidence(Evidence{AvailableCash: InitialCash, CutoffAt: t0, FreezeAt: freeze, Prompt: `{}`}, time.Time{}), t0)
 	if !strings.Contains(prompt, "辅助来源") || !strings.Contains(prompt, "证据冻结时间") || strings.Contains(prompt, "所有指标只使用证据截止时间") {
 		t.Fatal("prompt incorrectly applies the quote cutoff to auxiliary collection")
 	}
@@ -34,7 +34,7 @@ func scoreFixtureRefs(code string) []string {
 // Tests that exercise execution or score arithmetic still supply the same
 // minimum provenance that a real collector must expose.
 func scoreFixtureEvidence(at time.Time, candidates ...researchevidence.StockCandidate) Evidence {
-	evidence := Evidence{Prompt: `{}`, CutoffAt: at, SourceStatusJSON: `[]`, Candidates: candidates,
+	evidence := Evidence{AvailableCash: InitialCash, Prompt: `{}`, CutoffAt: at, SourceStatusJSON: `[]`, Candidates: candidates,
 		Documents: []researchevidence.SourceDocument{scoreAuditDocument("market", "market", `{"advances":4000}`, at)}}
 	for _, candidate := range candidates {
 		code := candidate.Code
@@ -110,7 +110,7 @@ func TestRunnerPreparedScoresSurviveRepairAndKnowledgeWithoutChangingFrozenEvide
 
 func TestRecommendationsCannotBypassEvidenceWithNilDocuments(t *testing.T) {
 	at := time.Date(2026, 9, 8, 10, 0, 0, 0, shanghai())
-	evidence := prepareEvidence(Evidence{CutoffAt: at, Candidates: []researchevidence.StockCandidate{{Code: "sh600343"}}}, time.Time{})
+	evidence := prepareEvidence(Evidence{AvailableCash: InitialCash, CutoffAt: at, Candidates: []researchevidence.StockCandidate{{Code: "sh600343"}}}, time.Time{})
 	value := modelRecommendation{Code: "sh600343", MarketScore: 20, StockScore: 40, FinalScore: 60, ReferencePrice: 10, SourceRefs: []string{"missing"}}
 	items, warnings := validateRecommendations("run", at, evidence, []modelRecommendation{value})
 	if len(items) != 0 || len(warnings) == 0 || len(validateModelSourceRefs([]modelRecommendation{value}, evidence)) == 0 {
@@ -355,7 +355,7 @@ func TestResearch2ScoreSavedSeptemberSamplesRemainUnchanged(t *testing.T) {
 	}
 }
 
-func TestResearch2ScoreSourceValidationKeepsThresholdAndExplainsZero(t *testing.T) {
+func TestResearch2ScoreSourceValidationExplainsZeroWithoutExecutionThreshold(t *testing.T) {
 	t0 := time.Date(2026, 9, 8, 10, 0, 2, 0, shanghai())
 	freeze := t0.Add(20 * time.Second)
 	since := t0.Add(-19 * time.Hour)
@@ -367,7 +367,7 @@ func TestResearch2ScoreSourceValidationKeepsThresholdAndExplainsZero(t *testing.
 	}
 	candidates := []researchevidence.StockCandidate{{Code: "sh600343", Name: "航天动力"}}
 	value := modelRecommendation{Code: "sh600343", MarketScore: 18, StockScore: 37, RiskDeduction: 3, FinalScore: 52, ReferencePrice: 19.61, SourceRefs: []string{"market", "stock-sh600343", "概念 sh600343", "公告 sh600343"}, ScoreReasons: map[string]string{"sector": "板块资料可用，本轮未奖励该项"}}
-	evidence := prepareEvidence(Evidence{CutoffAt: t0, FreezeAt: freeze, Candidates: candidates, Documents: docs}, since)
+	evidence := prepareEvidence(Evidence{AvailableCash: InitialCash, CutoffAt: t0, FreezeAt: freeze, Candidates: candidates, Documents: docs}, since)
 	items, warnings := validateRecommendations("run", t0, evidence, []modelRecommendation{value})
 	if len(items) != 1 || items[0].FinalScore != 52 || len(warnings) != 0 {
 		t.Fatalf("saved scoring baseline changed: items=%+v warnings=%v", items, warnings)
@@ -386,8 +386,8 @@ func TestResearch2ScoreSourceValidationKeepsThresholdAndExplainsZero(t *testing.
 	value.StockScore = 35
 	value.FinalScore = 50
 	items, _ = validateRecommendations("run", t0, evidence, []modelRecommendation{value})
-	assignResearch2SelectionRoles(items, 3)
-	if len(items) != 1 || items[0].SelectionRole != "observation" || items[0].Status != "analysis_only" {
-		t.Fatal("50-point candidate became executable")
+	assignResearch2SelectionRanks(items)
+	if len(items) != 1 || items[0].SelectionRole != "" || items[0].Status != "buy_pending" {
+		t.Fatal("50-point candidate was incorrectly excluded")
 	}
 }

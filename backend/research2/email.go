@@ -169,7 +169,7 @@ func reportEmailContent(run AnalysisRun) (string, string) {
 	} else if run.Status == "missed_window" {
 		suffix = "错过交易窗口"
 	} else if run.Status == "failed" {
-		suffix = "补位失败"
+		suffix = "分析失败"
 	}
 	attemptNo := normalizedAttemptNo(run.AttemptNo)
 	subject := fmt.Sprintf("[go-stock][研究中心2] %s 第%d次尝试 %s", run.TradingDate, attemptNo, suffix)

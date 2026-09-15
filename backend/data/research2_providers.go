@@ -205,12 +205,12 @@ type research2EvidenceCollector struct {
 
 var _ research2app.EvidenceProvider = (*research2EvidenceCollector)(nil)
 
-func (c *research2EvidenceCollector) Collect(ctx context.Context, cutoff time.Time) (research2.Evidence, error) {
-	return c.collectStructuredEvidence(ctx, cutoff)
+func (c *research2EvidenceCollector) Collect(ctx context.Context, cutoff time.Time, availableCash float64) (research2.Evidence, error) {
+	return c.collectStructuredEvidence(ctx, cutoff, availableCash)
 }
 
-func (c *research2EvidenceCollector) CollectWithExclusions(ctx context.Context, cutoff time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
-	return c.collectStructuredEvidenceWithExclusions(ctx, cutoff, excludedCodes)
+func (c *research2EvidenceCollector) CollectWithExclusions(ctx context.Context, cutoff time.Time, excludedCodes map[string]struct{}, availableCash float64) (research2.Evidence, error) {
+	return c.collectStructuredEvidenceWithExclusions(ctx, cutoff, excludedCodes, availableCash)
 }
 
 func validateResearch2CandidateCutoff(experimental bool, availableAt, cutoff time.Time) error {
@@ -428,7 +428,7 @@ func (c *research2EvidenceCollector) fetchFullMarketRequest(ctx context.Context,
 	return research2MarketResponse{}, lastErr
 }
 
-func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}, isOpen func(time.Time) (bool, error)) []researchevidence.StockCandidate {
+func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit int, asOf time.Time, excludedCodes map[string]struct{}, isOpen func(time.Time) (bool, error), availableCash float64) []researchevidence.StockCandidate {
 	excluded := normalizeResearch2ExcludedCodes(excludedCodes)
 	eligible := make([]research2MarketRow, 0, len(rows))
 	for _, row := range rows {
@@ -450,7 +450,7 @@ func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit in
 			continue
 		}
 		lot, lotErr := trading.LotSize(code)
-		if lotErr != nil || -trading.CalculateBuyCost(row.Price, lot).NetCashFlow > research2.InitialCash {
+		if lotErr != nil || -trading.CalculateBuyCost(row.Price, lot).NetCashFlow > availableCash {
 			continue
 		}
 		eligible = append(eligible, row)

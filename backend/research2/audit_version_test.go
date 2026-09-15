@@ -11,7 +11,7 @@ import (
 )
 
 func TestRunnerAuditVersionsCoexistWithLegacyAndReuseContent(t *testing.T) {
-	const valid = `{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`
+	const valid = fixtureModelResponse
 	for _, scenario := range []struct {
 		name     string
 		client   func(*time.Time) aicontract.AIClient
@@ -59,7 +59,7 @@ func TestRunnerAuditVersionsCoexistWithLegacyAndReuseContent(t *testing.T) {
 			versionByPhase := map[string]string{}
 			for day := 0; day < 2; day++ {
 				now := time.Date(2026, 9, 8+day, 9, 57, 0, 0, shanghai())
-				runner := NewRunner(repository, scenario.client(&now), fixedEvidence{value: Evidence{Prompt: "fixture evidence", SourceStatusJSON: "[]"}}, testCalendar{})
+				runner := NewRunner(repository, scenario.client(&now), fixedEvidence{value: modelCallEvidence(now, "fixture evidence")}, testCalendar{})
 				runner.ConfigureAudit(recorder)
 				runner.ConfigureReplayClock(func() time.Time { return now }, func(context.Context, time.Time) error { return nil })
 				run, err := runner.Run(ctx, now)

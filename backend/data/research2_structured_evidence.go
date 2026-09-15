@@ -844,11 +844,11 @@ func research2ListingDates(ctx context.Context, database *gorm.DB) map[string]in
 	return result
 }
 
-func (c *research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, startedAt time.Time) (research2.Evidence, error) {
-	return c.collectStructuredEvidenceWithExclusions(ctx, startedAt, nil)
+func (c *research2EvidenceCollector) collectStructuredEvidence(ctx context.Context, startedAt time.Time, availableCash float64) (research2.Evidence, error) {
+	return c.collectStructuredEvidenceWithExclusions(ctx, startedAt, nil, availableCash)
 }
 
-func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx context.Context, startedAt time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
+func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx context.Context, startedAt time.Time, excludedCodes map[string]struct{}, availableCash float64) (research2.Evidence, error) {
 	if c == nil || c.sources == nil || c.stocks == nil || c.minuteWindows == nil ||
 		(c.market == nil && (c.collectBreadth == nil || c.collectFlows == nil)) {
 		return research2.Evidence{CutoffAt: startedAt}, errors.New("research2 evidence collector is unavailable")
@@ -940,7 +940,7 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 		}
 		candidateRows = append(candidateRows, row)
 	}
-	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes, minuteProvidersForStocks(c.stocks).calendar.cacheForTask().isTradingDayStrict)
+	selected := selectResearch2CandidatesWithExclusions(candidateRows, 12, cutoff, excludedCodes, minuteProvidersForStocks(c.stocks).calendar.cacheForTask().isTradingDayStrict, availableCash)
 	windows := collectResearch2CandidateWindows(collectionCtx, c.minuteWindows, selected, marketSnapshot.Rows, windowStart, windowEnd)
 
 	type documentsResult struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +19,14 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+const fixtureModelResponse = `{"tradingDay":true,"conclusion":"按证据评分","recommendations":[{"code":"sh600000","marketScore":10,"stockScore":20,"finalScore":30,"referencePrice":10,"sourceRefs":["market","quote-sh600000"]}]}`
+
+func modelCallEvidence(at time.Time, prompt string) Evidence {
+	evidence := scoreFixtureEvidence(at, researchevidence.StockCandidate{Code: "sh600000"})
+	evidence.Prompt = prompt
+	return evidence
+}
 
 type sequenceAI struct {
 	responses []string
@@ -42,7 +51,7 @@ func (multiAttemptAI) Complete(_ context.Context, request aicontract.CompletionR
 		succeededAt := failedAt.Add(time.Second)
 		request.OnAttempt(aicontract.ModelAttemptRecord{ID: "provider-attempt-2", Phase: request.Phase, ConfigID: 7, ProviderName: "primary", ModelName: "fixture", Attempt: 2, MaxAttempts: 2, StartedAt: failedAt, CompletedAt: &succeededAt, Status: "success"})
 	}
-	return aicontract.CompletionResult{Content: `{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`, Model: "fixture"}, nil
+	return aicontract.CompletionResult{Content: fixtureModelResponse, Model: "fixture"}, nil
 }
 
 func (a *advancingAI) Complete(_ context.Context, _ aicontract.CompletionRequest) (aicontract.CompletionResult, error) {
@@ -79,15 +88,20 @@ func (retriever *fixtureKnowledgeRetriever) RetrieveForResearch(_ context.Contex
 
 type fixedEvidence struct{ value Evidence }
 
-func (e fixedEvidence) Collect(context.Context, time.Time) (Evidence, error) { return e.value, nil }
+func (e fixedEvidence) Collect(_ context.Context, _ time.Time, cash float64) (Evidence, error) {
+	e.value.AvailableCash = cash
+	return e.value, nil
+}
 
 type recordingEvidence struct {
 	value  Evidence
 	cutoff time.Time
+	cash   float64
 }
 
-func (e *recordingEvidence) Collect(_ context.Context, cutoff time.Time) (Evidence, error) {
-	e.cutoff = cutoff
+func (e *recordingEvidence) Collect(_ context.Context, cutoff time.Time, cash float64) (Evidence, error) {
+	e.cutoff, e.cash = cutoff, cash
+	e.value.AvailableCash = cash
 	return e.value, nil
 }
 
@@ -96,11 +110,11 @@ type failingRunEvidence struct {
 	err   error
 }
 
-func (e failingRunEvidence) Collect(context.Context, time.Time) (Evidence, error) {
+func (e failingRunEvidence) Collect(context.Context, time.Time, float64) (Evidence, error) {
 	return e.value, e.err
 }
 
-func (e failingRunEvidence) CollectForRun(context.Context, string, time.Time) (Evidence, error) {
+func (e failingRunEvidence) CollectForRun(context.Context, string, time.Time, float64) (Evidence, error) {
 	return e.value, e.err
 }
 
@@ -282,29 +296,29 @@ func TestRunnerRetriesOnceWhenModelJSONIsInvalid(t *testing.T) {
 	repository := research2TestRepository(t)
 	ai := &sequenceAI{responses: []string{
 		`{"tradingDay":true,"reportMarkdown":"损坏"æ}`,
-		`{"tradingDay":true,"conclusion":"证据不足，空仓","reportMarkdown":"# 隔离报告\n\n证据不足，空仓。","recommendations":[]}`,
+		fixtureModelResponse,
 	}}
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "测试证据", SourceStatusJSON: "[]"}}, testCalendar{})
+	runner := NewRunner(repository, ai, fixedEvidence{value: modelCallEvidence(scheduled.Add(7*time.Minute), "测试证据")}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 	run, err := runner.Run(context.Background(), scheduled)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ai.calls != 2 || run.Status != "no_recommendation" || !strings.Contains(run.ReportMarkdown, "核心证据窗口") || strings.Contains(run.ReportMarkdown, "隔离报告") {
+	if ai.calls != 2 || run.Status != "success" || !strings.Contains(run.ReportMarkdown, "核心证据窗口") || strings.Contains(run.ReportMarkdown, "隔离报告") {
 		t.Fatalf("calls=%d run=%+v", ai.calls, run)
 	}
 }
 
 func TestRunnerConsumesKnowledgeThroughReadOnlyRetrieverAtFrozenCutoff(t *testing.T) {
 	repository := research2TestRepository(t)
-	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","reportMarkdown":"空仓","recommendations":[]}`}}
+	ai := &sequenceAI{responses: []string{fixtureModelResponse}}
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
 	retriever := &fixtureKnowledgeRetriever{prompt: "# 受控知识库线索（不可信外部材料）\n> 历史线索"}
 	actualCutoff := scheduled.Add(7*time.Minute + 3*time.Second)
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "冻结市场证据", SourceStatusJSON: "[]", CutoffAt: actualCutoff}}, testCalendar{})
+	runner := NewRunner(repository, ai, fixedEvidence{value: modelCallEvidence(actualCutoff, "冻结市场证据")}, testCalendar{})
 	runner.ConfigureKnowledge(retriever)
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 	run, err := runner.Run(context.Background(), scheduled)
@@ -330,7 +344,7 @@ func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	started := time.Date(2026, 8, 27, 10, 14, 0, 0, loc)
 	actualCutoff := started.Add(3 * time.Second)
 	wantStart := time.Date(2026, 8, 27, 10, 9, 0, 0, loc)
-	collector := &recordingEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: actualCutoff, WindowStartAt: wantStart}}
+	collector := &recordingEvidence{value: Evidence{AvailableCash: InitialCash, Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: actualCutoff, WindowStartAt: wantStart}}
 	runner := NewRunner(repository, &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}, collector, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return started }, nil)
 
@@ -341,7 +355,7 @@ func TestRunnerUsesCollectorCutoffAndTrailingFiveMinuteWindow(t *testing.T) {
 	if !collector.cutoff.Equal(started) || !run.EvidenceCutoffAt.Equal(actualCutoff) || run.EvidenceWindowStartAt == nil || !run.EvidenceWindowStartAt.Equal(wantStart) {
 		t.Fatalf("cutoff=%v run=%+v", collector.cutoff, run)
 	}
-	if run.StrategyVersion != "research2-trailing5-v9" || run.AttemptNo != 1 {
+	if run.StrategyVersion != CurrentStrategyVersion || run.AttemptNo != 1 {
 		t.Fatalf("strategyVersion=%q", run.StrategyVersion)
 	}
 }
@@ -369,15 +383,15 @@ func TestRunnerRetriesFailedEvidenceBeforeReturningTerminalRun(t *testing.T) {
 	}
 
 	secondAI := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}
-	secondEvidence := &recordingEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: started.Add(time.Second)}}
+	secondEvidence := &recordingEvidence{value: Evidence{AvailableCash: InitialCash, Prompt: `{}`, SourceStatusJSON: `[]`, CutoffAt: started.Add(time.Second)}}
 	second := NewRunner(repository, secondAI, secondEvidence, testCalendar{})
 	second.ConfigureReplayClock(func() time.Time { return started.Add(time.Minute) }, nil)
 	retried, err := second.Run(context.Background(), scheduled)
 	if err != nil || retried.Status != "no_recommendation" || retried.AttemptNo != 2 || retried.RunID == failed.RunID {
 		t.Fatalf("second=%+v err=%v", retried, err)
 	}
-	if secondAI.calls != 1 || !secondEvidence.cutoff.Equal(started.Add(time.Minute)) {
-		t.Fatalf("retry did not recollect and call AI: calls=%d cutoff=%v reason=%s", secondAI.calls, secondEvidence.cutoff, retried.FailureReason)
+	if secondAI.calls != 0 || !secondEvidence.cutoff.Equal(started.Add(time.Minute)) {
+		t.Fatalf("retry did not recollect empty evidence: calls=%d cutoff=%v reason=%s", secondAI.calls, secondEvidence.cutoff, retried.FailureReason)
 	}
 
 	thirdAI := &sequenceAI{responses: []string{`{}`}}
@@ -397,9 +411,10 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 		started time.Time
 		accept  bool
 	}{
-		{name: "old start", started: time.Date(2026, 8, 27, 9, 50, 0, 0, loc)},
-		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 54, 59, 0, loc)},
-		{name: "open", started: time.Date(2026, 8, 27, 9, 55, 0, 0, loc), accept: true},
+		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 49, 59, 0, loc)},
+		{name: "open", started: time.Date(2026, 8, 27, 9, 50, 0, 0, loc), accept: true},
+		{name: "after open", started: time.Date(2026, 8, 27, 9, 54, 59, 0, loc), accept: true},
+		{name: "five minutes later", started: time.Date(2026, 8, 27, 9, 55, 0, 0, loc), accept: true},
 		{name: "11:30 remains open", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc), accept: true},
 		{name: "last second", started: time.Date(2026, 8, 27, 11, 49, 59, 0, loc), accept: true},
 		{name: "analysis cutoff", started: time.Date(2026, 8, 27, 11, 50, 0, 0, loc)},
@@ -409,7 +424,7 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			repository := research2TestRepository(t)
 			ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}
-			runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: `{}`, SourceStatusJSON: `[]`}}, testCalendar{})
+			runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{AvailableCash: InitialCash, Prompt: `{}`, SourceStatusJSON: `[]`}}, testCalendar{})
 			runner.ConfigureReplayClock(func() time.Time { return test.started }, nil)
 
 			run, err := runner.Run(context.Background(), scheduled)
@@ -418,7 +433,7 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 				t.Fatal(countErr)
 			}
 			if test.accept {
-				if err != nil || run.Status != "no_recommendation" || ai.calls != 1 || count != 1 {
+				if err != nil || run.Status != "no_recommendation" || ai.calls != 0 || count != 1 {
 					t.Fatalf("run=%+v calls=%d rows=%d err=%v", run, ai.calls, count, err)
 				}
 				return
@@ -509,13 +524,13 @@ func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
 func TestBuildPromptUsesCompactInjectedEvidenceWithoutReportOrBuyRange(t *testing.T) {
 	loc := shanghai()
 	cutoff := time.Date(2026, 8, 27, 10, 14, 0, 0, loc)
-	prompt := buildPrompt(prepareEvidence(Evidence{CutoffAt: cutoff, Prompt: `{"candidates":[{"code":"sh600000"}]}`, WindowStartAt: cutoff.Add(-5 * time.Minute)}, time.Time{}), cutoff)
+	prompt := buildPrompt(prepareEvidence(Evidence{AvailableCash: InitialCash, CutoffAt: cutoff, Prompt: `{"candidates":[{"code":"sh600000"}]}`, WindowStartAt: cutoff.Add(-5 * time.Minute)}, time.Time{}), cutoff)
 	for _, forbidden := range []string{"https://", "reportMarkdown", "buyLower", "buyUpper", "09:55冻结"} {
 		if strings.Contains(prompt, forbidden) {
 			t.Fatalf("prompt contains forbidden %q: %s", forbidden, prompt)
 		}
 	}
-	for _, required := range []string{"research2-trailing5-v9", "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
+	for _, required := range []string{CurrentStrategyVersion, "2026-08-27 10:09:00", "2026-08-27 10:14:00", "系统注入的紧凑结构化证据"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt missing %q: %s", required, prompt)
 		}
@@ -531,7 +546,7 @@ func TestRunnerRepairsInvalidSourceRefsAndStoresOnlyStableIDs(t *testing.T) {
 		`{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":0,"stockScore":36,"catalystScore":0,"riskDeduction":0,"finalScore":51,"referencePrice":10,"sourceRefs":["missing"]}]}`,
 		`{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":0,"stockScore":36,"catalystScore":0,"riskDeduction":0,"finalScore":51,"referencePrice":10,"sourceRefs":["market","quote-sh600000"]}]}`,
 	}}
-	evidence := Evidence{
+	evidence := Evidence{AvailableCash: InitialCash,
 		Prompt:           `{"sources":[{"sourceId":"market"},{"sourceId":"quote-sh600000"}]}`,
 		SourceStatusJSON: `[]`,
 		Candidates:       []researchevidence.StockCandidate{{Code: "sh600000", Name: "浦发银行"}},
@@ -574,11 +589,11 @@ func TestRunnerRecordsBothModelCallsWithActualProviderAndIsolatedRetryLogs(t *te
 	}
 	ai := &sequenceAI{responses: []string{
 		`{"tradingDay":true,"reportMarkdown":"损坏"æ}`,
-		`{"tradingDay":true,"conclusion":"空仓","reportMarkdown":"空仓","recommendations":[]}`,
+		fixtureModelResponse,
 	}}
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	runner := NewRunner(repository, ai, fixedEvidence{value: Evidence{Prompt: "测试证据", SourceStatusJSON: "[]"}}, testCalendar{})
+	runner := NewRunner(repository, ai, fixedEvidence{value: modelCallEvidence(scheduled.Add(7*time.Minute), "测试证据")}, testCalendar{})
 	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(repository.DB())))
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 	run, err := runner.Run(context.Background(), scheduled)
@@ -609,7 +624,7 @@ func TestRunnerRecordsEveryProviderAttemptAsImmutablePayload(t *testing.T) {
 	}
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	runner := NewRunner(repository, multiAttemptAI{}, fixedEvidence{value: Evidence{Prompt: `{"version":"research2-trailing5-v3","candidates":[],"sources":[]}`, SourceStatusJSON: "[]"}}, testCalendar{})
+	runner := NewRunner(repository, multiAttemptAI{}, fixedEvidence{value: modelCallEvidence(scheduled.Add(7*time.Minute), "provider retry evidence")}, testCalendar{})
 	runner.ConfigureAudit(researchaudit.NewRecorder(researchaudit.NewRepository(repository.DB())))
 	runner.ConfigureReplayClock(func() time.Time { return scheduled.Add(7 * time.Minute) }, func(context.Context, time.Time) error { return nil })
 	run, err := runner.Run(context.Background(), scheduled)
@@ -626,7 +641,7 @@ func TestRunnerRecordsEveryProviderAttemptAsImmutablePayload(t *testing.T) {
 	if !strings.Contains(view.Payloads[0].RepairLog, "network_error") || view.Payloads[0].RawResponse != "" {
 		t.Fatalf("failed attempt was not archived correctly: %+v", view.Payloads[0])
 	}
-	if !strings.Contains(view.Payloads[1].RawResponse, `"conclusion":"空仓"`) {
+	if !strings.Contains(view.Payloads[1].RawResponse, `"code":"sh600000"`) || !strings.Contains(view.Payloads[1].RawResponse, `"finalScore":30`) {
 		t.Fatalf("successful attempt response is missing: %+v", view.Payloads[1])
 	}
 }
@@ -636,7 +651,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	loc := shanghai()
 	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
 	collectorErr := errors.New("fixture collection failed")
-	runner := NewRunner(repository, &sequenceAI{responses: []string{`{}`}}, failingRunEvidence{value: Evidence{
+	runner := NewRunner(repository, &sequenceAI{responses: []string{`{}`}}, failingRunEvidence{value: Evidence{AvailableCash: InitialCash,
 		EvidenceProfileVersion: "profile-test",
 		EvidenceSetID:          "evidence-set-test",
 		SourceStatusJSON:       `[{"source":"fixture","status":"unavailable"}]`,
@@ -651,7 +666,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	if err := repository.DB().Where("run_id = ?", run.RunID).First(&stored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != "research2-trailing5-v9" {
+	if stored.EvidenceSetID != "evidence-set-test" || stored.EvidenceProfileVersion != "profile-test" || stored.StrategyVersion != CurrentStrategyVersion {
 		t.Fatalf("failed run lost evidence association: %+v", stored)
 	}
 	if !strings.Contains(stored.SourceStatusJSON, "fixture") {
@@ -659,7 +674,7 @@ func TestRunnerPersistsEvidenceAssociationBeforeCollectionFailure(t *testing.T) 
 	}
 }
 
-func TestRunnerStoresScoreAbove50EvenWhenModelConclusionSaysStayOut(t *testing.T) {
+func TestRunnerStoresValidatedScoresEvenWhenModelConclusionSaysStayOut(t *testing.T) {
 	repository := research2TestRepository(t)
 	ai := &sequenceAI{responses: []string{
 		`{"tradingDay":true,"conclusion":"空仓，不推荐任何股票","reportMarkdown":"# 结论\n\n模型伪造报告。","recommendations":[{"code":"sh600000","name":"模型名称","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":51,"referencePrice":10,"buyLower":9,"buyUpper":11,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`,
@@ -757,7 +772,7 @@ func TestValidateAllocationUsesEqualCashFractions(t *testing.T) {
 	}
 }
 
-func TestTradingServiceBuysThreeRecommendationsAtAboutOneThirdEach(t *testing.T) {
+func TestTradingServiceRebalancesRemainingCashAfterEachBuy(t *testing.T) {
 	repository := research2TestRepository(t)
 	loc := shanghai()
 	now := time.Date(2026, 8, 27, 10, 0, 5, 0, loc)
@@ -780,55 +795,56 @@ func TestTradingServiceBuysThreeRecommendationsAtAboutOneThirdEach(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
+	expected := map[string]int64{"sh600000": 300, "sz000001": 400, "sz002594": 400}
+	total := 0.0
+	if len(bought) != 3 {
+		t.Fatalf("bought=%+v", bought)
+	}
 	for _, item := range bought {
-		if item.Status != "active" || item.Quantity != 300 {
+		if item.Status != "active" || item.Quantity != expected[item.StockCode] {
 			t.Fatalf("recommendation=%+v", item)
 		}
+		total -= trading.CalculateBuyCost(10, item.Quantity).NetCashFlow
 	}
 	overview, err := repository.Overview(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if overview.Cash >= 3000 || overview.Cash <= 2900 {
-		t.Fatalf("cash=%f; expected roughly 3000 after three equal one-third purchases", overview.Cash)
+	if err != nil || overview.Cash < 0 || math.Abs(overview.Cash-(InitialCash-total)) > 1e-7 {
+		t.Fatalf("cash=%f total=%f err=%v", overview.Cash, total, err)
 	}
 }
 
-func TestTradingServiceReallocatesAfterUnaffordableCandidate(t *testing.T) {
-	repository := research2TestRepository(t)
-	loc := shanghai()
-	now := time.Date(2026, 8, 27, 10, 0, 5, 0, loc)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-08-27", ScheduledFor: now.Add(-10 * time.Minute), StartedAt: now.Add(-10 * time.Minute), EvidenceCutoffAt: now.Add(-5 * time.Minute), Status: "success", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]", RecommendationCount: 3, OnTime: true}
-	if err := repository.CreateRun(context.Background(), &run); err != nil {
+func TestTradingServiceAllowsExpensiveFirstLotThenReallocatesRemainingCash(t *testing.T) {
+	r := research2TestRepository(t)
+	ctx := context.Background()
+	at := time.Date(2026, 8, 27, 10, 0, 5, 0, shanghai())
+	_, run := createChainRun(t, r, at)
+	prices := map[string]float64{"sh600000": 60, "sz000001": 10, "sz002594": 10}
+	items := []Recommendation{}
+	for i, code := range []string{"sh600000", "sz000001", "sz002594"} {
+		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: code, StockName: code, FinalScore: float64(70 - i), SelectionRank: i + 1, ReferencePrice: prices[code], SignalAt: at.Add(-time.Minute), TargetBuyAt: at, Status: "buy_pending"})
+	}
+	if err := r.CreateRecommendations(ctx, items); err != nil {
 		t.Fatal(err)
 	}
-	prices := map[string]float64{"sh600000": 10, "sz000001": 10, "sz002594": 60}
-	items := make([]Recommendation, 0, 3)
-	for _, code := range []string{"sh600000", "sz000001", "sz002594"} {
-		price := prices[code]
-		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: code, StockName: code, SignalAt: now.Add(-time.Minute), FinalScore: 60, ReferencePrice: price, BuyLower: price * 0.9, BuyUpper: price * 1.1, Status: "buy_pending", TargetBuyAt: now.Add(-5 * time.Second)})
-	}
-	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
+	if err := testTradingService(r, chainMarket{snapshots: map[string]PriceSnapshot{"sh600000": {Price: 60, PreviousClose: 60}, "sz000001": {Price: 10, PreviousClose: 10}, "sz002594": {Price: 10, PreviousClose: 10}}}, testCalendar{}).ProcessDue(ctx, at); err != nil {
 		t.Fatal(err)
 	}
-	service := testTradingService(repository, &recordingMarket{prices: prices}, testCalendar{})
-	if err := service.ProcessDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	result, err := repository.ListRecommendations(context.Background(), 10, 0)
+	stored, err := r.RunRecommendations(ctx, run.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, item := range result {
-		if item.StockCode == "sz002594" {
-			if item.Status != "missed_cash" {
-				t.Fatalf("high-priced third candidate should be skipped: %+v", item)
-			}
-			continue
+	total := 0.0
+	for _, item := range stored {
+		if item.Status != "active" || item.Quantity < 100 {
+			t.Fatalf("candidate not bought: %+v", item)
 		}
-		if item.Status != "active" || item.Quantity != 500 {
-			t.Fatalf("remaining candidates should each receive about one-half: %+v", item)
+		if item.StockCode == "sh600000" && item.Quantity != 100 {
+			t.Fatalf("expensive first lot=%+v", item)
 		}
+		total -= trading.CalculateBuyCost(prices[item.StockCode], item.Quantity).NetCashFlow
+	}
+	overview, err := r.Overview(ctx)
+	if err != nil || overview.Cash < 0 || math.Abs(overview.Cash-(InitialCash-total)) > 1e-7 {
+		t.Fatalf("cash conservation: %+v total=%f err=%v", overview, total, err)
 	}
 }
 

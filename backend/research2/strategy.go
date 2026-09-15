@@ -27,7 +27,10 @@ var strategyPrompt string
 
 var ErrOutsideAnalysisStartWindow = errors.New("research2 analysis start is outside the allowed window")
 
+const CurrentStrategyVersion = "research2-trailing5-v10"
+
 type Evidence struct {
+	AvailableCash            float64
 	Prompt                   string
 	SourceStatusJSON         string
 	Candidates               []researchevidence.StockCandidate
@@ -71,15 +74,15 @@ func prepareEvidence(evidence Evidence, catalystWindowStartAt time.Time) prepare
 }
 
 type EvidenceCollector interface {
-	Collect(context.Context, time.Time) (Evidence, error)
+	Collect(context.Context, time.Time, float64) (Evidence, error)
 }
 
 type RunEvidenceCollector interface {
-	CollectForRun(context.Context, string, time.Time) (Evidence, error)
+	CollectForRun(context.Context, string, time.Time, float64) (Evidence, error)
 }
 
 type FilteredRunEvidenceCollector interface {
-	CollectForRunWithExclusions(context.Context, string, time.Time, map[string]struct{}) (Evidence, error)
+	CollectForRunWithExclusions(context.Context, string, time.Time, map[string]struct{}, float64) (Evidence, error)
 }
 
 type Calendar interface {
@@ -220,13 +223,9 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	return r.run(ctx, scheduledFor, "", "", "")
 }
 
-// Rerun starts a new persisted attempt for the latest empty run, bypassing its cooldown.
+// Rerun retries a failed attempt only while the day has no valid report.
 func (r *Runner) Rerun(ctx context.Context, scheduledFor time.Time, parentRunID string) (AnalysisRun, error) {
 	return r.run(ctx, scheduledFor, "manual_rerun", "", parentRunID)
-}
-
-func (r *Runner) RunRefill(ctx context.Context, scheduledFor time.Time, chainID, parentRunID string) (AnalysisRun, error) {
-	return r.run(ctx, scheduledFor, "untradable_refill", chainID, parentRunID)
 }
 
 func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource, chainID, parentRunID string) (AnalysisRun, error) {
@@ -235,7 +234,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	local := scheduledFor.In(shanghai())
 	tradingDate := local.Format("2006-01-02")
 	now := r.now().In(shanghai())
-	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 55, 0, 0, shanghai())
+	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 50, 0, 0, shanghai())
 	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 50, 0, 0, shanghai())
 	if !r.diagnosticWindowBypass && (now.Before(startWindow) || !now.Before(lastStartExclusive)) {
 		return AnalysisRun{}, ErrOutsideAnalysisStartWindow
@@ -248,7 +247,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 			triggerSource = "startup_recovery"
 		}
 	}
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: "research2-trailing5-v9", Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]", ChainID: chainID, ParentRunID: parentRunID, TriggerSource: triggerSource}
+	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: tradingDate, ScheduledFor: scheduledFor, StartedAt: now, EvidenceCutoffAt: cutoff, EvidenceWindowStartAt: &windowStart, StrategyVersion: CurrentStrategyVersion, Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]", ChainID: chainID, ParentRunID: parentRunID, TriggerSource: triggerSource}
 	selected, created, err := r.repository.CreateRunAttempt(ctx, &run, true)
 	if err != nil {
 		return run, err
@@ -336,15 +335,30 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	if excludeErr != nil {
 		return finishFailure("failed", "读取当日候选排除集失败: "+excludeErr.Error(), excludeErr)
 	}
-	var collected Evidence
-	if collector, ok := r.collector.(FilteredRunEvidenceCollector); ok {
-		collected, err = collector.CollectForRunWithExclusions(ctx, run.RunID, cutoff, excludedCodes)
-	} else if collector, ok := r.collector.(RunEvidenceCollector); ok {
-		collected, err = collector.CollectForRun(ctx, run.RunID, cutoff)
-	} else {
-		collected, err = r.collector.Collect(ctx, cutoff)
+	account, accountErr := r.repository.Overview(ctx)
+	if accountErr != nil {
+		return finishFailure("failed", "读取当前可用现金失败: "+accountErr.Error(), accountErr)
 	}
-	run.SourceStatusJSON = defaultJSON(collected.SourceStatusJSON, "[]")
+	availableCash := account.Cash
+	if availableCash < 0 || math.IsNaN(availableCash) || math.IsInf(availableCash, 0) {
+		return finishFailure("failed", "当前可用现金无效", errors.New("invalid cash balance"))
+	}
+	var collected Evidence
+	if availableCash == 0 {
+		collected = Evidence{CutoffAt: cutoff, SourceStatusJSON: "[]"}
+	} else if collector, ok := r.collector.(FilteredRunEvidenceCollector); ok {
+		collected, err = collector.CollectForRunWithExclusions(ctx, run.RunID, cutoff, excludedCodes, availableCash)
+	} else if collector, ok := r.collector.(RunEvidenceCollector); ok {
+		collected, err = collector.CollectForRun(ctx, run.RunID, cutoff, availableCash)
+	} else {
+		collected, err = r.collector.Collect(ctx, cutoff, availableCash)
+	}
+	collected.AvailableCash = availableCash
+	var sourceStates []map[string]any
+	_ = json.Unmarshal([]byte(defaultJSON(collected.SourceStatusJSON, "[]")), &sourceStates)
+	sourceStates = append(sourceStates, map[string]any{"sourceId": "research2:cash", "sourceName": "本轮可用现金", "status": "ok", "availableCash": availableCash, "collectedAt": now})
+	cashAudit, _ := json.Marshal(sourceStates)
+	run.SourceStatusJSON = string(cashAudit)
 	if !collected.CutoffAt.IsZero() {
 		cutoff = collected.CutoffAt.In(shanghai())
 		run.EvidenceCutoffAt = cutoff
@@ -389,9 +403,9 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	modelCtx := ctx
 	prompt := buildPrompt(evidence, cutoff)
 	var result aicontract.CompletionResult
-	var output modelOutput
+	output := modelOutput{Conclusion: "没有满足当前可用现金和数据约束的可评分标的。"}
 	var sourceValidationMessages []string
-	for structureAttempt := 1; structureAttempt <= 2; structureAttempt++ {
+	for structureAttempt := 1; len(evidence.Candidates) > 0 && structureAttempt <= 2; structureAttempt++ {
 		phase := "research2_overnight_strength"
 		if structureAttempt > 1 {
 			phase += "_repair"
@@ -466,7 +480,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	// the authoritative server-side signal timestamp.
 	items, validationMessages := validateRecommendations(run.RunID, cutoff, evidence, output.Recommendations)
 	validationMessages = append(validationMessages, sourceValidationMessages...)
-	assignResearch2SelectionRoles(items, run.RequestedSlots)
+	assignResearch2SelectionRanks(items)
 	generated := r.now().In(shanghai())
 	run.GeneratedAt = &generated
 	run.OnTime = !generated.After(time.Date(local.Year(), local.Month(), local.Day(), 10, 0, 0, 0, shanghai()))
@@ -478,25 +492,13 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 		items[index].SignalAt = generated
 		items[index].Late = late
 		items[index].TargetBuyAt = target
-		if items[index].SelectionRole == "observation" {
-			continue
-		}
-		if status == "analysis_only" {
-			items[index].Status = status
-		} else if items[index].SelectionRole == "standby" {
-			items[index].Status = "standby"
-		} else {
-			items[index].Status = status
-		}
+		items[index].Status = status
+
 		if status == "analysis_only" {
 			items[index].FailureReason = "报告在13:00及以后完成，仅保存分析，不进入模拟交易及收益统计"
 		}
 	}
-	for _, item := range items {
-		if item.SelectionRole != "observation" {
-			run.RecommendationCount++
-		}
-	}
+	run.RecommendationCount = len(items)
 	if run.RecommendationCount == 0 {
 		run.Status = "no_recommendation"
 		run.FailureReason = strings.TrimSpace(output.Conclusion)
@@ -506,13 +508,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	} else {
 		run.Status = "success"
 	}
-	for _, item := range items {
-		if item.SelectionRole == "primary" {
-			run.PrimaryCount++
-		} else if item.SelectionRole == "standby" {
-			run.StandbyCount++
-		}
-	}
+
 	if err = r.repository.FinalizeRun(ctx, &run, items, func() string {
 		return renderAnalysisReport(run, evidence, output, items, validationMessages)
 	}); err != nil {
@@ -531,33 +527,17 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	return run, nil
 }
 
-func assignResearch2SelectionRoles(items []Recommendation, requestedSlots int) {
-	if requestedSlots < 0 {
-		requestedSlots = 0
-	}
-	if requestedSlots > DailyTargetSlots {
-		requestedSlots = DailyTargetSlots
-	}
+func assignResearch2SelectionRanks(items []Recommendation) {
 	for index := range items {
 		items[index].SelectionRank = index + 1
-		if items[index].FinalScore <= 50 || index >= 6 {
-			items[index].SelectionRole, items[index].Status = "observation", "analysis_only"
-			items[index].FailureReason = "最终分未超过50，仅观察，不进入模拟交易"
-			if items[index].FinalScore > 50 {
-				items[index].FailureReason = "超出本轮最多6只可执行名单，仅观察"
-			}
-		} else if index < requestedSlots {
-			items[index].SelectionRole = "primary"
-			items[index].Status = "buy_pending"
-		} else {
-			items[index].SelectionRole = "standby"
-			items[index].Status = "standby"
-		}
+		items[index].SelectionRole = ""
+		items[index].Status = "buy_pending"
 	}
 }
 
 func research2AuditEvidence(evidence preparedEvidence) map[string]any {
 	return map[string]any{
+		"availableCash":         evidence.AvailableCash,
 		"evidenceSetId":         evidence.EvidenceSetID,
 		"cutoffAt":              evidence.CutoffAt,
 		"freezeAt":              evidence.FreezeAt,
@@ -653,7 +633,7 @@ func buildPrompt(evidence preparedEvidence, cutoff time.Time) string {
 	return strings.Join([]string{
 		strategyPrompt,
 		"\n# 本次执行参数",
-		"- 策略版本：research2-trailing5-v9",
+		"- 策略版本：" + CurrentStrategyVersion,
 		"- 核心证据窗口：[" + windowStart.Format("2006-01-02 15:04:05") + ", " + windowEnd.Format("2006-01-02 15:04:05") + "] Asia/Shanghai",
 		"- 市场快照时点：" + cutoff.Format("2006-01-02 15:04:05 Asia/Shanghai"),
 		"- 证据冻结时间：" + freezeAt.Format("2006-01-02 15:04:05 Asia/Shanghai"),
@@ -661,10 +641,10 @@ func buildPrompt(evidence preparedEvidence, cutoff time.Time) string {
 		"- 新催化参考起点（上一交易日收盘；--表示未核验）：" + formatResearch2Time(evidence.catalystWindowStartAt),
 		"- 11:50起不再启动分析；此前启动的任务允许继续完成，完成时间只用于执行归类，不得导致分析失败。",
 		"- 程序将在报告校验完成后获取第一笔有效行情买入；午休期间完成的报告统一在13:00买入；13:00及以后完成的推荐仅保存分析、不交易；已买入标的卖出目标固定为下一交易日10:00。",
-		"- 独立账户初始资金12,000元；服务端从完整评分中选取最多6只可执行股票并划分主选与备选；一手100股含费用成本不得超过账户资金。",
+		fmt.Sprintf("- 本轮当前可用现金快照：%.2f元；一手含费用不得超过该现金，不使用持仓市值或杠杆。服务端按评分高低弹性分仓，最多成交三只。", evidence.AvailableCash),
 		"- 不得访问外部地址、推算缺失值或编造行情；只能使用下方注入的结构化证据。",
 		"- sourceRefs只能填写证据sources中存在且适用于该股票的sourceId，不得填写来源名称或URL。先读本轮候选评分依据中的明确板块、题材和催化关联；一般板块排行榜不是股票归属证明。",
-		"- recommendations必须逐只覆盖冻结候选集合，包含50分及以下股票，不得只输出过线股票或空数组。逐项给出评分和scoreReasons；缺失证据不加分，不为凑数抬分。程序重新计算总分，仅>50且位于前6名的股票可进入执行名单，其余仅作候选展示。",
+		"- recommendations必须逐只覆盖冻结候选集合，包含50分及以下股票，不得只输出过线股票或空数组。逐项给出评分和scoreReasons；缺失证据不加分，不为凑数抬分。程序重新计算总分，全部有效评分按分数降序参与执行，不设最低分或前六名限制。",
 		"- 不要输出报告生成时间、买入时间、买入区间或Markdown报告，这些由服务端生成。",
 		"\n# 输出协议（只输出JSON，不加代码围栏）",
 		`{"tradingDay":true,"conclusion":"简洁结论，不含时间","recommendations":[{"code":"sh600000","name":"名称","marketScore":0,"sectorScore":0,"stockScore":0,"catalystScore":0,"riskDeduction":0,"finalScore":0,"referencePrice":0,"summary":"...","quantData":"...","freshCatalyst":"...","oldBackground":"...","mainRisk":"...","cancelConditions":"...","sourceRefs":["source-id"],"scoreReasons":{"market":"依据及0分原因","sector":"依据及0分原因","stock":"依据及0分原因","catalyst":"来源缺失/只有旧背景/核实无新催化/可用新催化及质量","risk":"扣分依据，0分说明未发现可核验风险"}}]}`,
@@ -753,8 +733,8 @@ func validateRecommendations(runID string, generated time.Time, evidence prepare
 		}
 		lot, _ := trading.LotSize(code)
 		lotCost := -trading.CalculateBuyCost(referencePrice, lot).NetCashFlow
-		if lotCost > InitialCash+1e-7 {
-			warnings = append(warnings, code+"一手含费成本超过12000元")
+		if lotCost > evidence.AvailableCash+1e-7 {
+			warnings = append(warnings, fmt.Sprintf("%s一手含费成本超过本轮可用现金%.2f元", code, evidence.AvailableCash))
 			continue
 		}
 		stockName := strings.TrimSpace(value.Name)
@@ -1003,21 +983,15 @@ func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output mod
 	if len(items) > 0 {
 		lines = append(lines,
 			"", "## 候选评分与执行安排", "",
-			"| 排名 | 角色 | 代码 | 名称 | 最终分 | 参考价 | 100股预计成本 | 市场/板块/个股/催化 | 风险扣分 | 执行安排 |",
-			"|---:|---|---|---|---:|---:|---:|---|---:|---|",
+			"| 排名 | 代码 | 名称 | 最终分 | 参考价 | 100股预计成本 | 市场/板块/个股/催化 | 风险扣分 | 执行安排 |",
+			"|---:|---|---|---:|---:|---:|---|---:|---|",
 		)
 		for _, item := range items {
 			execution := formatResearch2Time(item.TargetBuyAt)
 			if item.Status == "analysis_only" {
 				execution = "仅分析，不交易"
 			}
-			role := "主选"
-			if item.SelectionRole == "standby" {
-				role = "备选"
-			} else if item.SelectionRole == "observation" {
-				role, execution = "候选", item.FailureReason
-			}
-			lines = append(lines, fmt.Sprintf("| %d | %s | %s | %s | %.2f | %.3f | %.2f | %.1f / %.1f / %.1f / %.1f | %.1f | %s |", item.SelectionRank, role, item.StockCode, escapeMarkdownCell(item.StockName), item.FinalScore, item.ReferencePrice, item.EstimatedLotCost, item.MarketScore, item.SectorScore, item.StockScore, item.CatalystScore, item.RiskDeduction, execution))
+			lines = append(lines, fmt.Sprintf("| %d | %s | %s | %.2f | %.3f | %.2f | %.1f / %.1f / %.1f / %.1f | %.1f | %s |", item.SelectionRank, item.StockCode, escapeMarkdownCell(item.StockName), item.FinalScore, item.ReferencePrice, item.EstimatedLotCost, item.MarketScore, item.SectorScore, item.StockScore, item.CatalystScore, item.RiskDeduction, execution))
 		}
 		for _, item := range items {
 			lines = append(lines,
@@ -1040,7 +1014,7 @@ func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output mod
 			lines = append(lines, scoreReportLines(item, modelValue, evidence)...)
 		}
 	}
-	lines = append(lines, "", "评分范围说明：保存通过校验的本轮候选评分，缺失或无效评分见数据校验，不代表全市场。执行门槛保持总分严格大于50，最多6只进入可执行名单；其余仅观察，不参与成交与收益。相同市场分是正常现象，缺失分项不折算满分，也不为补位调分。")
+	lines = append(lines, "", "评分范围说明：保存通过校验的本轮候选评分，缺失或无效评分见数据校验，不代表全市场。不设最低分门槛，按评分顺序和当前现金最多成交三只；未买入股票不参与成交收益。相同市场分是正常现象，缺失分项不折算满分，也不为补位调分。")
 	if len(warnings) > 0 {
 		lines = append(lines, "", "> 数据校验："+strings.Join(warnings, "；"))
 	}
@@ -1205,35 +1179,32 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 		if runErr != nil {
 			return runErr
 		}
-		remainingSlots := DailyTargetSlots
+		remainingSlots, countErr := s.repository.RemainingBuySlots(ctx, now)
+		if countErr != nil {
+			return countErr
+		}
 		var chain ExecutionChain
-		if strings.TrimSpace(run.ChainID) != "" {
+		if run.ChainID != "" {
 			chain, err = s.repository.RefreshExecutionChainFilled(ctx, run.ChainID)
 			if err != nil {
 				return err
 			}
-			remainingSlots = chain.TargetSlots - chain.FilledSlots
-			if chain.Status != "running" || remainingSlots <= 0 {
-				for _, item := range group {
-					if item.Status == "standby" {
-						if markErr := s.repository.MarkStandbyNotUsed(ctx, item.RecommendationID); markErr != nil {
-							return markErr
-						}
-					} else if item.Status == "buy_pending" {
-						if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "当日三笔买入目标已完成，剩余候选不再执行"); markErr != nil {
-							return markErr
-						}
-					}
-				}
-				continue
+			if chain.Status != "running" {
+				remainingSlots = 0
 			}
-		} else if len(group) < remainingSlots {
-			remainingSlots = len(group)
 		}
+		if remainingSlots == 0 {
+			for _, item := range group {
+				if err := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", "当日执行已结束，剩余评分仅保留分析"); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+
 		snapshots := make(map[string]PriceSnapshot)
 		valid := make([]Recommendation, 0, len(group))
-		failedPrimaries := make([]string, 0)
-		pendingPrimaryCount := 0
+		pendingQuotes := make(map[string]bool)
 		for _, item := range group {
 			executionCutoff := time.Date(now.Year(), now.Month(), now.Day(), 13, 0, 0, 0, shanghai())
 			lunchStart := time.Date(now.Year(), now.Month(), now.Day(), 11, 30, 0, 0, shanghai())
@@ -1259,17 +1230,16 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				if markErr := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "等待报告生成后的有效买入行情: "+quoteErr.Error(), nil); markErr != nil {
 					return markErr
 				}
-				if item.SelectionRole != "standby" {
-					pendingPrimaryCount++
-				}
+				pendingQuotes[item.RecommendationID] = true
+				valid = append(valid, item)
 				continue
 			}
 			failureCode, failureReason := "", ""
 			switch {
 			case snapshot.Suspended:
-				failureCode, failureReason = "suspended", "停牌，不进入当日后续补位候选"
+				failureCode, failureReason = "suspended", "停牌，本报告跳过"
 			case snapshot.LimitUp:
-				failureCode, failureReason = "limit_up", "已涨停，不进入当日后续补位候选"
+				failureCode, failureReason = "limit_up", "已涨停，本报告跳过"
 			case snapshot.LimitDown:
 				failureCode, failureReason = "limit_down", "已跌停，无法确认有效成交"
 			case snapshot.Price <= 0:
@@ -1287,18 +1257,14 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				if markErr := s.repository.RecordExecutionFailure(ctx, item.RecommendationID, failureCode, failureReason, snapshot, limitPrice, distancePointer); markErr != nil {
 					return markErr
 				}
-				if item.SelectionRole != "standby" {
-					failedPrimaries = append(failedPrimaries, item.RecommendationID)
-				}
 				continue
 			}
 			if strings.TrimSpace(run.ChainID) != "" && snapshot.PreviousClose <= 0 {
 				if markErr := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "等待包含前收盘价的有效行情以校验涨停距离", &snapshot); markErr != nil {
 					return markErr
 				}
-				if item.SelectionRole != "standby" {
-					pendingPrimaryCount++
-				}
+				pendingQuotes[item.RecommendationID] = true
+				valid = append(valid, item)
 				continue
 			}
 			notBefore := item.SignalAt
@@ -1311,18 +1277,16 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				if markErr := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "等待报告生成后的新行情", &snapshot); markErr != nil {
 					return markErr
 				}
-				if item.SelectionRole != "standby" {
-					pendingPrimaryCount++
-				}
+				pendingQuotes[item.RecommendationID] = true
+				valid = append(valid, item)
 				continue
 			}
 			if current && !currentBuyQuoteFresh(snapshot.At, checkedAt) {
 				if markErr := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "等待不超过60秒的实时买入行情", &snapshot); markErr != nil {
 					return markErr
 				}
-				if item.SelectionRole != "standby" {
-					pendingPrimaryCount++
-				}
+				pendingQuotes[item.RecommendationID] = true
+				valid = append(valid, item)
 				continue
 			}
 			if err = s.repository.RecordExecutionQuote(ctx, item.RecommendationID, snapshot, limitPrice, distancePointer); err != nil {
@@ -1332,32 +1296,25 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			valid = append(valid, item)
 		}
 		if len(valid) == 0 {
-			continue
-		}
-		overview, overviewErr := s.repository.Overview(ctx)
-		if overviewErr != nil {
-			return overviewErr
-		}
-		if strings.TrimSpace(run.ChainID) == "" {
-			legacyEligible, removed := affordableEqualAllocation(valid, snapshots, overview.Cash)
-			for _, item := range removed {
-				if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "missed_cash", "等额分仓后不足买入100股"); markErr != nil {
-					return markErr
+			if run.ChainID != "" {
+				if _, err = s.repository.RefreshExecutionChainFilled(ctx, run.ChainID); err != nil {
+					return err
 				}
 			}
-			valid = legacyEligible
-			remainingSlots = len(valid)
-			if remainingSlots == 0 {
-				continue
-			}
+			continue
 		}
-		allocation := overview.Cash / float64(remainingSlots)
-		bought := 0
-		buyLimit := remainingSlots - min(remainingSlots, pendingPrimaryCount)
-		promotionIndex := 0
+		pendingQuoteCount := 0
 		for _, item := range valid {
-			if bought >= buyLimit {
+			slots, slotErr := s.repository.RemainingBuySlots(ctx, s.now())
+			if slotErr != nil {
+				return slotErr
+			}
+			if slots <= pendingQuoteCount {
 				break
+			}
+			if pendingQuotes[item.RecommendationID] {
+				pendingQuoteCount++
+				continue
 			}
 			sellAt, nextErr := s.nextTradingDayAt(ctx, item.TargetBuyAt, 10, 0)
 			if nextErr != nil {
@@ -1377,36 +1334,48 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				if err := s.repository.RecordExecutionQuotePending(ctx, item.RecommendationID, "其他候选采集期间买入行情已过期，等待新行情", nil); err != nil {
 					return err
 				}
-				if item.SelectionRole != "standby" {
-					buyLimit--
-				}
+				pendingQuoteCount++
 				continue
 			}
-			cashCap := allocation
+			overview, overviewErr := s.repository.Overview(ctx)
+			if overviewErr != nil {
+				return overviewErr
+			}
+			slots, slotErr = s.repository.RemainingBuySlots(ctx, checkedAt)
+			if slotErr != nil {
+				return slotErr
+			}
+			if slots == 0 {
+				break
+			}
+			lot, lotErr := trading.LotSize(item.StockCode)
+			if lotErr != nil {
+				return lotErr
+			}
+			lotCost := -trading.CalculateBuyCost(snapshots[item.RecommendationID].Price, lot).NetCashFlow
+			cashCap := math.Min(overview.Cash, math.Max(overview.Cash/float64(slots), lotCost))
 			quantity, cost, sizeErr := trading.SizeBuy(item.StockCode, snapshots[item.RecommendationID].Price, cashCap)
 			if sizeErr != nil {
-				if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "missed_cash", "等额分仓后不足买入100股"); markErr != nil {
-					return markErr
+				reason := fmt.Sprintf("剩余现金%.2f元不足支付一手含费成本%.2f元", overview.Cash, lotCost)
+				if err := s.repository.MarkStatus(ctx, item.RecommendationID, "missed_cash", reason); err != nil {
+					return err
 				}
 				continue
 			}
-			if item.SelectionRole == "standby" {
-				replaces := ""
-				if promotionIndex < len(failedPrimaries) {
-					replaces = failedPrimaries[promotionIndex]
-					promotionIndex++
-				}
-				if err = s.repository.PromoteStandby(ctx, item.RecommendationID, replaces, "更高优先级主选不可成交，按服务器排名递补"); err != nil {
-					return err
-				}
-			}
+
 			tradeAt := snapshots[item.RecommendationID].At
 			if tradeAt.IsZero() {
 				tradeAt = now
 			}
 			trade := Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: tradeAt, MarketPrice: snapshots[item.RecommendationID].Price, ExecutionPrice: cost.ExecutionPrice, Quantity: quantity, Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount, NetCashFlow: cost.NetCashFlow, PriceSource: snapshots[item.RecommendationID].Source, ExecutionMode: "live_after_signal"}
 			if err = s.repository.RecordBuy(ctx, item.RecommendationID, trade, sellAt); err != nil {
-				if errors.Is(err, trading.ErrNewPositionsDisabled) || errors.Is(err, ErrDailyBuyLimitReached) || errors.Is(err, ErrExecutionChainClosed) {
+				if errors.Is(err, trading.ErrInsufficientCash) {
+					if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "missed_cash", "成交事务检查发现当前现金不足"); markErr != nil {
+						return errors.Join(err, markErr)
+					}
+					continue
+				}
+				if errors.Is(err, trading.ErrNewPositionsDisabled) || errors.Is(err, ErrDailyBuyLimitReached) || errors.Is(err, ErrExecutionChainClosed) || errors.Is(err, errDuplicateBuy) {
 					if markErr := s.repository.MarkStatus(ctx, item.RecommendationID, "analysis_only", err.Error()); markErr != nil {
 						return errors.Join(err, markErr)
 					}
@@ -1414,7 +1383,6 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				}
 				return err
 			}
-			bought++
 		}
 		if strings.TrimSpace(run.ChainID) != "" {
 			chain, err = s.repository.RefreshExecutionChainFilled(ctx, run.ChainID)
@@ -1423,10 +1391,8 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			}
 			if chain.Status == "completed" {
 				for _, item := range group {
-					if item.Status == "standby" {
-						if markErr := s.repository.MarkStandbyNotUsed(ctx, item.RecommendationID); markErr != nil {
-							return markErr
-						}
+					if err := s.repository.FinishPendingBuy(ctx, item.RecommendationID); err != nil {
+						return err
 					}
 				}
 			}
@@ -1509,42 +1475,6 @@ func atOrAfterClose(value time.Time) bool {
 	local := value.In(shanghai())
 	closeTime := time.Date(local.Year(), local.Month(), local.Day(), 15, 0, 0, 0, shanghai())
 	return !local.Before(closeTime)
-}
-
-func affordableEqualAllocation(items []Recommendation, snapshots map[string]PriceSnapshot, cash float64) ([]Recommendation, []Recommendation) {
-	eligible := append([]Recommendation(nil), items...)
-	removed := make([]Recommendation, 0)
-	for len(eligible) > 0 {
-		allocation := cash / float64(len(eligible))
-		failed := make([]int, 0)
-		for index, item := range eligible {
-			if _, _, err := trading.SizeBuy(item.StockCode, snapshots[item.RecommendationID].Price, allocation); err != nil {
-				failed = append(failed, index)
-			}
-		}
-		if len(failed) == 0 {
-			break
-		}
-		// Remove one lowest-priority unaffordable candidate, then recalculate the
-		// equal share. This lets the remaining actual buyable stocks move from
-		// one-third to one-half (or full) allocation without exceeding cash.
-		drop := failed[0]
-		for _, index := range failed[1:] {
-			if lowerRecommendationPriority(eligible[index], eligible[drop]) {
-				drop = index
-			}
-		}
-		removed = append(removed, eligible[drop])
-		eligible = append(eligible[:drop], eligible[drop+1:]...)
-	}
-	return eligible, removed
-}
-
-func lowerRecommendationPriority(left, right Recommendation) bool {
-	if left.FinalScore == right.FinalScore {
-		return left.StockCode > right.StockCode
-	}
-	return left.FinalScore < right.FinalScore
 }
 
 func (s *TradingService) FinalizeMetrics(ctx context.Context, now time.Time) error {

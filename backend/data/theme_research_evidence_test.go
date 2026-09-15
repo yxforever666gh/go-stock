@@ -20,11 +20,11 @@ type themeResearch2EvidenceProvider struct {
 	evidence research2.Evidence
 }
 
-func (provider themeResearch2EvidenceProvider) Collect(context.Context, time.Time) (research2.Evidence, error) {
+func (provider themeResearch2EvidenceProvider) Collect(context.Context, time.Time, float64) (research2.Evidence, error) {
 	return provider.evidence, nil
 }
 
-func (provider themeResearch2EvidenceProvider) CollectWithExclusions(context.Context, time.Time, map[string]struct{}) (research2.Evidence, error) {
+func (provider themeResearch2EvidenceProvider) CollectWithExclusions(context.Context, time.Time, map[string]struct{}, float64) (research2.Evidence, error) {
 	return provider.evidence, nil
 }
 
@@ -137,7 +137,7 @@ func TestResearch2ThemeEvidencePersistsAfterCutoffWithoutContentAndCannotRewrite
 		themeResearch2EvidenceProvider{evidence: research2.Evidence{Prompt: "fixture", SourceStatusJSON: "[]", Documents: documents}},
 		repository, researchThemeEvidenceProfile, buildResearch2EvidenceItem,
 	)
-	evidence, err := collector.CollectForRun(context.Background(), "theme-r2-run", cutoff)
+	evidence, err := collector.CollectForRun(context.Background(), "theme-r2-run", cutoff, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ func TestResearch2ThemeBackgroundETFAndFundNeverBecomeCandidates(t *testing.T) {
 		{Code: "512000", Name: "券商ETF", Price: 1, PreClose: 1, ChangeRate: 1, Volume: 100, Amount: 10000, ListingDate: 20100101},
 		{Code: "159001", Name: "测试基金", Price: 1, PreClose: 1, ChangeRate: 1, Volume: 100, Amount: 10000, ListingDate: 20100101},
 	}
-	candidates := selectResearch2CandidatesWithExclusions(rows, 12, asOf, nil, IsCNOpenTradeDayStrict)
+	candidates := selectResearch2CandidatesWithExclusions(rows, 12, asOf, nil, IsCNOpenTradeDayStrict, 12000)
 	if len(candidates) != 1 || candidates[0].Code != "sh600000" {
 		t.Fatalf("ETF/fund entered Research2 candidates: %+v", candidates)
 	}

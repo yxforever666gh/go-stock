@@ -18,15 +18,15 @@ const detailRequest = useResearchDetail(GetResearch2Recommendation)
 const {detail, visible, loading: detailLoading, error: detailError} = detailRequest
 
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
-const statusLabels = {buy_pending: '待买入', standby: '备选待命', standby_not_used: '备选未启用', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
+const statusLabels = {buy_pending: '待买入', standby: '待买入', standby_not_used: '未买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
 const statusType = status => status === 'closed' ? 'success' : status === 'analysis_only' ? 'default' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
 const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
-const selectionLabel = row => row.displaySelectionRole === 'primary' ? `主选 ${row.displaySelectionRank}` : row.displaySelectionRole === 'candidate' ? `候选 ${row.displaySelectionRank}` : '--'
-const statusLabel = row => row.selectionRole === 'observation' ? '仅观察' : statusLabels[row.status] || row.status
+const rankLabel = value => Number(value) > 0 ? formatInteger(value) : '--'
+const statusLabel = row => statusLabels[row.status] || row.status
 const hasScoreExplanation = analysis => /^#{1,6}\s+分项评分依据\s*$/m.test(analysis?.reportMarkdown || '')
 
 const show = row => detailRequest.show(row.recommendationId)
@@ -46,7 +46,7 @@ function recommendationRowClass(row, index) {
 
 const defaultColumns = [
   {title: '信号时间', key: 'signalAt', width: 170, render: row => dateTime(row.signalAt)},
-  {title: '主选 / 候选', key: 'selectionRole', width: 115, render: row => h(NTag, {type: row.displaySelectionRole === 'primary' ? 'success' : 'info', bordered: false}, {default: () => selectionLabel(row)})},
+  {title: '排名', key: 'displaySelectionRank', width: 80, render: row => rankLabel(row.displaySelectionRank)},
   {title: '股票', key: 'stockCode', minWidth: 170, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
   {title: '最终分', key: 'finalScore', width: 90, render: row => formatNumber(row.finalScore, 1)},
   {title: '参考价', key: 'referencePrice', width: 95, render: row => formatPrice(row.referencePrice)},
@@ -65,9 +65,9 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">每天最多成交3只。已选入买入名单的股票显示为主选，包括待买入；主选不足时由最新完成轮次的低分候选补足前三，末位同分全部保留。50分及以下仅观察，不参与成交或收益。主选与候选满额后停止新分析；不足且无待执行或分析任务时，报告完成10分钟后继续补位。11:50停止启动新分析，已启动任务可完成，午休待买入主选仍在13:00按规则尝试成交。各轮完整评分保留在报告中。</n-alert>
+    <n-alert type="info" :bordered="false">交易日09:50启动，每天最多生成一份有效报告，失败不计入次数，11:50停止启动分析。按报告分数从高到低尝试买入，最多成交3只；当前现金不足一手时跳过并继续尝试后续股票。评分不设最低门槛，当天不再为不足3只重新分析。每天列表最多展示3只，完整评分及未成交原因保留在报告中。</n-alert>
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">实际可买标的按数量等额分配可用现金，向下取整为100股整手并计入交易费用；当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
+      <n-text depth="3">每次买入以剩余现金÷剩余名额为分配目标；目标不足一手时，可提高到一手，含费总成本不得超过当前可用现金。成交后重新分配余款，资金不足不借款。当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">
@@ -87,15 +87,14 @@ onMounted(refresh)
               <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>
               <n-descriptions-item label="评分">{{formatNumber(detail.recommendation.finalScore,1)}}</n-descriptions-item>
               <n-descriptions-item label="状态">{{statusLabel(detail.recommendation)}}</n-descriptions-item>
-              <n-descriptions-item label="主选 / 候选">{{selectionLabel(detail.recommendation)}}</n-descriptions-item>
-              <n-descriptions-item label="原始批次主选 / 候选">{{detail.recommendation.selectionRole === 'primary' ? '主选' : '候选'}} {{detail.recommendation.selectionRank || '--'}}</n-descriptions-item>
+              <n-descriptions-item label="列表排名">{{rankLabel(detail.recommendation.displaySelectionRank)}}</n-descriptions-item>
+              <n-descriptions-item label="报告排名">{{rankLabel(detail.recommendation.selectionRank)}}</n-descriptions-item>
               <n-descriptions-item label="执行报价">{{formatPrice(detail.recommendation.executionQuotePrice)}} / {{dateTime(detail.recommendation.executionQuoteAt)}}</n-descriptions-item>
               <n-descriptions-item label="涨停距离">{{detail.recommendation.executionLimitDistancePct === null || detail.recommendation.executionLimitDistancePct === undefined ? '--' : `${formatNumber(detail.recommendation.executionLimitDistancePct, 3)}%`}}</n-descriptions-item>
-              <n-descriptions-item v-if="detail.recommendation.executionFailureCode" label="不成交原因" :span="3">{{detail.recommendation.executionFailureCode}}；{{detail.recommendation.failureReason}}</n-descriptions-item>
-              <n-descriptions-item v-if="detail.recommendation.promotionReason" label="递补说明" :span="3">{{detail.recommendation.promotionReason}}</n-descriptions-item>
+              <n-descriptions-item v-if="detail.recommendation.failureReason || detail.recommendation.executionFailureCode" label="不成交原因" :span="3">{{detail.recommendation.failureReason || detail.recommendation.executionFailureCode}}</n-descriptions-item>
               <n-descriptions-item label="启动时间">{{dateTime(detail.analysis.startedAt)}}</n-descriptions-item>
               <n-descriptions-item label="报告产生时间">{{dateTime(detail.analysis.generatedAt)}}</n-descriptions-item>
-              <n-descriptions-item label="目标 / 实际买入">{{detail.recommendation.selectionRole === 'observation' ? '--' : dateTime(detail.recommendation.targetBuyAt)}} / {{dateTime(detail.recommendation.buyAt)}}</n-descriptions-item>
+              <n-descriptions-item label="目标 / 实际买入">{{detail.recommendation.status === 'analysis_only' ? '--' : dateTime(detail.recommendation.targetBuyAt)}} / {{dateTime(detail.recommendation.buyAt)}}</n-descriptions-item>
               <n-descriptions-item label="目标 / 实际卖出">{{dateTime(detail.recommendation.targetSellAt)}} / {{dateTime(detail.recommendation.sellAt)}}</n-descriptions-item>
               <n-descriptions-item label="证据降级" :span="3">{{degradedReason(detail.analysis)}}</n-descriptions-item>
               <n-descriptions-item label="分项评分" :span="3">市场 {{formatNumber(detail.recommendation.marketScore, 1)}} / 板块 {{formatNumber(detail.recommendation.sectorScore, 1)}} / 个股 {{formatNumber(detail.recommendation.stockScore, 1)}} / 催化 {{formatNumber(detail.recommendation.catalystScore, 1)}}；风险扣分 {{formatNumber(detail.recommendation.riskDeduction, 1)}}。<span v-if="!hasScoreExplanation(detail.analysis)">历史未记录逐项评分说明。</span><span v-else>逐项依据与来源见完整报告。</span></n-descriptions-item>

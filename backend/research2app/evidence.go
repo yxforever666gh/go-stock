@@ -18,8 +18,8 @@ import (
 // EvidenceProvider collects the provider-specific evidence payload while this
 // package owns run-level persistence and freezing.
 type EvidenceProvider interface {
-	Collect(context.Context, time.Time) (research2.Evidence, error)
-	CollectWithExclusions(context.Context, time.Time, map[string]struct{}) (research2.Evidence, error)
+	Collect(context.Context, time.Time, float64) (research2.Evidence, error)
+	CollectWithExclusions(context.Context, time.Time, map[string]struct{}, float64) (research2.Evidence, error)
 }
 
 type EvidenceRepository interface {
@@ -51,26 +51,26 @@ func NewDurableEvidenceCollector(provider EvidenceProvider, store EvidenceReposi
 	return &DurableEvidenceCollector{provider: provider, store: store, profile: strings.TrimSpace(profile), build: build, now: time.Now}
 }
 
-func (c *DurableEvidenceCollector) Collect(ctx context.Context, cutoff time.Time) (research2.Evidence, error) {
+func (c *DurableEvidenceCollector) Collect(ctx context.Context, cutoff time.Time, availableCash float64) (research2.Evidence, error) {
 	if c == nil || c.provider == nil {
 		return research2.Evidence{CutoffAt: cutoff}, errors.New("research2 evidence collector is unavailable")
 	}
-	return c.provider.Collect(ctx, cutoff)
+	return c.provider.Collect(ctx, cutoff, availableCash)
 }
 
-func (c *DurableEvidenceCollector) CollectForRun(ctx context.Context, runID string, startedAt time.Time) (research2.Evidence, error) {
-	return c.collectForRun(ctx, runID, startedAt, nil)
+func (c *DurableEvidenceCollector) CollectForRun(ctx context.Context, runID string, startedAt time.Time, availableCash float64) (research2.Evidence, error) {
+	return c.collectForRun(ctx, runID, startedAt, nil, availableCash)
 }
 
-func (c *DurableEvidenceCollector) CollectForRunWithExclusions(ctx context.Context, runID string, startedAt time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
-	return c.collectForRun(ctx, runID, startedAt, excludedCodes)
+func (c *DurableEvidenceCollector) CollectForRunWithExclusions(ctx context.Context, runID string, startedAt time.Time, excludedCodes map[string]struct{}, availableCash float64) (research2.Evidence, error) {
+	return c.collectForRun(ctx, runID, startedAt, excludedCodes, availableCash)
 }
 
-func (c *DurableEvidenceCollector) collectForRun(ctx context.Context, runID string, startedAt time.Time, excludedCodes map[string]struct{}) (evidence research2.Evidence, err error) {
+func (c *DurableEvidenceCollector) collectForRun(ctx context.Context, runID string, startedAt time.Time, excludedCodes map[string]struct{}, availableCash float64) (evidence research2.Evidence, err error) {
 	if c == nil || c.store == nil || c.profile == "" {
-		return c.collect(ctx, startedAt, excludedCodes)
+		return c.collect(ctx, startedAt, excludedCodes, availableCash)
 	}
-	evidence, collectErr := c.collect(ctx, startedAt, excludedCodes)
+	evidence, collectErr := c.collect(ctx, startedAt, excludedCodes, availableCash)
 	batchCutoff := evidence.FreezeAt
 	if batchCutoff.IsZero() {
 		batchCutoff = evidence.CutoffAt
@@ -122,14 +122,14 @@ func (c *DurableEvidenceCollector) collectForRun(ctx context.Context, runID stri
 	return evidence, err
 }
 
-func (c *DurableEvidenceCollector) collect(ctx context.Context, cutoff time.Time, excludedCodes map[string]struct{}) (research2.Evidence, error) {
+func (c *DurableEvidenceCollector) collect(ctx context.Context, cutoff time.Time, excludedCodes map[string]struct{}, availableCash float64) (research2.Evidence, error) {
 	if c == nil || c.provider == nil {
 		return research2.Evidence{CutoffAt: cutoff}, errors.New("research2 evidence collector is unavailable")
 	}
 	if len(excludedCodes) > 0 {
-		return c.provider.CollectWithExclusions(ctx, cutoff, excludedCodes)
+		return c.provider.CollectWithExclusions(ctx, cutoff, excludedCodes, availableCash)
 	}
-	return c.provider.Collect(ctx, cutoff)
+	return c.provider.Collect(ctx, cutoff, availableCash)
 }
 
 func (c *DurableEvidenceCollector) nowTime() time.Time {

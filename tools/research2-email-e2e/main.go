@@ -56,7 +56,7 @@ type historicalCollector struct {
 	date     string
 }
 
-func (c historicalCollector) Collect(_ context.Context, cutoff time.Time) (research2.Evidence, error) {
+func (c historicalCollector) Collect(_ context.Context, cutoff time.Time, _ float64) (research2.Evidence, error) {
 	start := time.Date(cutoff.Year(), cutoff.Month(), cutoff.Day(), 9, 30, 0, 0, cutoff.Location()).UnixMilli()
 	end := cutoff.UnixMilli()
 	var rows []minuteRow

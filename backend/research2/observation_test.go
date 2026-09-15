@@ -26,101 +26,48 @@ func observationResponse(values []modelRecommendation) string {
 	return string(encoded)
 }
 
-func TestObservationOnlyRunDoesNotTradeOrStopRefill(t *testing.T) {
-	ctx := context.Background()
-	r := research2TestRepository(t)
+func TestAllValidatedScoresRemainExecutable(t *testing.T) {
 	at := time.Date(2026, 9, 10, 10, 0, 0, 0, shanghai())
+	evidence, values := observationScores(at, 60, 59, 58, 57, 56, 55, 50, 49)
+	if prompt := buildPrompt(prepareEvidence(evidence, at.Add(-24*time.Hour)), at); strings.Contains(prompt, "最多输出6只") || !strings.Contains(prompt, "必须逐只覆盖") {
+		t.Fatal("prompt restricts complete candidate scoring")
+	}
+	items, warnings := validateRecommendations("run", at, prepareEvidence(evidence, at.Add(-24*time.Hour)), values)
+	if len(warnings) != 0 || len(items) != 8 {
+		t.Fatalf("items=%d warnings=%v", len(items), warnings)
+	}
+	assignResearch2SelectionRanks(items)
+	for i, item := range items {
+		if item.SelectionRole != "" || item.SelectionRank != i+1 || item.Status != "buy_pending" {
+			t.Fatalf("candidate %d excluded by score or rank: %+v", i, item)
+		}
+	}
+}
+
+func TestLowScoreReportIsEffectiveAndDoesNotRerun(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 9, 10, 9, 50, 0, 0, shanghai())
 	evidence, values := observationScores(at, 50, 49, 48)
 	ai := &sequenceAI{responses: []string{observationResponse(values)}}
+	r := research2TestRepository(t)
 	runner := NewRunner(r, ai, fixedEvidence{value: evidence}, testCalendar{})
 	runner.ConfigureReplayClock(func() time.Time { return at }, nil)
 	run, err := runner.Run(ctx, at)
-	if err != nil || run.Status != "no_recommendation" || run.RecommendationCount != 0 || run.PrimaryCount != 0 || run.StandbyCount != 0 || ai.calls != 1 {
-		t.Fatalf("run=%+v err=%v calls=%d", run, err, ai.calls)
+	if err != nil || run.Status != "success" || run.RecommendationCount != 3 {
+		t.Fatalf("run=%+v err=%v", run, err)
 	}
 	items, err := r.RunRecommendations(ctx, run.RunID)
 	if err != nil || len(items) != 3 {
 		t.Fatalf("items=%v err=%v", items, err)
 	}
 	for _, item := range items {
-		if item.SelectionRole != "observation" || item.Status != "analysis_only" {
-			t.Fatalf("item=%+v", item)
-		}
-		if !strings.Contains(run.ReportMarkdown, item.StockCode) || !strings.Contains(run.ReportMarkdown, "仅观察") {
-			t.Fatal("missing score report")
-		}
-		if err := r.FinalizeMetrics(ctx, item.RecommendationID, true, true, true); err != nil {
-			t.Fatal(err)
+		if item.Status != "buy_pending" || (item.SelectionRole != "" && item.SelectionRole != "legacy-unversioned") {
+			t.Fatalf("low score became analysis only: %+v", item)
 		}
 	}
-	due, err := r.DueRecommendations(ctx, at, []string{"buy_pending", "standby"})
-	if err != nil || len(due) != 0 {
-		t.Fatalf("due=%v %v", due, err)
-	}
-	active, err := r.ActiveAndPending(ctx)
-	if err != nil || len(active) != 0 {
-		t.Fatalf("active=%v %v", active, err)
-	}
-	exclusions, err := r.ExecutionChainExcludedCodes(ctx, run.ChainID)
-	if err != nil || len(exclusions) != 0 {
-		t.Fatalf("exclusions=%v %v", exclusions, err)
-	}
-	chain, err := r.ExecutionChain(ctx, run.ChainID)
-	if err != nil || chain.Status != "running" || chain.FilledSlots != 0 {
-		t.Fatalf("chain=%v %v", chain, err)
-	}
-	ready, err := r.ExecutionChainsReadyForRefill(ctx, at.Add(10*time.Minute))
-	if err != nil || len(ready) != 0 {
-		t.Fatalf("ready=%v %v", ready, err)
-	}
-	chain, err = r.RefreshExecutionChainFilled(ctx, run.ChainID)
-	if err != nil || chain.Status != "completed" || chain.FilledSlots != 0 || chain.StopReason != "主选与候选已满额" {
-		t.Fatalf("full observation list not completed: %+v %v", chain, err)
-	}
-	var account Account
-	if err := r.DB().First(&account, 1).Error; err != nil {
-		t.Fatal(err)
-	}
-	if account.Cash != InitialCash {
-		t.Fatal("observations consumed cash")
-	}
-	// Even erroneous state changes cannot turn a saved observation into a trade.
-	item := items[0]
-	if err := r.DB().Model(&Recommendation{}).Where("recommendation_id = ?", item.RecommendationID).Update("status", "standby").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := r.PromoteStandby(ctx, item.RecommendationID, "", ""); err == nil {
-		t.Fatal("observation promoted")
-	}
-	if err := r.DB().Model(&Recommendation{}).Where("recommendation_id = ?", item.RecommendationID).Update("status", "buy_pending").Error; err != nil {
-		t.Fatal(err)
-	}
-	if err := r.RecordBuy(ctx, item.RecommendationID, Trade{TradedAt: at, Quantity: 100, NetCashFlow: -1000}, at.AddDate(0, 0, 1)); err == nil {
-		t.Fatal("observation bought")
-	}
-}
-
-func TestObservationScoresKeepAllRowsButOnlySixCanExecute(t *testing.T) {
-	at := time.Date(2026, 9, 10, 10, 0, 0, 0, shanghai())
-	evidence, values := observationScores(at, 60, 59, 58, 57, 56, 55, 54, 50)
-	if prompt := buildPrompt(prepareEvidence(evidence, at.Add(-24*time.Hour)), at); strings.Contains(prompt, "最多输出6只") || !strings.Contains(prompt, "必须逐只覆盖") {
-		t.Fatal("prompt still limits scoring to executable shortlist")
-	}
-	items, warnings := validateRecommendations("run", at, prepareEvidence(evidence, at.Add(-24*time.Hour)), values)
-	if len(warnings) != 0 || len(items) != 8 {
-		t.Fatalf("items=%d warnings=%v", len(items), warnings)
-	}
-	assignResearch2SelectionRoles(items, 2)
-	for i, item := range items {
-		want := "observation"
-		if i < 2 {
-			want = "primary"
-		} else if i < 6 {
-			want = "standby"
-		}
-		if item.SelectionRole != want {
-			t.Fatalf("item %d role=%s want=%s", i, item.SelectionRole, want)
-		}
+	later, err := runner.Run(ctx, at.Add(10*time.Minute))
+	if err != nil || later.RunID != run.RunID || ai.calls != 1 {
+		t.Fatalf("valid report reran: %+v err=%v calls=%d", later, err, ai.calls)
 	}
 }
 

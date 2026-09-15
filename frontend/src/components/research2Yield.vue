@@ -24,16 +24,17 @@ const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') :
 const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
-const statusLabels = {buy_pending: '待买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
+const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
+const statusLabels = {buy_pending: '待买入', standby: '待买入', standby_not_used: '未买入', active: '持仓中', sell_pending: '待卖出', closed: '已平仓', analysis_only: '仅分析', missed_cash: '资金不足', missed_untradable: '不可成交', missed_window: '错过窗口', cancelled_price: '价格取消'}
 const assessment = computed(() => !performance.value?.closedTrades ? '暂无已平仓样本' : performance.value.closedTrades < 30 ? '样本不足，仅供观察' : '已有阶段性样本')
 const columns = [
   {title: '股票', key: 'stockCode', minWidth: 160, render: row => h(NButton, {text: true, type: 'primary', onClick: () => show(row)}, {default: () => `${row.stockName}（${row.stockCode}）`})},
-  {title: '数量', key: 'quantity', width: 90, render: row => formatInteger(row.quantity)},
-  {title: '净收益', key: 'netPnl', width: 120, render: row => h(NText, {type: colorType(row.netPnl), strong: true, class: 'yield-table-value'}, {default: () => formatMoney(row.netPnl)})},
-  {title: '净收益率', key: 'netYieldRate', width: 110, render: row => h(NText, {type: colorType(row.netYieldRate), strong: true, class: 'yield-table-value'}, {default: () => rate(row.netYieldRate)})},
-  {title: '卖出前+5%', key: 'hitFiveBeforeSell', width: 110, render: row => yesNo(row.hitFiveBeforeSell)},
-  {title: '次日全天涨停', key: 'hitLimitUpFullDay', width: 120, render: row => yesNo(row.hitLimitUpFullDay)},
-  {title: '曾低于-3%', key: 'hitMinusThree', width: 110, render: row => yesNo(row.hitMinusThree)},
+  {title: '数量', key: 'quantity', width: 90, render: row => hasBuy(row) ? formatInteger(row.quantity) : '--'},
+  {title: '净收益', key: 'netPnl', width: 120, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netPnl), strong: true, class: 'yield-table-value'}, {default: () => formatMoney(row.netPnl)}) : '--'},
+  {title: '净收益率', key: 'netYieldRate', width: 110, render: row => hasBuy(row) ? h(NText, {type: colorType(row.netYieldRate), strong: true, class: 'yield-table-value'}, {default: () => rate(row.netYieldRate)}) : '--'},
+  {title: '卖出前+5%', key: 'hitFiveBeforeSell', width: 110, render: row => hasBuy(row) ? yesNo(row.hitFiveBeforeSell) : '--'},
+  {title: '次日全天涨停', key: 'hitLimitUpFullDay', width: 120, render: row => hasBuy(row) ? yesNo(row.hitLimitUpFullDay) : '--'},
+  {title: '曾低于-3%', key: 'hitMinusThree', width: 110, render: row => hasBuy(row) ? yesNo(row.hitMinusThree) : '--'},
 ]
 const show = row => detailRequest.show(row.recommendationId)
 async function refresh() {
@@ -56,7 +57,7 @@ onMounted(refresh)
       ['卖出前+5%', `${formatInteger(performance?.hitFiveCount)} 次`], ['次日全天涨停', `${formatInteger(performance?.hitLimitUpCount)} 次`], ['曾低于-3%', `${formatInteger(performance?.hitMinusThreeCount)} 次`], ['报告时效', `准时 ${formatInteger(performance?.onTimeReports)} / 迟到 ${formatInteger(performance?.lateReports)}`]
     ]" :key="item[0]"><n-card size="small"><n-statistic :label="item[0]" :value="item[1]" :class="item[2]"/></n-card></n-gi></n-grid>
     <n-alert type="info" :bordered="false">{{assessment}}。主指标为下一交易日10:00卖出后的扣费净收益；+5%、全天涨停和-3%风险分别统计，不混作同一成功标准。</n-alert>
-    <n-flex justify="space-between" align="center"><n-text depth="3">账户指标与未平仓收益按最新行情估值；点击股票可查看持仓期分钟走势。</n-text><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
+    <n-flex justify="space-between" align="center"><n-text depth="3">账户指标与未平仓收益按最新行情估值；未买入股票的收益显示为“--”，不计入成交收益。点击股票可查看持仓期分钟走势。</n-text><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="920" :row-key="row => row.recommendationId"/>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="listLoading" :error="listError" @load-more="history.loadMore"/>
   </n-space>
@@ -69,8 +70,8 @@ onMounted(refresh)
           <template v-if="detail">
             <n-descriptions bordered :column="3">
               <n-descriptions-item label="股票">{{detail.recommendation.stockName}}（{{detail.recommendation.stockCode}}）</n-descriptions-item>
-              <n-descriptions-item label="净收益"><n-text class="yield-table-value" :type="colorType(detail.recommendation.netPnl)" strong>{{formatMoney(detail.recommendation.netPnl)}}</n-text></n-descriptions-item>
-              <n-descriptions-item label="净收益率"><n-text class="yield-table-value" :type="colorType(detail.recommendation.netYieldRate)" strong>{{rate(detail.recommendation.netYieldRate)}}</n-text></n-descriptions-item>
+              <n-descriptions-item label="净收益"><n-text v-if="hasBuy(detail.recommendation)" class="yield-table-value" :type="colorType(detail.recommendation.netPnl)" strong>{{formatMoney(detail.recommendation.netPnl)}}</n-text><span v-else>--</span></n-descriptions-item>
+              <n-descriptions-item label="净收益率"><n-text v-if="hasBuy(detail.recommendation)" class="yield-table-value" :type="colorType(detail.recommendation.netYieldRate)" strong>{{rate(detail.recommendation.netYieldRate)}}</n-text><span v-else>--</span></n-descriptions-item>
               <n-descriptions-item label="最终分">{{formatNumber(detail.recommendation.finalScore, 1)}}</n-descriptions-item>
               <n-descriptions-item label="状态">{{statusLabels[detail.recommendation.status] || detail.recommendation.status}}</n-descriptions-item>
               <n-descriptions-item label="信号时间">{{dateTime(detail.recommendation.signalAt)}}</n-descriptions-item>

@@ -20,14 +20,36 @@ import (
 type evidenceProviderStub struct {
 	evidence research2.Evidence
 	err      error
+	seenCash *float64
 }
 
-func (provider evidenceProviderStub) Collect(context.Context, time.Time) (research2.Evidence, error) {
+func (provider evidenceProviderStub) Collect(_ context.Context, _ time.Time, cash float64) (research2.Evidence, error) {
+	if provider.seenCash != nil {
+		*provider.seenCash = cash
+	}
 	return provider.evidence, provider.err
 }
 
-func (provider evidenceProviderStub) CollectWithExclusions(context.Context, time.Time, map[string]struct{}) (research2.Evidence, error) {
+func (provider evidenceProviderStub) CollectWithExclusions(_ context.Context, _ time.Time, _ map[string]struct{}, cash float64) (research2.Evidence, error) {
+	if provider.seenCash != nil {
+		*provider.seenCash = cash
+	}
 	return provider.evidence, provider.err
+}
+
+func TestEvidenceCollectorForwardsExactCashIncludingZero(t *testing.T) {
+	for _, cash := range []float64{0, 5000, 25000} {
+		for _, excluded := range []map[string]struct{}{nil, {"sh600000": {}}} {
+			seen := -1.0
+			collector := NewDurableEvidenceCollector(evidenceProviderStub{seenCash: &seen}, nil, "", nil)
+			if _, err := collector.CollectForRunWithExclusions(context.Background(), "cash-run", time.Now(), excluded, cash); err != nil {
+				t.Fatal(err)
+			}
+			if seen != cash {
+				t.Fatalf("cash=%v forwarded=%v", cash, seen)
+			}
+		}
+	}
 }
 
 type freezeErrorEvidenceRepository struct {
@@ -114,7 +136,7 @@ func TestCollectFailureKeepsEvidenceLinkAndFreezesBatch(t *testing.T) {
 	cutoff := time.Date(2026, 8, 28, 9, 55, 0, 0, time.FixedZone("CST", 8*60*60))
 	collector := NewDurableEvidenceCollector(evidenceProviderStub{evidence: research2.Evidence{CutoffAt: cutoff}, err: errors.New("collector is unavailable")}, repository, "profile-test", buildEvidenceTestItem)
 
-	evidence, err := collector.CollectForRun(context.Background(), "run-collect-failure", cutoff)
+	evidence, err := collector.CollectForRun(context.Background(), "run-collect-failure", cutoff, 12000)
 	if err == nil || !strings.Contains(err.Error(), "collector is unavailable") {
 		t.Fatalf("expected collection failure, got %v", err)
 	}
@@ -133,7 +155,7 @@ func TestCollectForRunPersistsActualCutoffAndFailureDocuments(t *testing.T) {
 	}}}, err: errors.New("auxiliary collection failed")}
 	collector := NewDurableEvidenceCollector(provider, repository, "research2-trailing5-v7", buildEvidenceTestItem)
 
-	evidence, err := collector.CollectForRun(context.Background(), "run-actual-cutoff", startedAt)
+	evidence, err := collector.CollectForRun(context.Background(), "run-actual-cutoff", startedAt, 12000)
 	if err == nil || !strings.Contains(err.Error(), "auxiliary collection failed") {
 		t.Fatalf("collection failure not retained: %v", err)
 	}
@@ -159,7 +181,7 @@ func TestDurableFreezeErrorKeepsFrozenLink(t *testing.T) {
 		freezeErrorEvidenceRepository{Repository: repository, err: freezeErr}, "profile-test", buildEvidenceTestItem,
 	)
 
-	evidence, err := collector.CollectForRun(context.Background(), "run-freeze-failure", cutoff)
+	evidence, err := collector.CollectForRun(context.Background(), "run-freeze-failure", cutoff, 12000)
 	if err == nil || !strings.Contains(err.Error(), "collector is unavailable") || strings.Contains(err.Error(), freezeErr.Error()) {
 		t.Fatalf("durably frozen batch returned the wrong failure: %v", err)
 	}
@@ -172,7 +194,7 @@ func TestFreezeRetriesWithIndependentContext(t *testing.T) {
 	retrying := &retryFreezeEvidenceRepository{Repository: repository, err: errors.New("first freeze did not reach storage")}
 	collector := NewDurableEvidenceCollector(evidenceProviderStub{evidence: research2.Evidence{CutoffAt: cutoff}, err: errors.New("collector is unavailable")}, retrying, "profile-test", buildEvidenceTestItem)
 
-	evidence, err := collector.CollectForRun(context.Background(), "run-freeze-retry", cutoff)
+	evidence, err := collector.CollectForRun(context.Background(), "run-freeze-retry", cutoff, 12000)
 	if err == nil || !strings.Contains(err.Error(), "collector is unavailable") || retrying.calls != 2 {
 		t.Fatalf("freeze retry result: calls=%d err=%v", retrying.calls, err)
 	}
@@ -185,7 +207,7 @@ func TestRepeatedFreezeFailureSealsTerminalBatch(t *testing.T) {
 	freezeErr := errors.New("freeze storage unavailable")
 	collector := NewDurableEvidenceCollector(evidenceProviderStub{evidence: research2.Evidence{CutoffAt: cutoff}, err: errors.New("collector is unavailable")}, failedFreezeEvidenceRepository{Repository: repository, err: freezeErr}, "profile-test", buildEvidenceTestItem)
 
-	evidence, err := collector.CollectForRun(context.Background(), "run-freeze-terminal", cutoff)
+	evidence, err := collector.CollectForRun(context.Background(), "run-freeze-terminal", cutoff, 12000)
 	if err == nil || !strings.Contains(err.Error(), "collector is unavailable") || !strings.Contains(err.Error(), freezeErr.Error()) {
 		t.Fatalf("collection and terminal freeze failures were not joined: %v", err)
 	}

@@ -132,7 +132,7 @@ func newResearch2StructuredCollector(t *testing.T, cutoff time.Time, rows []rese
 func TestResearch2StructuredEvidenceUsesTrailingWindowAndCompactPrompt(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 10, 14, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 20), 20, 5)
-	evidence, err := collector.Collect(context.Background(), cutoff)
+	evidence, err := collector.Collect(context.Background(), cutoff, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestResearch2StructuredEvidenceExcludesTodayNearLimitCandidate(t *testing.T
 	rows[0].ChangeRate = (rows[0].Price/rows[0].PreClose - 1) * 100
 	rows[0].High = limitPrice
 	collector := newResearch2StructuredCollector(t, cutoff, rows, len(rows), 5)
-	evidence, err := collector.Collect(context.Background(), cutoff)
+	evidence, err := collector.Collect(context.Background(), cutoff, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +202,7 @@ func TestResearch2StructuredEvidenceExcludesTodayNearLimitCandidate(t *testing.T
 func TestResearch2CollectWithExclusionsRemovesCodeBeforePromptConstruction(t *testing.T) {
 	cutoff := time.Date(2026, 9, 4, 10, 14, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 20), 20, 5)
-	evidence, err := collector.CollectWithExclusions(context.Background(), cutoff, map[string]struct{}{"SH600001": {}})
+	evidence, err := collector.CollectWithExclusions(context.Background(), cutoff, map[string]struct{}{"SH600001": {}}, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,7 +247,7 @@ func TestResearch2StructuredEvidenceUsesLastFiveMorningMinutesDuringLunch(t *tes
 			SourceRef: "fixture-market", AsOf: snapshotAt, CollectedAt: startedAt.Add(time.Second)}, nil
 	}
 
-	evidence, err := collector.Collect(context.Background(), startedAt)
+	evidence, err := collector.Collect(context.Background(), startedAt, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestResearch2StructuredEvidenceSeparatesFreezeTimeFromSnapshotAsOf(t *testi
 	collector.sources = research2LateAuxiliaryFixture{snapshotAt: snapshotAt, freezeAt: freezeAt}
 	collector.now = func() time.Time { return freezeAt }
 
-	evidence, err := collector.Collect(context.Background(), snapshotAt)
+	evidence, err := collector.Collect(context.Background(), snapshotAt, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,7 +323,7 @@ func TestResearch2StructuredEvidenceMayFinishAfterMorningWindow(t *testing.T) {
 	startedAt := time.Date(2026, 9, 3, 11, 29, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, startedAt, research2StructuredRows(startedAt, 20), 20, 5)
 	collector.now = func() time.Time { return time.Date(2026, 9, 3, 11, 31, 0, 0, shanghaiDataLocation()) }
-	evidence, err := collector.Collect(context.Background(), startedAt)
+	evidence, err := collector.Collect(context.Background(), startedAt, 12000)
 	if err != nil {
 		t.Fatalf("morning-started collection was rejected after 11:30: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestResearch2StructuredEvidenceMayFinishAfterMorningWindow(t *testing.T) {
 func TestResearch2StructuredEvidenceRejectsCoverageBelow95Percent(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, cutoff, research2InvalidatePrices(research2StructuredRows(cutoff, 100), 6), 100, 5)
-	evidence, err := collector.Collect(context.Background(), cutoff)
+	evidence, err := collector.Collect(context.Background(), cutoff, 12000)
 	if err == nil || !strings.Contains(err.Error(), "低于95") {
 		t.Fatalf("94%% coverage accepted: evidence=%+v err=%v", evidence, err)
 	}
@@ -353,7 +353,7 @@ func TestResearch2StructuredEvidenceFallsBackOnlyBelow95Percent(t *testing.T) {
 			fallbackCalls++
 			return research2FullMarketSnapshot{}, errors.New("must not be called")
 		}
-		evidence, err := collector.Collect(context.Background(), startedAt)
+		evidence, err := collector.Collect(context.Background(), startedAt, 12000)
 		if err != nil || evidence.CoveragePct != 95 || fallbackCalls != 0 {
 			t.Fatalf("95%% primary triggered fallback: coverage=%v calls=%d err=%v", evidence.CoveragePct, fallbackCalls, err)
 		}
@@ -370,7 +370,7 @@ func TestResearch2StructuredEvidenceFallsBackOnlyBelow95Percent(t *testing.T) {
 			return research2FullMarketSnapshot{Rows: fallbackRows, Reported: 100, SourceID: "research2:market:tencent",
 				SourceName: "腾讯全市场降级快照", SourceRef: "tencent", CollectedAt: fallbackCutoff.Add(time.Second)}, nil
 		}
-		evidence, err := collector.Collect(context.Background(), startedAt)
+		evidence, err := collector.Collect(context.Background(), startedAt, 12000)
 		if err != nil || evidence.CoveragePct != 100 || fallbackCalls != 1 || !evidence.CutoffAt.Equal(fallbackCutoff) {
 			t.Fatalf("trusted fallback not selected: coverage=%v cutoff=%s calls=%d err=%v", evidence.CoveragePct, evidence.CutoffAt, fallbackCalls, err)
 		}
@@ -380,7 +380,7 @@ func TestResearch2StructuredEvidenceFallsBackOnlyBelow95Percent(t *testing.T) {
 func TestResearch2StructuredEvidenceExcludesCandidateWithFewerThanFourBars(t *testing.T) {
 	cutoff := time.Date(2026, 9, 3, 9, 50, 0, 0, shanghaiDataLocation())
 	collector := newResearch2StructuredCollector(t, cutoff, research2StructuredRows(cutoff, 1), 1, 3)
-	evidence, err := collector.Collect(context.Background(), cutoff)
+	evidence, err := collector.Collect(context.Background(), cutoff, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -508,7 +508,7 @@ func TestResearch2StructuredEvidenceAcceptsRowsUpdatedWhileSnapshotLoads(t *test
 		return research2FullMarketSnapshot{Rows: rows, Reported: 5077, SourceID: "fixture-market", SourceName: "测试全市场",
 			SourceRef: "fixture-market", CollectedAt: startedAt.Add(4 * time.Second)}, nil
 	}
-	evidence, err := collector.Collect(context.Background(), startedAt)
+	evidence, err := collector.Collect(context.Background(), startedAt, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,7 +529,7 @@ func TestResearch2StructuredEvidenceUsesActualCutoffAcrossMinuteBoundary(t *test
 		return research2FullMarketSnapshot{Rows: rows, Reported: 20, SourceID: "fixture-market", SourceName: "测试全市场",
 			SourceRef: "fixture-market", CollectedAt: actualCutoff.Add(time.Second)}, nil
 	}
-	evidence, err := collector.Collect(context.Background(), startedAt)
+	evidence, err := collector.Collect(context.Background(), startedAt, 12000)
 	if err != nil {
 		t.Fatal(err)
 	}

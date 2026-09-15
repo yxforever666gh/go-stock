@@ -43,16 +43,12 @@ func TestDailySelectionCountsTiesAndPagination(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := r.ListRecommendations(ctx, 100, 0)
-			counts := []int{3, 4, 3, 3}
+			counts := []int{3, 3, 3, 3}
 			if err != nil || len(got) != counts[buys] {
 				t.Fatalf("got=%+v err=%v", got, err)
 			}
 			for i, row := range got {
-				role, rank := "primary", i+1
-				if i >= buys {
-					role = "candidate"
-					rank = buys + []int{1, 2, 2}[i-buys]
-				}
+				role, rank := "", i+1
 				if row.DisplaySelectionRole != role || row.DisplaySelectionRank != rank {
 					t.Fatalf("row=%+v", row)
 				}
@@ -83,7 +79,7 @@ func TestDailySelectionCountsTiesAndPagination(t *testing.T) {
 	}
 }
 
-func TestDailySelectionLatestCompletedRunAndExactScores(t *testing.T) {
+func TestDailySelectionDeduplicatesHistoryAndUsesExactScores(t *testing.T) {
 	r := research2TestRepository(t)
 	ctx := context.Background()
 	at := time.Date(2026, 9, 10, 10, 0, 0, 0, shanghai())
@@ -118,8 +114,36 @@ func TestDailySelectionLatestCompletedRunAndExactScores(t *testing.T) {
 	if err := r.DB().Model(&AnalysisRun{}).Where("run_id = ?", "new").Update("status", "no_recommendation").Error; err != nil {
 		t.Fatal(err)
 	}
-	check("bought", "new1", "new2")
-	// A new empty completed run clears old candidates instead of inventing scores.
+	check("bought", "failed", "new1")
+	// A later empty legacy report does not erase actual daily results.
 	displayRun(t, r, "empty", at.Add(2*time.Minute), 3, "no_recommendation")
-	check("bought")
+	check("bought", "failed", "new1")
+}
+
+func TestDailySelectionPrioritizesBoughtThenExecutableWithStableTies(t *testing.T) {
+	r := research2TestRepository(t)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 10, 10, 0, 0, 0, shanghai())
+	displayRun(t, r, "daily", at, 1, "success")
+	rows := []Recommendation{
+		{RecommendationID: "other", AnalysisRunID: "daily", StockCode: "sh600000", SignalAt: at, Status: "analysis_only", FinalScore: 99},
+		{RecommendationID: "pending-later-code", AnalysisRunID: "daily", StockCode: "sz000002", SignalAt: at, Status: "buy_pending", FinalScore: 49},
+		{RecommendationID: "standby-earlier-code", AnalysisRunID: "daily", StockCode: "sz000001", SignalAt: at, Status: "standby", SelectionRole: "standby", FinalScore: 49},
+		{RecommendationID: "bought-low", AnalysisRunID: "daily", StockCode: "sh600099", SignalAt: at, BuyAt: &at, Status: "active", FinalScore: 20},
+	}
+	if err := r.CreateRecommendations(ctx, rows); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"bought-low", "standby-earlier-code", "pending-later-code"}
+	for iteration := 0; iteration < 3; iteration++ {
+		got, err := r.ListRecommendations(ctx, 100, 0)
+		if err != nil || len(got) != 3 {
+			t.Fatalf("rows=%+v err=%v", got, err)
+		}
+		for i, row := range got {
+			if row.RecommendationID != want[i] || row.DisplaySelectionRole != "" || row.DisplaySelectionRank != i+1 {
+				t.Fatalf("rank %d: %+v", i, row)
+			}
+		}
+	}
 }

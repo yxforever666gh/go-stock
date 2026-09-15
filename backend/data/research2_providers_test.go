@@ -142,11 +142,11 @@ func TestSelectResearch2CandidatesExcludesStocksInsideLimitBufferAndHonorsBounda
 		row("600004", limitPrice*0.98),
 		{Code: "600005", Name: "缺前收", Price: 10, PreClose: 0, ChangeRate: 1, ChangeValid: true, Volume: 100000, Amount: 10000000, Turnover: 3, ListingDate: 20200101, Timestamp: asOf.Unix()},
 	}
-	selected := selectResearch2CandidatesWithExclusions(rows, 10, asOf, nil, IsCNOpenTradeDayStrict)
+	selected := selectResearch2CandidatesWithExclusions(rows, 10, asOf, nil, IsCNOpenTradeDayStrict, 12000)
 	if len(selected) != 2 || selected[0].Code != "sh600003" || selected[1].Code != "sh600004" {
 		t.Fatalf("near-limit filter or 1.5%% boundary is wrong: %+v", selected)
 	}
-	selected = selectResearch2CandidatesWithExclusions(rows, 10, asOf, map[string]struct{}{"SH600003": {}}, IsCNOpenTradeDayStrict)
+	selected = selectResearch2CandidatesWithExclusions(rows, 10, asOf, map[string]struct{}{"SH600003": {}}, IsCNOpenTradeDayStrict, 12000)
 	if len(selected) != 1 || selected[0].Code != "sh600004" {
 		t.Fatalf("candidate exclusions were not normalized/applied: %+v", selected)
 	}
@@ -168,6 +168,21 @@ func TestLoadResearch2CachedMinuteBarsUsesOnlyUnadjustedCache(t *testing.T) {
 	}
 	if len(bars) != 1 || !bars[0].TradeTime.Equal(target) || bars[0].Close != 10.1 || bars[0].Source != "tencent" {
 		t.Fatalf("sell replay cache was not adjustment-safe: %+v", bars)
+	}
+}
+
+func TestResearch2CandidateBudgetUsesCurrentCashIncludingFees(t *testing.T) {
+	at := time.Date(2026, 9, 15, 9, 50, 0, 0, shanghaiDataLocation())
+	rows := []research2MarketRow{{Code: "600001", Name: "预算样例", Price: 150, PreClose: 149, ChangeRate: 1, ChangeValid: true,
+		Volume: 10000, Amount: 1500000, Turnover: 3, ListingDate: 20200101, Timestamp: at.Unix()}}
+	for _, tc := range []struct {
+		cash  float64
+		count int
+	}{{25000, 1}, {15000, 0}, {12000, 0}, {5000, 0}, {0, 0}} {
+		selected := selectResearch2CandidatesWithExclusions(rows, 12, at, nil, func(time.Time) (bool, error) { return true, nil }, tc.cash)
+		if len(selected) != tc.count {
+			t.Fatalf("cash=%v selected=%+v", tc.cash, selected)
+		}
 	}
 }
 

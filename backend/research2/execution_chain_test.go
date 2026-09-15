@@ -6,12 +6,10 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
-	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"go-stock/internal/researchevidence"
 	"go-stock/internal/trading"
 
 	"github.com/glebarez/sqlite"
@@ -22,20 +20,6 @@ import (
 type chainMarket struct {
 	snapshots map[string]PriceSnapshot
 	errors    map[string]error
-}
-
-type filteredEvidenceRecorder struct {
-	value    Evidence
-	excluded map[string]struct{}
-}
-
-func (c *filteredEvidenceRecorder) Collect(context.Context, time.Time) (Evidence, error) {
-	return c.value, nil
-}
-
-func (c *filteredEvidenceRecorder) CollectForRunWithExclusions(_ context.Context, _ string, _ time.Time, excluded map[string]struct{}) (Evidence, error) {
-	c.excluded = excluded
-	return c.value, nil
 }
 
 func (m chainMarket) PriceAt(_ context.Context, code string, target time.Time, _ bool) (PriceSnapshot, error) {
@@ -142,7 +126,7 @@ func createChainRun(t *testing.T, repository *Repository, now time.Time) (Execut
 	return chain, run
 }
 
-func TestTradingServicePromotesStandbysAndStopsAtThreeBuys(t *testing.T) {
+func TestTradingServiceSkipsUntradableRowsAndStopsAtThreeBuys(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 10, 0, 5, 0, shanghai())
 	chain, run := createChainRun(t, repository, now)
@@ -185,11 +169,11 @@ func TestTradingServicePromotesStandbysAndStopsAtThreeBuys(t *testing.T) {
 		t.Fatalf("primary outcomes=%+v", stored[:3])
 	}
 	for _, code := range codes[3:5] {
-		if byCode[code].Status != "active" || byCode[code].PromotionReason == "" {
+		if byCode[code].Status != "active" {
 			t.Fatalf("standby %s was not promoted: %+v", code, byCode[code])
 		}
 	}
-	if byCode[codes[5]].Status != "standby_not_used" {
+	if byCode[codes[5]].BuyAt != nil || byCode[codes[5]].Status == "buy_pending" || byCode[codes[5]].Status == "standby" {
 		t.Fatalf("unused standby=%+v", byCode[codes[5]])
 	}
 	chain, err = repository.ExecutionChain(context.Background(), chain.ChainID)
@@ -202,7 +186,7 @@ func TestTradingServicePromotesStandbysAndStopsAtThreeBuys(t *testing.T) {
 	}
 }
 
-func TestPendingPrimaryReservesOneSlotWithoutBlockingAllStandbys(t *testing.T) {
+func TestPendingQuoteDoesNotBlockOtherExecutableRows(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 10, 0, 5, 0, shanghai())
 	chain, run := createChainRun(t, repository, now)
@@ -250,7 +234,7 @@ func TestPendingPrimaryReservesOneSlotWithoutBlockingAllStandbys(t *testing.T) {
 	}
 }
 
-func TestTradingServicePartialFillPreservesRefillChainAndCashSlot(t *testing.T) {
+func TestTradingServiceCompletesUnderfilledReportWithoutAnotherAnalysis(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 10, 0, 5, 0, shanghai())
 	chain, run := createChainRun(t, repository, now)
@@ -269,16 +253,12 @@ func TestTradingServicePartialFillPreservesRefillChainAndCashSlot(t *testing.T) 
 		t.Fatal(err)
 	}
 	chain, err := repository.RefreshExecutionChainFilled(context.Background(), chain.ChainID)
-	if err != nil || chain.Status != "running" || chain.FilledSlots != 1 {
+	if err != nil || chain.Status != "completed" || chain.FilledSlots != 1 {
 		t.Fatalf("chain=%+v err=%v", chain, err)
 	}
 	overview, err := repository.Overview(context.Background())
 	if err != nil || overview.Cash < 7900 || overview.Cash > 9000 {
-		t.Fatalf("cash=%v err=%v; one of three slots should be used", overview.Cash, err)
-	}
-	ready, err := repository.ExecutionChainsReadyForRefill(context.Background(), now)
-	if err != nil || len(ready) != 1 || ready[0].ChainID != chain.ChainID {
-		t.Fatalf("ready=%+v err=%v", ready, err)
+		t.Fatalf("cash=%v err=%v; one executed slot must preserve remaining cash", overview.Cash, err)
 	}
 }
 
@@ -297,10 +277,6 @@ func TestQuoteFailureStaysPendingAndDoesNotSpawnRefill(t *testing.T) {
 	stored, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
 	if err != nil || stored.Recommendation.Status != "buy_pending" || stored.Recommendation.ExecutionFailureCode != "quote_retry" {
 		t.Fatalf("stored=%+v err=%v", stored.Recommendation, err)
-	}
-	ready, err := repository.ExecutionChainsReadyForRefill(context.Background(), now)
-	if err != nil || len(ready) != 0 {
-		t.Fatalf("quote retry unexpectedly spawned refill: %+v err=%v", ready, err)
 	}
 	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
 	if chain.Status != "running" {
@@ -344,7 +320,7 @@ func TestDiagnosticTradingBypassDoesNotApplyThirteenOClockCutoff(t *testing.T) {
 		t.Fatalf("diagnostic recommendation=%+v err=%v", detail.Recommendation, err)
 	}
 	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if chain.Status != "running" || chain.FilledSlots != 1 {
+	if chain.Status != "completed" || chain.FilledSlots != 1 {
 		t.Fatalf("diagnostic chain=%+v", chain)
 	}
 }
@@ -373,7 +349,7 @@ func TestProductionCutoffCancelsMorningRetryBeforeBuyingAtThirteen(t *testing.T)
 		t.Fatalf("morning retry=%+v err=%v", detail.Recommendation, err)
 	}
 	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if chain.Status != "cutoff" || chain.FilledSlots != 0 {
+	if chain.Status != "completed" || chain.FilledSlots != 0 {
 		t.Fatalf("chain=%+v", chain)
 	}
 }
@@ -395,7 +371,7 @@ func TestLunchRecommendationMayBuyAtThirteenBeforeChainCloses(t *testing.T) {
 		t.Fatalf("lunch recommendation=%+v err=%v", detail.Recommendation, err)
 	}
 	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if chain.Status != "cutoff" || chain.FilledSlots != 1 {
+	if chain.Status != "completed" || chain.FilledSlots != 1 {
 		t.Fatalf("chain=%+v", chain)
 	}
 }
@@ -489,120 +465,5 @@ func TestChainlessLegacyPendingCannotExceedDailyThreeBuys(t *testing.T) {
 	trade := Trade{TradeID: uuid.NewString(), RecommendationID: pending.RecommendationID, Side: "buy", TradedAt: now, MarketPrice: 10, ExecutionPrice: cost.ExecutionPrice, Quantity: 100, Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount, NetCashFlow: cost.NetCashFlow}
 	if err := repository.RecordBuy(context.Background(), pending.RecommendationID, trade, now.AddDate(0, 0, 1)); err == nil {
 		t.Fatal("chainless fourth same-day buy was accepted")
-	}
-}
-
-func TestExecutionChainEmailRunAggregatesAllRounds(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 4, 10, 5, 0, 0, shanghai())
-	chain, first := createChainRun(t, repository, now)
-	first.ReportMarkdown = "# 首轮"
-	if err := repository.SaveRun(context.Background(), &first); err != nil {
-		t.Fatal(err)
-	}
-	second := AnalysisRun{RunID: uuid.NewString(), TradingDate: chain.TradingDate, AttemptNo: 2, ChainID: chain.ChainID, ParentRunID: first.RunID, TriggerSource: "untradable_refill", RequestedSlots: 1, PrimaryCount: 1, ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, StrategyVersion: "research2-trailing5-v9", Status: "success", ReportMarkdown: "# 补位轮", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
-	if err := repository.CreateRun(context.Background(), &second); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.AttachRunToExecutionChain(context.Background(), chain.ChainID, second.RunID); err != nil {
-		t.Fatal(err)
-	}
-	items := []Recommendation{
-		{RecommendationID: uuid.NewString(), AnalysisRunID: first.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600031", StockName: "failed", SignalAt: now, Status: "missed_untradable", TargetBuyAt: now, ExecutionFailureCode: "near_limit_up", FailureReason: "距涨停不足1%"},
-		{RecommendationID: uuid.NewString(), AnalysisRunID: second.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600032", StockName: "filled", SignalAt: now, Status: "active", TargetBuyAt: now, BuyAt: &now},
-	}
-	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
-		t.Fatal(err)
-	}
-	chain, err := repository.RefreshExecutionChainFilled(context.Background(), chain.ChainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = repository.CompleteExecutionChain(context.Background(), chain.ChainID, "cutoff", "13:00截止", now); err != nil {
-		t.Fatal(err)
-	}
-	emailRun, err := repository.ExecutionChainEmailRun(context.Background(), chain.ChainID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, fragment := range []string{"# 补位轮", "当日补位执行汇总", "分析轮次：2", "near_limit_up", "13:00截止"} {
-		if !strings.Contains(emailRun.ReportMarkdown, fragment) {
-			t.Fatalf("email report missing %q: %s", fragment, emailRun.ReportMarkdown)
-		}
-	}
-}
-
-func TestRunnerRefillLinksParentAndInjectsDailyExclusions(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 4, 10, 5, 0, 0, shanghai())
-	chain, first := createChainRun(t, repository, now)
-	failed := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: first.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600041", StockName: "blocked", SignalAt: now.Add(-time.Minute), Status: "missed_untradable", TargetBuyAt: now, ExecutionFailureCode: "near_limit_up"}
-	bought := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: first.RunID, StockCode: "sh600040", Status: "active", BuyAt: &now, SignalAt: now, TargetBuyAt: now}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{failed, bought}); err != nil {
-		t.Fatal(err)
-	}
-	evidence := scoreFixtureEvidence(now, researchevidence.StockCandidate{Code: "sh600042", Name: "replacement"})
-	evidence.CandidateReferencePrices = map[string]float64{"sh600042": 10}
-	collector := &filteredEvidenceRecorder{value: evidence}
-	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"refill","recommendations":[{"code":"sh600042","marketScore":20,"sectorScore":20,"stockScore":20,"catalystScore":0,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600042","概念 sh600042"]}]}`}}
-	runner := NewRunner(repository, ai, collector, testCalendar{})
-	runner.ConfigureReplayClock(func() time.Time { return now }, nil)
-	run, err := runner.RunRefill(context.Background(), now, chain.ChainID, first.RunID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if run.AttemptNo != 2 || run.ParentRunID != first.RunID || run.TriggerSource != "untradable_refill" || run.RequestedSlots != 2 || run.PrimaryCount != 1 {
-		t.Fatalf("refill run=%+v", run)
-	}
-	if _, ok := collector.excluded[failed.StockCode]; !ok {
-		t.Fatalf("daily exclusion was not injected: %+v", collector.excluded)
-	}
-	items, err := repository.RunRecommendations(context.Background(), run.RunID)
-	if err != nil || len(items) != 1 || items[0].SelectionRole != "primary" || items[0].SelectionRank != 1 {
-		t.Fatalf("refill recommendations=%+v err=%v", items, err)
-	}
-}
-
-func TestNoRecommendationWaitsThenRefillsInsteadOfHotLooping(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 4, 9, 55, 0, 0, shanghai())
-	ai := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"证据不足","recommendations":[{"code":"sh600061","stockScore":20,"finalScore":20,"referencePrice":10,"sourceRefs":["quote-sh600061"]}]}`}}
-	runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(now, researchevidence.StockCandidate{Code: "sh600061", Name: "candidate"})}, testCalendar{})
-	runner.ConfigureReplayClock(func() time.Time { return now }, nil)
-	run, err := runner.Run(context.Background(), now)
-	if err != nil || run.Status != "no_recommendation" || ai.calls != 1 {
-		t.Fatalf("run=%+v calls=%d err=%v", run, ai.calls, err)
-	}
-	chain, exists, err := repository.ExecutionChainForDate(context.Background(), now.Format("2006-01-02"))
-	if err != nil || !exists || chain.Status != "running" {
-		t.Fatalf("chain=%+v exists=%v err=%v", chain, exists, err)
-	}
-	ready, err := repository.ExecutionChainsReadyForRefill(context.Background(), now)
-	if err != nil || len(ready) != 0 {
-		t.Fatalf("empty run did not enter cooldown: %+v err=%v", ready, err)
-	}
-	first := run
-	for attempt := 2; attempt <= 3; attempt++ {
-		now = run.GeneratedAt.Add(10*time.Minute - time.Nanosecond)
-		ready, err = repository.ExecutionChainsReadyForRefill(context.Background(), now)
-		if err != nil || len(ready) != 0 {
-			t.Fatalf("early refill: %+v %v", ready, err)
-		}
-		if _, err := runner.RunRefill(context.Background(), now, chain.ChainID, run.RunID); !errors.Is(err, ErrExecutionChainClosed) {
-			t.Fatalf("direct early claim: %v", err)
-		}
-		now = now.Add(time.Nanosecond)
-		ready, err = repository.ExecutionChainsReadyForRefill(context.Background(), now)
-		if err != nil || len(ready) != 1 {
-			t.Fatalf("due refill missing: %+v %v", ready, err)
-		}
-		run, err = runner.RunRefill(context.Background(), now, chain.ChainID, run.RunID)
-		if err != nil || run.AttemptNo != attempt || run.Status != "no_recommendation" || ai.calls != attempt {
-			t.Fatalf("run=%+v calls=%d err=%v", run, ai.calls, err)
-		}
-	}
-	stored, err := repository.AnalysisRunByID(context.Background(), first.RunID)
-	if err != nil || stored.ReportMarkdown != first.ReportMarkdown || stored.Status != first.Status {
-		t.Fatalf("original report changed: %+v %v", stored, err)
 	}
 }

@@ -7,144 +7,12 @@ import (
 	"strings"
 	"time"
 
-	"go-stock/internal/trading"
-
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 const DailyTargetSlots = 3
-
-const emptyRunRefillDelay = 10 * time.Minute
-
-func refillWindowOpen(now time.Time, tradingDate string) bool {
-	local := now.In(shanghai())
-	return local.Format("2006-01-02") == tradingDate &&
-		!local.Before(time.Date(local.Year(), local.Month(), local.Day(), 9, 55, 0, 0, shanghai())) &&
-		local.Before(time.Date(local.Year(), local.Month(), local.Day(), 11, 50, 0, 0, shanghai()))
-}
-
-type chainSelectionState struct {
-	Visible, Pending, Running, ExecutionFailed int64
-}
-
-// Use the same daily projection for display completion and task claims.
-func selectionState(tx *gorm.DB, chain ExecutionChain) (chainSelectionState, error) {
-	var state chainSelectionState
-	if err := tx.Raw(dailySelectionQuery+" SELECT count(*) FROM ranked v WHERE v.display_day = ? AND "+dailySelectionVisible,
-		chain.TradingDate, DailyTargetSlots).Scan(&state.Visible).Error; err != nil {
-		return state, err
-	}
-	if err := tx.Table("research2_recommendations AS recommendations").
-		Joins("JOIN research2_analysis_runs AS runs ON runs.run_id = recommendations.analysis_run_id").
-		Where("runs.chain_id = ? AND recommendations.status IN ?", chain.ChainID, []string{"buy_pending", "standby"}).Count(&state.Pending).Error; err != nil {
-		return state, err
-	}
-	if err := tx.Model(&AnalysisRun{}).Where("trading_date = ? AND status = ?", chain.TradingDate, "running").Count(&state.Running).Error; err != nil {
-		return state, err
-	}
-	err := tx.Table("research2_recommendations AS failed").Where("failed.analysis_run_id = ? AND failed.status IN ?", chain.LatestRunID,
-		[]string{"missed_cash", "missed_untradable", "cancelled_price"}).
-		Where("failed.selection_role = ? OR coalesce(failed.replaces_recommendation_id, '') <> ''", "primary").
-		Where("NOT EXISTS (SELECT 1 FROM research2_recommendations replacement WHERE replacement.replaces_recommendation_id = failed.recommendation_id AND replacement.buy_at IS NOT NULL)").
-		Count(&state.ExecutionFailed).Error
-	return state, err
-}
-
-func (s chainSelectionState) complete() bool {
-	return s.Visible >= DailyTargetSlots && s.Pending == 0 && s.Running == 0 && s.ExecutionFailed == 0
-}
-
-// refillReady is shared by polling and the transactional attempt claim.
-func refillReady(tx *gorm.DB, chain ExecutionChain, latest AnalysisRun, now time.Time, manual bool) (bool, int, error) {
-	if !refillWindowOpen(now, chain.TradingDate) || chain.Status != "running" ||
-		latest.RunID != chain.LatestRunID || latest.ChainID != chain.ChainID ||
-		(latest.Status != "success" && latest.Status != "no_recommendation") {
-		return false, 0, nil
-	}
-	state, err := selectionState(tx, chain)
-	if err != nil {
-		return false, 0, err
-	}
-	if !manual && state.ExecutionFailed == 0 {
-		completed := latest.StartedAt
-		if !latest.UpdatedAt.IsZero() {
-			completed = latest.UpdatedAt
-		}
-		if latest.GeneratedAt != nil && !latest.GeneratedAt.IsZero() {
-			completed = *latest.GeneratedAt
-		}
-		if completed.IsZero() || now.Before(completed.Add(emptyRunRefillDelay)) {
-			return false, 0, nil
-		}
-	}
-	dayStart, err := time.ParseInLocation("2006-01-02", chain.TradingDate, shanghai())
-	if err != nil {
-		return false, 0, err
-	}
-	var buys int64
-	if err = tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&buys).Error; err != nil {
-		return false, 0, err
-	}
-	return buys < int64(min(DailyTargetSlots, chain.TargetSlots)) && state.Pending == 0 && state.Running == 0 &&
-		(state.Visible < DailyTargetSlots || state.ExecutionFailed > 0), int(buys), nil
-}
-
-// RecoverEmptyExecutionChain reopens only today's legacy empty terminal chain.
-// The caller must have checked that automatic research is enabled.
-func (r *Repository) RecoverEmptyExecutionChain(ctx context.Context, now time.Time) error {
-	date := now.In(shanghai()).Format("2006-01-02")
-	if !refillWindowOpen(now, date) {
-		return nil
-	}
-	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		if err := lockResearch2AccountForWrite(tx); err != nil {
-			return err
-		}
-		if err := r.checkNewPositionsAllowed(ctx, tx); err != nil {
-			if errors.Is(err, trading.ErrNewPositionsDisabled) {
-				return nil
-			}
-			return err
-		}
-		var chain ExecutionChain
-		err := tx.Where("trading_date = ? AND status = ?", date, "exhausted").First(&chain).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		var latest AnalysisRun
-		if err = tx.Where("trading_date = ?", date).Order("attempt_no DESC, id DESC").First(&latest).Error; err != nil {
-			return err
-		}
-		if latest.Status != "no_recommendation" {
-			return nil
-		}
-		chain.Status = "running"
-		ready, buys, err := refillReady(tx, chain, latest, now, true)
-		if err != nil {
-			return err
-		}
-		state, err := selectionState(tx, chain)
-		if err != nil {
-			return err
-		}
-		if state.complete() {
-			return tx.Model(&ExecutionChain{}).Where("chain_id = ? AND status = ?", chain.ChainID, "exhausted").Updates(map[string]any{
-				"status": "completed", "filled_slots": buys, "stop_reason": "主选与候选已满额", "completed_at": now,
-			}).Error
-		}
-		if !ready {
-			return nil
-		}
-		return tx.Model(&ExecutionChain{}).Where("chain_id = ? AND status = ?", chain.ChainID, "exhausted").Updates(map[string]any{
-			"status": "running", "filled_slots": buys, "stop_reason": "", "completed_at": nil, "updated_at": now,
-		}).Error
-	})
-}
 
 var hardExecutionFailureCodes = []string{
 	"limit_up",
@@ -241,15 +109,20 @@ func (r *Repository) RefreshExecutionChainFilled(ctx context.Context, chainID st
 			chain.Status, chain.StopReason, chain.CompletedAt = "completed", "已完成当日三笔买入", &now
 		}
 		if chain.Status == "running" {
-			state, err := selectionState(tx, chain)
-			if err != nil {
+			var pending, reports int64
+			if err := tx.Model(&Recommendation{}).Where("analysis_run_id IN (?) AND status IN ?",
+				tx.Model(&AnalysisRun{}).Select("run_id").Where("chain_id = ?", chain.ChainID), []string{"buy_pending", "standby"}).Count(&pending).Error; err != nil {
 				return err
 			}
-			if state.complete() {
+			if err := tx.Model(&AnalysisRun{}).Where("trading_date = ? AND status IN ?", chain.TradingDate, []string{"success", "no_recommendation"}).Count(&reports).Error; err != nil {
+				return err
+			}
+			if reports > 0 && pending == 0 {
 				now := time.Now().In(shanghai())
-				chain.Status, chain.StopReason, chain.CompletedAt = "completed", "主选与候选已满额", &now
+				chain.Status, chain.StopReason, chain.CompletedAt = "completed", "当日有效报告的执行名单已处理完毕", &now
 			}
 		}
+
 		return tx.Model(&chain).Updates(map[string]any{
 			"filled_slots": chain.FilledSlots, "status": chain.Status,
 			"stop_reason": chain.StopReason, "completed_at": chain.CompletedAt,
@@ -295,41 +168,6 @@ func normalizeResearch2Code(code string) (string, bool) {
 		return "", false
 	}
 	return code, true
-}
-
-// ExecutionChainsReadyForRefill returns durable chains that have no remaining
-// due or future buy candidates. Quote-source failures deliberately keep a
-// candidate pending, so they are retried by the trading poll instead of
-// spawning duplicate model calls.
-func (r *Repository) ExecutionChainsReadyForRefill(ctx context.Context, now time.Time) ([]ExecutionChain, error) {
-	local := now.In(shanghai())
-	cutoff := time.Date(local.Year(), local.Month(), local.Day(), 13, 0, 0, 0, shanghai())
-	if !local.Before(cutoff) {
-		return nil, nil
-	}
-	var chains []ExecutionChain
-	if err := r.db.WithContext(ctx).Where("trading_date = ? AND status = ? AND filled_slots < target_slots", local.Format("2006-01-02"), "running").Find(&chains).Error; err != nil {
-		return nil, err
-	}
-	ready := make([]ExecutionChain, 0, len(chains))
-	for _, chain := range chains {
-		if strings.TrimSpace(chain.LatestRunID) == "" {
-			continue
-		}
-		var latest AnalysisRun
-		if err := r.db.WithContext(ctx).Where("run_id = ?", chain.LatestRunID).First(&latest).Error; err != nil {
-			return nil, err
-		}
-		eligible, buys, err := refillReady(r.db.WithContext(ctx), chain, latest, now, false)
-		if err != nil {
-			return nil, err
-		}
-		if eligible {
-			chain.FilledSlots = buys
-			ready = append(ready, chain)
-		}
-	}
-	return ready, nil
 }
 
 func (r *Repository) ExpireExecutionChainsAtCutoff(ctx context.Context, now time.Time) error {
@@ -460,30 +298,6 @@ func (r *Repository) RecordExecutionQuote(ctx context.Context, recommendationID 
 	})
 }
 
-func (r *Repository) PromoteStandby(ctx context.Context, recommendationID, replacesRecommendationID, reason string) error {
-	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		result := tx.Model(&Recommendation{}).Where("recommendation_id = ? AND status = ? AND coalesce(selection_role, '') <> ?", recommendationID, "standby", "observation").Updates(map[string]any{
-			"status": "buy_pending", "replaces_recommendation_id": replacesRecommendationID,
-			"promotion_reason": reason, "failure_reason": "",
-		})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return errors.New("research2 standby is no longer promotable")
-		}
-		return nil
-	})
-}
-
-func (r *Repository) MarkStandbyNotUsed(ctx context.Context, recommendationID string) error {
-	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Model(&Recommendation{}).Where("recommendation_id = ? AND status = ?", recommendationID, "standby").Updates(map[string]any{
-			"status": "standby_not_used", "failure_reason": "当轮主选及更高优先级备选已满足剩余席位",
-		}).Error
-	})
-}
-
 func (r *Repository) RunRecommendations(ctx context.Context, runID string) ([]Recommendation, error) {
 	var items []Recommendation
 	err := r.db.WithContext(ctx).Where("analysis_run_id = ?", runID).Order("selection_rank ASC, id ASC").Find(&items).Error
@@ -524,18 +338,15 @@ func (r *Repository) ExecutionChainEmailRun(ctx context.Context, chainID string)
 	}
 	var summary strings.Builder
 	summary.WriteString(strings.TrimSpace(run.ReportMarkdown))
-	summary.WriteString("\n\n## 当日补位执行汇总\n\n")
-	summary.WriteString(fmt.Sprintf("- 补位状态：%s\n- 分析轮次：%d\n- 目标买入：%d\n- 实际买入：%d\n- 剩余席位：%d\n", chain.Status, len(runs), chain.TargetSlots, chain.FilledSlots, max(0, chain.TargetSlots-chain.FilledSlots)))
+	summary.WriteString("\n\n## 当日报告执行汇总\n\n")
+	summary.WriteString(fmt.Sprintf("- 执行状态：%s\n- 分析轮次：%d\n- 目标买入：%d\n- 实际买入：%d\n- 剩余席位：%d\n", chain.Status, len(runs), chain.TargetSlots, chain.FilledSlots, max(0, chain.TargetSlots-chain.FilledSlots)))
 	if strings.TrimSpace(chain.StopReason) != "" {
 		summary.WriteString("- 结束原因：" + strings.TrimSpace(chain.StopReason) + "\n")
 	}
 	if len(recommendations) > 0 {
 		summary.WriteString("\n### 全部候选与执行结果\n\n")
 		for _, item := range recommendations {
-			if item.SelectionRole == "observation" {
-				item.SelectionRole, item.Status = "候选", "仅观察"
-			}
-			line := fmt.Sprintf("- 第%d轮 #%d %s %s（%s）：%s", attemptForRun(runs, item.AnalysisRunID), item.SelectionRank, item.StockCode, item.StockName, item.SelectionRole, item.Status)
+			line := fmt.Sprintf("- 第%d次 #%d %s %s：%s", attemptForRun(runs, item.AnalysisRunID), item.SelectionRank, item.StockCode, item.StockName, item.Status)
 			if strings.TrimSpace(item.ExecutionFailureCode) != "" {
 				line += " / " + item.ExecutionFailureCode
 			}
