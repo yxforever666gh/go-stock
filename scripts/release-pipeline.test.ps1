@@ -415,6 +415,18 @@ try {
     Assert-True ((Read-ReleaseState $maintenancePath).status -eq 'complete' -and $Starts -eq 1) 'Running exact release did not reconcile maintenance journal'
     $passed++
 
+    New-ReleaseFixture
+    $TargetVersion='4.0.0'
+    Invoke-Publish
+    $majorRecord=Read-ReleaseState (Get-FixtureReceipt)
+    Assert-True ($majorRecord.version -eq '4.0.0' -and $Starts -eq 1) 'Explicit major version was not deployed exactly once'
+    Invoke-Publish
+    Assert-True ($Starts -eq 1 -and $TagCalls -eq 1) 'Explicit-version resume duplicated the tag or restart'
+    $TargetVersion='5.0.0'
+    Assert-Fails {Resume-Fixture} 'TargetVersion differs'
+    $TargetVersion=''
+    $passed++
+
     $url='git@github.com:owner/repo.git'
     Assert-GitHubRemoteURLs @($url) @($url)
     Assert-Fails {Assert-GitHubRemoteURLs @('https://github.com/owner/repo.git') @($url)} 'URL'

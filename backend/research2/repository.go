@@ -17,6 +17,8 @@ import (
 )
 
 type Repository struct {
+	slot                   string
+	now                    func() time.Time
 	db                     *gorm.DB
 	newPositionsPermission func(context.Context, *gorm.DB) error
 }
@@ -30,8 +32,12 @@ var (
 // SQLite ignores SELECT FOR UPDATE. Acquire the single-writer lock explicitly
 // before reading the research2 cash balance so concurrent schedulers cannot
 // race the read/modify/write transaction.
-func lockResearch2AccountForWrite(tx *gorm.DB) error {
-	result := tx.Exec("UPDATE research2_accounts SET cash = cash WHERE id = ?", 1)
+func lockResearch2AccountForWrite(tx *gorm.DB, slots ...string) error {
+	slot := DefaultSlot
+	if len(slots) > 0 {
+		slot = normalizeSlot(slots[0])
+	}
+	result := tx.Exec("UPDATE research2_accounts SET cash = cash WHERE slot = ?", slot)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -47,7 +53,7 @@ func research2TransactionWithWriteRetry(ctx context.Context, database *gorm.DB, 
 	}, nil)
 }
 
-func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database} }
+func NewRepository(database *gorm.DB) *Repository { return &Repository{db: database, now: time.Now} }
 func (r *Repository) DB() *gorm.DB                { return r.db }
 
 // ConfigureNewPositionsPermission is called before publishing the runtime.
@@ -68,7 +74,24 @@ func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gor
 }
 
 func (r *Repository) EnsureAccount(ctx context.Context) error {
-	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&Account{ID: 1, InitialCash: InitialCash, Cash: InitialCash}).Error
+	var count int64
+	if err := r.db.WithContext(ctx).Model(&Account{}).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 24 {
+		return nil
+	}
+
+	for _, slot := range append([]string{DefaultSlot}, Slots()...) {
+		account := Account{Slot: slot, InitialCash: InitialCash, Cash: InitialCash}
+		if slot == DefaultSlot {
+			account.ID = 1
+		}
+		if err := r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&account).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *Repository) CreateRun(ctx context.Context, run *AnalysisRun) error {
@@ -84,6 +107,7 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 	if run == nil {
 		return AnalysisRun{}, false, errors.New("research2 analysis run is required")
 	}
+	run.ScheduledSlot = normalizeSlot(run.ScheduledSlot)
 	var selected AnalysisRun
 	created := false
 	err := research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
@@ -94,7 +118,7 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 		}
 		// Serialize the daily quota across schedulers, manual retries and versions.
 		var existing AnalysisRun
-		err := tx.Where("trading_date = ? AND status IN ?", run.TradingDate, []string{"success", "no_recommendation", "running"}).
+		err := tx.Where("trading_date = ? AND scheduled_slot = ? AND status IN ?", run.TradingDate, run.ScheduledSlot, []string{"success", "no_recommendation", "running"}).
 			Order("CASE WHEN status = 'running' THEN 1 ELSE 0 END, attempt_no DESC, id DESC").First(&existing).Error
 		if err == nil {
 			if run.TriggerSource == "manual_rerun" {
@@ -107,7 +131,7 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 			return err
 		}
 		var latest AnalysisRun
-		err = tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&latest).Error
+		err = tx.Where("trading_date = ? AND scheduled_slot = ?", run.TradingDate, run.ScheduledSlot).Order("attempt_no DESC, id DESC").First(&latest).Error
 		if run.TriggerSource == "manual_rerun" && (err != nil || latest.RunID != run.ParentRunID || latest.Status != "failed") {
 			return ErrExecutionChainClosed
 		}
@@ -124,7 +148,7 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 		}
 
 		result := tx.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "trading_date"}, {Name: "attempt_no"}},
+			Columns:   []clause.Column{{Name: "trading_date"}, {Name: "scheduled_slot"}, {Name: "attempt_no"}},
 			DoNothing: true,
 		}).Create(run)
 		if result.Error != nil {
@@ -134,7 +158,7 @@ func (r *Repository) CreateRunAttempt(ctx context.Context, run *AnalysisRun, all
 			selected, created = *run, true
 			return nil
 		}
-		return tx.Where("trading_date = ?", run.TradingDate).Order("attempt_no DESC, id DESC").First(&selected).Error
+		return tx.Where("trading_date = ? AND scheduled_slot = ?", run.TradingDate, run.ScheduledSlot).Order("attempt_no DESC, id DESC").First(&selected).Error
 	})
 	return selected, created, err
 }
@@ -176,54 +200,16 @@ func (r *Repository) FinalizeRun(ctx context.Context, run *AnalysisRun, items []
 	if run == nil {
 		return errors.New("research2 analysis run is required")
 	}
-	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		if err := lockResearch2AccountForWrite(tx); err != nil {
-			return err
-		}
-		permissionErr := r.checkNewPositionsAllowed(ctx, tx)
-		if permissionErr != nil && !errors.Is(permissionErr, trading.ErrNewPositionsDisabled) {
-			return permissionErr
-		}
-		disabled := errors.Is(permissionErr, trading.ErrNewPositionsDisabled)
-		if run.ChainID != "" {
-			var chain ExecutionChain
-			if err := tx.Where("chain_id = ?", run.ChainID).First(&chain).Error; err != nil {
-				return err
-			}
-			disabled = disabled || chain.Status == "disabled"
-			if disabled && chain.Status == "running" {
-				if err := tx.Model(&chain).Updates(map[string]any{"status": "disabled", "stop_reason": trading.ErrNewPositionsDisabled.Error(), "completed_at": run.GeneratedAt}).Error; err != nil {
-					return err
-				}
-			}
-		}
-		if disabled {
-			for index := range items {
-				if items[index].Status == "buy_pending" || items[index].Status == "standby" {
-					items[index].Status, items[index].FailureReason = "analysis_only", trading.ErrNewPositionsDisabled.Error()
-				}
-			}
-		}
-		run.ReportMarkdown = renderReport()
-		if disabled {
-			run.ReportMarkdown += "\n\n> " + trading.ErrNewPositionsDisabled.Error()
-		}
-		if err := tx.Save(run).Error; err != nil {
-			return err
-		}
-		if len(items) == 0 {
-			return nil
-		}
-		rows := append([]Recommendation(nil), items...)
-		for index := range rows {
-			rows[index].ID = 0
-		}
-		return tx.Create(&rows).Error
-	})
+	return r.finalizeSlotRun(ctx, run, items, renderReport)
 }
+
 func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]AnalysisRunSummary, error) {
 	var rows []AnalysisRun
-	err := r.db.WithContext(ctx).Order("scheduled_for DESC, id DESC").Limit(limit).Offset(offset).Find(&rows).Error
+	query := r.db.WithContext(ctx)
+	if r.slot != "" {
+		query = query.Where("slot = ? OR (slot = ? AND scheduled_slot = ?)", r.slot, "", r.slot)
+	}
+	err := query.Order("scheduled_for DESC, id DESC").Limit(limit).Offset(offset).Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -239,7 +225,7 @@ func (r *Repository) ListRuns(ctx context.Context, limit, offset int) ([]Analysi
 	for _, row := range rows {
 		delivery := deliveries[row.RunID]
 		chain := chains[row.ChainID]
-		items = append(items, AnalysisRunSummary{RunID: row.RunID, TradingDate: row.TradingDate, AttemptNo: row.AttemptNo, ChainID: row.ChainID, ParentRunID: row.ParentRunID, TriggerSource: row.TriggerSource, RequestedSlots: row.RequestedSlots, PrimaryCount: row.PrimaryCount, StandbyCount: row.StandbyCount, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError, ExecutionChain: chain})
+		items = append(items, AnalysisRunSummary{ScheduledSlot: row.ScheduledSlot, Slot: row.Slot, Published: row.Published, ArchiveReason: row.ArchiveReason, PersistedAt: row.PersistedAt, RunID: row.RunID, TradingDate: row.TradingDate, AttemptNo: row.AttemptNo, ChainID: row.ChainID, ParentRunID: row.ParentRunID, TriggerSource: row.TriggerSource, RequestedSlots: row.RequestedSlots, PrimaryCount: row.PrimaryCount, StandbyCount: row.StandbyCount, ScheduledFor: row.ScheduledFor, StartedAt: row.StartedAt, EvidenceWindowStartAt: row.EvidenceWindowStartAt, EvidenceCutoffAt: row.EvidenceCutoffAt, EvidenceCoveragePct: row.EvidenceCoveragePct, Degraded: row.Degraded, GeneratedAt: row.GeneratedAt, Status: row.Status, ProviderName: row.ProviderName, ModelName: row.ModelName, StrategyVersion: row.StrategyVersion, EvidenceProfileVersion: row.EvidenceProfileVersion, EvidenceSetID: row.EvidenceSetID, RecommendationCount: row.RecommendationCount, OnTime: row.OnTime, FailureReason: row.FailureReason, EmailDeliveryStatus: delivery.Status, EmailSentAt: delivery.SentAt, EmailAttemptCount: delivery.AttemptCount, EmailLastError: delivery.LastError, ExecutionChain: chain})
 	}
 	return items, nil
 }
@@ -368,8 +354,8 @@ func (r *Repository) ListRecommendations(ctx context.Context, limit, offset int)
 	if limit <= 0 {
 		limit = -1
 	}
-	query := dailySelectionQuery + ", displayed AS (SELECT * FROM ranked v WHERE " + dailySelectionVisible + dailySelectionOrder + " LIMIT ? OFFSET ?)" + dailySelectionProjection + dailySelectionOrder
-	err := r.db.WithContext(ctx).Raw(query, DailyTargetSlots, limit, max(0, offset), DailyTargetSlots).Scan(&items).Error
+	query := dailySelectionQuery + ", displayed AS (SELECT * FROM ranked v WHERE " + dailySelectionVisible + " AND (? = '' OR v.slot = ?)" + dailySelectionOrder + " LIMIT ? OFFSET ?)" + dailySelectionProjection + dailySelectionOrder
+	err := r.db.WithContext(ctx).Raw(query, DailyTargetSlots, r.slot, r.slot, limit, max(0, offset), DailyTargetSlots).Scan(&items).Error
 	for index := range items {
 		enrichLiveRecommendation(&items[index])
 	}
@@ -416,17 +402,6 @@ func (r *Repository) DueRecommendations(ctx context.Context, now time.Time, stat
 	return items, err
 }
 
-func (r *Repository) DeferDueBuys(ctx context.Context, dueBefore, target time.Time) error {
-	if !target.After(dueBefore) {
-		return errors.New("research2 deferred buy target must be after the current due time")
-	}
-	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Model(&Recommendation{}).
-			Where("status = ? AND target_buy_at <= ?", "buy_pending", dueBefore).
-			Update("target_buy_at", target).Error
-	})
-}
-
 func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, trade Trade, sellAt time.Time) error {
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		if err := lockResearch2AccountForWrite(tx); err != nil {
@@ -442,14 +417,14 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 		tradeDay := trade.TradedAt.In(shanghai())
 		dayStart := time.Date(tradeDay.Year(), tradeDay.Month(), tradeDay.Day(), 0, 0, 0, 0, shanghai())
 		var dailyBuys int64
-		if err := tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&dailyBuys).Error; err != nil {
+		if err := tx.Model(&Recommendation{}).Where("slot = ? AND buy_at >= ? AND buy_at < ?", recommendation.Slot, dayStart, dayStart.AddDate(0, 0, 1)).Count(&dailyBuys).Error; err != nil {
 			return err
 		}
 		if dailyBuys >= DailyTargetSlots {
 			return ErrDailyBuyLimitReached
 		}
 		var duplicates int64
-		if err := tx.Model(&Recommendation{}).Where("stock_code = ? AND (status IN ? OR (buy_at >= ? AND buy_at < ?))", recommendation.StockCode, []string{"active", "sell_pending"}, dayStart, dayStart.AddDate(0, 0, 1)).Count(&duplicates).Error; err != nil {
+		if err := tx.Model(&Recommendation{}).Where("slot = ? AND stock_code = ? AND (status IN ? OR (buy_at >= ? AND buy_at < ?))", recommendation.Slot, recommendation.StockCode, []string{"active", "sell_pending"}, dayStart, dayStart.AddDate(0, 0, 1)).Count(&duplicates).Error; err != nil {
 			return err
 		}
 		if duplicates > 0 {
@@ -467,12 +442,12 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 			if err := tx.Where("chain_id = ?", run.ChainID).First(&chain).Error; err != nil {
 				return err
 			}
-			if chain.Status != "running" || chain.FilledSlots >= chain.TargetSlots {
+			if chain.Status != "running" || chain.FilledSlots >= chain.TargetSlots || chain.SellCompletedAt == nil {
 				return ErrExecutionChainClosed
 			}
 		}
 		var account Account
-		if err := tx.First(&account, 1).Error; err != nil {
+		if err := tx.Where("slot = ?", recommendation.Slot).First(&account).Error; err != nil {
 			return err
 		}
 		cost := -trade.NetCashFlow
@@ -490,6 +465,7 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 		if result.RowsAffected != 1 {
 			return errors.New("research2 buy is no longer pending")
 		}
+		trade.Slot = recommendation.Slot
 		if err := tx.Create(&trade).Error; err != nil {
 			return err
 		}
@@ -501,7 +477,7 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 			updates := map[string]any{"filled_slots": newFilledSlots}
 			if newFilledSlots >= chain.TargetSlots {
 				now := trade.TradedAt
-				updates["status"], updates["stop_reason"], updates["completed_at"] = "completed", "已完成当日三笔买入", now
+				updates["status"], updates["stop_reason"], updates["completed_at"] = "completed", "已完成本区间当日五笔买入", now
 			}
 			if err := tx.Model(&ExecutionChain{}).Where("chain_id = ? AND filled_slots = ?", run.ChainID, chain.FilledSlots).Updates(updates).Error; err != nil {
 				return err
@@ -521,7 +497,7 @@ func (r *Repository) RecordSell(ctx context.Context, recommendationID string, tr
 			return err
 		}
 		var account Account
-		if err := tx.First(&account, 1).Error; err != nil {
+		if err := tx.Where("slot = ?", item.Slot).First(&account).Error; err != nil {
 			return err
 		}
 		buyCost := item.BuyPrice*float64(item.Quantity) + item.BuyFees
@@ -536,6 +512,13 @@ func (r *Repository) RecordSell(ctx context.Context, recommendationID string, tr
 		}
 		if result.RowsAffected != 1 {
 			return errors.New("research2 position is no longer active")
+		}
+		trade.Slot = item.Slot
+		if item.BaselineValue != nil {
+			value := trade.NetCashFlow - *item.BaselineValue
+			if err := tx.Model(&item).Update("period_pn_l", value).Error; err != nil {
+				return err
+			}
 		}
 		if err := tx.Create(&trade).Error; err != nil {
 			return err
@@ -562,7 +545,7 @@ func (r *Repository) ActiveAndPending(ctx context.Context) ([]Recommendation, er
 
 func (r *Repository) ActiveRecommendations(ctx context.Context) ([]Recommendation, error) {
 	var items []Recommendation
-	err := r.db.WithContext(ctx).Where("status IN ?", []string{"active", "sell_pending"}).Order("stock_code ASC, id ASC").Find(&items).Error
+	err := r.accountQuery(ctx).Where("status IN ?", []string{"active", "sell_pending"}).Order("stock_code ASC, id ASC").Find(&items).Error
 	return items, err
 }
 
@@ -580,15 +563,15 @@ func (r *Repository) UpdateCurrentQuote(ctx context.Context, recommendationID st
 
 func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
 	var account Account
-	if err := r.db.WithContext(ctx).First(&account, 1).Error; err != nil {
+	if err := r.accountQuery(ctx).First(&account).Error; err != nil {
 		return AccountOverview{}, err
 	}
 	var active []Recommendation
-	if err := r.db.WithContext(ctx).Where("status IN ?", []string{"active", "sell_pending"}).Find(&active).Error; err != nil {
+	if err := r.accountQuery(ctx).Where("status IN ?", []string{"active", "sell_pending"}).Find(&active).Error; err != nil {
 		return AccountOverview{}, err
 	}
 	var pending int64
-	if err := r.db.WithContext(ctx).Model(&Recommendation{}).Where("status = ?", "buy_pending").Count(&pending).Error; err != nil {
+	if err := r.accountQuery(ctx).Model(&Recommendation{}).Where("status = ?", "buy_pending").Count(&pending).Error; err != nil {
 		return AccountOverview{}, err
 	}
 	positionValue := 0.0
@@ -596,11 +579,15 @@ func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
 		positionValue += livePositionValue(item)
 	}
 	nav := account.Cash + positionValue
-	returnRate := 0.0
-	if account.InitialCash > 0 {
-		returnRate = (nav - account.InitialCash) / account.InitialCash
+	basis := account.InitialCash
+	if account.BaselineAt != nil {
+		basis = account.BaselineNetAssetValue
 	}
-	return AccountOverview{InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: positionValue, NetAssetValue: nav, NetProfit: nav - account.InitialCash, ReturnRate: returnRate, OpenPositions: int64(len(active)), PendingBuys: pending, LastValuedAt: time.Now()}, nil
+	returnRate := 0.0
+	if basis > 0 {
+		returnRate = (nav - basis) / basis
+	}
+	return AccountOverview{Slot: r.accountSlot(), BaselineAt: account.BaselineAt, BaselineNetAssetValue: basis, InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: positionValue, NetAssetValue: nav, NetProfit: nav - basis, ReturnRate: returnRate, OpenPositions: int64(len(active)), PendingBuys: pending, LastValuedAt: time.Now()}, nil
 }
 
 func (r *Repository) SaveSnapshot(ctx context.Context, kind string, at time.Time) (AccountSnapshot, error) {
@@ -608,7 +595,7 @@ func (r *Repository) SaveSnapshot(ctx context.Context, kind string, at time.Time
 	if err != nil {
 		return AccountSnapshot{}, err
 	}
-	item := AccountSnapshot{SnapshotID: uuid.NewString(), ValuedAt: at, TradingDate: at.In(shanghai()).Format("2006-01-02"), SnapshotType: kind, Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate}
+	item := AccountSnapshot{Slot: r.accountSlot(), SnapshotID: uuid.NewString(), ValuedAt: at, TradingDate: at.In(shanghai()).Format("2006-01-02"), SnapshotType: kind, Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate}
 	err = research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		item.ID = 0
 		return tx.Create(&item).Error
@@ -622,29 +609,41 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 		return Performance{}, err
 	}
 	result := Performance{AccountOverview: overview}
-	base := r.db.WithContext(ctx).Model(&Recommendation{}).Where("status = ?", "closed")
+	period := r.accountQuery(ctx)
+	if overview.BaselineAt != nil {
+		period = period.Where("sell_at >= ?", *overview.BaselineAt)
+	}
+	trades := r.accountQuery(ctx)
+	curve := r.accountQuery(ctx)
+	reports := r.db.WithContext(ctx).Where("slot = ? AND published = ?", r.accountSlot(), true)
+	if overview.BaselineAt != nil {
+		trades = trades.Where("traded_at >= ?", *overview.BaselineAt)
+		curve = curve.Where("valued_at >= ?", *overview.BaselineAt)
+		reports = reports.Where("persisted_at >= ?", *overview.BaselineAt)
+	}
+	base := period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("status = ?", "closed")
 	if err = base.Count(&result.ClosedTrades).Error; err != nil {
 		return result, err
 	}
-	if err = r.db.WithContext(ctx).Model(&Recommendation{}).Where("status = ? AND net_pn_l > 0", "closed").Count(&result.WinningTrades).Error; err != nil {
+	if err = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("status = ? AND coalesce(period_pn_l,net_pn_l) > 0", "closed").Count(&result.WinningTrades).Error; err != nil {
 		return result, err
 	}
 	if result.ClosedTrades > 0 {
 		value := float64(result.WinningTrades) / float64(result.ClosedTrades)
 		result.WinRate = &value
 	}
-	if err = r.db.WithContext(ctx).Model(&Trade{}).Select("COALESCE(SUM(commission + stamp_duty + transfer_fee), 0)").Scan(&result.TotalFees).Error; err != nil {
+	if err = trades.Model(&Trade{}).Select("COALESCE(SUM(commission + stamp_duty + transfer_fee), 0)").Scan(&result.TotalFees).Error; err != nil {
 		return result, err
 	}
-	_ = r.db.WithContext(ctx).Model(&Recommendation{}).Where("hit_five_before_sell = ?", true).Count(&result.HitFiveCount).Error
-	_ = r.db.WithContext(ctx).Model(&Recommendation{}).Where("hit_limit_up_full_day = ?", true).Count(&result.HitLimitUpCount).Error
-	_ = r.db.WithContext(ctx).Model(&Recommendation{}).Where("hit_minus_three = ?", true).Count(&result.HitMinusThreeCount).Error
-	_ = r.db.WithContext(ctx).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", true, []string{"success", "no_recommendation"}).Count(&result.OnTimeReports).Error
-	_ = r.db.WithContext(ctx).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", false, []string{"success", "no_recommendation"}).Count(&result.LateReports).Error
-	if err = r.db.WithContext(ctx).Order("valued_at ASC").Limit(500).Find(&result.Curve).Error; err != nil {
+	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_five_before_sell = ?", true).Count(&result.HitFiveCount).Error
+	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_limit_up_full_day = ?", true).Count(&result.HitLimitUpCount).Error
+	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_minus_three = ?", true).Count(&result.HitMinusThreeCount).Error
+	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", true, []string{"success", "no_recommendation"}).Count(&result.OnTimeReports).Error
+	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", false, []string{"success", "no_recommendation"}).Count(&result.LateReports).Error
+	if err = curve.Order("valued_at ASC").Limit(500).Find(&result.Curve).Error; err != nil {
 		return result, err
 	}
-	result.Curve = append(result.Curve, AccountSnapshot{ValuedAt: overview.LastValuedAt, TradingDate: overview.LastValuedAt.In(shanghai()).Format("2006-01-02"), SnapshotType: "current", Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate})
+	result.Curve = append(result.Curve, AccountSnapshot{Slot: r.accountSlot(), ValuedAt: overview.LastValuedAt, TradingDate: overview.LastValuedAt.In(shanghai()).Format("2006-01-02"), SnapshotType: "current", Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate})
 	peak, maxDrawdown := 0.0, 0.0
 	for _, point := range result.Curve {
 		if point.NetAssetValue > peak {
@@ -721,10 +720,10 @@ func (r *Repository) RemainingBuySlots(ctx context.Context, at time.Time) (int, 
 	local := at.In(shanghai())
 	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, shanghai())
 	var count int64
-	err := r.db.WithContext(ctx).Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", start, start.AddDate(0, 0, 1)).Count(&count).Error
+	err := r.accountQuery(ctx).Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", start, start.AddDate(0, 0, 1)).Count(&count).Error
 	return max(0, DailyTargetSlots-int(count)), err
 }
 
 func (r *Repository) FinishPendingBuy(ctx context.Context, id string) error {
-	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ? AND status IN ?", id, []string{"buy_pending", "standby"}).Updates(map[string]any{"status": "analysis_only", "failure_reason": "当日已完成三笔买入，剩余评分仅保留分析"}).Error
+	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ? AND status IN ?", id, []string{"buy_pending", "standby"}).Updates(map[string]any{"status": "analysis_only", "failure_reason": "本区间当日已完成五笔买入，剩余评分仅保留分析"}).Error
 }

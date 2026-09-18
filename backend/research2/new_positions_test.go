@@ -117,31 +117,26 @@ func TestDisableDuringAnalysisPreservesRunningStateAndCompletesAnalysisOnly(t *t
 		t.Fatal("analysis did not reach model call")
 	}
 	setEnabled(false)
-	chains, err := repo.DisableRunningExecutionChains(ctx, at.Format("2006-01-02"), at)
-	if err != nil || len(chains) != 1 {
-		t.Fatalf("chains=%+v err=%v", chains, err)
+	if _, err := repo.DisableRunningExecutionChains(ctx, at.Format("2006-01-02"), at); err != nil {
+		t.Fatal(err)
 	}
 	var active AnalysisRun
-	if err := repo.DB().Where("chain_id = ?", chains[0].ChainID).First(&active).Error; err != nil {
+	if err := repo.DB().Where("status = ?", "running").First(&active).Error; err != nil {
 		t.Fatal(err)
 	}
-	if active.Status != "running" || active.GeneratedAt != nil {
-		t.Fatalf("disable pretended to interrupt live analysis: %+v", active)
+	if active.GeneratedAt != nil {
+		t.Fatal("disable pretended to complete the live task")
 	}
-	// Even an immediate re-enable cannot resurrect this already closed chain.
 	setEnabled(true)
-	if err := repo.AttachRunToExecutionChain(ctx, chains[0].ChainID, active.RunID); err != nil {
-		t.Fatal(err)
-	}
 	close(ai.resume)
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
 	items, err := repo.RunRecommendations(ctx, run.RunID)
-	chain, chainErr := repo.ExecutionChain(ctx, chains[0].ChainID)
-	if err != nil || chainErr != nil || run.Status != "success" || len(items) != 1 || items[0].Status != "analysis_only" || chain.Status != "disabled" || !strings.Contains(run.ReportMarkdown, "仅分析，不交易") || !strings.Contains(run.ReportMarkdown, "自动策略已关闭") {
-		t.Fatalf("disabled run did not finalize cleanly: run=%+v items=%+v chain=%+v err=%v/%v", run, items, chain, err, chainErr)
+	if err != nil || run.Status != "success" || run.Published || len(items) != 0 || !strings.Contains(run.ReportMarkdown, "自动策略已关闭") {
+		t.Fatalf("disabled run=%+v items=%+v err=%v", run, items, err)
 	}
+
 }
 
 func TestDisabledResearchStillSellsAndDoesNotRevivePendingBuy(t *testing.T) {
@@ -149,6 +144,9 @@ func TestDisabledResearchStillSellsAndDoesNotRevivePendingBuy(t *testing.T) {
 	repo := research2TestRepository(t)
 	at := time.Date(2026, 9, 9, 10, 0, 0, 0, shanghai())
 	_, run := createChainRun(t, repo, at)
+	if err := repo.DB().Model(&ExecutionChain{}).Where("chain_id = ?", run.ChainID).Update("sell_completed_at", nil).Error; err != nil {
+		t.Fatal(err)
+	}
 	buyAt := at.AddDate(0, 0, -1)
 	items := []Recommendation{
 		{RecommendationID: "pending", AnalysisRunID: run.RunID, StockCode: "sh600001", Status: "buy_pending", SignalAt: at, TargetBuyAt: at},

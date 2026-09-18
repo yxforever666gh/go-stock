@@ -12,48 +12,42 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const DailyTargetSlots = 3
-
-var hardExecutionFailureCodes = []string{
-	"limit_up",
-	"near_limit_up",
-	"limit_down",
-	"suspended",
-	"invalid_price",
-}
+const DailyTargetSlots = 5
 
 func deterministicExecutionChainID(tradingDate string) string {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte("go-stock:research2:execution-chain:"+strings.TrimSpace(tradingDate))).String()
 }
 
 func (r *Repository) EnsureExecutionChain(ctx context.Context, tradingDate string, scheduledFor, startedAt time.Time) (ExecutionChain, error) {
-	if strings.TrimSpace(tradingDate) == "" {
-		return ExecutionChain{}, errors.New("research2 execution chain trading date is required")
-	}
-	dayStart, parseErr := time.ParseInLocation("2006-01-02", tradingDate, shanghai())
-	if parseErr != nil {
-		return ExecutionChain{}, fmt.Errorf("invalid research2 execution chain trading date: %w", parseErr)
-	}
-	chain := ExecutionChain{
-		ChainID: deterministicExecutionChainID(tradingDate), TradingDate: tradingDate,
-		ScheduledFor: scheduledFor, Status: "running", TargetSlots: DailyTargetSlots,
-		StartedAt: startedAt,
-	}
+	var chain ExecutionChain
 	err := research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		var existingBuys int64
-		if err := tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&existingBuys).Error; err != nil {
+		if err := lockResearch2AccountForWrite(tx); err != nil {
 			return err
 		}
-		chain.FilledSlots = min(DailyTargetSlots, int(existingBuys))
-		if chain.FilledSlots >= chain.TargetSlots {
-			completed := startedAt
-			chain.Status, chain.StopReason, chain.CompletedAt = "completed", "当日已有三笔买入，无需补位", &completed
-		}
-		if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "trading_date"}}, DoNothing: true}).Create(&chain).Error; err != nil {
-			return err
-		}
-		return tx.Where("trading_date = ?", tradingDate).First(&chain).Error
+		var err error
+		chain, err = ensureExecutionChain(tx, r.accountSlot(), tradingDate, scheduledFor, startedAt)
+		return err
 	})
+	return chain, err
+}
+
+func ensureExecutionChain(tx *gorm.DB, slot, tradingDate string, scheduledFor, startedAt time.Time) (ExecutionChain, error) {
+	if tradingDate == "" || !ValidSlot(slot) {
+		return ExecutionChain{}, errors.New("invalid research2 account day")
+	}
+	var bought int64
+	day, err := time.ParseInLocation("2006-01-02", tradingDate, shanghai())
+	if err != nil {
+		return ExecutionChain{}, err
+	}
+	if err := tx.Model(&Recommendation{}).Where("slot = ? AND buy_at >= ? AND buy_at < ?", slot, day, day.AddDate(0, 0, 1)).Count(&bought).Error; err != nil {
+		return ExecutionChain{}, err
+	}
+	chain := ExecutionChain{FilledSlots: int(bought), ChainID: deterministicExecutionChainID(tradingDate + ":" + slot), Slot: slot, TradingDate: tradingDate, ScheduledFor: scheduledFor, Status: "running", TargetSlots: DailyTargetSlots, StartedAt: startedAt}
+	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "trading_date"}, {Name: "slot"}}, DoNothing: true}).Create(&chain).Error; err != nil {
+		return chain, err
+	}
+	err = tx.Where("trading_date = ? AND slot = ?", tradingDate, slot).First(&chain).Error
 	return chain, err
 }
 
@@ -65,7 +59,7 @@ func (r *Repository) ExecutionChain(ctx context.Context, chainID string) (Execut
 
 func (r *Repository) ExecutionChainForDate(ctx context.Context, tradingDate string) (ExecutionChain, bool, error) {
 	var chain ExecutionChain
-	err := r.db.WithContext(ctx).Where("trading_date = ?", tradingDate).First(&chain).Error
+	err := r.accountQuery(ctx).Where("trading_date = ?", tradingDate).First(&chain).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return ExecutionChain{}, false, nil
 	}
@@ -100,13 +94,13 @@ func (r *Repository) RefreshExecutionChainFilled(ctx context.Context, chainID st
 			return err
 		}
 		var filled int64
-		if err := tx.Model(&Recommendation{}).Where("buy_at >= ? AND buy_at < ?", dayStart, dayStart.AddDate(0, 0, 1)).Count(&filled).Error; err != nil {
+		if err := tx.Model(&Recommendation{}).Where("slot = ? AND buy_at >= ? AND buy_at < ?", chain.Slot, dayStart, dayStart.AddDate(0, 0, 1)).Count(&filled).Error; err != nil {
 			return err
 		}
 		chain.FilledSlots = int(filled)
 		if chain.FilledSlots >= chain.TargetSlots && chain.Status == "running" {
 			now := time.Now().In(shanghai())
-			chain.Status, chain.StopReason, chain.CompletedAt = "completed", "已完成当日三笔买入", &now
+			chain.Status, chain.StopReason, chain.CompletedAt = "completed", "已完成本区间当日五笔买入", &now
 		}
 		if chain.Status == "running" {
 			var pending, reports int64
@@ -114,7 +108,7 @@ func (r *Repository) RefreshExecutionChainFilled(ctx context.Context, chainID st
 				tx.Model(&AnalysisRun{}).Select("run_id").Where("chain_id = ?", chain.ChainID), []string{"buy_pending", "standby"}).Count(&pending).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&AnalysisRun{}).Where("trading_date = ? AND status IN ?", chain.TradingDate, []string{"success", "no_recommendation"}).Count(&reports).Error; err != nil {
+			if err := tx.Model(&AnalysisRun{}).Where("chain_id = ? AND published = ? AND status IN ?", chain.ChainID, true, []string{"success", "no_recommendation"}).Count(&reports).Error; err != nil {
 				return err
 			}
 			if reports > 0 && pending == 0 {
@@ -139,55 +133,28 @@ func (r *Repository) CompleteExecutionChain(ctx context.Context, chainID, status
 	})
 }
 
-func (r *Repository) ExecutionChainExcludedCodes(ctx context.Context, chainID string) (map[string]struct{}, error) {
-	var codes []string
-	err := r.db.WithContext(ctx).Table("research2_recommendations AS recommendations").Distinct("recommendations.stock_code").
-		Joins("JOIN research2_analysis_runs AS runs ON runs.run_id = recommendations.analysis_run_id").
-		Where("runs.chain_id = ? AND (recommendations.buy_at IS NOT NULL OR recommendations.status IN ? OR recommendations.execution_failure_code IN ?)", chainID, []string{"missed_cash", "missed_untradable"}, hardExecutionFailureCodes).
-		Pluck("recommendations.stock_code", &codes).Error
-	if err != nil {
-		return nil, err
-	}
-	var held []string
-	if err = r.db.WithContext(ctx).Model(&Recommendation{}).Distinct("stock_code").
-		Where("status IN ?", []string{"active", "sell_pending"}).Pluck("stock_code", &held).Error; err != nil {
-		return nil, err
-	}
-	result := make(map[string]struct{}, len(codes)+len(held))
-	for _, code := range append(codes, held...) {
-		if normalized, ok := normalizeResearch2Code(code); ok {
-			result[normalized] = struct{}{}
-		}
-	}
-	return result, nil
-}
-
-func normalizeResearch2Code(code string) (string, bool) {
-	code = strings.ToLower(strings.TrimSpace(code))
-	if len(code) != 8 || !(strings.HasPrefix(code, "sh") || strings.HasPrefix(code, "sz")) {
-		return "", false
-	}
-	return code, true
-}
-
 func (r *Repository) ExpireExecutionChainsAtCutoff(ctx context.Context, now time.Time) error {
 	local := now.In(shanghai())
-	cutoff := time.Date(local.Year(), local.Month(), local.Day(), 13, 0, 0, 0, shanghai())
+	cutoff := time.Date(local.Year(), local.Month(), local.Day(), 11, 30, 0, 0, shanghai())
 	if local.Before(cutoff) {
 		return nil
 	}
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		// Also retire imported chainless pending rows; no lunchtime deferral.
+		if err := tx.Model(&Recommendation{}).Where("status IN ? AND signal_at < ?", []string{"buy_pending", "standby"}, cutoff.AddDate(0, 0, 1)).Updates(map[string]any{"status": "analysis_only", "failure_reason": "上午11:30买入窗口已截止"}).Error; err != nil {
+			return err
+		}
 		var chains []ExecutionChain
 		if err := tx.Where("trading_date = ? AND status = ?", local.Format("2006-01-02"), "running").Find(&chains).Error; err != nil {
 			return err
 		}
 		for _, chain := range chains {
-			if err := tx.Model(&chain).Updates(map[string]any{"status": "cutoff", "stop_reason": "分析启动窗口11:50已结束，13:00执行窗口截止", "completed_at": local}).Error; err != nil {
+			if err := tx.Model(&chain).Updates(map[string]any{"status": "cutoff", "stop_reason": "上午11:30买入窗口截止", "completed_at": local}).Error; err != nil {
 				return err
 			}
 			if err := tx.Table("research2_recommendations").Where("analysis_run_id IN (?) AND status IN ?",
 				tx.Model(&AnalysisRun{}).Select("run_id").Where("chain_id = ?", chain.ChainID), []string{"buy_pending", "standby"}).
-				Updates(map[string]any{"status": "analysis_only", "failure_reason": "补位链已到13:00截止，仅保留分析"}).Error; err != nil {
+				Updates(map[string]any{"status": "analysis_only", "failure_reason": "上午11:30买入窗口已截止，仅保留分析"}).Error; err != nil {
 				return err
 			}
 		}
@@ -207,6 +174,10 @@ func (r *Repository) RecoverInterruptedRunsForDate(ctx context.Context, tradingD
 func (r *Repository) DisableRunningExecutionChains(ctx context.Context, tradingDate string, disabledAt time.Time) ([]ExecutionChain, error) {
 	var stopped []ExecutionChain
 	err := research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := tx.Model(&AnalysisRun{}).Where("trading_date = ? AND status = ?", tradingDate, "running").Update("archive_reason", "自动策略已关闭，仅保留报告").Error; err != nil {
+			return err
+		}
+
 		if err := tx.Where("trading_date = ? AND status = ?", tradingDate, "running").Find(&stopped).Error; err != nil {
 			return err
 		}

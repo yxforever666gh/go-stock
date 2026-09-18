@@ -84,6 +84,18 @@ func research2AnalysisRunIndexes(database *gorm.DB) ([]research2SQLiteIndex, err
 }
 
 func verifyMainSchema24Runtime(database *gorm.DB) error {
+	if database != nil && database.Migrator().HasColumn(research2AnalysisRunsTable, "scheduled_slot") {
+		indexes, err := research2AnalysisRunIndexes(database)
+		if err != nil {
+			return err
+		}
+		for _, index := range indexes {
+			if index.Unique && len(index.Columns) == 3 && index.Columns[0] == "trading_date" && index.Columns[1] == "scheduled_slot" && index.Columns[2] == "attempt_no" {
+				return nil
+			}
+		}
+	}
+
 	if database == nil {
 		return errors.New("main database is unavailable")
 	}

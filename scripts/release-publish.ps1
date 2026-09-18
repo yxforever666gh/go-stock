@@ -121,6 +121,7 @@ function Assert-PublishBranch {
 
 function Assert-PublishRecord {
     param([string]$Path, $Record)
+    if ($TargetVersion -and $Record.version -ne $TargetVersion) { throw 'TargetVersion differs from the saved release record' }
     [void](Assert-ChildPath $Path $DeploymentsRoot)
     if ($Record.formatVersion -ne 1 -or $Record.projectRoot -ne $ProjectRoot -or $Record.version -notmatch '^\d+\.\d+\.\d+$' -or
         $Record.sourceCommit -notmatch '^[0-9a-f]{40}$' -or ($Record.commit -and $Record.commit -notmatch '^[0-9a-f]{40}$')) { throw 'Invalid publish receipt' }
@@ -185,6 +186,10 @@ function New-PublishRecord {
     $manifest = $manifestText | ConvertFrom-Json
     if ($manifest.appVersion -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw 'Patch increment requires a stable semantic version' }
     $version = "$($Matches[1]).$($Matches[2]).$([int]$Matches[3]+1)"
+    if ($TargetVersion) {
+        if ($TargetVersion -notmatch '^\d+\.\d+\.\d+$' -or [version]$TargetVersion -le [version]$manifest.appVersion) { throw 'TargetVersion must be a stable semantic version greater than the current version' }
+        $version = $TargetVersion
+    }
     $remote = Get-PublishRemoteRefs $version
     if ((Get-PublishLocalTag $version) -or $remote["refs/tags/$version"]) { throw "Release tag $version already exists; it cannot be overwritten" }
     $manifest.appVersion = $version
@@ -254,7 +259,7 @@ function Invoke-Publish {
         $context = Get-Context
         if (-not $recordPath -or (Read-ReleaseState $recordPath).status -eq 'complete') {
             $remote = Get-PublishRemoteRefs $context.Manifest.appVersion
-            if ($remote['refs/heads/main'] -eq $head -and $remote["refs/tags/$($context.Manifest.appVersion)^{}"] -eq $head) {
+            if ((-not $TargetVersion -or $TargetVersion -eq $context.Manifest.appVersion) -and $remote['refs/heads/main'] -eq $head -and $remote["refs/tags/$($context.Manifest.appVersion)^{}"] -eq $head) {
                 if ($remote["refs/tags/$($context.Manifest.appVersion)"] -ne (Get-PublishLocalTag $context.Manifest.appVersion)) { throw 'Local and remote annotated tag objects differ' }
                 Assert-VersionTagMatchesCommit $context
                 [void](Read-BuildArtifact $context)

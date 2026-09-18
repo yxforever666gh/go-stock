@@ -43,7 +43,7 @@ func TestDailySelectionCountsTiesAndPagination(t *testing.T) {
 				t.Fatal(err)
 			}
 			got, err := r.ListRecommendations(ctx, 100, 0)
-			counts := []int{3, 3, 3, 3}
+			counts := []int{4, 5, 5, 5}
 			if err != nil || len(got) != counts[buys] {
 				t.Fatalf("got=%+v err=%v", got, err)
 			}
@@ -114,10 +114,10 @@ func TestDailySelectionDeduplicatesHistoryAndUsesExactScores(t *testing.T) {
 	if err := r.DB().Model(&AnalysisRun{}).Where("run_id = ?", "new").Update("status", "no_recommendation").Error; err != nil {
 		t.Fatal(err)
 	}
-	check("bought", "failed", "new1")
+	check("bought", "failed", "new1", "new2", "new3")
 	// A later empty legacy report does not erase actual daily results.
 	displayRun(t, r, "empty", at.Add(2*time.Minute), 3, "no_recommendation")
-	check("bought", "failed", "new1")
+	check("bought", "failed", "new1", "new2", "new3")
 }
 
 func TestDailySelectionPrioritizesBoughtThenExecutableWithStableTies(t *testing.T) {
@@ -134,10 +134,10 @@ func TestDailySelectionPrioritizesBoughtThenExecutableWithStableTies(t *testing.
 	if err := r.CreateRecommendations(ctx, rows); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"bought-low", "standby-earlier-code", "pending-later-code"}
+	want := []string{"bought-low", "standby-earlier-code", "pending-later-code", "other"}
 	for iteration := 0; iteration < 3; iteration++ {
 		got, err := r.ListRecommendations(ctx, 100, 0)
-		if err != nil || len(got) != 3 {
+		if err != nil || len(got) != 4 {
 			t.Fatalf("rows=%+v err=%v", got, err)
 		}
 		for i, row := range got {

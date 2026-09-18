@@ -112,7 +112,7 @@ func createChainRun(t *testing.T, repository *Repository, now time.Time) (Execut
 		t.Fatal(err)
 	}
 	run := AnalysisRun{
-		RunID: uuid.NewString(), TradingDate: chain.TradingDate, AttemptNo: 1, ChainID: chain.ChainID,
+		Slot: DefaultSlot, Published: true, RunID: uuid.NewString(), TradingDate: chain.TradingDate, AttemptNo: 1, ChainID: chain.ChainID,
 		TriggerSource: "scheduled", RequestedSlots: 3, PrimaryCount: 3, StandbyCount: 3,
 		ScheduledFor: now.Add(-5 * time.Minute), StartedAt: now.Add(-5 * time.Minute), EvidenceCutoffAt: now.Add(-5 * time.Minute),
 		StrategyVersion: "research2-trailing5-v9", Status: "success", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]",
@@ -123,10 +123,15 @@ func createChainRun(t *testing.T, repository *Repository, now time.Time) (Execut
 	if err = repository.AttachRunToExecutionChain(ctx, chain.ChainID, run.RunID); err != nil {
 		t.Fatal(err)
 	}
+	if err := repository.DB().Model(&ExecutionChain{}).Where("chain_id = ?", chain.ChainID).Updates(map[string]any{"sell_completed_at": now, "winner_run_id": run.RunID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	chain.SellCompletedAt = &now
+	chain.WinnerRunID = run.RunID
 	return chain, run
 }
 
-func TestTradingServiceSkipsUntradableRowsAndStopsAtThreeBuys(t *testing.T) {
+func TestTradingServiceSkipsUntradableRowsWithinFiveSeats(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 10, 0, 5, 0, shanghai())
 	chain, run := createChainRun(t, repository, now)
@@ -173,15 +178,15 @@ func TestTradingServiceSkipsUntradableRowsAndStopsAtThreeBuys(t *testing.T) {
 			t.Fatalf("standby %s was not promoted: %+v", code, byCode[code])
 		}
 	}
-	if byCode[codes[5]].BuyAt != nil || byCode[codes[5]].Status == "buy_pending" || byCode[codes[5]].Status == "standby" {
+	if byCode[codes[5]].BuyAt == nil {
 		t.Fatalf("unused standby=%+v", byCode[codes[5]])
 	}
 	chain, err = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if err != nil || chain.Status != "completed" || chain.FilledSlots != 3 {
+	if err != nil || chain.Status != "completed" || chain.FilledSlots != 4 {
 		t.Fatalf("chain=%+v err=%v", chain, err)
 	}
 	var trades int64
-	if err = repository.DB().Model(&Trade{}).Where("side = ?", "buy").Count(&trades).Error; err != nil || trades != 3 {
+	if err = repository.DB().Model(&Trade{}).Where("side = ?", "buy").Count(&trades).Error; err != nil || trades != 4 {
 		t.Fatalf("buy trades=%d err=%v", trades, err)
 	}
 }
@@ -257,7 +262,7 @@ func TestTradingServiceCompletesUnderfilledReportWithoutAnotherAnalysis(t *testi
 		t.Fatalf("chain=%+v err=%v", chain, err)
 	}
 	overview, err := repository.Overview(context.Background())
-	if err != nil || overview.Cash < 7900 || overview.Cash > 9000 {
+	if err != nil || math.Abs(overview.Cash-(InitialCash+trading.CalculateBuyCost(10, 200).NetCashFlow)) > 1e-7 {
 		t.Fatalf("cash=%v err=%v; one executed slot must preserve remaining cash", overview.Cash, err)
 	}
 }
@@ -302,81 +307,7 @@ func TestStaleExecutionQuoteStaysPending(t *testing.T) {
 	}
 }
 
-func TestDiagnosticTradingBypassDoesNotApplyThirteenOClockCutoff(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 4, 14, 0, 5, 0, shanghai())
-	chain, run := createChainRun(t, repository, now)
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600022", StockName: "diagnostic", SignalAt: now.Add(-time.Minute), FinalScore: 70, ReferencePrice: 10, Status: "buy_pending", TargetBuyAt: now.Add(-time.Second)}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
-		t.Fatal(err)
-	}
-	service := testTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
-	service.ConfigureDiagnosticWindowBypass(true)
-	if err := service.ProcessDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
-	if err != nil || detail.Recommendation.Status != "active" {
-		t.Fatalf("diagnostic recommendation=%+v err=%v", detail.Recommendation, err)
-	}
-	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if chain.Status != "completed" || chain.FilledSlots != 1 {
-		t.Fatalf("diagnostic chain=%+v", chain)
-	}
-}
-
-func TestProductionCutoffCancelsMorningRetryBeforeBuyingAtThirteen(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 4, 13, 0, 5, 0, shanghai())
-	chain, run := createChainRun(t, repository, now)
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600024", StockName: "morning", SignalAt: now.Add(-3 * time.Hour), FinalScore: 70, ReferencePrice: 10, Status: "buy_pending", TargetBuyAt: now.Add(-3 * time.Hour), ExecutionFailureCode: "quote_retry"}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
-		t.Fatal(err)
-	}
-	service := testTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{})
-	if err := service.ProcessDue(context.Background(), time.Date(2026, 9, 4, 11, 30, 5, 0, shanghai())); err != nil {
-		t.Fatal(err)
-	}
-	deferred, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
-	if err != nil || !deferred.Recommendation.TargetBuyAt.Equal(time.Date(2026, 9, 4, 13, 0, 0, 0, shanghai())) {
-		t.Fatalf("morning retry was not deferred for final classification: %+v err=%v", deferred.Recommendation, err)
-	}
-	if err := service.ProcessDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
-	if err != nil || detail.Recommendation.Status != "analysis_only" || detail.Recommendation.BuyAt != nil {
-		t.Fatalf("morning retry=%+v err=%v", detail.Recommendation, err)
-	}
-	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if chain.Status != "completed" || chain.FilledSlots != 0 {
-		t.Fatalf("chain=%+v", chain)
-	}
-}
-
-func TestLunchRecommendationMayBuyAtThirteenBeforeChainCloses(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 4, 13, 0, 5, 0, shanghai())
-	chain, run := createChainRun(t, repository, now)
-	target := time.Date(2026, 9, 4, 13, 0, 0, 0, shanghai())
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, SelectionRole: "primary", SelectionRank: 1, StockCode: "sh600025", StockName: "lunch", SignalAt: now.Add(-10 * time.Minute), FinalScore: 70, ReferencePrice: 10, Status: "buy_pending", TargetBuyAt: target}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
-		t.Fatal(err)
-	}
-	if err := testTradingService(repository, chainMarket{snapshots: map[string]PriceSnapshot{item.StockCode: {Price: 10, PreviousClose: 10}}}, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
-	if err != nil || detail.Recommendation.Status != "active" || detail.Recommendation.BuyAt == nil {
-		t.Fatalf("lunch recommendation=%+v err=%v", detail.Recommendation, err)
-	}
-	chain, _ = repository.ExecutionChain(context.Background(), chain.ChainID)
-	if chain.Status != "completed" || chain.FilledSlots != 1 {
-		t.Fatalf("chain=%+v", chain)
-	}
-}
-
-func TestExecutionChainConcurrentBuysNeverExceedThree(t *testing.T) {
+func TestExecutionChainConcurrentBuysNeverExceedFive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "research2-wal.db")
 	database, err := gorm.Open(sqlite.Open(path+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)"), &gorm.Config{})
 	if err != nil {
@@ -395,7 +326,7 @@ func TestExecutionChainConcurrentBuysNeverExceedThree(t *testing.T) {
 	}
 	now := time.Date(2026, 9, 4, 10, 0, 5, 0, shanghai())
 	chain, run := createChainRun(t, repository, now)
-	items := make([]Recommendation, 5)
+	items := make([]Recommendation, 8)
 	for index := range items {
 		items[index] = Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, SelectionRole: "primary", SelectionRank: index + 1, StockCode: fmt.Sprintf("sh6001%02d", index), StockName: "concurrent", SignalAt: now.Add(-time.Minute), Status: "buy_pending", TargetBuyAt: now}
 	}
@@ -448,11 +379,11 @@ func TestExecutionChainConcurrentBuysNeverExceedThree(t *testing.T) {
 	}
 }
 
-func TestChainlessLegacyPendingCannotExceedDailyThreeBuys(t *testing.T) {
+func TestChainlessLegacyPendingCannotExceedAccountDailyFiveBuys(t *testing.T) {
 	repository := research2TestRepository(t)
 	now := time.Date(2026, 9, 4, 10, 5, 0, 0, shanghai())
 	items := make([]Recommendation, 0, 4)
-	for index := 0; index < 3; index++ {
+	for index := 0; index < DailyTargetSlots; index++ {
 		buyAt := now.Add(-time.Duration(index+1) * time.Minute)
 		items = append(items, Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: "legacy", StockCode: fmt.Sprintf("sh6002%02d", index), StockName: "bought", SignalAt: buyAt, Status: "active", TargetBuyAt: buyAt, BuyAt: &buyAt})
 	}

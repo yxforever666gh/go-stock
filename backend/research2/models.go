@@ -5,10 +5,16 @@ import "time"
 const InitialCash = 12000.0
 
 type AnalysisRun struct {
+	ScheduledSlot string     `json:"scheduledSlot" gorm:"not null;default:'09:50';uniqueIndex:idx_research2_runs_date_attempt,priority:2"`
+	Slot          string     `json:"slot" gorm:"index"`
+	Published     bool       `json:"published" gorm:"not null;default:false"`
+	ArchiveReason string     `json:"archiveReason"`
+	PersistedAt   *time.Time `json:"persistedAt,omitempty"`
+
 	ID                     uint            `json:"id" gorm:"primaryKey"`
 	RunID                  string          `json:"runId" gorm:"size:36;uniqueIndex;not null"`
 	TradingDate            string          `json:"tradingDate" gorm:"size:10;uniqueIndex:idx_research2_runs_date_attempt,priority:1;not null"`
-	AttemptNo              int             `json:"attemptNo" gorm:"not null;default:1;uniqueIndex:idx_research2_runs_date_attempt,priority:2"`
+	AttemptNo              int             `json:"attemptNo" gorm:"not null;default:1;uniqueIndex:idx_research2_runs_date_attempt,priority:3"`
 	ChainID                string          `json:"chainId,omitempty" gorm:"size:36;index"`
 	ParentRunID            string          `json:"parentRunId,omitempty" gorm:"size:36;index"`
 	TriggerSource          string          `json:"triggerSource,omitempty" gorm:"size:32;index;not null;default:'legacy-unversioned'"`
@@ -46,6 +52,12 @@ type AnalysisRun struct {
 func (AnalysisRun) TableName() string { return "research2_analysis_runs" }
 
 type AnalysisRunSummary struct {
+	ScheduledSlot string     `json:"scheduledSlot"`
+	Slot          string     `json:"slot"`
+	Published     bool       `json:"published"`
+	ArchiveReason string     `json:"archiveReason"`
+	PersistedAt   *time.Time `json:"persistedAt,omitempty"`
+
 	RunID                  string          `json:"runId"`
 	TradingDate            string          `json:"tradingDate"`
 	AttemptNo              int             `json:"attemptNo"`
@@ -79,6 +91,10 @@ type AnalysisRunSummary struct {
 }
 
 type ExecutionChain struct {
+	Slot            string     `json:"slot" gorm:"not null;default:'09:50';uniqueIndex:idx_research2_execution_chains_trading_date,priority:2"`
+	WinnerRunID     string     `json:"winnerRunId"`
+	SellCompletedAt *time.Time `json:"sellCompletedAt,omitempty"`
+
 	ID           uint       `json:"id" gorm:"primaryKey"`
 	ChainID      string     `json:"chainId" gorm:"size:36;uniqueIndex;not null"`
 	TradingDate  string     `json:"tradingDate" gorm:"size:10;uniqueIndex:idx_research2_execution_chains_trading_date;not null"`
@@ -117,6 +133,11 @@ type EmailDelivery struct {
 func (EmailDelivery) TableName() string { return "research2_email_deliveries" }
 
 type Recommendation struct {
+	Slot                string   `json:"slot" gorm:"index;not null;default:'09:50'"`
+	LegacySlotException bool     `json:"legacySlotException"`
+	BaselineValue       *float64 `json:"baselineValue,omitempty"`
+	PeriodPnL           *float64 `json:"periodPnl,omitempty"`
+
 	ID                        uint       `json:"id" gorm:"primaryKey"`
 	RecommendationID          string     `json:"recommendationId" gorm:"size:36;uniqueIndex;not null"`
 	AnalysisRunID             string     `json:"analysisRunId" gorm:"size:36;index;not null"`
@@ -180,6 +201,10 @@ type Recommendation struct {
 func (Recommendation) TableName() string { return "research2_recommendations" }
 
 type Trade struct {
+	Slot       string     `json:"slot" gorm:"index;not null;default:'09:50'"`
+	QuoteAt    *time.Time `json:"quoteAt,omitempty"`
+	PriceStale bool       `json:"priceStale"`
+
 	ID               uint      `json:"id" gorm:"primaryKey"`
 	TradeID          string    `json:"tradeId" gorm:"size:36;uniqueIndex;not null"`
 	RecommendationID string    `json:"recommendationId" gorm:"size:36;index;not null"`
@@ -201,6 +226,11 @@ type Trade struct {
 func (Trade) TableName() string { return "research2_trades" }
 
 type Account struct {
+	Slot                  string     `json:"slot" gorm:"uniqueIndex;not null;default:'09:50'"`
+	BaselineAt            *time.Time `json:"baselineAt,omitempty"`
+	BaselineNetAssetValue float64    `json:"baselineNetAssetValue"`
+	SeedCash              float64    `json:"seedCash"`
+
 	ID          uint      `json:"id" gorm:"primaryKey"`
 	InitialCash float64   `json:"initialCash" gorm:"not null"`
 	Cash        float64   `json:"cash" gorm:"not null"`
@@ -211,6 +241,8 @@ type Account struct {
 func (Account) TableName() string { return "research2_accounts" }
 
 type AccountSnapshot struct {
+	Slot string `json:"slot" gorm:"index;not null;default:'09:50'"`
+
 	ID            uint      `json:"id" gorm:"primaryKey"`
 	SnapshotID    string    `json:"snapshotId" gorm:"size:36;uniqueIndex;not null"`
 	ValuedAt      time.Time `json:"valuedAt" gorm:"index;not null"`
@@ -233,6 +265,10 @@ type RecommendationDetail struct {
 }
 
 type AccountOverview struct {
+	Slot                  string     `json:"slot"`
+	BaselineAt            *time.Time `json:"baselineAt,omitempty"`
+	BaselineNetAssetValue float64    `json:"baselineNetAssetValue"`
+
 	InitialCash   float64   `json:"initialCash"`
 	Cash          float64   `json:"cash"`
 	PositionValue float64   `json:"positionValue"`

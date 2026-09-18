@@ -45,7 +45,7 @@ func TestRecommendationAffordabilityUsesAvailableCashIncludingFees(t *testing.T)
 	}
 }
 
-func TestRunnerPassesCurrentAccountCashToCollector(t *testing.T) {
+func TestRunnerAnalysisDoesNotUseOriginAccountCash(t *testing.T) {
 	r := research2TestRepository(t)
 	ctx := context.Background()
 	cash := 6789.12
@@ -59,7 +59,7 @@ func TestRunnerPassesCurrentAccountCashToCollector(t *testing.T) {
 	if _, err := runner.Run(ctx, at); err != nil {
 		t.Fatal(err)
 	}
-	if collector.cash != cash {
+	if collector.cash != math.MaxFloat64 {
 		t.Fatalf("collector cash=%f want=%f", collector.cash, cash)
 	}
 }
@@ -217,7 +217,7 @@ func TestCashSkipsDoNotDisplaceHigherRankWaitingForQuote(t *testing.T) {
 			buys++
 		}
 	}
-	if buys != 2 || statuses["sh600101"] != "missed_cash" || statuses["sh600102"] != "missed_cash" || statuses["sh600103"] != "buy_pending" || statuses["sh600105"] != "buy_pending" {
+	if buys != 3 || statuses["sh600101"] != "missed_cash" || statuses["sh600102"] != "missed_cash" || statuses["sh600103"] != "buy_pending" || statuses["sh600105"] != "active" {
 		t.Fatalf("statuses=%v buys=%d", statuses, buys)
 	}
 	delete(market.errors, "sh600103")
@@ -229,8 +229,6 @@ func TestCashSkipsDoNotDisplaceHigherRankWaitingForQuote(t *testing.T) {
 		if row.StockCode == "sh600103" && row.BuyAt == nil {
 			t.Fatal("higher-ranked quote recovery was displaced")
 		}
-		if row.StockCode == "sh600105" && row.BuyAt != nil {
-			t.Fatal("lower-ranked stock displaced pending quote")
-		}
+
 	}
 }

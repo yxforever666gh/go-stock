@@ -60,7 +60,6 @@ type App struct {
 	aiDeploymentRunMu       sync.Mutex
 	aiDeploymentLeaseOwner  string
 	aiLifecycleRunMu        sync.Mutex
-	research2RunMu          sync.Mutex
 	research2TradeMu        sync.Mutex
 	research2MetricMu       sync.Mutex
 	research2EmailMu        sync.Mutex

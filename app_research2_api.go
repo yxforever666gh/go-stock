@@ -17,9 +17,9 @@ import (
 )
 
 const (
-	research2AnalysisCronSpec    = "0 50 9 * * 1-5"
+	research2AnalysisCronSpec    = "0 */5 9-11 * * 1-5"
 	research2AnalysisStartHour   = 9
-	research2AnalysisStartMinute = 50
+	research2AnalysisStartMinute = 30
 )
 
 func (a *App) ensureResearch2Runtime(cfg *models.SettingConfig) (*research2app.Runtime, error) {
@@ -67,13 +67,8 @@ func (a *App) reloadResearch2CronLocked(setting *models.SettingConfig) {
 		if a.researchDatabase != nil {
 			repository := research2.NewRepository(a.researchDatabase)
 			now := time.Now().In(research2Location())
-			chains, err := repository.DisableRunningExecutionChains(a.ctx, now.Format("2006-01-02"), now)
-			if err != nil {
-				logger.SugaredLogger.Errorf("关闭研究中心2补位链失败: %v", err)
-			} else {
-				for _, chain := range chains {
-					a.queueResearch2FinalEmail(&research2app.Runtime{Repository: repository, Email: research2.NewEmailService(repository, nil)}, chain)
-				}
+			if _, err := repository.DisableRunningExecutionChains(a.ctx, now.Format("2006-01-02"), now); err != nil {
+				logger.SugaredLogger.Errorf("关闭研究中心2买入失败: %v", err)
 			}
 		}
 	}
@@ -86,7 +81,7 @@ func (a *App) reloadResearch2CronLocked(setting *models.SettingConfig) {
 		run       func()
 	}{
 		{research2AnalysisEntryKey, research2AnalysisCronSpec, func() { a.runResearch2Analysis(time.Now()) }},
-		{research2TradingEntryKey, "5 * 9-15 * * 1-5", func() {
+		{research2TradingEntryKey, "0,5 * 9-15 * * 1-5", func() {
 			now := time.Now()
 			a.processResearch2Trades(now)
 			go a.resumeResearch2ExecutionChain(now)
@@ -154,6 +149,7 @@ func (a *App) recoverResearch2RunsOnStartup(now time.Time) error {
 }
 
 func (a *App) recoverResearch2Schedule(now time.Time) {
+	a.processResearch2Trades(now)
 	local := now.In(research2Location())
 	if !withinResearch2RecoveryWindow(local) {
 		return
@@ -179,136 +175,46 @@ func (a *App) recoverResearch2Schedule(now time.Time) {
 }
 
 func (a *App) runResearch2Analysis(scheduledFor time.Time) {
-	if !a.research2RunMu.TryLock() {
+	if !withinResearch2RecoveryWindow(scheduledFor) {
 		return
 	}
-	defer a.research2RunMu.Unlock()
 	setting := a.loadResearch2Settings()
 	if setting == nil || !setting.Research2AutoEnabled {
 		return
 	}
-	runtime, err := a.ensureResearch2Runtime(setting)
+	// Each entry gets an immutable service graph; cross-slot runs never share a
+	// mutable runner or temporarily replace settings during retries.
+	if a.research2Factory == nil {
+		return
+	}
+	runtime, err := a.research2Factory(researchconfig.Clone(setting))
 	if err != nil {
 		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
 		return
 	}
-	run, err := runtime.Runner.Run(a.ctx, scheduledFor)
-	if err != nil {
+	if _, err = runtime.Runner.Run(a.ctx, scheduledFor); err != nil {
 		if !errors.Is(err, research2.ErrOutsideAnalysisStartWindow) {
 			logger.SugaredLogger.Errorf("研究中心2分析失败: %v", err)
 		}
 		return
 	}
 	a.processResearch2Trades(time.Now())
-	if run.ChainID != "" {
-		chain, err := runtime.Repository.RefreshExecutionChainFilled(a.ctx, run.ChainID)
-		if err != nil {
-			logger.SugaredLogger.Errorf("刷新研究中心2执行状态失败: %v", err)
-			return
-		}
-		if chain.Status != "running" {
-			a.queueResearch2FinalEmail(runtime, chain)
-		}
-	}
 }
 
 func (a *App) resumeResearch2ExecutionChain(now time.Time) {
-	setting := a.loadResearch2Settings()
-	if setting == nil || setting.Settings == nil || !setting.Research2AutoEnabled {
-		return
-	}
-	runtime, err := a.ensureResearch2Runtime(setting)
-	if err != nil {
-		logger.SugaredLogger.Errorf("恢复研究中心2补位链失败: %v", err)
-		return
-	}
-	chain, exists, err := runtime.Repository.ExecutionChainForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
-	if err != nil {
-		logger.SugaredLogger.Errorf("读取研究中心2补位链失败: %v", err)
-		return
-	}
-
-	if exists && chain.Status != "running" && chain.Status != "failed" {
-		a.queueResearch2FinalEmail(runtime, chain)
-		return
-	}
-	if exists && chain.Status == "running" {
-		chain, err = runtime.Repository.RefreshExecutionChainFilled(a.ctx, chain.ChainID)
-		if err != nil {
-			logger.SugaredLogger.Errorf("刷新研究中心2展示名额失败: %v", err)
-			return
-		}
-		if chain.Status != "running" {
-			a.queueResearch2FinalEmail(runtime, chain)
-			return
-		}
-	}
-	if !exists || chain.Status == "failed" {
-		// Audit/calendar failures can occur before a chain exists. Older builds
-		// also closed chains for retryable failures. Resume only the latest
-		// failed attempt, under the original analysis window and runner lock.
-		if !withinResearch2RecoveryWindow(now) {
-			return
-		}
-		latest, found, runErr := runtime.Repository.RunForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
-		if runErr != nil {
-			logger.SugaredLogger.Errorf("读取研究中心2失败轮次失败: %v", runErr)
-			return
-		}
-		if !found || latest.Status != "failed" {
-			return
-		}
-		a.runResearch2Analysis(research2ScheduledRoot(now))
-		return
-	}
-	if !now.In(research2Location()).Before(time.Date(now.In(research2Location()).Year(), now.In(research2Location()).Month(), now.In(research2Location()).Day(), 13, 0, 0, 0, research2Location())) {
-		if err = runtime.Repository.ExpireExecutionChainsAtCutoff(a.ctx, now); err != nil {
-			logger.SugaredLogger.Errorf("结束研究中心2补位链失败: %v", err)
-			return
-		}
-		chain, _ = runtime.Repository.ExecutionChain(a.ctx, chain.ChainID)
-		a.queueResearch2FinalEmail(runtime, chain)
-		return
-	}
-	if !withinResearch2RecoveryWindow(now) {
-		return
-	}
-	latest, found, runErr := runtime.Repository.RunForDate(a.ctx, now.In(research2Location()).Format("2006-01-02"))
-	if runErr != nil {
-		logger.SugaredLogger.Errorf("读取研究中心2失败任务失败: %v", runErr)
-		return
-	}
-	if found && latest.Status == "failed" {
+	if withinResearch2RecoveryWindow(now) {
 		a.runResearch2Analysis(research2ScheduledRoot(now))
 	}
-}
-
-func (a *App) queueResearch2FinalEmail(runtime *research2app.Runtime, chain research2.ExecutionChain) {
-	setting := a.loadResearch2Settings()
-	if runtime == nil || runtime.Email == nil || setting == nil || setting.Settings == nil || !setting.Research2EmailEnabled || chain.Status == "running" {
-		return
-	}
-	run, err := runtime.Repository.ExecutionChainEmailRun(a.ctx, chain.ChainID)
-	if err != nil {
-		logger.SugaredLogger.Errorf("生成研究中心2补位汇总失败: %v", err)
-		return
-	}
-	if _, err = runtime.Email.QueueFinal(a.ctx, run, research2EmailConfig(setting)); err != nil {
-		logger.SugaredLogger.Errorf("研究中心2最终报告邮件入队失败: %v", err)
-		return
-	}
-	go a.processResearch2Emails()
 }
 
 func withinResearch2RecoveryWindow(value time.Time) bool {
 	local := value.In(research2Location())
 	minutes := local.Hour()*60 + local.Minute()
-	return minutes >= research2AnalysisStartHour*60+research2AnalysisStartMinute && minutes < 11*60+50
+	return minutes >= research2AnalysisStartHour*60+research2AnalysisStartMinute && minutes < 11*60+30
 }
 
 func research2ScheduledRoot(value time.Time) time.Time {
-	local := value.In(research2Location())
-	return time.Date(local.Year(), local.Month(), local.Day(), research2AnalysisStartHour, research2AnalysisStartMinute, 0, 0, research2Location())
+	return research2.SlotTime(value, research2.SlotAt(value))
 }
 
 func research2EmailConfig(setting *models.SettingConfig) research2.EmailConfig {
@@ -339,6 +245,14 @@ func (a *App) processResearch2Emails() {
 	if runtime.Email == nil {
 		logger.SugaredLogger.Error("初始化研究中心2邮件服务失败: 邮件服务不可用")
 		return
+	}
+	now := time.Now().In(research2Location())
+	if now.Hour()*60+now.Minute() >= 11*60+30 && setting.Research2EmailEnabled {
+		if day, dayErr := data.NewResearchTradingCalendar(setting).IsTradingDay(a.ctx, now); dayErr == nil && day {
+			if run, summaryErr := runtime.Repository.DailyEmailRun(a.ctx, now); summaryErr == nil {
+				_, _ = runtime.Email.QueueFinal(a.ctx, run, research2EmailConfig(setting))
+			}
+		}
 	}
 	if err = runtime.Email.ProcessDue(a.ctx, research2EmailConfig(setting)); err != nil {
 		logger.SugaredLogger.Errorf("研究中心2报告邮件处理失败: %v", err)
@@ -372,9 +286,7 @@ func (a *App) testResearch2Email(ctx context.Context) error {
 }
 
 func (a *App) processResearch2Trades(now time.Time) {
-	if !a.research2TradeMu.TryLock() {
-		return
-	}
+	a.research2TradeMu.Lock()
 	defer a.research2TradeMu.Unlock()
 	setting := a.loadResearch2Settings()
 	if setting == nil || setting.Settings == nil {
@@ -430,10 +342,13 @@ func (a *App) research2Valuation() (*research2.Service, error) {
 	return runtime.Valuation, nil
 }
 
-func (a *App) listResearch2Runs(ctx context.Context, limit, offset int) ([]research2.AnalysisRunSummary, error) {
+func (a *App) listResearch2Runs(ctx context.Context, limit, offset int, slots ...string) ([]research2.AnalysisRunSummary, error) {
 	repository, err := a.research2Repository()
 	if err != nil {
 		return nil, err
+	}
+	if len(slots) > 0 && slots[0] != "" {
+		repository = repository.WithSlot(slots[0])
 	}
 	return repository.ListRuns(ctx, limit, offset)
 }
@@ -444,10 +359,13 @@ func (a *App) getResearch2Run(ctx context.Context, id string) (research2.Analysi
 	}
 	return repository.GetRun(ctx, id)
 }
-func (a *App) listResearch2Recommendations(ctx context.Context, limit, offset int) ([]research2.Recommendation, error) {
+func (a *App) listResearch2Recommendations(ctx context.Context, limit, offset int, slots ...string) ([]research2.Recommendation, error) {
 	valuation, err := a.research2Valuation()
 	if err != nil {
 		return nil, err
+	}
+	if len(slots) > 0 {
+		valuation = valuation.WithSlot(slots[0])
 	}
 	return valuation.ListRecommendations(ctx, limit, offset)
 }
@@ -458,17 +376,23 @@ func (a *App) getResearch2Recommendation(ctx context.Context, id string) (resear
 	}
 	return valuation.GetRecommendation(ctx, id)
 }
-func (a *App) getResearch2Account(ctx context.Context) (research2.AccountOverview, error) {
+func (a *App) getResearch2Account(ctx context.Context, slots ...string) (research2.AccountOverview, error) {
 	valuation, err := a.research2Valuation()
 	if err != nil {
 		return research2.AccountOverview{}, err
 	}
+	if len(slots) > 0 {
+		valuation = valuation.WithSlot(slots[0])
+	}
 	return valuation.Overview(ctx)
 }
-func (a *App) getResearch2Performance(ctx context.Context) (research2.Performance, error) {
+func (a *App) getResearch2Performance(ctx context.Context, slots ...string) (research2.Performance, error) {
 	valuation, err := a.research2Valuation()
 	if err != nil {
 		return research2.Performance{}, err
+	}
+	if len(slots) > 0 {
+		valuation = valuation.WithSlot(slots[0])
 	}
 	return valuation.Performance(ctx)
 }

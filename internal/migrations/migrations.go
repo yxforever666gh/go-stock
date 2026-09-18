@@ -318,6 +318,7 @@ var mainMigrations = []migration{
 		apply:       applyResearchSettingsSchema,
 		verify:      verifyMainSchema27Runtime,
 	},
+	{id: 28, name: "research2_five_minute_accounts", description: "Independent five-minute accounts, scheduled sells and first-result publication with a one-time cash contribution and performance baseline.", definition: mainMigrationV28Definition, apply: applyResearch2Slots, verify: verifyMainSchema28Runtime},
 }
 
 var legacyStrategyTables = []string{

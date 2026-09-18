@@ -491,10 +491,17 @@ paths:
       description: Returns unitized TWR, valuation points and strategy-quality metrics.
       responses:
         "200": {description: Account performance, content: {application/json: {schema: {$ref: "#/components/schemas/AccountPerformance"}}}}
+  /api/v1/research2/slots:
+    get:
+      operationId: listResearch2Slots
+      responses:
+        "200": {description: Today slot publication and scheduled liquidation state, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2SlotStatus"}}}}}
   /api/v1/research2/analysis-runs:
     get:
       operationId: listResearch2AnalysisRuns
-      description: Lists automatic overnight-strength runs. This strategy has no manual trigger endpoint.
+      parameters:
+        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
+      description: Lists independent five-minute analysis attempts including archived late reports.
       responses:
         "200": {description: Research Center 2 analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2AnalysisRunSummary"}}}}}
   /api/v1/research2/email/test:
@@ -510,7 +517,7 @@ paths:
   /api/v1/research2/analysis-runs/{id}/rerun:
     post:
       operationId: rerunResearch2AnalysisRun
-      description: Retry the latest failed attempt only when this trading day has no valid report. Successful and empty reports cannot be rerun.
+      description: Retry the latest failed attempt for its scheduled slot in the morning start window. Successful and empty reports cannot be rerun.
       parameters:
         - {name: id, in: path, required: true, schema: {type: string}}
       responses:
@@ -538,6 +545,8 @@ paths:
   /api/v1/research2/recommendations:
     get:
       operationId: listResearch2Recommendations
+      parameters:
+        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
       responses:
         "200": {description: Research Center 2 recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2Recommendation"}}}}}
   /api/v1/research2/recommendations/{id}:
@@ -561,11 +570,15 @@ paths:
   /api/v1/research2/account:
     get:
       operationId: getResearch2Account
+      parameters:
+        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
       responses:
         "200": {description: Isolated 12000-yuan Research Center 2 account, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AccountOverview"}}}}
   /api/v1/research2/account/performance:
     get:
       operationId: getResearch2Performance
+      parameters:
+        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
       responses:
         "200": {description: Research Center 2 overnight performance, content: {application/json: {schema: {$ref: "#/components/schemas/Research2Performance"}}}}
   /api/v1/research/replays:
@@ -1875,10 +1888,25 @@ components:
         cumulativeNetContribution: {type: number}
         curve: {type: array, items: {$ref: "#/components/schemas/AccountPerformancePoint"}}
         metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}
+    Research2SlotStatus:
+      type: object
+      required: [slot, label, tradingDate, winnerRunId, status]
+      properties:
+        slot: {type: string}
+        label: {type: string}
+        tradingDate: {type: string, format: date}
+        winnerRunId: {type: string}
+        sellCompletedAt: {type: string, format: date-time, nullable: true}
+        status: {type: string}
     Research2AnalysisRun:
       type: object
       required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
       properties:
+        scheduledSlot: {type: string}
+        slot: {type: string}
+        published: {type: boolean}
+        archiveReason: {type: string}
+        persistedAt: {type: string, format: date-time, nullable: true}
         runId: {type: string}
         tradingDate: {type: string, format: date}
         attemptNo: {type: integer, minimum: 1}
@@ -1916,6 +1944,11 @@ components:
       type: object
       required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, recommendationCount, onTime]
       properties:
+        scheduledSlot: {type: string}
+        slot: {type: string}
+        published: {type: boolean}
+        archiveReason: {type: string}
+        persistedAt: {type: string, format: date-time, nullable: true}
         runId: {type: string}
         tradingDate: {type: string, format: date}
         attemptNo: {type: integer, minimum: 1}
@@ -1950,6 +1983,9 @@ components:
       type: object
       required: [chainId, tradingDate, scheduledFor, status, targetSlots, filledSlots, startedAt, createdAt, updatedAt]
       properties:
+        slot: {type: string}
+        winnerRunId: {type: string}
+        sellCompletedAt: {type: string, format: date-time, nullable: true}
         chainId: {type: string}
         tradingDate: {type: string, format: date}
         scheduledFor: {type: string, format: date-time}
@@ -2171,6 +2207,10 @@ components:
       type: object
       required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]
       properties:
+        slot: {type: string}
+        legacySlotException: {type: boolean}
+        baselineValue: {type: number}
+        periodPnl: {type: number}
         recommendationId: {type: string}
         analysisRunId: {type: string}
         selectionRole: {type: string}
@@ -2230,6 +2270,9 @@ components:
       type: object
       required: [tradeId, recommendationId, side, tradedAt, marketPrice, executionPrice, quantity, commission, stampDuty, transferFee, slippageAmount, netCashFlow]
       properties:
+        slot: {type: string}
+        quoteAt: {type: string, format: date-time, nullable: true}
+        priceStale: {type: boolean}
         tradeId: {type: string}
         recommendationId: {type: string}
         side: {type: string, enum: [buy, sell]}
@@ -2255,7 +2298,10 @@ components:
       type: object
       required: [initialCash, cash, positionValue, netAssetValue, netProfit, returnRate, openPositions, pendingBuys, lastValuedAt]
       properties:
-        initialCash: {type: number, const: 12000}
+        slot: {type: string}
+        baselineAt: {type: string, format: date-time, nullable: true}
+        baselineNetAssetValue: {type: number}
+        initialCash: {type: number}
         cash: {type: number}
         positionValue: {type: number}
         netAssetValue: {type: number}
@@ -2268,6 +2314,7 @@ components:
       type: object
       required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, netProfit, returnRate]
       properties:
+        slot: {type: string}
         snapshotId: {type: string}
         valuedAt: {type: string, format: date-time}
         tradingDate: {type: string, format: date}

@@ -8,8 +8,10 @@ import ResearchTradeChart from './ResearchTradeChart.vue'
 import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
 import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
 
+const props = defineProps({slot: {type: String, default: '09:50'}})
+
 const message = useMessage(), loading = ref(false), performance = ref(null)
-const history = useResearchList(async (limit, offset) => await ListResearch2Recommendations(limit, offset) || [])
+const history = useResearchList(async (limit, offset) => await ListResearch2Recommendations(limit, offset, props.slot) || [])
 const {rows, loading: listLoading, error: listError, hasMore} = history
 const detailRequest = useResearchDetail(GetResearch2Recommendation)
 const {detail, visible, loading: detailLoading, error: detailError} = detailRequest
@@ -21,7 +23,7 @@ const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const yieldClass = value => value === null || value === undefined ? '' : Number(value) >= 0 ? 'yield-positive' : 'yield-negative'
 const yesNo = value => value === null || value === undefined ? '--' : value ? '是' : '否'
 const dateTime = value => value ? String(value).slice(0, 19).replace('T', ' ') : '--'
-const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
+const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '历史目标分钟价', scheduled_slot_sell: '分区定时卖出', recovered_slot_sell: '重启恢复卖出'}
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
@@ -41,7 +43,7 @@ async function refresh() {
   if (loading.value) return
   loading.value = true
   try {
-    const [result] = await Promise.all([GetResearch2Performance(), history.refresh()])
+    const [result] = await Promise.all([GetResearch2Performance(props.slot), history.refresh()])
     if (active) performance.value = result
   } catch (error) { if (active) message.error(error?.message || String(error)) }
   finally { if (active) loading.value = false }
@@ -52,11 +54,11 @@ onMounted(refresh)
 <template>
   <n-space vertical size="large">
     <n-grid :cols="4" :x-gap="12" :y-gap="12" responsive="screen"><n-gi v-for="item in [
-      ['账户净值', formatMoney(performance?.netAssetValue)], ['可用现金', formatMoney(performance?.cash)], ['累计净收益', formatMoney(performance?.netProfit), yieldClass(performance?.netProfit)], ['累计收益率', rate(performance?.returnRate), yieldClass(performance?.returnRate)],
+      ['账户区间', props.slot], ['统计基准', dateTime(performance?.baselineAt)], ['基准净值', formatMoney(performance?.baselineNetAssetValue)], ['账户净值', formatMoney(performance?.netAssetValue)], ['可用现金', formatMoney(performance?.cash)], ['累计净收益', formatMoney(performance?.netProfit), yieldClass(performance?.netProfit)], ['累计收益率', rate(performance?.returnRate), yieldClass(performance?.returnRate)],
       ['已平仓', `${formatInteger(performance?.closedTrades)} 笔`], ['胜率', rate(performance?.winRate)], ['总费用', formatMoney(performance?.totalFees)], ['最大回撤', drawdownRate(performance?.maxDrawdown), performance?.maxDrawdown === null || performance?.maxDrawdown === undefined ? '' : 'yield-negative'],
       ['卖出前+5%', `${formatInteger(performance?.hitFiveCount)} 次`], ['次日全天涨停', `${formatInteger(performance?.hitLimitUpCount)} 次`], ['曾低于-3%', `${formatInteger(performance?.hitMinusThreeCount)} 次`], ['报告时效', `准时 ${formatInteger(performance?.onTimeReports)} / 迟到 ${formatInteger(performance?.lateReports)}`]
     ]" :key="item[0]"><n-card size="small"><n-statistic :label="item[0]" :value="item[1]" :class="item[2]"/></n-card></n-gi></n-grid>
-    <n-alert type="info" :bordered="false">{{assessment}}。主指标为下一交易日10:00卖出后的扣费净收益；+5%、全天涨停和-3%风险分别统计，不混作同一成功标准。</n-alert>
+    <n-alert type="info" :bordered="false">{{assessment}}。账户收益从分区迁移基准时刻重新计算，追加本金不计盈利；个股明细保留原始持有期收益。+5%、全天涨停和-3%风险分别统计，不混作同一成功标准。</n-alert>
     <n-flex justify="space-between" align="center"><n-text depth="3">账户指标与未平仓收益按最新行情估值；未买入股票的收益显示为“--”，不计入成交收益。点击股票可查看持仓期分钟走势。</n-text><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="920" :row-key="row => row.recommendationId"/>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="listLoading" :error="listError" @load-more="history.loadMore"/>
@@ -90,7 +92,7 @@ onMounted(refresh)
               {title:'方向',key:'side'},
               {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},
               {title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},
-              {title:'价格来源',key:'priceSource',render:r=>r.priceSource || '--'},
+              {title:'价格来源',key:'priceSource',render:r=>`${r.priceSource || '--'}${r.priceStale ? '（历史价格）' : ''}`},
               {title:'执行模式',key:'executionMode',render:r=>executionMode(r)},
               {title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},
               {title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}

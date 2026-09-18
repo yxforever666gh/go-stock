@@ -23,11 +23,11 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 		at   time.Time
 		want bool
 	}{
-		{name: "before", at: time.Date(2026, 9, 3, 9, 49, 59, 0, location), want: false},
+		{name: "before", at: time.Date(2026, 9, 3, 9, 29, 59, 0, location), want: false},
 		{name: "start", at: time.Date(2026, 9, 3, 9, 50, 0, 0, location), want: true},
 		{name: "during", at: time.Date(2026, 9, 3, 10, 14, 0, 0, location), want: true},
-		{name: "morning close", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: true},
-		{name: "last second", at: time.Date(2026, 9, 3, 11, 49, 59, 0, location), want: true},
+		{name: "morning close", at: time.Date(2026, 9, 3, 11, 30, 0, 0, location), want: false},
+		{name: "last second", at: time.Date(2026, 9, 3, 11, 29, 59, 0, location), want: true},
 		{name: "analysis cutoff", at: time.Date(2026, 9, 3, 11, 50, 0, 0, location), want: false},
 		{name: "end", at: time.Date(2026, 9, 3, 13, 0, 0, 0, location), want: false},
 	}
@@ -41,12 +41,12 @@ func TestResearch2RecoveryWindowIsHalfOpen(t *testing.T) {
 }
 
 func TestResearch2AnalysisCronAndScheduledRootUse0955(t *testing.T) {
-	if research2AnalysisCronSpec != "0 50 9 * * 1-5" {
+	if research2AnalysisCronSpec != "0 */5 9-11 * * 1-5" {
 		t.Fatalf("analysis cron=%q want 09:50 on weekdays", research2AnalysisCronSpec)
 	}
 	location := research2Location()
-	root := research2ScheduledRoot(time.Date(2026, 9, 3, 12, 34, 56, 0, location))
-	want := time.Date(2026, 9, 3, 9, 50, 0, 0, location)
+	root := research2ScheduledRoot(time.Date(2026, 9, 3, 10, 34, 56, 0, location))
+	want := time.Date(2026, 9, 3, 10, 30, 0, 0, location)
 	if !root.Equal(want) {
 		t.Fatalf("scheduled root=%s want=%s", root, want)
 	}
@@ -64,7 +64,7 @@ func TestResearch2RecoveryOutsideWindowAndWeekendDoNotCreateRuntime(t *testing.T
 	}
 	for _, at := range []time.Time{
 		time.Date(2026, 9, 3, 9, 50, 0, 0, location),
-		time.Date(2026, 9, 3, 9, 49, 59, 0, location),
+		time.Date(2026, 9, 3, 9, 29, 59, 0, location),
 		time.Date(2026, 9, 3, 13, 0, 0, 0, location),
 		time.Date(2026, 9, 5, 10, 0, 0, 0, location),
 	} {
@@ -113,16 +113,16 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 		{"pre-chain failure", "", "failed", 10, 0, true, true},
 		{"legacy failed chain", "failed", "failed", 10, 0, true, true},
 		{"running chain failed attempt", "running", "failed", 10, 0, true, true},
-		{"completed chain", "completed", "failed", 10, 0, true, false},
-		{"disabled chain", "disabled", "failed", 10, 0, true, false},
-		{"cutoff chain", "cutoff", "failed", 10, 0, true, false},
-		{"exhausted chain", "exhausted", "failed", 10, 0, true, false},
+		{"completed chain", "completed", "failed", 10, 0, true, true},
+		{"disabled chain", "disabled", "failed", 10, 0, true, true},
+		{"cutoff chain", "cutoff", "failed", 10, 0, true, true},
+		{"exhausted chain", "exhausted", "failed", 10, 0, true, true},
 		{"legacy empty chain", "exhausted", "no_recommendation", 10, 0, true, false},
 		{"disabled legacy empty chain", "exhausted", "no_recommendation", 10, 0, false, false},
 		{"legacy empty chain at cutoff", "exhausted", "no_recommendation", 13, 0, true, false},
 		{"nonfailure without chain", "", "no_recommendation", 10, 0, true, false},
 		{"nonfailure with failed chain", "failed", "success", 10, 0, true, false},
-		{"before window", "", "failed", 9, 49, true, false},
+		{"before window", "", "failed", 9, 29, true, false},
 		{"at cutoff", "", "failed", 13, 0, true, false},
 		{"automatic strategy disabled", "", "failed", 10, 0, false, false},
 	} {
@@ -152,7 +152,7 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 			}
 			now := time.Date(2026, 9, 7, tc.hour, tc.minute, 0, 0, research2Location())
 			started := research2ScheduledRoot(now)
-			old := research2.AnalysisRun{RunID: "original-failure", TradingDate: "2026-09-07", AttemptNo: 1, ScheduledFor: started, StartedAt: started, EvidenceCutoffAt: started, Status: tc.runStatus, FailureReason: "original audit/calendar failure", StrategyVersion: "research2-trailing5-v9", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
+			old := research2.AnalysisRun{ScheduledSlot: research2.SlotAt(started), RunID: "original-failure", TradingDate: "2026-09-07", AttemptNo: 1, ScheduledFor: started, StartedAt: started, EvidenceCutoffAt: started, Status: tc.runStatus, FailureReason: "original audit/calendar failure", StrategyVersion: "research2-trailing5-v9", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
 			if tc.chainStatus != "" {
 				chain, err := repository.EnsureExecutionChain(context.Background(), old.TradingDate, started, started)
 				if err != nil {
@@ -175,6 +175,7 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 				t.Fatal(err)
 			}
 			app := &App{ctx: context.Background(), researchConfigStore: store, researchDatabase: database, research2Settings: settings.Settings, research2Runtime: &research2app.Runtime{Repository: repository, Runner: runner, Trading: research2.NewTradingService(repository, research2ResumeMarket{}, research2ResumeCalendar{})}}
+			app.research2Factory = func(*models.SettingConfig) (*research2app.Runtime, error) { return app.research2Runtime, nil }
 			app.resumeResearch2ExecutionChain(now)
 			latest, exists, err := repository.RunForDate(context.Background(), old.TradingDate)
 			if err != nil || !exists {
@@ -199,10 +200,7 @@ func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 					t.Fatalf("terminal chain changed: %+v err=%v", chain, err)
 				}
 			}
-			if !app.research2RunMu.TryLock() {
-				t.Fatal("resume retained the run lock while waiting")
-			}
-			app.research2RunMu.Unlock()
+
 		})
 	}
 }

@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	research2EvidenceProfileV7 = "research2-trailing5-v7"
+	research2EvidenceProfileV7 = "research2-slots-v8"
 	research2MinimumCoverage   = 0.95
 	research2MinimumMinuteBars = 4
 	research2QuoteFreshness    = 3 * time.Minute
@@ -252,7 +252,7 @@ func collectResearch2CandidateWindows(ctx context.Context, provider research2Min
 			} else {
 				item.Bars, item.Source, item.Error = provider.Window(ctx, candidate.Code, start, cutoff)
 				item.Bars = sanitizeResearch2MinuteBars(item.Bars, item.Source, start, cutoff)
-				if item.Error == nil && len(item.Bars) < research2MinimumMinuteBars {
+				if item.Error == nil && len(item.Bars) < research2.OpeningMinuteMinimum(cutoff) {
 					item.Error = fmt.Errorf("only %d closed minute bars", len(item.Bars))
 				}
 			}
@@ -294,12 +294,12 @@ func buildResearch2CompactCandidate(item research2CandidateWindow, cutoff time.T
 	if item.Error != nil {
 		result.Missing = append(result.Missing, "minute_window")
 	}
-	if len(item.Bars) < research2MinimumMinuteBars {
+	if len(item.Bars) < research2.OpeningMinuteMinimum(cutoff) {
 		result.Missing = append(result.Missing, "minimum_4_minute_bars")
 	}
 	result.Metrics = calculateResearch2CompactMetrics(item.Row, item.Bars)
 	result.Missing = append(result.Missing, "historical_5day_same_time_baseline")
-	result.CoreEligible = quoteValid && len(item.Bars) >= research2MinimumMinuteBars
+	result.CoreEligible = quoteValid && len(item.Bars) >= research2.OpeningMinuteMinimum(cutoff)
 	return result
 }
 
@@ -904,6 +904,9 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 	cutoff := marketSnapshot.AsOf
 	windowEnd := research2ClosedWindowEnd(startedAt, cutoff)
 	windowStart := windowEnd.Add(-5 * time.Minute)
+	if research2.OpeningMinuteMinimum(windowEnd) == 0 {
+		windowStart = research2.SlotTime(windowEnd, "09:30")
+	}
 	availableAt := cutoff
 	if availableAt.IsZero() {
 		detail := "全市场快照缺少可验证的截止时点"
@@ -1068,7 +1071,7 @@ func (c *research2EvidenceCollector) collectStructuredEvidenceWithExclusions(ctx
 			SourceRef: window.Source, Category: "stock", CollectedAt: c.research2Now(), AvailableAt: &minuteAvailableAt, Content: string(minutePayload)}
 		if window.Error != nil {
 			minuteDocument.Error = window.Error.Error()
-		} else if len(window.Bars) < research2MinimumMinuteBars {
+		} else if len(window.Bars) < research2.OpeningMinuteMinimum(cutoff) {
 			minuteDocument.Error = fmt.Sprintf("五分钟窗口仅有%d根有效一分钟线，至少需要4根", len(window.Bars))
 		}
 		documents = append(documents, quoteDocument, minuteDocument)

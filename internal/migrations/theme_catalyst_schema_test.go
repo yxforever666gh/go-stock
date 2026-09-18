@@ -248,10 +248,10 @@ VALUES ('stock','sh600000','1m','qfq',1,10,11,9,10.5,'fixture',1)`).Error; err !
 	if err := minuteDB.Model(&MigrationRecord{}).Count(&minuteMigrationCountBefore).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := MigrateAll(mainDB, minuteDB); err != nil {
+	if err := migrateBeforeResearch2Rebase(mainDB, minuteDB); err != nil {
 		t.Fatal(err)
 	}
-	if err := MigrateAll(mainDB, minuteDB); err != nil {
+	if err := migrateBeforeResearch2Rebase(mainDB, minuteDB); err != nil {
 		t.Fatalf("repeat schema 17 migration: %v", err)
 	}
 	after := captureResearchHistory(t, mainDB)
@@ -307,7 +307,7 @@ VALUES ('stock','sh600000','1m','qfq',1,10,11,9,10.5,'fixture',1)`).Error; err !
 	if minuteMigrationCountBefore != 3 || minuteMigrationCountAfter != minuteMigrationCountBefore || barCount != 1 {
 		t.Fatalf("minute schema changed: migrations=%d/%d bars=%d", minuteMigrationCountBefore, minuteMigrationCountAfter, barCount)
 	}
-	mainStatus, err := VerifyMain(mainDB)
+	mainStatus, err := verifiedStatus(mainDB, "main", mainMigrations[:27], 27)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,5 +315,7 @@ VALUES ('stock','sh600000','1m','qfq',1,10,11,9,10.5,'fixture',1)`).Error; err !
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertCurrentSchemaVersions(t, mainStatus, minuteStatus)
+	if mainStatus.CurrentVersion != 27 || minuteStatus.CurrentVersion != 3 {
+		t.Fatal(mainStatus, minuteStatus)
+	}
 }

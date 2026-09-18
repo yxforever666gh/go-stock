@@ -157,7 +157,7 @@ func TestBuyChecksClockAfterQuoteRequest(t *testing.T) {
 		wantStatus        string
 	}{
 		{"request takes ten seconds", time.Date(2026, 9, 7, 10, 0, 5, 0, shanghai()), time.Date(2026, 9, 7, 10, 0, 15, 0, shanghai()), "active"},
-		{"request crosses lunch", time.Date(2026, 9, 7, 11, 29, 59, 0, shanghai()), time.Date(2026, 9, 7, 11, 30, 1, 0, shanghai()), "buy_pending"},
+		{"request crosses lunch", time.Date(2026, 9, 7, 11, 29, 59, 0, shanghai()), time.Date(2026, 9, 7, 11, 30, 1, 0, shanghai()), "analysis_only"},
 		{"request crosses cutoff", time.Date(2026, 9, 7, 11, 29, 59, 0, shanghai()), time.Date(2026, 9, 7, 13, 0, 1, 0, shanghai()), "analysis_only"},
 		{"request crosses close", time.Date(2026, 9, 7, 14, 59, 59, 0, shanghai()), time.Date(2026, 9, 7, 15, 0, 1, 0, shanghai()), "analysis_only"},
 	} {
@@ -372,14 +372,8 @@ func TestRunnerRetriesFailedEvidenceBeforeReturningTerminalRun(t *testing.T) {
 	if err == nil || failed.Status != "failed" || failed.AttemptNo != 1 {
 		t.Fatalf("first=%+v err=%v", failed, err)
 	}
-	chain, chainErr := repository.ExecutionChain(context.Background(), failed.ChainID)
-	if chainErr != nil || chain.Status != "running" {
-		t.Fatalf("retryable failure closed the chain: %+v err=%v", chain, chainErr)
-	}
-	// Also recover rows left by older builds, which closed the chain on the
-	// first provider failure while still allowing another run attempt.
-	if err := repository.CompleteExecutionChain(context.Background(), failed.ChainID, "failed", "temporary evidence failure", started); err != nil {
-		t.Fatal(err)
+	if failed.ChainID != "" {
+		t.Fatal("failed analysis claimed an account")
 	}
 
 	secondAI := &sequenceAI{responses: []string{`{"tradingDay":true,"conclusion":"空仓","recommendations":[]}`}}
@@ -411,13 +405,13 @@ func TestRunnerStartWindowBoundaries(t *testing.T) {
 		started time.Time
 		accept  bool
 	}{
-		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 49, 59, 0, loc)},
+		{name: "one second before open", started: time.Date(2026, 8, 27, 9, 29, 59, 0, loc)},
 		{name: "open", started: time.Date(2026, 8, 27, 9, 50, 0, 0, loc), accept: true},
 		{name: "after open", started: time.Date(2026, 8, 27, 9, 54, 59, 0, loc), accept: true},
 		{name: "five minutes later", started: time.Date(2026, 8, 27, 9, 55, 0, 0, loc), accept: true},
-		{name: "11:30 remains open", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc), accept: true},
-		{name: "last second", started: time.Date(2026, 8, 27, 11, 49, 59, 0, loc), accept: true},
-		{name: "analysis cutoff", started: time.Date(2026, 8, 27, 11, 50, 0, 0, loc)},
+		{name: "11:30 closes", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc), accept: false},
+		{name: "last second", started: time.Date(2026, 8, 27, 11, 29, 59, 0, loc), accept: true},
+		{name: "analysis cutoff", started: time.Date(2026, 8, 27, 11, 30, 0, 0, loc)},
 		{name: "close", started: time.Date(2026, 8, 27, 13, 0, 0, 0, loc)},
 	}
 	for _, test := range tests {
@@ -470,54 +464,6 @@ func TestRunnerTakesSignalTimeAfterAllValidation(t *testing.T) {
 	}
 	if run.GeneratedAt == nil || !run.GeneratedAt.Equal(validated) || len(items) != 1 || !items[0].SignalAt.Equal(validated) || !items[0].TargetBuyAt.Equal(validated) {
 		t.Fatalf("run=%+v items=%+v clockCalls=%d", run, items, clockCalls)
-	}
-}
-
-func TestRunnerCompletionImmediatelyBeforeAfternoonOpenTargets1300(t *testing.T) {
-	repository := research2TestRepository(t)
-	loc := shanghai()
-	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
-	completed := time.Date(2026, 8, 27, 12, 59, 59, 0, loc)
-	ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`}
-	runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(current, researchevidence.StockCandidate{Code: "sh600000", Name: "浦发银行"})}, testCalendar{})
-	runner.ConfigureReplayClock(func() time.Time { return current }, nil)
-
-	run, err := runner.Run(context.Background(), scheduled)
-	items, listErr := repository.ListRecommendations(context.Background(), 10, 0)
-	if err != nil || listErr != nil || run.Status != "success" || run.GeneratedAt == nil || !run.GeneratedAt.Equal(completed) || len(items) != 1 || items[0].Status != "buy_pending" || !items[0].TargetBuyAt.Equal(time.Date(2026, 8, 27, 13, 0, 0, 0, loc)) || ai.calls != 1 {
-		t.Fatalf("run=%+v calls=%d err=%v", run, ai.calls, err)
-	}
-}
-
-func TestRunnerKeepsRecommendationsAtOrAfter1300AsAnalysisOnly(t *testing.T) {
-	loc := shanghai()
-	scheduled := time.Date(2026, 8, 27, 9, 50, 0, 0, loc)
-	for _, completed := range []time.Time{
-		time.Date(2026, 8, 27, 13, 0, 0, 0, loc),
-		time.Date(2026, 8, 27, 15, 0, 1, 0, loc),
-	} {
-		t.Run(completed.Format("15:04:05"), func(t *testing.T) {
-			repository := research2TestRepository(t)
-			current := time.Date(2026, 8, 27, 11, 29, 0, 0, loc)
-			ai := &advancingAI{current: &current, advance: completed, response: `{"tradingDay":true,"conclusion":"推荐","recommendations":[{"code":"sh600000","marketScore":15,"sectorScore":15,"stockScore":20,"catalystScore":10,"riskDeduction":0,"finalScore":60,"referencePrice":10,"sourceRefs":["market","quote-sh600000","概念 sh600000","公告 sh600000"]}]}`}
-			runner := NewRunner(repository, ai, fixedEvidence{value: scoreFixtureEvidence(current, researchevidence.StockCandidate{Code: "sh600000", Name: "浦发银行"})}, testCalendar{})
-			runner.ConfigureReplayClock(func() time.Time { return current }, nil)
-
-			run, err := runner.Run(context.Background(), scheduled)
-			items, listErr := repository.RunRecommendations(context.Background(), run.RunID)
-			if err != nil || listErr != nil || run.Status != "success" || len(items) != 1 || items[0].Status != "analysis_only" {
-				t.Fatalf("run=%+v items=%+v err=%v listErr=%v", run, items, err, listErr)
-			}
-			market := &recordingMarket{prices: map[string]float64{"sh600000": 10}}
-			if err = testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), completed.Add(time.Second)); err != nil {
-				t.Fatal(err)
-			}
-			detail, err := repository.GetRecommendation(context.Background(), items[0].RecommendationID)
-			if err != nil || detail.Recommendation.Status != "analysis_only" || len(detail.Trades) != 0 || detail.Recommendation.NetPnL != 0 || detail.Recommendation.NetYieldRate != 0 || len(market.currentFlags) != 0 {
-				t.Fatalf("analysis-only recommendation affected execution or return: detail=%+v calls=%v err=%v", detail, market.currentFlags, err)
-			}
-		})
 	}
 }
 
@@ -751,27 +697,6 @@ func TestValidateRecommendationsUsesScoreAndCodePriority(t *testing.T) {
 	}
 }
 
-func TestValidateAllocationUsesEqualCashFractions(t *testing.T) {
-	for _, test := range []struct {
-		count int
-		want  int64
-	}{{1, 1100}, {2, 500}, {3, 300}} {
-		prices := make([]float64, test.count)
-		for index := range prices {
-			prices[index] = 10
-		}
-		quantities, err := ValidateAllocation(prices, InitialCash)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, quantity := range quantities {
-			if quantity != test.want {
-				t.Fatalf("count=%d quantities=%v want=%d", test.count, quantities, test.want)
-			}
-		}
-	}
-}
-
 func TestTradingServiceRebalancesRemainingCashAfterEachBuy(t *testing.T) {
 	repository := research2TestRepository(t)
 	loc := shanghai()
@@ -795,7 +720,7 @@ func TestTradingServiceRebalancesRemainingCashAfterEachBuy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := map[string]int64{"sh600000": 300, "sz000001": 400, "sz002594": 400}
+	expected := map[string]int64{"sh600000": 200, "sz000001": 200, "sz002594": 200}
 	total := 0.0
 	if len(bought) != 3 {
 		t.Fatalf("bought=%+v", bought)
@@ -868,8 +793,8 @@ func TestTradingServiceDoesNotTradeDuringLunch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantTarget := time.Date(2026, 8, 27, 13, 0, 0, 0, loc)
-	if len(market.currentFlags) != 0 || result[0].Status != "buy_pending" || !result[0].TargetBuyAt.Equal(wantTarget) {
+	wantTarget := time.Date(2026, 8, 27, 11, 0, 0, 0, loc)
+	if len(market.currentFlags) != 0 || result[0].Status != "analysis_only" || !result[0].TargetBuyAt.Equal(wantTarget) {
 		t.Fatalf("lunch processing must not request a quote or trade: calls=%v item=%+v", market.currentFlags, result[0])
 	}
 }
@@ -916,73 +841,6 @@ func TestTradingServiceConvertsPriorDayPendingBuyToAnalysisOnly(t *testing.T) {
 	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
 	if err != nil || detail.Recommendation.Status != "analysis_only" || len(detail.Trades) != 0 || len(market.currentFlags) != 0 {
 		t.Fatalf("prior-day pending buy was not preserved as analysis-only: detail=%+v calls=%v err=%v", detail, market.currentFlags, err)
-	}
-}
-
-func TestSellRetryRecoversTheExactTargetMinuteInsteadOfUsingCurrentQuote(t *testing.T) {
-	repository := research2TestRepository(t)
-	loc := shanghai()
-	now := time.Date(2026, 8, 28, 10, 3, 0, 0, loc)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-08-27", ScheduledFor: now.AddDate(0, 0, -1), StartedAt: now.AddDate(0, 0, -1), EvidenceCutoffAt: now.AddDate(0, 0, -1), Status: "success", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]", RecommendationCount: 1, OnTime: true}
-	if err := repository.CreateRun(context.Background(), &run); err != nil {
-		t.Fatal(err)
-	}
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "test", SignalAt: now.AddDate(0, 0, -1), FinalScore: 60, ReferencePrice: 10, BuyLower: 9, BuyUpper: 11, Status: "buy_pending", TargetBuyAt: now.AddDate(0, 0, -1)}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
-		t.Fatal(err)
-	}
-	buyCost := trading.CalculateBuyCost(10, 100)
-	sellAt := now.Add(-3 * time.Minute)
-	if err := repository.RecordBuy(context.Background(), item.RecommendationID, Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now.AddDate(0, 0, -1), MarketPrice: 10, ExecutionPrice: buyCost.ExecutionPrice, Quantity: 100, Commission: buyCost.Commission, TransferFee: buyCost.TransferFee, SlippageAmount: buyCost.SlippageAmount, NetCashFlow: buyCost.NetCashFlow}, sellAt); err != nil {
-		t.Fatal(err)
-	}
-	market := &recordingMarket{prices: map[string]float64{"sh600000": 10.5}}
-	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	if len(market.currentFlags) != 1 || market.currentFlags[0] {
-		t.Fatalf("expected sell retry to request the fixed target minute, got %v", market.currentFlags)
-	}
-	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if detail.Recommendation.Status != "closed" || len(detail.Trades) != 2 {
-		t.Fatalf("unexpected recovered sell: %+v", detail)
-	}
-	sell := detail.Trades[1]
-	if sell.ExecutionMode != "recovered_target_minute" || sell.PriceSource != "test" || !sell.TradedAt.Equal(sellAt) {
-		t.Fatalf("unexpected recovered sell provenance: %+v", sell)
-	}
-}
-
-func TestSellRecoveryStillRunsAfterMarketClose(t *testing.T) {
-	repository := research2TestRepository(t)
-	loc := shanghai()
-	now := time.Date(2026, 8, 28, 15, 5, 0, 0, loc)
-	targetSell := time.Date(2026, 8, 28, 10, 0, 0, 0, loc)
-	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-08-27", ScheduledFor: now.AddDate(0, 0, -1), StartedAt: now.AddDate(0, 0, -1), EvidenceCutoffAt: now.AddDate(0, 0, -1), Status: "success", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]", RecommendationCount: 1}
-	if err := repository.CreateRun(context.Background(), &run); err != nil {
-		t.Fatal(err)
-	}
-	item := Recommendation{RecommendationID: uuid.NewString(), AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "test", SignalAt: now.AddDate(0, 0, -1), FinalScore: 60, ReferencePrice: 10, Status: "buy_pending", TargetBuyAt: now.AddDate(0, 0, -1)}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
-		t.Fatal(err)
-	}
-	buyCost := trading.CalculateBuyCost(10, 100)
-	if err := repository.RecordBuy(context.Background(), item.RecommendationID, Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now.AddDate(0, 0, -1), MarketPrice: 10, ExecutionPrice: buyCost.ExecutionPrice, Quantity: 100, Commission: buyCost.Commission, TransferFee: buyCost.TransferFee, SlippageAmount: buyCost.SlippageAmount, NetCashFlow: buyCost.NetCashFlow}, targetSell); err != nil {
-		t.Fatal(err)
-	}
-	market := &recordingMarket{prices: map[string]float64{"sh600000": 10.5}}
-	if err := testTradingService(repository, market, testCalendar{}).ProcessDue(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	detail, err := repository.GetRecommendation(context.Background(), item.RecommendationID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if detail.Recommendation.Status != "closed" || len(detail.Trades) != 2 || detail.Trades[1].ExecutionMode != "recovered_target_minute" {
-		t.Fatalf("after-close sell was not recovered: %+v", detail)
 	}
 }
 

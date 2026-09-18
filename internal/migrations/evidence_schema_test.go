@@ -251,7 +251,7 @@ func TestSchema14Minute2UpgradesThroughSchema17Minute3WithoutRewritingResearchHi
 	}
 
 	before := captureResearchHistory(t, mainDB)
-	if err := MigrateAll(mainDB, minuteDB); err != nil {
+	if err := migrateBeforeResearch2Rebase(mainDB, minuteDB); err != nil {
 		t.Fatal(err)
 	}
 	after := captureResearchHistory(t, mainDB)
@@ -284,7 +284,7 @@ WHERE strategy_version IS NOT NULL OR evidence_profile_version IS NOT NULL OR ev
 	if experimentalEnabled != 0 {
 		t.Fatalf("experimental evidence unexpectedly enabled for %d settings rows", experimentalEnabled)
 	}
-	mainStatus, err := VerifyMain(mainDB)
+	mainStatus, err := verifiedStatus(mainDB, "main", mainMigrations[:27], 27)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,8 +292,10 @@ WHERE strategy_version IS NOT NULL OR evidence_profile_version IS NOT NULL OR ev
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertCurrentSchemaVersions(t, mainStatus, minuteStatus)
-	expectedMain, _ := currentSchemaVersions()
+	if mainStatus.CurrentVersion != 27 || minuteStatus.CurrentVersion != 3 {
+		t.Fatal(mainStatus, minuteStatus)
+	}
+	expectedMain := 27
 	const firstUpgrade = 15
 	expectedUpgradeCount := expectedMain - firstUpgrade + 1
 	if expectedUpgradeCount < 1 || len(mainStatus.Records) < expectedUpgradeCount {

@@ -6,7 +6,9 @@ param(
     [string]$WebAddr = "127.0.0.1:34115",
     [string]$RollbackReceipt = "",
     [string]$RuntimeRootOverride = "",
+    [string]$RuntimeWorkingDirectory = "",
     [string]$NotesFile = '',
+    [string]$TargetVersion = '',
     [string]$Resume = ''
 )
 
@@ -16,6 +18,8 @@ if ($PSVersionTable.PSVersion -lt [version]'7.2') { throw 'Release commands requ
 
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
+$RunDirectory = if ($RuntimeWorkingDirectory) { [System.IO.Path]::GetFullPath($RuntimeWorkingDirectory) } else { $ProjectRoot }
+if (-not (Test-Path -LiteralPath $RunDirectory -PathType Container)) { throw 'Runtime working directory is unavailable' }
 $RuntimeRoot = if ($RuntimeRootOverride) {
     if ([System.IO.Path]::IsPathRooted($RuntimeRootOverride)) { $RuntimeRootOverride } else { Join-Path $ProjectRoot $RuntimeRootOverride }
 } else { Join-Path $ProjectRoot "runtime" }
@@ -329,7 +333,7 @@ function Start-Pointer {
     $env:GO_STOCK_MINUTE_DB_PATH = $MinuteDB + $minuteSeparator + "_pragma=cache_size(-524288)&_pragma=journal_mode(WAL)"
     $env:ZONEINFO = $Pointer.zoneInfo
     try {
-        $process = Start-Process -FilePath $Pointer.binary -WorkingDirectory $ProjectRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru
+        $process = Start-Process -FilePath $Pointer.binary -WorkingDirectory $RunDirectory -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru
     } finally {
         $env:GO_STOCK_WEB_ADDR = $previous.Web; $env:GO_STOCK_DB_PATH = $previous.DB
         $env:GO_STOCK_MINUTE_DB_PATH = $previous.Minute; $env:ZONEINFO = $previous.Zone
@@ -649,7 +653,7 @@ function Invoke-Rollback {
 
 . (Join-Path $ScriptDir 'release-publish.ps1')
 if ($MyInvocation.InvocationName -ne ".") {
-    if (($NotesFile -or $Resume) -and $Command -ne 'publish') { throw 'NotesFile and Resume belong to publish' }
+    if (($NotesFile -or $Resume -or $TargetVersion) -and $Command -ne 'publish') { throw 'NotesFile and Resume belong to publish' }
     $releaseLock = Enter-ReleaseLock
     try { switch ($Command) {
         'publish' { Invoke-Publish }

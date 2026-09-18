@@ -155,6 +155,7 @@ func TestCreateRunAttemptDoesNotRetryFailedRunOutsideWindow(t *testing.T) {
 
 func TestFinalizeRunRollsBackRunWhenRecommendationsFail(t *testing.T) {
 	repository := research2TestRepository(t)
+	repository.now = func() time.Time { return time.Date(2026, 8, 27, 10, 0, 0, 0, shanghai()) }
 	now := time.Date(2026, 8, 27, 10, 0, 0, 0, shanghai())
 	run := AnalysisRun{RunID: uuid.NewString(), TradingDate: "2026-08-27", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, Status: "running", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]"}
 	if err := repository.CreateRun(context.Background(), &run); err != nil {

@@ -1,5 +1,5 @@
 <script setup>
-import {h, onMounted} from 'vue'
+import {h, onMounted, ref, watch} from 'vue'
 import {NButton, NTag} from 'naive-ui'
 import AppMarkdownPreview from './AppMarkdownPreview.vue'
 import ResearchAuditPanel from './research-audit/ResearchAuditPanel.vue'
@@ -8,7 +8,9 @@ import {useResearchDetail, useResearchList} from '../composables/useResearchRequ
 import {usePolling} from '../composables/usePolling.js'
 import {GetResearch2Run, ListResearch2Runs} from '../services/research2-api'
 
-const history = useResearchList(async (limit, offset) => await ListResearch2Runs(limit, offset) || [], {key: 'runId', pageSize: 100})
+const props = defineProps({slot: {type: String, default: '09:50'}})
+const allReports = ref(true)
+const history = useResearchList(async (limit, offset) => await ListResearch2Runs(limit, offset, allReports.value ? '' : props.slot) || [], {key: 'runId', pageSize: 100})
 const {rows, loading, error: listError, hasMore} = history
 const detailRequest = useResearchDetail(GetResearch2Run)
 const {detail, visible, loading: detailLoading, error: detailError} = detailRequest
@@ -23,6 +25,10 @@ const shortFailureReason = value => { const text = String(value || '').replace(/
 const type = status => status === 'success' ? 'success' : status === 'failed' ? 'error' : status === 'running' ? 'warning' : 'info'
 const show = row => detailRequest.show(row.runId)
 const columns = [
+ {title: '计划区间', key: 'scheduledSlot', width: 100},
+ {title: '落盘区间', key: 'slot', width: 100, render: row => row.slot || '--'},
+ {title: '展示状态', key: 'published', width: 120, render: row => row.published ? '区间首份报告' : row.status === 'running' ? '运行中' : '仅保留报告'},
+ {title: '归档原因', key: 'archiveReason', minWidth: 200},
   {title: '交易日', key: 'tradingDate', width: 110},
   {title: '尝试', key: 'attemptNo', width: 80, render: row => `第${row.attemptNo || 1}次`},
   {title: '触发', key: 'triggerSource', width: 125, render: row => row.triggerSource || '--'},
@@ -43,12 +49,14 @@ const polling = usePolling(async () => {
   await history.refreshHead()
   if (visible.value && (!detail.value || detail.value.status === 'running')) await detailRequest.refresh()
 }, 2000, {shouldRun: () => rows.value.some(row => row.status === 'running')})
+watch(allReports, () => { void refresh() })
 onMounted(() => { void refresh(); polling.start({immediate: false}) })
 </script>
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">交易日09:50启动，任务启动窗口为 [09:50,11:50)，使用最近5个已闭合交易分钟；09:50正常运行对应09:45—09:50，午休启动固定使用11:25—11:30。每天最多生成一份有效报告，失败不计入次数，可在启动窗口内重试；报告生成后不再重新分析。按分数排序尝试买入，最多成交3只，不设置最低分数。报告在13:00前生成才进入模拟执行，13:00起生成的推荐仅用于分析。</n-alert>
+    <n-alert type="info" :bordered="false">09:30至11:25每五分钟独立启动。成功按落盘时间归区间，先到先得；后到及11:30后完成的报告仅归档。买入跟随有效推荐，卖出由各账户的定时任务独立执行。</n-alert>
+    <n-checkbox v-model:checked="allReports">全部报告（包含失败、后到和午休后报告）</n-checkbox>
     <n-flex justify="end"><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="2210" :row-key="row => row.runId"/>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="loading" :error="listError" @load-more="history.loadMore"/>

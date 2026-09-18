@@ -70,6 +70,33 @@ async function pageComponent(filename) {
   return {...component, render: () => null}
 }
 
+test('research2 account switch isolates list requests and ignores an unmounted account response', async () => {
+  const pending = new Map()
+  globalThis.__researchPageFixtures = {
+    GetResearch2Account: async () => ({}),
+    ListResearch2Recommendations: (limit, offset, slot) => new Promise(resolve => pending.set(slot, resolve)),
+  }
+  const component = await pageComponent('research2Recommendations.vue')
+  const first = renderer.createApp(component, {slot: '09:30'})
+  first.mount({})
+  await flush()
+  first.unmount()
+  const second = renderer.createApp(component, {slot: '09:35'})
+  const vm = second.mount({})
+  try {
+    await flush()
+    assert.deepEqual([...pending.keys()], ['09:30', '09:35'])
+    pending.get('09:35')([{recommendationId: 'new-account'}])
+    await flush()
+    pending.get('09:30')([{recommendationId: 'old-account'}])
+    await flush()
+    assert.deepEqual(vm.$.setupState.rows.map(row => row.recommendationId), ['new-account'])
+  } finally {
+    second.unmount()
+    delete globalThis.__researchPageFixtures
+  }
+})
+
 test('research2 uses server ranks and execution states without selection roles or score gates', async () => {
   const rows = [
     {recommendationId: 'first', selectionRank: 1, displaySelectionRank: 1, finalScore: 51, status: 'buy_pending'},
@@ -125,9 +152,9 @@ test('research2 report explains the one-report daily limit and does not offer an
       assert.equal(action.children, '查看')
     }
     const source = await readFile(new URL('research2Report.vue', import.meta.url), 'utf8')
-    assert.match(source, /\[09:50,11:50\)/)
-    assert.match(source, /09:45—09:50/)
-    assert.match(source, /每天最多生成一份有效报告，失败不计入次数/)
+    assert.match(source, /09:30至11:25每五分钟独立启动/)
+    assert.match(source, /成功按落盘时间归区间/)
+    assert.match(source, /卖出由各账户的定时任务独立执行/)
     assert.doesNotMatch(source, /主选|候选|补位|主备|主\/备|09:55/)
   } finally {
     app.unmount()

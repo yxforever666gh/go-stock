@@ -90,6 +90,7 @@ export const API_PATHS = {
   listRecommendations: "/api/v1/research/recommendations",
   listResearch2AnalysisRuns: "/api/v1/research2/analysis-runs",
   listResearch2Recommendations: "/api/v1/research2/recommendations",
+  listResearch2Slots: "/api/v1/research2/slots",
   listStockNotices: "/api/v1/market/stocks/notices",
   listStockResearchReports: "/api/v1/market/stocks/research-reports",
   listTelegraphs: "/api/v1/market/telegraphs",
@@ -1030,8 +1031,10 @@ export type RecommendationDetail = {
 }
 
 export type Research2AccountOverview = {
+  baselineAt?: string | null
+  baselineNetAssetValue?: number
   cash: number
-  initialCash: 12000
+  initialCash: number
   lastValuedAt: string
   netAssetValue: number
   netProfit: number
@@ -1039,6 +1042,7 @@ export type Research2AccountOverview = {
   pendingBuys: number
   positionValue: number
   returnRate: number
+  slot?: string
 }
 
 export type Research2AccountSnapshot = {
@@ -1047,6 +1051,7 @@ export type Research2AccountSnapshot = {
   netProfit: number
   positionValue: number
   returnRate: number
+  slot?: string
   snapshotId: string
   snapshotType: string
   tradingDate: string
@@ -1054,6 +1059,7 @@ export type Research2AccountSnapshot = {
 }
 
 export type Research2AnalysisRun = {
+  archiveReason?: string
   attemptNo: number
   chainId?: string
   degraded?: boolean | null
@@ -1073,13 +1079,17 @@ export type Research2AnalysisRun = {
   modelName?: string
   onTime: boolean
   parentRunId?: string
+  persistedAt?: string | null
   primaryCount?: number
   providerName?: string
+  published?: boolean
   recommendationCount: number
   reportMarkdown: string
   requestedSlots?: number
   runId: string
   scheduledFor: string
+  scheduledSlot?: string
+  slot?: string
   sourceStatusJson: string
   standbyCount?: number
   startedAt: string
@@ -1090,6 +1100,7 @@ export type Research2AnalysisRun = {
 }
 
 export type Research2AnalysisRunSummary = {
+  archiveReason?: string
   attemptNo: number
   chainId?: string
   degraded?: boolean | null
@@ -1108,12 +1119,16 @@ export type Research2AnalysisRunSummary = {
   modelName?: string
   onTime: boolean
   parentRunId?: string
+  persistedAt?: string | null
   primaryCount?: number
   providerName?: string
+  published?: boolean
   recommendationCount: number
   requestedSlots?: number
   runId: string
   scheduledFor: string
+  scheduledSlot?: string
+  slot?: string
   standbyCount?: number
   startedAt: string
   status: string
@@ -1130,12 +1145,15 @@ export type Research2ExecutionChain = {
   latestRunId?: string
   rootRunId?: string
   scheduledFor: string
+  sellCompletedAt?: string | null
+  slot?: string
   startedAt: string
   status: "running" | "completed" | "cutoff" | "exhausted" | "capital_blocked" | "disabled" | "failed"
   stopReason?: string
   targetSlots: number
   tradingDate: string
   updatedAt: string
+  winnerRunId?: string
 }
 
 export type Research2Performance = Research2AccountOverview & {
@@ -1154,6 +1172,7 @@ export type Research2Performance = Research2AccountOverview & {
 
 export type Research2Recommendation = {
   analysisRunId: string
+  baselineValue?: number
   buyAt?: string
   buyFees?: number
   buyLower: number
@@ -1179,12 +1198,14 @@ export type Research2Recommendation = {
   hitLimitUpFullDay?: boolean | null
   hitMinusThree?: boolean | null
   late: boolean
+  legacySlotException?: boolean
   mainRisk?: string
   marketScore?: number
   metricsFinalized: boolean
   netPnl: number
   netYieldRate: number
   oldBackground?: string
+  periodPnl?: number
   promotionReason?: string
   quantData?: string
   quantity: number
@@ -1200,6 +1221,7 @@ export type Research2Recommendation = {
   sellMarketPrice?: number
   sellPrice?: number
   signalAt: string
+  slot?: string
   sourceRefs?: string
   status: "buy_pending" | "active" | "sell_pending" | "closed" | "analysis_only" | "missed_cash" | "missed_untradable" | "missed_window" | "cancelled_price" | "standby" | "standby_not_used"
   stockCode: string
@@ -1216,6 +1238,15 @@ export type Research2RecommendationDetail = {
   trades: Array<Research2Trade>
 }
 
+export type Research2SlotStatus = {
+  label: string
+  sellCompletedAt?: string | null
+  slot: string
+  status: string
+  tradingDate: string
+  winnerRunId: string
+}
+
 export type Research2Trade = {
   commission: number
   executionMode?: "live_after_signal" | "recovered_target_minute"
@@ -1223,10 +1254,13 @@ export type Research2Trade = {
   marketPrice: number
   netCashFlow: number
   priceSource?: string
+  priceStale?: boolean
   quantity: number
+  quoteAt?: string | null
   recommendationId: string
   side: "buy" | "sell"
   slippageAmount: number
+  slot?: string
   stampDuty: number
   tradeId: string
   tradedAt: string

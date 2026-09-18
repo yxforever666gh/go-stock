@@ -65,7 +65,7 @@ func TestLowScoreReportIsEffectiveAndDoesNotRerun(t *testing.T) {
 			t.Fatalf("low score became analysis only: %+v", item)
 		}
 	}
-	later, err := runner.Run(ctx, at.Add(10*time.Minute))
+	later, err := runner.Run(ctx, at)
 	if err != nil || later.RunID != run.RunID || ai.calls != 1 {
 		t.Fatalf("valid report reran: %+v err=%v calls=%d", later, err, ai.calls)
 	}

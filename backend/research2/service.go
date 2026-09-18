@@ -34,6 +34,13 @@ func NewService(repository *Repository, quotes CurrentQuoteProvider) *Service {
 	return &Service{repository: repository, quotes: quotes, now: time.Now, maxConcurrency: defaultQuoteRefreshConcurrency}
 }
 
+func (s *Service) WithSlot(slot string) *Service {
+	scoped := NewService(s.repository.WithSlot(slot), s.quotes)
+	scoped.now = s.now
+	scoped.maxConcurrency = s.maxConcurrency
+	return scoped
+}
+
 func (s *Service) SetRecommendationChartProvider(provider recommendationchart.Provider, calendar recommendationchart.Calendar) {
 	s.chartMu.Lock()
 	s.chartEngine = recommendationchart.NewEngine(provider, calendar, func() time.Time { return s.now() })

@@ -222,10 +222,10 @@ func TestSchema19To20FundETFMigrationPreservesResearchAccountingAndHasNoTradingL
 	}
 
 	before := captureResearchHistory(t, database)
-	if err := MigrateMain(database); err != nil {
+	if err := migrate(database, "main", mainMigrations[:27], 27); err != nil {
 		t.Fatal(err)
 	}
-	if err := MigrateMain(database); err != nil {
+	if err := migrate(database, "main", mainMigrations[:27], 27); err != nil {
 		t.Fatalf("repeat schema 20: %v", err)
 	}
 	afterMigration := captureResearchHistory(t, database)

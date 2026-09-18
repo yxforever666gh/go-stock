@@ -9,9 +9,11 @@ import ResearchHistoryFooter from './ResearchHistoryFooter.vue'
 import {useResearchDetail, useResearchList} from '../composables/useResearchRequests.js'
 import {formatInteger, formatMoney, formatNumber, formatPercent, formatPrice} from '../utils/number-format'
 
+const props = defineProps({slot: {type: String, default: '09:50'}})
+
 const history = useResearchList(async (limit, offset) => {
-  if (offset === 0) await GetResearch2Account()
-  return await ListResearch2Recommendations(limit, offset) || []
+  if (offset === 0) await GetResearch2Account(props.slot)
+  return await ListResearch2Recommendations(limit, offset, props.slot) || []
 })
 const {rows, loading, error: listError, hasMore} = history
 const detailRequest = useResearchDetail(GetResearch2Recommendation)
@@ -22,7 +24,7 @@ const statusLabels = {buy_pending: '待买入', standby: '待买入', standby_no
 const statusType = status => status === 'closed' ? 'success' : status === 'analysis_only' ? 'default' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
-const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '恢复目标分钟价'}
+const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '历史目标分钟价', scheduled_slot_sell: '分区定时卖出', recovered_slot_sell: '重启恢复卖出'}
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
 const rankLabel = value => Number(value) > 0 ? formatInteger(value) : '--'
@@ -65,7 +67,7 @@ onMounted(refresh)
 
 <template>
   <n-space vertical>
-    <n-alert type="info" :bordered="false">交易日09:50启动，每天最多生成一份有效报告，失败不计入次数，11:50停止启动分析。按报告分数从高到低尝试买入，最多成交3只；当前现金不足一手时跳过并继续尝试后续股票。评分不设最低门槛，当天不再为不足3只重新分析。每天列表最多展示3只，完整评分及未成交原因保留在报告中。</n-alert>
+    <n-alert type="info" :bordered="false">每五分钟独立研究；第一份成功落盘报告进入对应时间账户，立即按评分和可用现金买入，每账户每天最多5只；当前现金不足一手时跳过并尝试后续股票。旧持仓在账户对应刻度独立定时卖出；后到报告仅在AI分析报告中保留。</n-alert>
     <n-flex justify="space-between" align="center">
       <n-text depth="3">每次买入以剩余现金÷剩余名额为分配目标；目标不足一手时，可提高到一手，含费总成本不得超过当前可用现金。成交后重新分配余款，资金不足不借款。当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
@@ -114,7 +116,7 @@ onMounted(refresh)
               {title:'时间',key:'tradedAt',render:r=>dateTime(r.tradedAt)},
               {title:'市场价',key:'marketPrice',render:r=>formatPrice(r.marketPrice)},
               {title:'成交价',key:'executionPrice',render:r=>formatPrice(r.executionPrice)},
-              {title:'价格来源',key:'priceSource',render:r=>r.priceSource || '--'},
+              {title:'价格来源',key:'priceSource',render:r=>`${r.priceSource || '--'}${r.priceStale ? '（历史价格）' : ''}`},
               {title:'执行模式',key:'executionMode',render:r=>executionMode(r)},
               {title:'数量',key:'quantity',render:r=>formatInteger(r.quantity)},
               {title:'净现金流',key:'netCashFlow',render:r=>formatMoney(r.netCashFlow)}
