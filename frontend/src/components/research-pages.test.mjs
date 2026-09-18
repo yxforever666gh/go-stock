@@ -138,6 +138,15 @@ test('research2 uses server ranks and execution states without selection roles o
   }
 })
 
+test('research2 keeps the five-minute account selector collapsed until clicked', async () => {
+  const source = await readFile(new URL('research2Index.vue', import.meta.url), 'utf8')
+  assert.match(source, /<n-dropdown trigger="click"/)
+  assert.match(source, /slotOptions/)
+  assert.match(source, /已完成.*尚未完成|尚未完成.*已完成/)
+  assert.match(source, /选择五分钟区间/)
+  assert.doesNotMatch(source, /<n-tab v-for="slot in RESEARCH2_SLOTS"/)
+})
+
 test('research2 report explains the one-report daily limit and does not offer another analysis', async () => {
   globalThis.__researchPageFixtures = {ListResearch2Runs: async () => [], GetResearch2Run: async () => ({})}
   const app = renderer.createApp(await pageComponent('research2Report.vue'))

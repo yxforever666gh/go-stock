@@ -1,5 +1,5 @@
 <script setup>
-import {defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import {computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import {RESEARCH2_SLOTS, validResearch2Slot} from '../utils/research2-slots.js'
 import {usePolling} from '../composables/usePolling.js'
@@ -18,6 +18,12 @@ const selectedSlot = ref(validResearch2Slot(route.query.slot) ? String(route.que
 const slotStates = ref([])
 async function refreshSlots() { try { slotStates.value = await ListResearch2Slots() || [] } catch { slotStates.value = [] } }
 const slotPolling = usePolling(refreshSlots, 15000)
+const selectedSlotInfo = computed(() => RESEARCH2_SLOTS.find(slot => slot.value === selectedSlot.value) || RESEARCH2_SLOTS[0])
+const selectedSlotState = computed(() => slotStates.value.find(item => item.slot === selectedSlot.value))
+const slotOptions = computed(() => RESEARCH2_SLOTS.map(slot => {
+ const state = slotStates.value.find(item => item.slot === slot.value)
+ return {key: slot.value, label: `${slot.label} · ${state?.sellCompletedAt ? '已完成' : '尚未完成'}`}
+}))
 function updateSlot(slot) {
  if (!validResearch2Slot(slot)) return
  selectedSlot.value = slot
@@ -41,10 +47,15 @@ onBeforeUnmount(() => EventsOff('changeResearch2Tab'))
 
 <template>
   <n-card>
-    <n-tabs v-if="nowTab !== '设置'" type="card" :value="selectedSlot" @update:value="updateSlot" style="margin-bottom:16px">
-      <n-tab v-for="slot in RESEARCH2_SLOTS" :key="slot.value" :name="slot.value">{{slot.label}}</n-tab>
-    </n-tabs>
-    <n-text v-if="nowTab !== '设置'" depth="3">{{ selectedSlot }} 独立账户 · 今日定时卖出：{{ slotStates.find(item => item.slot === selectedSlot)?.sellCompletedAt ? '已完成' : '尚未完成' }}</n-text>
+    <div v-if="nowTab !== '设置'" class="research2-slot-toolbar">
+      <n-dropdown trigger="click" :options="slotOptions" @select="updateSlot">
+        <n-button secondary size="small" aria-label="选择五分钟区间">
+          {{ selectedSlotInfo.label }}
+          <span class="research2-slot-chevron" aria-hidden="true">⌄</span>
+        </n-button>
+      </n-dropdown>
+      <n-text depth="3">独立账户 · 今日定时卖出：{{ selectedSlotState?.sellCompletedAt ? '已完成' : '尚未完成' }}</n-text>
+    </div>
     <n-tabs type="line" animated :value="nowTab" @update-value="updateTab">
       <n-tab-pane v-for="tab in tabs" :key="tab.name" :name="tab.name" :tab="tab.name">
         <component v-if="visited.includes(tab.name)" :is="tab.component" :key="tab.name === '设置' ? tab.name : `${tab.name}:${selectedSlot}`" :slot="selectedSlot" v-bind="tab.props || {}"/>
@@ -52,3 +63,19 @@ onBeforeUnmount(() => EventsOff('changeResearch2Tab'))
     </n-tabs>
   </n-card>
 </template>
+
+<style scoped>
+.research2-slot-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  margin-bottom: 16px;
+}
+
+.research2-slot-chevron {
+  margin-left: 8px;
+  font-size: 14px;
+  line-height: 1;
+}
+</style>
