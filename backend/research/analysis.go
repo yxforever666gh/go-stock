@@ -111,6 +111,11 @@ func (r *AnalysisRunner) ConfigureEvidence(repository EvidenceRepository, profil
 }
 
 func (r *AnalysisRunner) completeAI(ctx context.Context, request sharedai.CompletionRequest) (sharedai.CompletionResult, error) {
+	if r.service.repository != nil {
+		if err := r.service.repository.CheckResearchAllowed(ctx); err != nil {
+			return sharedai.CompletionResult{}, err
+		}
+	}
 	return r.service.ai.Complete(ctx, request)
 }
 
@@ -270,6 +275,9 @@ func recentRecommendationContext(source []RecommendationHistoryItem) string {
 }
 
 func (r *AnalysisRunner) Run(ctx context.Context, request AnalysisRequest) (result AnalysisRun, resultErr error) {
+	if err := r.service.repository.CheckResearchAllowed(ctx); err != nil {
+		return AnalysisRun{}, err
+	}
 	if request.BuyPermit != nil {
 		ctx = context.WithValue(ctx, analysisBuyPermitKey{}, request.BuyPermit)
 	}

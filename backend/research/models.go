@@ -302,11 +302,14 @@ type MinuteEvidenceSummary struct {
 }
 
 type SimulatedAccount struct {
-	ID          uint      `json:"id" gorm:"primaryKey"`
-	InitialCash float64   `json:"initialCash" gorm:"not null"`
-	Cash        float64   `json:"cash" gorm:"not null"`
-	CreatedAt   time.Time `json:"createdAt"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	Frozen       bool       `json:"frozen" gorm:"not null;default:false"`
+	FrozenAt     *time.Time `json:"frozenAt,omitempty"`
+	FrozenReason string     `json:"frozenReason"`
+	ID           uint       `json:"id" gorm:"primaryKey"`
+	InitialCash  float64    `json:"initialCash" gorm:"not null"`
+	Cash         float64    `json:"cash" gorm:"not null"`
+	CreatedAt    time.Time  `json:"createdAt"`
+	UpdatedAt    time.Time  `json:"updatedAt"`
 }
 
 func (SimulatedAccount) TableName() string { return "research_v160_simulated_accounts" }
@@ -412,6 +415,9 @@ type Position struct {
 func (Position) TableName() string { return "research_v160_positions" }
 
 type AccountOverview struct {
+	Frozen                    bool       `json:"frozen" gorm:"not null;default:false"`
+	FrozenAt                  *time.Time `json:"frozenAt,omitempty"`
+	FrozenReason              string     `json:"frozenReason"`
 	InitialCash               float64    `json:"initialCash"`
 	Cash                      float64    `json:"cash"`
 	PositionValue             float64    `json:"positionValue"`

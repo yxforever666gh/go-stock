@@ -212,6 +212,11 @@ func (s *Service) enqueueRecommendation(ctx context.Context, recommendation *Rec
 }
 
 func (s *Service) ProcessDue(ctx context.Context) error {
+	if frozen, err := s.repository.Frozen(ctx); err != nil {
+		return err
+	} else if frozen {
+		return nil
+	}
 	// A minute cron tick must not accumulate behind a slow model response. The
 	// next tick simply observes that this scan is still running and exits.
 	if !s.lifecycleScanMu.TryLock() {

@@ -64,6 +64,9 @@ func (a *App) reloadAIAnalysisCron(setting *models.SettingConfig, startup bool) 
 			a.deleteCronEntry(key)
 		}
 	}
+	if a.research1IsFrozen() {
+		return
+	}
 	a.registerResearchLifecycleScanner()
 	deploymentID, deploymentErr := a.cron.AddFunc("@every 1m", func() { a.processCapitalDeployment(false) })
 	if deploymentErr != nil {
@@ -88,6 +91,13 @@ func (a *App) registerResearchLifecycleScanner() {
 }
 
 func (a *App) ensureResearchAccountCrons() {
+	if a.research1IsFrozen() {
+		if entry, exists := a.getCronEntry(researchSnapshotEntryKey); exists {
+			a.cron.Remove(entry)
+			a.deleteCronEntry(researchSnapshotEntryKey)
+		}
+		return
+	}
 	if _, exists := a.getCronEntry(researchSnapshotEntryKey); !exists {
 		entryID, err := a.cron.AddFunc(researchSnapshotCronSpec, func() { a.processScheduledResearchSnapshot() })
 		if err != nil {
@@ -100,6 +110,9 @@ func (a *App) ensureResearchAccountCrons() {
 }
 
 func (a *App) processScheduledResearchSnapshot() {
+	if a.research1IsFrozen() {
+		return
+	}
 	now := time.Now()
 	local := research.ShanghaiTime(now)
 	if local.Hour() < 15 || (local.Hour() == 15 && local.Minute() < 5) {
@@ -161,6 +174,9 @@ func triggerIdentity(source string, now time.Time, suffix string) string {
 }
 
 func (a *App) processCapitalDeployment(startup bool) {
+	if a.research1IsFrozen() {
+		return
+	}
 	if !a.aiDeploymentRunMu.TryLock() {
 		return
 	}
@@ -345,6 +361,9 @@ func (a *App) startClaimedCapitalDeployment(runtime *researchapp.Runtime, select
 }
 
 func (a *App) processDueAILifecycle() {
+	if a.research1IsFrozen() {
+		return
+	}
 	// Protect across runtime replacements as well as ordinary cron overlap. A
 	// slow model call must not let a later one-minute tick process the same due
 	// recommendation through a newly constructed Service instance.
@@ -403,7 +422,7 @@ func (a *App) getAICapitalDeploymentStatusContext(ctx context.Context) (capitalD
 		return capitalDeploymentStatusResponse{}, err
 	}
 	setting := snapshot.Settings
-	enabled := setting != nil && setting.Settings != nil && setting.AICapitalDeploymentEnabled
+	enabled := setting != nil && setting.Settings != nil && setting.AICapitalDeploymentEnabled && !a.research1IsFrozen()
 	now := time.Now()
 	status, err := runtime.Service.CapitalDeploymentStatus(ctx, now)
 	if err != nil {
@@ -444,6 +463,13 @@ func (a *App) getAICapitalDeploymentStatusContext(ctx context.Context) (capitalD
 			response.NextEligibleAt = &next
 		}
 	}
+	if a.research1IsFrozen() {
+		response.State = "frozen"
+		response.Reason = research.FreezeReason
+		response.Enabled = false
+		return response, nil
+	}
+
 	switch {
 	case !enabled:
 		response.State, response.Reason = "disabled", "资金补位策略已关闭"
@@ -554,4 +580,16 @@ func (a *App) getAIAccountPerformanceContext(ctx context.Context) (research.Acco
 		return research.AccountPerformance{}, err
 	}
 	return runtime.Service.AccountPerformance(ctx)
+}
+
+func (a *App) research1IsFrozen() bool {
+	if a.researchDatabase == nil || !a.researchDatabase.Migrator().HasTable(&research.SimulatedAccount{}) {
+		return false
+	}
+	frozen, err := research.NewRepository(a.researchDatabase).Frozen(a.taskContext())
+	if err != nil {
+		logger.SugaredLogger.Errorf("读取研究中心1冻结状态失败: %v", err)
+		return true
+	}
+	return frozen
 }

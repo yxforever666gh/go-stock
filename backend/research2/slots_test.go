@@ -150,6 +150,23 @@ func TestSlotLunchAndEmptyPublication(t *testing.T) {
 	}
 }
 
+func TestSlotDiagnosticNeverPublishesEvenDuringTradingWindow(t *testing.T) {
+	r := slotRepository(t)
+	at := slotClock(9, 35)
+	ctx := context.Background()
+	runner := NewRunner(r, &sequenceAI{responses: []string{fixtureModelResponse}}, fixedEvidence{value: modelCallEvidence(at, "diagnostic fixture")}, testCalendar{})
+	runner.ConfigureReplayClock(func() time.Time { return at }, nil)
+	run, err := runner.RunDiagnostic(ctx, at)
+	if err != nil || run.Status != "success" || run.Published || run.ArchiveReason == "" {
+		t.Fatal(run, err)
+	}
+	var count int64
+	r.db.Model(&Recommendation{}).Count(&count)
+	if count != 0 {
+		t.Fatal("diagnostic published stocks")
+	}
+}
+
 type slotMarket struct {
 	at   time.Time
 	fail bool
@@ -222,4 +239,52 @@ func TestSlotSellFallbackChargesFees(t *testing.T) {
 	if !trade.PriceStale || trade.MarketPrice != 11 || trade.Commission <= 0 || trade.StampDuty <= 0 {
 		t.Fatal(trade)
 	}
+}
+
+func TestSlotFullPipelineEvidenceAnalysisBuyScheduledExitAndPerformance(t *testing.T) {
+	ctx := context.Background()
+	r := slotRepository(t)
+	at := slotClock(9, 30)
+	model := &sequenceAI{responses: []string{fixtureModelResponse}}
+	runner := NewRunner(r, model, fixedEvidence{value: modelCallEvidence(at, "fixture evidence")}, testCalendar{})
+	runner.ConfigureReplayClock(func() time.Time { return at }, nil)
+	market := chainMarket{snapshots: map[string]PriceSnapshot{"sh600000": {Price: 10, PreviousClose: 10}}}
+	trader := NewTradingService(r, market, testCalendar{})
+	trader.now = func() time.Time { return at }
+	if err := trader.ProcessDue(ctx, at); err != nil {
+		t.Fatal(err)
+	}
+	run, err := runner.Run(ctx, at)
+	if err != nil || !run.Published || run.Slot != "09:30" || model.calls != 1 {
+		t.Fatalf("run=%+v calls=%d err=%v", run, model.calls, err)
+	}
+	if err := trader.ProcessDue(ctx, at); err != nil {
+		t.Fatal(err)
+	}
+	items, err := r.WithSlot("09:30").ListRecommendations(ctx, 10, 0)
+	if err != nil || len(items) != 1 || items[0].BuyAt == nil || items[0].BuyAt.Hour() != 9 || items[0].BuyAt.Minute() != 30 {
+		t.Fatal(items, err)
+	}
+	if run.ReportMarkdown == "" {
+		t.Fatal("missing report")
+	}
+	quantity := items[0].Quantity
+	at = at.AddDate(0, 0, 3)
+	market.snapshots["sh600000"] = PriceSnapshot{Price: 11, PreviousClose: 11}
+	if err := trader.ProcessDue(ctx, at); err != nil {
+		t.Fatal(err)
+	}
+	performance, err := r.WithSlot("09:30").Performance(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := trading.CalculateSellCost(11, quantity).NetCashFlow + trading.CalculateBuyCost(10, quantity).NetCashFlow
+	if performance.ClosedTrades != 1 || performance.OpenPositions != 0 || math.Abs(performance.NetProfit-want) > 1e-6 {
+		t.Fatalf("performance=%+v wantPnl=%f", performance, want)
+	}
+	other, err := r.WithSlot(DefaultSlot).Overview(ctx)
+	if err != nil || other.Cash != InitialCash || other.OpenPositions != 0 {
+		t.Fatal(other, err)
+	}
+	t.Log("isolated full chain passed: evidence -> AI -> first publication -> immediate buy -> next-session timed sell -> fee-adjusted performance; production DB untouched")
 }

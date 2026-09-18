@@ -23,7 +23,9 @@ func TestKnowledgeReportLoaderReadsExistingResearch1AndResearch2Reports(t *testi
 	}
 	now := time.Date(2026, 8, 28, 9, 58, 0, 0, time.FixedZone("Asia/Shanghai", 8*3600))
 	r1 := research.AnalysisRun{RunID: "r1-report", ScheduledFor: now, StartedAt: now, Status: "success", FinalReport: "# R1 最终报告"}
-	if err = research.NewRepository(database).CreateAnalysis(context.Background(), &r1); err != nil {
+	// Seed archived history directly; creating a new live analysis now requires
+	// an account whose freeze state can be checked.
+	if err = database.Create(&r1).Error; err != nil {
 		t.Fatal(err)
 	}
 	r2 := research2.AnalysisRun{RunID: "r2-report", TradingDate: "2026-08-28", ScheduledFor: now, StartedAt: now, EvidenceCutoffAt: now, Status: "success", SourceStatusJSON: "[]", ModelAttemptLogJSON: "[]", ReportMarkdown: "# R2 最终报告"}

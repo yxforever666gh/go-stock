@@ -1814,6 +1814,9 @@ components:
       type: object
       required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, currentPositions, pendingBuys, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, valuationStatus, positions]
       properties:
+        frozen: {type: boolean}
+        frozenAt: {type: string, format: date-time, nullable: true}
+        frozenReason: {type: string}
         initialCash: {type: number}
         cash: {type: number}
         positionValue: {type: number}

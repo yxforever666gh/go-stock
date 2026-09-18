@@ -212,6 +212,12 @@ func (r *Runner) Run(ctx context.Context, scheduledFor time.Time) (AnalysisRun, 
 	return r.run(ctx, scheduledFor, "", "", "")
 }
 
+// RunDiagnostic exercises providers, validation and reporting outside the
+// scheduler window. Use disposable storage; diagnostics never publish stocks.
+func (r *Runner) RunDiagnostic(ctx context.Context, at time.Time) (AnalysisRun, error) {
+	return r.run(ctx, at, "diagnostic", "", "")
+}
+
 // Rerun retries a failed attempt only while the day has no valid report.
 func (r *Runner) Rerun(ctx context.Context, scheduledFor time.Time, parentRunID string) (AnalysisRun, error) {
 	return r.run(ctx, scheduledFor, "manual_rerun", "", parentRunID)
@@ -223,7 +229,7 @@ func (r *Runner) run(ctx context.Context, scheduledFor time.Time, triggerSource,
 	now := r.now().In(shanghai())
 	startWindow := time.Date(local.Year(), local.Month(), local.Day(), 9, 30, 0, 0, shanghai())
 	lastStartExclusive := time.Date(local.Year(), local.Month(), local.Day(), 11, 30, 0, 0, shanghai())
-	if now.Before(startWindow) || !now.Before(lastStartExclusive) {
+	if triggerSource != "diagnostic" && (now.Before(startWindow) || !now.Before(lastStartExclusive)) {
 		return AnalysisRun{}, ErrOutsideAnalysisStartWindow
 	}
 	cutoff := now

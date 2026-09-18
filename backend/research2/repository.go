@@ -167,7 +167,7 @@ func (r *Repository) SaveRun(ctx context.Context, run *AnalysisRun) error {
 		return errors.New("research2 analysis run is required")
 	}
 	return research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
-		return tx.Save(run).Error
+		return tx.Omit("archive_reason").Save(run).Error
 	})
 }
 func (r *Repository) RunForDate(ctx context.Context, tradingDate string) (AnalysisRun, bool, error) {

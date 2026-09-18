@@ -110,6 +110,11 @@ func (r *Repository) CheckNewPositionsAllowed(ctx context.Context) error {
 }
 
 func (r *Repository) checkNewPositionsAllowed(ctx context.Context, database *gorm.DB) error {
+	if frozen, err := accountFrozen(database); err != nil {
+		return err
+	} else if frozen {
+		return ErrFrozen
+	}
 	if err := checkAnalysisBuyPermit(ctx); err != nil {
 		return err
 	}
@@ -252,7 +257,12 @@ func (r *Repository) CreateAnalysis(ctx context.Context, run *AnalysisRun) error
 	if strings.TrimSpace(run.DataProfileVersion) == "" {
 		run.DataProfileVersion = CurrentDataProfileVersion
 	}
-	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Create(run).Error })
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := checkAccountUnfrozen(tx); err != nil {
+			return err
+		}
+		return tx.Create(run).Error
+	})
 }
 
 func (r *Repository) SaveAnalysis(ctx context.Context, run *AnalysisRun) error {
@@ -262,7 +272,12 @@ func (r *Repository) SaveAnalysis(ctx context.Context, run *AnalysisRun) error {
 	if strings.TrimSpace(run.DataProfileVersion) == "" {
 		run.DataProfileVersion = CurrentDataProfileVersion
 	}
-	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return tx.Save(run).Error })
+	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := checkAccountUnfrozen(tx); err != nil {
+			return err
+		}
+		return tx.Save(run).Error
+	})
 }
 
 func (r *Repository) UpdateAnalysisAttemptLog(ctx context.Context, runID, value string) error {
@@ -385,6 +400,9 @@ func (r *Repository) SupersedeWaitOpportunities(ctx context.Context, priorIDs []
 
 func (r *Repository) CreateRecommendation(ctx context.Context, recommendation *Recommendation, initialMessages []LifecycleMessage) error {
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := checkAccountUnfrozen(tx); err != nil {
+			return err
+		}
 		if err := tx.Create(recommendation).Error; err != nil {
 			return err
 		}
@@ -731,6 +749,9 @@ func (r *Repository) DeferBuyProcessingError(ctx context.Context, recommendation
 }
 
 func (r *Repository) Sell(ctx context.Context, recommendationID string, quote marketquote.Quote) error {
+	if err := r.CheckResearchAllowed(ctx); err != nil {
+		return err
+	}
 	tradeID, eventID, triggerID := newID(), newID(), newID()
 	return transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		trade, err := sellInTransactionWithTradeID(tx, recommendationID, quote, tradeID)

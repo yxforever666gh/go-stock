@@ -211,6 +211,8 @@ type research2CompactSnapshot struct {
 }
 
 func research2ClosedWindowEnd(startedAt, snapshotAt time.Time) time.Time {
+	localSnapshot := snapshotAt.In(shanghaiDataLocation())
+	closeAt := time.Date(localSnapshot.Year(), localSnapshot.Month(), localSnapshot.Day(), 15, 0, 0, 0, shanghaiDataLocation())
 	location := shanghaiDataLocation()
 	startedAt = startedAt.In(location)
 	snapshotAt = snapshotAt.In(location)
@@ -220,6 +222,9 @@ func research2ClosedWindowEnd(startedAt, snapshotAt time.Time) time.Time {
 	snapshotDuringLunch := !snapshotAt.Before(morningClose) && snapshotAt.Before(afternoonOpen)
 	if startedDuringLunch || snapshotDuringLunch {
 		return morningClose
+	}
+	if !localSnapshot.Before(closeAt) {
+		return closeAt
 	}
 	return snapshotAt.Truncate(time.Minute)
 }

@@ -2,6 +2,9 @@
 import { defineAsyncComponent, nextTick, onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { EventsOff, EventsOn } from "../services/browser-runtime.mjs";
 import { useRoute, useRouter } from 'vue-router'
+import {GetAISimulatedAccount} from '../services/research-api'
+const frozenAccount = ref(null)
+onMounted(async () => { try { const account = await GetAISimulatedAccount(); if (account?.frozen) frozenAccount.value = account } catch { /* Existing child pages show request errors. */ } })
 
 const TAB_ORDER_STORAGE_KEY = 'research-index-tab-order-v163'
 const ResearchYield = defineAsyncComponent(() => import('./researchYield.vue'))
@@ -228,6 +231,7 @@ onBeforeUnmount(() => {
 
 <template>
   <n-card ref="cardRef">
+    <n-alert v-if="frozenAccount" type="warning" :bordered="false" style="margin-bottom:16px">研究中心一已清仓并冻结：自动研究、持仓复核、手动研究和新买入均已停止。历史报告、成交及收益保留供查看。</n-alert>
     <n-tabs type="line" animated @update-value="updateTab" :value="nowTab">
       <n-tab-pane
           v-for="tab in tabs"

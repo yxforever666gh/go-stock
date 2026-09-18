@@ -74,6 +74,9 @@ func (executor appReplayExecutor) CompleteReplay(ctx context.Context, call resea
 }
 
 func (a *App) createResearchReplay(ctx context.Context, request researchaudit.CreateReplayRequest) (researchaudit.ReplayView, error) {
+	if request.SourceOwnerType == researchaudit.OwnerResearch1 && a.research1IsFrozen() {
+		return researchaudit.ReplayView{}, errors.New("研究中心1已冻结，禁止新的AI回放")
+	}
 	snapshot, err := a.researchConfiguration(ctx, request.SourceOwnerType)
 	if err != nil {
 		return researchaudit.ReplayView{}, err

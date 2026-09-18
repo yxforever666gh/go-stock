@@ -114,6 +114,9 @@ func normalizeResearchSettings(center string, cfg *models.SettingConfig) error {
 }
 
 func (a *App) saveResearchConfiguration(ctx context.Context, center string, revision int64, cfg *models.SettingConfig) (researchconfig.Snapshot, error) {
+	if center == researchconfig.Research1 && cfg != nil && cfg.Settings != nil && cfg.AICapitalDeploymentEnabled && a.research1IsFrozen() {
+		return researchconfig.Snapshot{}, fmt.Errorf("%w: 研究中心1已冻结，需先明确解除冻结", researchconfig.ErrInvalidConfig)
+	}
 	if center == researchconfig.Research2 {
 		a.research2ConfigMu.Lock()
 		defer a.research2ConfigMu.Unlock()

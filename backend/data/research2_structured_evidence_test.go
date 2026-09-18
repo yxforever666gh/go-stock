@@ -20,6 +20,19 @@ type research2StructuredSourceFixture struct {
 	candidates []researchevidence.StockCandidate
 }
 
+func TestResearch2ClosedWindowStaysWithinTradingSessions(t *testing.T) {
+	day := time.Date(2026, 9, 18, 0, 0, 0, 0, shanghaiDataLocation())
+	for _, sample := range []struct{ start, snapshot, want time.Duration }{
+		{23 * time.Hour, 16*time.Hour + 12*time.Minute, 15 * time.Hour},
+		{12 * time.Hour, 16 * time.Hour, 11*time.Hour + 30*time.Minute},
+		{9*time.Hour + 37*time.Minute, 9*time.Hour + 37*time.Minute + 30*time.Second, 9*time.Hour + 37*time.Minute},
+	} {
+		if got := research2ClosedWindowEnd(day.Add(sample.start), day.Add(sample.snapshot)); !got.Equal(day.Add(sample.want)) {
+			t.Fatalf("window end=%s want=%s", got, day.Add(sample.want))
+		}
+	}
+}
+
 func (f *research2StructuredSourceFixture) CollectMarket(context.Context, time.Time) ([]researchevidence.SourceDocument, error) {
 	available := f.cutoff
 	return []researchevidence.SourceDocument{{SourceName: "空市场响应", Category: "market", CollectedAt: f.cutoff.Add(time.Second), AvailableAt: &available,

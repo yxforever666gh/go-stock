@@ -26,6 +26,11 @@ const (
 // deterministic with buys and sells; the sequence unique key is the database
 // level idempotency guard.
 func (s *Service) ProcessScheduledFunding(ctx context.Context, now time.Time) (FundingProcessResult, error) {
+	if frozen, err := s.repository.Frozen(ctx); err != nil {
+		return FundingProcessResult{}, err
+	} else if frozen {
+		return FundingProcessResult{Reason: "frozen"}, nil
+	}
 	s.serial.Lock()
 	defer s.serial.Unlock()
 
@@ -165,6 +170,11 @@ func (s *Service) ProcessScheduledFunding(ctx context.Context, now time.Time) (F
 // It is safe to invoke repeatedly after 15:05; the deterministic snapshot ID
 // makes retries after a transient calendar or quote failure idempotent.
 func (s *Service) ProcessScheduledSnapshot(ctx context.Context, now time.Time) (bool, error) {
+	if frozen, err := s.repository.Frozen(ctx); err != nil {
+		return false, err
+	} else if frozen {
+		return false, nil
+	}
 	s.serial.Lock()
 	defer s.serial.Unlock()
 	local := ShanghaiTime(now)
@@ -371,7 +381,14 @@ func (s *Service) accountOverview(ctx context.Context, refreshQuotes bool) (Acco
 			valuationStatus = "partial"
 		}
 	}
+	if account.Frozen {
+		valuationStatus = "frozen"
+		if account.FrozenAt != nil {
+			now = *account.FrozenAt
+		}
+	}
 	return AccountOverview{
+		Frozen: account.Frozen, FrozenAt: account.FrozenAt, FrozenReason: account.FrozenReason,
 		InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: value, NetAssetValue: nav,
 		CumulativeNetContribution: contribution, CurrentPositions: len(positions), PendingBuys: int(pending),
 		NetProfit: netProfit, NetYieldRate: twr, TimeWeightedReturn: twr, CumulativeCapitalReturn: capitalReturn,

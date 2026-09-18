@@ -166,7 +166,9 @@ func (r *Repository) finalizeSlotRun(ctx context.Context, run *AnalysisRun, item
 		run.Published = false
 		run.ChainID = ""
 		run.ArchiveReason = ""
-		if slot == "" || persisted.Format("2006-01-02") != run.TradingDate {
+		if run.TriggerSource == "diagnostic" {
+			run.ArchiveReason = "链路诊断，仅保留报告，不发布推荐或交易"
+		} else if slot == "" || persisted.Format("2006-01-02") != run.TradingDate {
 			run.ArchiveReason = "上午窗口外完成，仅保留报告"
 		} else {
 			chain, err := ensureExecutionChain(tx, slot, run.TradingDate, SlotTime(persisted, slot), persisted)

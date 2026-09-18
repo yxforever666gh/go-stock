@@ -143,6 +143,9 @@ export type AccountOverview = {
   cumulativeCapitalReturn: number
   cumulativeNetContribution: number
   currentPositions: number
+  frozen?: boolean
+  frozenAt?: string | null
+  frozenReason?: string
   initialCash: number
   netAssetValue: number
   netProfit: number

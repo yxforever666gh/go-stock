@@ -319,6 +319,9 @@ var mainMigrations = []migration{
 		verify:      verifyMainSchema27Runtime,
 	},
 	{id: 28, name: "research2_five_minute_accounts", description: "Independent five-minute accounts, scheduled sells and first-result publication with a one-time cash contribution and performance baseline.", definition: mainMigrationV28Definition, apply: applyResearch2Slots, verify: verifyMainSchema28Runtime},
+	{id: 29, name: "research1_liquidate_and_freeze", description: "User-authorized Research1 liquidation and persistent research/trading freeze, preserving historical records and fees.", definition: func() string {
+		return "research1 account frozen/frozen_at/frozen_reason; liquidate open positions at stored valid prices with fees; retire pending work; disable research1 automatic analysis; no Research2 changes"
+	}, apply: applyResearch1Freeze, verify: verifyMainSchema29Runtime},
 }
 
 var legacyStrategyTables = []string{

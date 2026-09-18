@@ -93,6 +93,9 @@ func enqueueTriggerInTransaction(tx *gorm.DB, trigger *AnalysisTrigger) error {
 }
 
 func (r *Repository) EnqueueAnalysisTrigger(ctx context.Context, source, sourceKey, reason string, availableAt time.Time) (AnalysisTrigger, error) {
+	if err := r.CheckResearchAllowed(ctx); err != nil {
+		return AnalysisTrigger{}, err
+	}
 	source, err := normalizedTriggerSource(source)
 	if err != nil {
 		return AnalysisTrigger{}, err
@@ -102,7 +105,12 @@ func (r *Repository) EnqueueAnalysisTrigger(ctx context.Context, source, sourceK
 	}
 	trigger := AnalysisTrigger{TriggerID: newID(), Source: source, SourceKey: strings.TrimSpace(sourceKey), Reason: strings.TrimSpace(reason),
 		Status: TriggerStatusQueued, AvailableAt: availableAt, CoalesceUntil: availableAt}
-	err = transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error { return enqueueTriggerInTransaction(tx, &trigger) })
+	err = transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
+		if err := checkAccountUnfrozen(tx); err != nil {
+			return err
+		}
+		return enqueueTriggerInTransaction(tx, &trigger)
+	})
 	if err != nil {
 		return AnalysisTrigger{}, err
 	}
@@ -191,6 +199,9 @@ func (s *Service) NormalizeQueuedAnalysisTriggerWindows(ctx context.Context) (in
 // eligible for one full run and reserves that queued AnalysisRun. The run row
 // is the database-level singleton guard shared across runtimes/processes.
 func (r *Repository) ClaimAnalysisTriggerBatch(ctx context.Context, now time.Time, owner string, lease time.Duration) (AnalysisTriggerClaim, bool, error) {
+	if err := r.CheckResearchAllowed(ctx); err != nil {
+		return AnalysisTriggerClaim{}, false, err
+	}
 	owner = strings.TrimSpace(owner)
 	if owner == "" {
 		return AnalysisTriggerClaim{}, false, errors.New("analysis lease owner is required")
@@ -202,6 +213,9 @@ func (r *Repository) ClaimAnalysisTriggerBatch(ctx context.Context, now time.Tim
 	reservedRunID := newID()
 	err := transactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		claim = AnalysisTriggerClaim{}
+		if err := checkAccountUnfrozen(tx); err != nil {
+			return err
+		}
 		var active int64
 		if err := tx.Model(&AnalysisRun{}).
 			Where("status IN ? AND trigger_id <> '' AND (lease_expires_at IS NULL OR lease_expires_at > ?)", []string{"queued", "running"}, now).
