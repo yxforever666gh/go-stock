@@ -69,7 +69,7 @@ onMounted(refresh)
   <n-space vertical>
     <n-alert type="info" :bordered="false">每五分钟独立研究；第一份成功落盘报告进入对应时间账户，立即按评分和可用现金买入，每账户每天最多5只；当前现金不足一手时跳过并尝试后续股票。旧持仓在账户对应刻度独立定时卖出；后到报告仅在AI分析报告中保留。</n-alert>
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">每次买入以剩余现金÷剩余名额为分配目标；目标不足一手时，可提高到一手，含费总成本不得超过当前可用现金。成交后重新分配余款，资金不足不借款。当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
+      <n-text depth="3">每个时间段使用独立账户。本分区以本轮报告落盘时的可用现金为基准：一手含费成本达到或超过五分之一时买一手，其余成交严格低于五分之一；任何成交均不得超过当前可用现金，不借款。当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">

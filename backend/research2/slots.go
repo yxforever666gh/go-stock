@@ -315,7 +315,15 @@ func (r *Repository) finalizeSlotRun(ctx context.Context, run *AnalysisRun, item
 			} else if permissionErr != nil {
 				run.ArchiveReason = "自动研究已关闭，仅保留报告"
 			} else {
-				result := tx.Model(&ExecutionChain{}).Where("chain_id = ? AND winner_run_id = ?", chain.ChainID, "").Updates(map[string]any{"winner_run_id": run.RunID, "latest_run_id": run.RunID, "root_run_id": run.RunID, "status": "running", "target_slots": DailyTargetSlots})
+				updates := map[string]any{"winner_run_id": run.RunID, "latest_run_id": run.RunID, "root_run_id": run.RunID, "status": "running", "target_slots": DailyTargetSlots}
+				if allocationBaseCapturePending(chain.AllocationBaseCash) {
+					var account Account
+					if err := tx.Where("slot = ?", slot).First(&account).Error; err != nil {
+						return err
+					}
+					updates["allocation_base_cash"] = account.Cash
+				}
+				result := tx.Model(&ExecutionChain{}).Where("chain_id = ? AND winner_run_id = ?", chain.ChainID, "").Updates(updates)
 				if result.Error != nil {
 					return result.Error
 				}

@@ -322,6 +322,7 @@ var mainMigrations = []migration{
 	{id: 29, name: "research1_liquidate_and_freeze", description: "User-authorized Research1 liquidation and persistent research/trading freeze, preserving historical records and fees.", definition: func() string {
 		return "research1 account frozen/frozen_at/frozen_reason; liquidate open positions at stored valid prices with fees; retire pending work; disable research1 automatic analysis; no Research2 changes"
 	}, apply: applyResearch1Freeze, verify: verifyMainSchema29Runtime},
+	{id: 30, name: "research2_allocation_base_cash", description: "Persists a new Research Center 2 slot chain's winning-report cash snapshot for fixed one-fifth allocation while retaining NULL for historical and already-running chains.", definition: mainMigrationV30Definition, apply: applyResearch2AllocationBaseCash, verify: verifyMainSchema30Runtime},
 }
 
 var legacyStrategyTables = []string{

@@ -1,7 +1,7 @@
 <script setup>
 import {computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
-import {RESEARCH2_SLOTS, research2SlotBuyLabel, research2SlotReportLabel, validResearch2Slot} from '../utils/research2-slots.js'
+import {RESEARCH2_SLOTS, research2SlotBuyLabel, validResearch2Slot} from '../utils/research2-slots.js'
 import {usePolling} from '../composables/usePolling.js'
 import {ListResearch2Slots} from '../services/research2-api'
 import {EventsOff, EventsOn} from '../services/browser-runtime.mjs'
@@ -22,32 +22,19 @@ const selectedSlotInfo = computed(() => RESEARCH2_SLOTS.find(slot => slot.value 
 const selectedSlotState = computed(() => slotStates.value.find(item => item.slot === selectedSlot.value))
 const slotOptions = computed(() => RESEARCH2_SLOTS.map(slot => {
  const state = slotStates.value.find(item => item.slot === slot.value)
- const position = Number(state?.openPositionCount || 0)
- const summary = [research2SlotReportLabel(state), research2SlotBuyLabel(state)]
- if (position > 0) summary.push(`持仓：${position} 只`)
- return {key: slot.value, label: slot.label, summary: summary.join(' · ')}
+ return {key: slot.value, label: slot.label, summary: research2SlotBuyLabel(state)}
 }))
 function renderSlotLabel(option) {
  const current = option.key === selectedSlot.value
  return h('div', {class: 'research2-slot-option-label'}, [
   h('span', {class: 'research2-slot-option-title'}, String(option.label)),
   current ? h('span', {class: 'research2-slot-current-mark'}, '当前') : null,
-  h('span', {class: 'research2-slot-option-summary'}, String(option.summary || '报告：等待落盘 · 买入：等待报告')),
+  h('span', {class: 'research2-slot-option-summary'}, String(option.summary || '买入：等待报告')),
  ])
 }
 function slotNodeProps(option) {
  const current = option.key === selectedSlot.value
  return current ? {class: 'research2-slot-option-current', 'aria-current': 'true'} : {'aria-current': 'false'}
-}
-function reportTagType(state) {
- switch (state?.reportStatus) {
-  case 'success': return state.reportOnTime === false ? 'warning' : 'success'
-  case 'no_recommendation': return 'info'
-  case 'failed': return 'error'
-  case 'cutoff': return 'warning'
-  case 'disabled': return 'default'
-  default: return 'default'
- }
 }
 function buyTagType(state) {
  switch (state?.buyStatus) {
@@ -91,9 +78,7 @@ onBeforeUnmount(() => EventsOff('changeResearch2Tab'))
         </n-button>
       </n-dropdown>
       <div class="research2-slot-status" aria-live="polite">
-        <n-tag size="small" :type="reportTagType(selectedSlotState)" bordered="false">{{ research2SlotReportLabel(selectedSlotState) }}</n-tag>
         <n-tag size="small" :type="buyTagType(selectedSlotState)" bordered="false">{{ research2SlotBuyLabel(selectedSlotState) }}</n-tag>
-        <n-text v-if="Number(selectedSlotState?.openPositionCount || 0) > 0" depth="3">持仓：{{ selectedSlotState.openPositionCount }} 只</n-text>
       </div>
     </div>
     <n-tabs type="line" animated :value="nowTab" @update-value="updateTab">

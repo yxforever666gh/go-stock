@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {RESEARCH2_SLOTS, research2SlotBuyLabel, research2SlotReportLabel, validResearch2Slot} from './research2-slots.js'
+import {RESEARCH2_SLOTS, research2SlotBuyLabel, validResearch2Slot} from './research2-slots.js'
 
 test('morning accounts have 24 exclusive five-minute identities', () => {
   assert.equal(RESEARCH2_SLOTS.length, 24)
@@ -11,13 +11,7 @@ test('morning accounts have 24 exclusive five-minute identities', () => {
   assert.equal(validResearch2Slot('09:50'), true)
 })
 
-test('slot labels distinguish report timeliness from buy execution', () => {
-  assert.equal(research2SlotReportLabel({reportStatus: 'success', reportOnTime: true}), '报告：准时落盘')
-  assert.equal(research2SlotReportLabel({reportStatus: 'success', reportOnTime: false}), '报告：迟到落盘')
-  assert.equal(research2SlotReportLabel({reportStatus: 'no_recommendation', reportOnTime: true}), '报告：准时落盘，无推荐')
-  assert.equal(research2SlotReportLabel({reportStatus: 'cutoff'}), '报告：未在买入窗口落盘')
-  assert.equal(research2SlotReportLabel(), '报告：等待落盘')
-
+test('slot labels show only buy execution', () => {
   assert.equal(research2SlotBuyLabel({buyStatus: 'bought_full', boughtCount: 5, buyTargetCount: 5}), '买入：已买入 5/5')
   assert.equal(research2SlotBuyLabel({buyStatus: 'bought_partial', boughtCount: 3, buyTargetCount: 5}), '买入：已买入 3/5，本轮结束')
   assert.equal(research2SlotBuyLabel({buyStatus: 'awaiting_quote', pendingBuyCount: 2}), '买入：等待行情（2 笔）')

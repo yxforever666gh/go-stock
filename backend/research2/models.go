@@ -91,9 +91,10 @@ type AnalysisRunSummary struct {
 }
 
 type ExecutionChain struct {
-	Slot            string     `json:"slot" gorm:"not null;default:'09:50';uniqueIndex:idx_research2_execution_chains_trading_date,priority:2"`
-	WinnerRunID     string     `json:"winnerRunId"`
-	SellCompletedAt *time.Time `json:"sellCompletedAt,omitempty"`
+	Slot               string     `json:"slot" gorm:"not null;default:'09:50';uniqueIndex:idx_research2_execution_chains_trading_date,priority:2"`
+	WinnerRunID        string     `json:"winnerRunId"`
+	SellCompletedAt    *time.Time `json:"sellCompletedAt,omitempty"`
+	AllocationBaseCash *float64   `json:"-" gorm:"column:allocation_base_cash"`
 
 	ID           uint       `json:"id" gorm:"primaryKey"`
 	ChainID      string     `json:"chainId" gorm:"size:36;uniqueIndex;not null"`

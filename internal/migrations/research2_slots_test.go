@@ -34,7 +34,7 @@ func TestSchema28SeedsCashOnceAndPartitionsHoldings(t *testing.T) {
 	for table, fields := range map[string][]string{
 		"research2_accounts":          {"slot", "baseline_at", "baseline_net_asset_value", "seed_cash"},
 		"research2_analysis_runs":     {"scheduled_slot", "slot", "published", "archive_reason", "persisted_at"},
-		"research2_execution_chains":  {"slot", "winner_run_id", "sell_completed_at"},
+		"research2_execution_chains":  {"slot", "winner_run_id", "sell_completed_at", "allocation_base_cash"},
 		"research2_recommendations":   {"slot", "legacy_slot_exception", "baseline_value", "period_pn_l"},
 		"research2_trades":            {"slot", "quote_at", "price_stale"},
 		"research2_account_snapshots": {"slot"},

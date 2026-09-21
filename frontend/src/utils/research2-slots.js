@@ -8,23 +8,6 @@ export const validResearch2Slot = value => RESEARCH2_SLOTS.some(slot => slot.val
 
 const nonNegativeInteger = value => Math.max(0, Number.parseInt(value, 10) || 0)
 
-export function research2SlotReportLabel(state = {}) {
-  switch (state?.reportStatus) {
-    case 'success':
-      return state.reportOnTime === false ? '报告：迟到落盘' : '报告：准时落盘'
-    case 'no_recommendation':
-      return state.reportOnTime === false ? '报告：迟到落盘，无推荐' : '报告：准时落盘，无推荐'
-    case 'failed':
-      return '报告：分析失败'
-    case 'cutoff':
-      return '报告：未在买入窗口落盘'
-    case 'disabled':
-      return '报告：自动研究已关闭'
-    default:
-      return '报告：等待落盘'
-  }
-}
-
 export function research2SlotBuyLabel(state = {}) {
   const bought = nonNegativeInteger(state?.boughtCount)
   const target = nonNegativeInteger(state?.buyTargetCount)
