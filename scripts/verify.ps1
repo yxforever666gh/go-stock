@@ -239,7 +239,10 @@ try {
                         "./backend/data", "."
                     )
                 }
-                "migrations" { Invoke-GoTest "migration domain tests" @("./internal/migrations") }
+                "migrations" {
+                    Invoke-GoTest "migration domain tests" @("./internal/migrations")
+                    Invoke-GoTest 'bootstrap backup boundary tests' @('./internal/bootstrap') '^TestBackupMainBeforePendingMigration'
+                }
                 "frontend" { Invoke-FrontendTests "frontend runtime tests" }
                 "api" {
                     Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
@@ -247,6 +250,7 @@ try {
                 }
                 "tools" {
                     Invoke-GoTest "tool build checks" @("./tools/...")
+                    Invoke-Step 'release recovery tests' 'pwsh' @('-NoProfile','-File',(Join-Path $ScriptDir 'release-recovery.test.ps1')) $ProjectRoot
                     Invoke-Step 'release pipeline tests' 'pwsh' @('-NoProfile','-File',(Join-Path $ScriptDir 'release-pipeline.test.ps1')) $ProjectRoot
                 }
             }

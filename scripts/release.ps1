@@ -36,6 +36,8 @@ $CurrentPointer = Join-Path $RuntimeRoot "current.json"
 $PidFile = Join-Path $RuntimeRoot "go-stock-web.pid"
 $script:DeploymentReceiptPath = ''
 . (Join-Path $ScriptDir 'release-state.ps1')
+$script:BuildJobPath=''
+. (Join-Path $ScriptDir 'release-build-process.ps1')
 
 function Enter-ReleaseLock {
     New-Item -ItemType Directory -Force -Path $DeploymentsRoot | Out-Null
@@ -165,6 +167,7 @@ function New-Pointer {
 }
 
 function Invoke-Build {
+    Wait-ExistingCandidateBuilds
     $context = Get-Context
     Assert-VersionTagMatchesCommit $context
     $dirty = (& git -C $ProjectRoot status --porcelain)
@@ -228,30 +231,39 @@ function Invoke-CandidateCompiler {
     param($Context, [string]$Binary)
     $buildTime = [DateTime]::UtcNow.ToString("o")
     $ldflags = "-s -w -X go-stock/internal/releaseinfo.Commit=$($Context.Commit) -X go-stock/internal/releaseinfo.BuildTime=$buildTime -X go-stock/internal/releaseinfo.Dirty=false"
-    Invoke-Checked 'go' @('build','-trimpath','-ldflags',$ldflags,'-o',$Binary,'.') 'Candidate build failed'
+    $arguments=@('build','-trimpath','-ldflags',$ldflags,'-o',$Binary,'.')
+    Invoke-TrackedGoCompiler $arguments
     $signature = Get-AuthenticodeSignature -LiteralPath $Binary
     if ([string]$signature.Status -notin @('Valid','NotSigned')) { throw "Candidate has invalid signature: $($signature.Status)" }
 }
 
+function Assert-CandidateArtifactInputs {
+    param($Context,[string]$RecordPath)
+    $existing=Read-BuildArtifact $Context
+    $record=Read-ReleaseState $RecordPath
+    if ($existing.PSObject.Properties.Name -contains 'verificationIdentity' -and
+        ($existing.verificationIdentity -ne (Get-ReleaseInputs $ProjectRoot).identity -or $existing.PSObject.Properties.Name -notcontains 'frontendHash' -or $existing.frontendHash -ne $record.frontendHash)) {
+        throw 'Immutable artifact has different build inputs; restore its toolchain or prepare a new commit/version'
+    }
+}
+
 function Invoke-ReleaseCandidateBuild {
-    param($Context, [string]$RecordPath)
+    param($Context, [string]$RecordPath, [switch]$Worker)
     $record = Read-ReleaseState $RecordPath
     $inputs = Get-ReleaseInputs $ProjectRoot
     if ($record.commit -ne $Context.Commit -or $record.verificationIdentity -ne $inputs.identity -or
         -not $record.frontendHash -or $record.frontendHash -ne (Get-ReleaseTreeHash (Join-Path $ProjectRoot 'frontend/dist'))) { throw 'Candidate inputs have not passed verification' }
     if (@(& git -C $ProjectRoot status --porcelain).Count) { throw 'Candidate build requires a clean checkout' }
+    if (-not $Worker) { Invoke-TrackedCandidateBuild $Context $RecordPath; return }
     if (Test-Path -LiteralPath $Context.ReleaseDir) {
-        $existing = Read-BuildArtifact $Context
-        if ($existing.PSObject.Properties.Name -contains 'verificationIdentity' -and
-            ($existing.verificationIdentity -ne $inputs.identity -or $existing.PSObject.Properties.Name -notcontains 'frontendHash' -or $existing.frontendHash -ne $record.frontendHash)) {
-            throw 'Immutable artifact has different build inputs; restore its toolchain or prepare a new commit/version'
-        }
+        Assert-CandidateArtifactInputs $Context $RecordPath
         Write-Host 'REUSE immutable candidate artifact'
         return
     }
     $stagingRoot = Join-Path $ReleaseRoot '.staging'
     $staging = Assert-ChildPath (Join-Path $stagingRoot ([Guid]::NewGuid().ToString('N'))) $ReleaseRoot
     New-Item -ItemType Directory -Force -Path $staging | Out-Null
+    if($script:BuildJobPath){$job=Read-ReleaseState $script:BuildJobPath;$job.staging=$staging;Write-ReleaseState $script:BuildJobPath $job}
     try {
         $candidate = [pscustomobject]@{Manifest=$Context.Manifest; Commit=$Context.Commit; Binary=(Join-Path $staging 'go-stock-web.exe'); ZoneInfo=(Join-Path $staging 'zoneinfo.zip')}
         Invoke-CandidateCompiler $Context $candidate.Binary
@@ -263,11 +275,14 @@ function Invoke-ReleaseCandidateBuild {
         $pointer | Add-Member -NotePropertyName frontendHash -NotePropertyValue $record.frontendHash
         Write-JSONAtomic (Join-Path $staging 'build.json') $pointer
         if ((& git -C $ProjectRoot rev-parse HEAD).Trim() -ne $Context.Commit -or @(& git -C $ProjectRoot status --porcelain).Count) { throw 'Checkout changed during candidate build' }
+        if((Get-ReleaseInputs $ProjectRoot).identity -ne $inputs.identity -or (Get-ReleaseTreeHash (Join-Path $ProjectRoot 'frontend/dist')) -ne $record.frontendHash){throw 'Full candidate inputs changed during build'}
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Context.ReleaseDir) | Out-Null
         # Same-volume directory rename fails rather than nesting or overwriting.
         [IO.Directory]::Move($staging, $Context.ReleaseDir)
     } finally {
-        if (Test-Path -LiteralPath $staging) { Remove-Item -LiteralPath (Assert-ChildPath $staging $stagingRoot) -Recurse -Force }
+        $canClean=$true
+        if($script:BuildJobPath){$job=Read-ReleaseState $script:BuildJobPath;$canClean=$job.nativeStatus -notin @('launching','running')}
+        if ($canClean -and (Test-Path -LiteralPath $staging)) { Remove-Item -LiteralPath (Assert-ChildPath $staging $stagingRoot) -Recurse -Force }
     }
 }
 
@@ -333,21 +348,24 @@ function Start-Pointer {
     $env:GO_STOCK_MINUTE_DB_PATH = $MinuteDB + $minuteSeparator + "_pragma=cache_size(-524288)&_pragma=journal_mode(WAL)"
     $env:ZONEINFO = $Pointer.zoneInfo
     try {
-        $process = Start-Process -FilePath $Pointer.binary -WorkingDirectory $RunDirectory -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru
+        $process = Invoke-ReleaseDiagnostic 'start process' { Start-Process -FilePath $Pointer.binary -WorkingDirectory $RunDirectory -WindowStyle Hidden -RedirectStandardOutput (Join-Path $logDir "web.out") -RedirectStandardError (Join-Path $logDir "web.err") -PassThru }
     } finally {
         $env:GO_STOCK_WEB_ADDR = $previous.Web; $env:GO_STOCK_DB_PATH = $previous.DB
         $env:GO_STOCK_MINUTE_DB_PATH = $previous.Minute; $env:ZONEINFO = $previous.Zone
     }
     $process.Id | Set-Content -LiteralPath $PidFile
+    Invoke-ReleaseDiagnostic 'readiness wait' {
+    $lastReadinessError=''
     for ($attempt = 0; $attempt -lt 60; $attempt++) {
         if (-not (Get-Process -Id $process.Id -ErrorAction SilentlyContinue)) { throw "Released process exited during startup" }
         try {
             [void](Get-ExactReleaseStatus $Pointer $process.Id)
             return
-        } catch {}
+        } catch { $lastReadinessError=$_.Exception.Message }
         Start-Sleep -Seconds 1
     }
-    throw "Release readiness timed out"
+    throw "Release readiness timed out: $lastReadinessError"
+    }
 }
 
 function Invoke-DatabaseJSON {
@@ -557,6 +575,7 @@ function Complete-SchemaMaintenance {
 }
 
 function Invoke-Deploy {
+    Wait-ExistingCandidateBuilds
     Assert-DatabasePaths
     $context = Get-Context
     Assert-VersionTagMatchesCommit $context
@@ -585,32 +604,32 @@ function Invoke-Deploy {
     $safetyCopy = ""
     try {
         if ($null -ne $schemaTransition -and $schemaTransition.RequiresMigration) {
-            Stop-Current
-            $archive = New-DatabaseArchive $previous $pointer
+            Invoke-ReleaseDiagnostic 'stop process' { Stop-Current }
+            $archive = Invoke-ReleaseDiagnostic 'database archive (including ZIP and verification)' { New-DatabaseArchive $previous $pointer }
             $maintenanceReceipt = New-RollbackReceipt $previous $archive.Path $archive.SHA256
             Write-JSONAtomic $receiptPath $maintenanceReceipt
             Write-ReleaseState (Join-Path $DeploymentsRoot ("maintenance-" + [Guid]::NewGuid().ToString('N') + '.json')) @{
                 status='started'; commit=$pointer.commit; artifactSHA256=$pointer.artifactSHA256; rollbackReceipt=$receiptPath
             }
             $migrationStarted = $true
-            [void](Invoke-DatabaseJSON $pointer.binary @("db", "migrate"))
+            Invoke-ReleaseDiagnostic 'database migrate' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "migrate")) }
             if ($schemaTransition.MainChanged) {
-                [void](Invoke-DatabaseJSON $pointer.binary @("db", "compact", "--database", "main"))
+                Invoke-ReleaseDiagnostic 'database compact' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "compact", "--database", "main")) }
             }
-            [void](Invoke-DatabaseJSON $pointer.binary @("db", "verify"))
+            Invoke-ReleaseDiagnostic 'database verify' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "verify")) }
         } elseif ($null -ne $previous) {
             Write-JSONAtomic $receiptPath (New-RollbackReceipt $previous)
-            Stop-Current
+            Invoke-ReleaseDiagnostic 'stop process' { Stop-Current }
         }
         Write-JSONAtomic $CurrentPointer $pointer
         Start-Pointer $pointer
     } catch {
         $deployError = $_
         try {
-            Stop-Current
+            Invoke-ReleaseDiagnostic 'rollback stop process' { Stop-Current }
             if ($null -ne $previous) {
                 if ($migrationStarted) {
-                    $safetyCopy = Restore-FromReceipt ([pscustomobject]$maintenanceReceipt)
+                    $safetyCopy = Invoke-ReleaseDiagnostic 'rollback restore databases' { Restore-FromReceipt ([pscustomobject]$maintenanceReceipt) }
                 }
                 Write-JSONAtomic $CurrentPointer $previous
                 Start-Pointer $previous

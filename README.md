@@ -104,6 +104,12 @@ pwsh -NoProfile -File scripts/release.ps1 -Command publish -Resume "runtime\depl
 
 记录和分阶段日志保存在 `runtime/deployments`。成功阶段只在提交、工具链和相关产物一致时复用；代码变化需要新发布，已存在的不同输入制品或冲突tag不会被覆盖。推送结果不确定时先核对远端；已运行的相同制品不会再次重启。完整制品存于 `runtime/releases`，构建暂存目录位于同卷的 `runtime/releases/.staging`，成功后原子移入正式目录。
 
+每次命令单独保存 `attempt-*.json`，发布记录引用其历史。最终分别显示发布历时、累计执行、本次执行和两次执行之间的中断间隔；不累加嵌套阶段，不将间隔直接称为人工等待。旧记录或强制中断缺少结束时间时，相应累计值显示 unknown，并列出已知部分；首次预检失败尚无发布记录时，保留独立尝试记录。
+
+候选构建由一次性子进程完成，无常驻服务。`build-job-*.json` 保存输入、工作目录、暂存目录、进程身份、退出码及 stdout/stderr 日志；每15秒报告仍在运行。续跑在验证前先等待身份匹配的活跃构建，完整制品直接复用。进程已消失且没有完整制品才重新执行；PID复用、输入不一致或启动握手结果未知时停止。不要在命令仍运行时手工补构建、改发布记录或再次restart；命令明确失败后使用Resume。失去终端但构建仍活跃时暂存目录会保留。
+
+部署诊断分别记录停机、归档（含ZIP和归档验证）、迁移、数据库整理compact、数据库校验、启动及readiness等待；这些计时不是可以跳过的恢复步骤。涉及schema的开发验收运行 `pwsh -File scripts/verify.ps1 -Tier domain -Domain migrations`，同时覆盖bootstrap备份边界。3—5分钟仍是普通同schema热缓存发布的目标，跨schema维护耗时单独评估，真实效果在下一次授权发布时测量。
+
 独立 `build` 仍适用于已有对应tag的构建；`deploy`/`activate`只部署已核验的现有制品，不再隐式构建；`rollback`和日常`restart`保留。发布脚本改动使用离线流程测试或工具领域验证：
 
 ```powershell

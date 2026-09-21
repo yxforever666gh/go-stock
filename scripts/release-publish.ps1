@@ -237,10 +237,10 @@ function Invoke-Publish {
     $script:PublishGitNetworkSeconds = 0
     $script:DeploymentReceiptPath = ''
     $recordPath = ''
+    $attemptStatus='failed'; $attemptError=''
+    Start-ReleaseAttempt $DeploymentsRoot
     try {
         if ($Resume -and $NotesFile) { throw 'Resume reuses recorded notes; do not supply NotesFile' }
-        Assert-PublishTransport
-        [void](Get-ReleaseInputs $ProjectRoot)
         $head = Get-PublishHead
         if ($Resume) {
             $recordPath = Assert-ChildPath ([IO.Path]::GetFullPath($Resume)) $DeploymentsRoot
@@ -252,9 +252,11 @@ function Invoke-Publish {
                 if (-not $record.commit -and $record.projectRoot -eq $ProjectRoot -and (Test-PublishPreparedCommit $record)) { $recordPath=$file.FullName; break }
             }
         }
-        if (-not $recordPath) { Assert-PublishClean }
-        [void](Assert-PublishBranch)
-        if ($recordPath) { Complete-PublishVersion $recordPath }
+        if ($recordPath) { Connect-ReleaseAttempt $recordPath }
+        Invoke-ReleaseDiagnostic 'preflight transport and tools' { Assert-PublishTransport; [void](Get-ReleaseInputs $ProjectRoot) }
+        Invoke-ReleaseDiagnostic 'reconcile active candidate' { Wait-ExistingCandidateBuilds }
+        Invoke-ReleaseDiagnostic 'preflight checkout and branch' { if (-not $recordPath) { Assert-PublishClean }; [void](Assert-PublishBranch) }
+        if ($recordPath) { Invoke-ReleaseDiagnostic 'prepare version' { Complete-PublishVersion $recordPath } }
         $head = Get-PublishHead
         $context = Get-Context
         if (-not $recordPath -or (Read-ReleaseState $recordPath).status -eq 'complete') {
@@ -266,13 +268,18 @@ function Invoke-Publish {
                 Invoke-Deploy
                 [void](Get-ExactReleaseStatus (Read-BuildArtifact $context))
                 Write-Host "Already published $($context.Manifest.appVersion); no version increment"
+                $attemptStatus='complete'
                 return
             }
         }
         [void](Invoke-PublishGit @('switch','main'))
         [void](Invoke-PublishGit @('merge','--ff-only',$head))
         Restore-PublishBuildInputs
-        if (-not $recordPath) { $recordPath = New-PublishRecord $head $NotesFile; Complete-PublishVersion $recordPath }
+        if (-not $recordPath) {
+            $recordPath = New-PublishRecord $head $NotesFile
+            Connect-ReleaseAttempt $recordPath
+            Invoke-ReleaseDiagnostic 'prepare version' { Complete-PublishVersion $recordPath }
+        }
         $record = Read-ReleaseState $recordPath
         Assert-PublishRecord $recordPath $record
         foreach ($step in $record.steps.Values) { $step.lastRunSeconds=0 }
@@ -297,23 +304,27 @@ function Invoke-Publish {
         $record.remoteRefs = $script:LastPublishRemoteRefs
         $record.processId = [int](Get-ReleaseListener).ProcessId
         if ($script:DeploymentReceiptPath -and (Test-Path -LiteralPath $script:DeploymentReceiptPath)) { $record.rollbackReceipt = $script:DeploymentReceiptPath }
-        $record.totalSeconds = [math]::Round($watch.Elapsed.TotalSeconds,3)
         $record.gitNetworkSeconds = [math]::Round($script:PublishGitNetworkSeconds,3)
         Write-ReleaseState $recordPath $record
         $verifySeconds = ($record.steps.GetEnumerator() | Where-Object { $_.Key -like 'verify-*' -and $_.Key -ne 'verify-frontend production build' } | ForEach-Object { $_.Value.lastRunSeconds } | Measure-Object -Sum).Sum
         Write-Host "Published $($record.version), commit $($record.commit)"
-        Write-Host "Verification ${verifySeconds}s; frontend build $($record.steps['verify-frontend production build'].lastRunSeconds)s; Go build $($record.steps['candidate-build'].lastRunSeconds)s; Git network $($record.gitNetworkSeconds)s; deploy $($record.steps['deploy'].lastRunSeconds)s; total $($record.totalSeconds)s"
+        Write-Host "Verification ${verifySeconds}s; frontend build $($record.steps['verify-frontend production build'].lastRunSeconds)s; candidate stage $($record.steps['candidate-build'].lastRunSeconds)s; Git network $($record.gitNetworkSeconds)s; deploy $($record.steps['deploy'].lastRunSeconds)s"
         Write-Host "Receipt: $recordPath"
+        $attemptStatus='complete'
     } catch {
+        $attemptError=$_.Exception.Message
         if ($recordPath -and (Test-Path -LiteralPath $recordPath)) {
             $record = Read-ReleaseState $recordPath
             $record.status, $record.lastError = 'failed', $_.Exception.Message
-            $record.totalSeconds = [math]::Round($watch.Elapsed.TotalSeconds,3)
             $record.gitNetworkSeconds = [math]::Round($script:PublishGitNetworkSeconds,3)
             if ($script:DeploymentReceiptPath -and (Test-Path -LiteralPath $script:DeploymentReceiptPath)) { $record.rollbackReceipt = $script:DeploymentReceiptPath }
             Write-ReleaseState $recordPath $record
             Write-Host "Resume: pwsh -File scripts/release.ps1 -Command publish -Resume `"$recordPath`""
         }
         throw
-    } finally { $watch.Stop() }
+    } finally {
+        $watch.Stop()
+        Complete-ReleaseAttempt $attemptStatus $attemptError $watch.Elapsed.TotalSeconds
+        $script:ReleaseAttemptPath=''
+    }
 }

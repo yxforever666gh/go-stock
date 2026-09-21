@@ -15,7 +15,7 @@ function Write-ReleaseState {
         $script:FailMaintenanceWrite=''
         throw 'fixture maintenance receipt failure'
     }
-    if ($script:FailReceiptAfterDeploy -and $State.steps['deploy'] -and $State.steps['deploy'].status -eq 'passed') {
+    if ($script:FailReceiptAfterDeploy -and $State.Contains('steps') -and $State.steps['deploy'] -and $State.steps['deploy'].status -eq 'passed') {
         $script:FailReceiptAfterDeploy=$false
         throw 'fixture receipt write failed after deployment'
     }
@@ -75,6 +75,18 @@ function Invoke-CandidateCompiler {
     $script:GoBuilds++;$script:Events.Add('candidate-build')
     if ($script:FailBuild) { throw 'fixture compiler failure' }
     @{manifest=$Context.Manifest;build=@{commit=$Context.Commit;dirty=$false;buildTime='fixture'}} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Binary
+}
+function Start-CandidateWorker {
+    param([string]$Path,$Job)
+    $script:BuildJobPath=$Path
+    $Job.status='running';Write-ReleaseState $Path $Job
+    try {
+        Invoke-ReleaseCandidateBuild (Get-Context) $Job.recordPath -Worker
+        $Job=Read-ReleaseState $Path;$Job.status='passed';$Job.exitCode=0
+    } catch {
+        $failure=$_.Exception.Message
+        $Job=Read-ReleaseState $Path;$Job.status='failed';$Job.exitCode=1;$Job.error=$failure
+    } finally { Write-ReleaseState $Path $Job; $script:BuildJobPath='' }
 }
 function Get-ZoneInfoSource { return (Join-Path $FixtureRoot 'fixture-zone.zip') }
 function Get-ArtifactInspection {
@@ -210,9 +222,13 @@ try {
     Invoke-Publish
     Assert-True ($FrontendBuilds -eq 1 -and $GoBuilds -eq 1 -and $Starts -eq 1 -and $Stops -eq 1 -and $TagCalls -eq 1 -and $PushCalls -eq 1) 'Normal publish duplicated work'
     Assert-True ($Events.IndexOf('candidate-build') -lt $Events.IndexOf('tag') -and $Events.IndexOf('tag') -lt $Events.IndexOf('push') -and $Events.IndexOf('push') -lt $Events.IndexOf('stop')) 'Publish order is wrong'
+    $timed=Read-ReleaseState (Get-FixtureReceipt)
+    $diagnostics=(Read-ReleaseState $timed.attempts[-1]).diagnostics
+    Assert-True ($null -ne $timed.timing.executionSeconds -and $diagnostics.name -contains 'stop process' -and $diagnostics.name -contains 'start process' -and $diagnostics.name -contains 'readiness wait') 'Normal deployment lost timing breakdown'
     $publishedHead=Get-PublishHead
     Invoke-Publish
     Assert-True ((Get-PublishHead) -eq $publishedHead -and $GoBuilds -eq 1 -and $Starts -eq 1) 'Repeated successful publish created an empty version'
+    Assert-True ((Read-ReleaseState (Get-FixtureReceipt)).attempts.Count -eq 2) 'No-op execution lost its attempt record'
     $savedChecked=${function:Invoke-Checked}
     $script:VerifierChildren=0
     function Invoke-Checked {
@@ -355,6 +371,22 @@ try {
     Assert-True ($GoBuilds -eq 0 -and $Stops -eq 0) 'Deploy implicitly rebuilt an incomplete artifact'
     $passed++
 
+    New-ReleaseFixture;Add-DevelopmentCommit;$script:FailPush='before'
+    Assert-Fails {Invoke-Publish} 'failed'
+    $script:FailPush='';$script:RejectProxy=$true
+    Assert-Fails {Resume-Fixture} 'proxy'
+    Assert-True ((Read-ReleaseState (Get-FixtureReceipt)).attempts.Count -eq 2) 'Resume preflight failure was not linked to release'
+    $script:RejectProxy=$false
+    $jobPath=Join-Path $DeploymentsRoot 'build-job-live-fixture.json'
+    $job=@{projectRoot=$ProjectRoot;status='running';nativeStatus='not_started';process=@{pid=42};nativeProcess=$null;inputIdentity=((Get-ReleaseInputs $ProjectRoot).identity+':'+(Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist')));log="$jobPath.log";error=''}
+    Write-ReleaseState $jobPath $job
+    $savedMatcher=${function:Get-MatchingBuildProcess};$script:livePolls=0
+    function Get-MatchingBuildProcess {param($Identity);if(-not $Identity){return $null};$script:livePolls++;if($script:livePolls -eq 1){return [Diagnostics.Process]::GetCurrentProcess()};return $null}
+    Resume-Fixture
+    Set-Item Function:Get-MatchingBuildProcess $savedMatcher
+    Assert-True ($livePolls -eq 2 -and $GoBuilds -eq 1 -and $FrontendBuilds -eq 1) 'Surviving worker caused concurrent or duplicate build'
+    $passed++
+
     foreach($failure in @('migration','startup')) {
         New-ReleaseFixture
         $manifest=Get-Content $ManifestPath -Raw|ConvertFrom-Json;$manifest.mainSchemaVersion=27
@@ -365,6 +397,10 @@ try {
         Assert-True ($Events.IndexOf('archive') -ge 0 -and $Events.IndexOf('archive') -lt $Events.IndexOf('database-migrate') -and $Events.Contains('restore')) 'Schema rollback order is wrong'
         Assert-True ((Get-Content $MainDB -Raw).Trim() -eq 'original main' -and (Get-Content $MinuteDB -Raw).Trim() -eq 'original minute') 'Rollback did not restore both fixture databases'
         Assert-True ((Get-Content $CurrentPointer -Raw|ConvertFrom-Json).appVersion -eq '1.0.0') 'Schema rollback lost prior pointer'
+        $timed=Read-ReleaseState (Get-FixtureReceipt)
+        $names=(Read-ReleaseState $timed.attempts[-1]).diagnostics.name
+        Assert-True ($names -contains 'database archive (including ZIP and verification)' -and $names -contains 'database migrate' -and $names -contains 'rollback restore databases') 'Schema deployment lost diagnostic timings'
+        if($failure -eq 'startup'){Assert-True ($names -contains 'database compact' -and $names -contains 'database verify') 'Database maintenance timings missing'}
         $passed++
     }
 
