@@ -6,12 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
-$ReleaseManifestPath = Join-Path $ProjectRoot "internal\releaseinfo\release_manifest.json"
-if (-not (Test-Path -LiteralPath $ReleaseManifestPath -PathType Leaf)) { throw "Release manifest is missing: $ReleaseManifestPath" }
-$ReleaseManifest = Get-Content -LiteralPath $ReleaseManifestPath -Raw | ConvertFrom-Json
-$AppVersion = [string]$ReleaseManifest.appVersion
-if ([string]::IsNullOrWhiteSpace($AppVersion)) { throw "Release manifest appVersion is missing" }
-if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = "Go-Stock $AppVersion" }
+if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = "启动项目" }
 $LauncherName = ([char]0x542F).ToString() + [char]0x52A8 + [char]0x9879 + [char]0x76EE + ".cmd"
 $Launcher = Join-Path $ProjectRoot $LauncherName
 $IconPath = Join-Path $ProjectRoot "build\app.ico"
@@ -27,7 +22,7 @@ $Shortcut.TargetPath = $Launcher
 $Shortcut.Arguments = ""
 $Shortcut.WorkingDirectory = $ProjectRoot
 $Shortcut.IconLocation = $IconPath + ",0"
-$Shortcut.Description = "Start Go-Stock $AppVersion and open Research Center"
+$Shortcut.Description = "启动 Go-Stock 最新源码并打开研究中心2"
 $Shortcut.Save()
 
 Write-Output $ShortcutPath

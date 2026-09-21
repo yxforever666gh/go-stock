@@ -1,7 +1,7 @@
 package main
 
 import (
-	"embed"
+	_ "embed"
 	"flag"
 	"fmt"
 	log "go-stock/backend/logger"
@@ -13,9 +13,6 @@ import (
 	"runtime/debug"
 	_ "time/tzdata"
 )
-
-//go:embed all:frontend/dist
-var assets embed.FS
 
 //go:embed build/appicon.png
 var icon []byte

@@ -49,6 +49,7 @@ Thumbs.db
 /runtime/releases/
 /runtime/deployments/
 /runtime/logs/
+/runtime/source-dev/
 /runtime/current.json
 /runtime/go-stock-web.pid
 data.test

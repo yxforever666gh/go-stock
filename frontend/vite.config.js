@@ -1,6 +1,23 @@
 import {defineConfig} from 'vite'
 import vue from '@vitejs/plugin-vue'
 
+const backendTarget = process.env.GO_STOCK_DEV_BACKEND || 'http://127.0.0.1:34115'
+const backendOrigin = new URL(backendTarget).origin
+
+function backendProxy(websocket = false) {
+    return {
+        target: backendTarget,
+        changeOrigin: true,
+        ws: websocket,
+        rewriteWsOrigin: websocket,
+        configure(proxy) {
+            const rewriteOrigin = request => request.setHeader('origin', backendOrigin)
+            proxy.on('proxyReq', rewriteOrigin)
+            if (websocket) proxy.on('proxyReqWs', rewriteOrigin)
+        },
+    }
+}
+
 function packageNameFromId(id) {
     const marker = '/node_modules/'
     const index = id.lastIndexOf(marker)
@@ -102,19 +119,11 @@ export default defineConfig({
       port: 5173,
       strictPort: true,
       proxy: {
-          '/api': {
-              target: 'http://127.0.0.1:34115',
-              changeOrigin: true,
-              ws: true
-          },
-          '/livez': {
-              target: 'http://127.0.0.1:34115',
-              changeOrigin: true
-          },
-          '/readyz': {
-              target: 'http://127.0.0.1:34115',
-              changeOrigin: true
-          }
+          '/api': backendProxy(true),
+          '/livez': backendProxy(),
+          '/readyz': backendProxy(),
+          '/build': backendProxy(),
+          '/favicon.ico': backendProxy(),
       }
   }
 })
