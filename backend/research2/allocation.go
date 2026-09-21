@@ -83,3 +83,10 @@ func sizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationB
 	}
 	return quantity, cost, nil
 }
+
+// SizeFixedAllocationBuy exposes the fixed one-fifth sizing rule to the
+// durable capital-rebase migration. It deliberately shares the production
+// implementation so a historical replay cannot drift from live execution.
+func SizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationBaseCash float64) (int64, trading.CostBreakdown, error) {
+	return sizeFixedAllocationBuy(code, marketPrice, availableCash, allocationBaseCash)
+}

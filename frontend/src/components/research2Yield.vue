@@ -54,11 +54,12 @@ onMounted(refresh)
 <template>
   <n-space vertical size="large">
     <n-grid :cols="4" :x-gap="12" :y-gap="12" responsive="screen"><n-gi v-for="item in [
-      ['账户区间', props.slot], ['统计基准', dateTime(performance?.baselineAt)], ['基准净值', formatMoney(performance?.baselineNetAssetValue)], ['账户净值', formatMoney(performance?.netAssetValue)], ['可用现金', formatMoney(performance?.cash)], ['累计净收益', formatMoney(performance?.netProfit), yieldClass(performance?.netProfit)], ['累计收益率', rate(performance?.returnRate), yieldClass(performance?.returnRate)],
-      ['已平仓', `${formatInteger(performance?.closedTrades)} 笔`], ['胜率', rate(performance?.winRate)], ['总费用', formatMoney(performance?.totalFees)], ['最大回撤', drawdownRate(performance?.maxDrawdown), performance?.maxDrawdown === null || performance?.maxDrawdown === undefined ? '' : 'yield-negative'],
+      ['账户区间', props.slot], ['初始本金', formatMoney(performance?.initialContribution)], ['9月21日追加', formatMoney(performance?.topUpContribution)], ['累计投入本金', formatMoney(performance?.cumulativeExternalCapital)],
+      ['历史内部划拨', formatMoney(performance?.netInternalTransfer)], ['账户净值', formatMoney(performance?.netAssetValue)], ['可用现金', formatMoney(performance?.cash)], ['累计净收益', formatMoney(performance?.netProfit), yieldClass(performance?.netProfit)], ['累计收益率', rate(performance?.cumulativeCapitalReturn ?? performance?.returnRate), yieldClass(performance?.cumulativeCapitalReturn ?? performance?.returnRate)],
+      ['已平仓', `${formatInteger(performance?.closedTrades)} 笔`], ['胜率', rate(performance?.winRate)], ['总费用', formatMoney(performance?.totalFees)], ['交易事件最大回撤', drawdownRate(performance?.maxDrawdown), performance?.maxDrawdown === null || performance?.maxDrawdown === undefined ? '' : 'yield-negative'],
       ['卖出前+5%', `${formatInteger(performance?.hitFiveCount)} 次`], ['次日全天涨停', `${formatInteger(performance?.hitLimitUpCount)} 次`], ['曾低于-3%', `${formatInteger(performance?.hitMinusThreeCount)} 次`], ['报告时效', `准时 ${formatInteger(performance?.onTimeReports)} / 迟到 ${formatInteger(performance?.lateReports)}`]
     ]" :key="item[0]"><n-card size="small"><n-statistic :label="item[0]" :value="item[1]" :class="item[2]"/></n-card></n-gi></n-grid>
-    <n-alert type="info" :bordered="false">{{assessment}}。账户收益从分区迁移基准时刻重新计算，追加本金不计盈利；个股明细保留原始持有期收益。+5%、全天涨停和-3%风险分别统计，不混作同一成功标准。</n-alert>
+    <n-alert type="info" :bordered="false">{{assessment}}。收益率 =（账户净值 − 累计外部本金 − 历史内部划拨净额）÷ 累计外部本金；2026-09-21 开盘前每个账户追加 1 万元。历史共享资金划拨不计盈利，也不扩大本金分母；个股明细保留原始持有期收益。+5%、全天涨停和-3%风险分别统计，不混作同一成功标准。</n-alert>
     <n-flex justify="space-between" align="center"><n-text depth="3">账户指标与未平仓收益按最新行情估值；未买入股票的收益显示为“--”，不计入成交收益。点击股票可查看持仓期分钟走势。</n-text><n-button :loading="loading" @click="refresh">刷新</n-button></n-flex>
     <n-data-table :columns="columns" :data="rows" :loading="loading" :scroll-x="920" :row-key="row => row.recommendationId"/>
     <ResearchHistoryFooter :count="rows.length" :has-more="hasMore" :loading="listLoading" :error="listError" @load-more="history.loadMore"/>

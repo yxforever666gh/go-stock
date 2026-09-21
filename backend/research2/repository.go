@@ -579,15 +579,30 @@ func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
 		positionValue += livePositionValue(item)
 	}
 	nav := account.Cash + positionValue
-	basis := account.InitialCash
-	if account.BaselineAt != nil {
-		basis = account.BaselineNetAssetValue
+	summary, err := research2CapitalSummary(ctx, r.db, r.accountSlot(), account.InitialCash)
+	if err != nil {
+		return AccountOverview{}, err
 	}
-	returnRate := 0.0
-	if basis > 0 {
-		returnRate = (nav - basis) / basis
+	if !summary.ledger && account.BaselineAt != nil && account.BaselineNetAssetValue > 0 {
+		summary.external = account.BaselineNetAssetValue
 	}
-	return AccountOverview{Slot: r.accountSlot(), BaselineAt: account.BaselineAt, BaselineNetAssetValue: basis, InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: positionValue, NetAssetValue: nav, NetProfit: nav - basis, ReturnRate: returnRate, OpenPositions: int64(len(active)), PendingBuys: pending, LastValuedAt: time.Now()}, nil
+	if err := validateCapitalSummary(summary); err != nil {
+		return AccountOverview{}, err
+	}
+	basis := summary.external
+	valuationBasis := CapitalValuationBasisLegacy
+	if summary.ledger {
+		valuationBasis = CapitalValuationBasisLedger
+	}
+	profit := summary.profit(nav)
+	returnRate := summary.rate(nav)
+	return AccountOverview{
+		Slot: r.accountSlot(), BaselineAt: account.BaselineAt, BaselineNetAssetValue: basis,
+		InitialCash: account.InitialCash, Cash: account.Cash, PositionValue: positionValue, NetAssetValue: nav,
+		NetProfit: profit, ReturnRate: returnRate, OpenPositions: int64(len(active)), PendingBuys: pending, LastValuedAt: time.Now(),
+		InitialContribution: summary.initial, TopUpContribution: summary.topUp, CumulativeExternalCapital: summary.external,
+		NetInternalTransfer: summary.transfer, CumulativeCapitalReturn: returnRate, ValuationBasis: valuationBasis,
+	}, nil
 }
 
 func (r *Repository) SaveSnapshot(ctx context.Context, kind string, at time.Time) (AccountSnapshot, error) {
@@ -598,7 +613,15 @@ func (r *Repository) SaveSnapshot(ctx context.Context, kind string, at time.Time
 	item := AccountSnapshot{Slot: r.accountSlot(), SnapshotID: uuid.NewString(), ValuedAt: at, TradingDate: at.In(shanghai()).Format("2006-01-02"), SnapshotType: kind, Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate}
 	err = research2TransactionWithWriteRetry(ctx, r.db, func(tx *gorm.DB) error {
 		item.ID = 0
-		return tx.Create(&item).Error
+		if err := tx.Create(&item).Error; err != nil {
+			return err
+		}
+		if overview.ValuationBasis != CapitalValuationBasisLedger || !research2CapitalLedgerAvailable(tx) {
+			return nil
+		}
+		ledger := newAccountLedgerSnapshot(r.accountSlot(), kind, at, overview)
+		ledger.SnapshotID = "ledger-" + item.SnapshotID
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ledger).Error
 	})
 	return item, err
 }
@@ -610,13 +633,14 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	}
 	result := Performance{AccountOverview: overview}
 	period := r.accountQuery(ctx)
-	if overview.BaselineAt != nil {
+	ledgerBacked := overview.ValuationBasis == CapitalValuationBasisLedger
+	if !ledgerBacked && overview.BaselineAt != nil {
 		period = period.Where("sell_at >= ?", *overview.BaselineAt)
 	}
 	trades := r.accountQuery(ctx)
 	curve := r.accountQuery(ctx)
 	reports := r.db.WithContext(ctx).Where("slot = ? AND published = ?", r.accountSlot(), true)
-	if overview.BaselineAt != nil {
+	if !ledgerBacked && overview.BaselineAt != nil {
 		trades = trades.Where("traded_at >= ?", *overview.BaselineAt)
 		curve = curve.Where("valued_at >= ?", *overview.BaselineAt)
 		reports = reports.Where("persisted_at >= ?", *overview.BaselineAt)
@@ -640,17 +664,34 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_minus_three = ?", true).Count(&result.HitMinusThreeCount).Error
 	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", true, []string{"success", "no_recommendation"}).Count(&result.OnTimeReports).Error
 	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", false, []string{"success", "no_recommendation"}).Count(&result.LateReports).Error
-	if err = curve.Order("valued_at ASC").Limit(500).Find(&result.Curve).Error; err != nil {
-		return result, err
+	if ledgerBacked && research2CapitalLedgerAvailable(r.db) {
+		if err = r.accountQuery(ctx).Order("valued_at ASC, id ASC").Limit(500).Find(&result.Curve).Error; err != nil {
+			return result, err
+		}
+	} else {
+		var raw []AccountSnapshot
+		if err = curve.Order("valued_at ASC, id ASC").Limit(500).Find(&raw).Error; err != nil {
+			return result, err
+		}
+		result.Curve = make([]AccountLedgerSnapshot, 0, len(raw))
+		for _, item := range raw {
+			result.Curve = append(result.Curve, accountLedgerSnapshotFromRaw(item))
+		}
 	}
-	result.Curve = append(result.Curve, AccountSnapshot{Slot: r.accountSlot(), ValuedAt: overview.LastValuedAt, TradingDate: overview.LastValuedAt.In(shanghai()).Format("2006-01-02"), SnapshotType: "current", Cash: overview.Cash, PositionValue: overview.PositionValue, NetAssetValue: overview.NetAssetValue, NetProfit: overview.NetProfit, ReturnRate: overview.ReturnRate})
+	current := newAccountLedgerSnapshot(r.accountSlot(), "current", overview.LastValuedAt, overview)
+	current.SnapshotID = "current-" + r.accountSlot()
+	result.Curve = append(result.Curve, current)
 	peak, maxDrawdown := 0.0, 0.0
 	for _, point := range result.Curve {
-		if point.NetAssetValue > peak {
-			peak = point.NetAssetValue
+		wealth := 1 + point.CumulativeCapitalReturn
+		if wealth <= 0 {
+			wealth = 1e-12
+		}
+		if wealth > peak {
+			peak = wealth
 		}
 		if peak > 0 {
-			drawdown := (peak - point.NetAssetValue) / peak
+			drawdown := (peak - wealth) / peak
 			if drawdown > maxDrawdown {
 				maxDrawdown = drawdown
 			}

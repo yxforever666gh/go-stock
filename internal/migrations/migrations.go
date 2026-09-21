@@ -323,6 +323,7 @@ var mainMigrations = []migration{
 		return "research1 account frozen/frozen_at/frozen_reason; liquidate open positions at stored valid prices with fees; retire pending work; disable research1 automatic analysis; no Research2 changes"
 	}, apply: applyResearch1Freeze, verify: verifyMainSchema29Runtime},
 	{id: 30, name: "research2_allocation_base_cash", description: "Persists a new Research Center 2 slot chain's winning-report cash snapshot for fixed one-fifth allocation while retaining NULL for historical and already-running chains.", definition: mainMigrationV30Definition, apply: applyResearch2AllocationBaseCash, verify: verifyMainSchema30Runtime},
+	{id: 31, name: "research2_capital_ledger_rebase", description: "Rebuilds Research Center 2 slot capital from 10000 initial capital, a 2026-09-21 pre-open top-up and neutral legacy-pool transfers; recalculates same-day fixed-fifth executions from stored prices.", definition: mainMigrationV31Definition, apply: applyResearch2CapitalLedger, verify: verifyMainSchema31Runtime},
 }
 
 var legacyStrategyTables = []string{

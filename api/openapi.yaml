@@ -2307,7 +2307,7 @@ components:
         trades: {type: array, items: {$ref: "#/components/schemas/Research2Trade"}}
     Research2AccountOverview:
       type: object
-      required: [initialCash, cash, positionValue, netAssetValue, netProfit, returnRate, openPositions, pendingBuys, lastValuedAt]
+      required: [initialCash, cash, positionValue, netAssetValue, netProfit, returnRate, openPositions, pendingBuys, lastValuedAt, initialContribution, topUpContribution, cumulativeExternalCapital, netInternalTransfer, cumulativeCapitalReturn, valuationBasis]
       properties:
         slot: {type: string}
         baselineAt: {type: string, format: date-time, nullable: true}
@@ -2321,6 +2321,12 @@ components:
         openPositions: {type: integer, format: int64}
         pendingBuys: {type: integer, format: int64}
         lastValuedAt: {type: string, format: date-time}
+        initialContribution: {type: number}
+        topUpContribution: {type: number}
+        cumulativeExternalCapital: {type: number}
+        netInternalTransfer: {type: number}
+        cumulativeCapitalReturn: {type: number}
+        valuationBasis: {type: string}
     Research2AccountSnapshot:
       type: object
       required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, netProfit, returnRate]
@@ -2351,4 +2357,21 @@ components:
             hitMinusThreeCount: {type: integer, format: int64}
             onTimeReports: {type: integer, format: int64}
             lateReports: {type: integer, format: int64}
-            curve: {type: array, items: {$ref: "#/components/schemas/Research2AccountSnapshot"}}
+            curve: {type: array, items: {$ref: "#/components/schemas/Research2AccountLedgerSnapshot"}}
+    Research2AccountLedgerSnapshot:
+      type: object
+      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeExternalCapital, netInternalTransfer, netProfit, cumulativeCapitalReturn, valuationBasis]
+      properties:
+        slot: {type: string}
+        snapshotId: {type: string}
+        valuedAt: {type: string, format: date-time}
+        tradingDate: {type: string, format: date}
+        snapshotType: {type: string}
+        cash: {type: number}
+        positionValue: {type: number}
+        netAssetValue: {type: number}
+        cumulativeExternalCapital: {type: number}
+        netInternalTransfer: {type: number}
+        netProfit: {type: number}
+        cumulativeCapitalReturn: {type: number}
+        valuationBasis: {type: string}

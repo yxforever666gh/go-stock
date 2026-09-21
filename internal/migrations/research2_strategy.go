@@ -42,8 +42,11 @@ func verifyMainSchema13Runtime(database *gorm.DB) error {
 	if err := database.First(&account, 1).Error; err != nil {
 		return err
 	}
-	if math.Abs(account.InitialCash-research2.InitialCash) > 1e-8 {
-		return fmt.Errorf("research2 initial cash is %.2f, expected %.2f", account.InitialCash, research2.InitialCash)
+	// Schema 31 replaces the former 12000 account field as the performance
+	// source with a capital ledger and resets the historical initial capital to
+	// 10000. Earlier schemas remain valid with their published 12000 value.
+	if math.Abs(account.InitialCash-research2.InitialCash) > 1e-8 && math.Abs(account.InitialCash-research2CapitalInitialAmount) > 1e-8 {
+		return fmt.Errorf("research2 initial cash is %.2f, expected a published capital basis", account.InitialCash)
 	}
 	if account.Cash < -1e-8 {
 		return errors.New("research2 account cash is negative")

@@ -199,6 +199,10 @@ test('research2 yield keeps unbought rows out of displayed returns regardless of
     assert.equal(state.columns.find(column => column.key === 'quantity').render(rows[3]), '100')
     assert.notEqual(state.columns.find(column => column.key === 'netPnl').render(rows[3]), '--')
     assert.equal(state.hasBuy(rows[3]), true)
+    const source = await readFile(new URL('research2Yield.vue', import.meta.url), 'utf8')
+    assert.match(source, /累计投入本金/)
+    assert.match(source, /历史内部划拨/)
+    assert.match(source, /交易事件最大回撤/)
   } finally {
     app.unmount()
     delete globalThis.__researchPageFixtures

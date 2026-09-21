@@ -1033,19 +1033,41 @@ export type RecommendationDetail = {
   trades: Array<SimulatedTrade>
 }
 
+export type Research2AccountLedgerSnapshot = {
+  cash: number
+  cumulativeCapitalReturn: number
+  cumulativeExternalCapital: number
+  netAssetValue: number
+  netInternalTransfer: number
+  netProfit: number
+  positionValue: number
+  slot?: string
+  snapshotId: string
+  snapshotType: string
+  tradingDate: string
+  valuationBasis: string
+  valuedAt: string
+}
+
 export type Research2AccountOverview = {
   baselineAt?: string | null
   baselineNetAssetValue?: number
   cash: number
+  cumulativeCapitalReturn: number
+  cumulativeExternalCapital: number
   initialCash: number
+  initialContribution: number
   lastValuedAt: string
   netAssetValue: number
+  netInternalTransfer: number
   netProfit: number
   openPositions: number
   pendingBuys: number
   positionValue: number
   returnRate: number
   slot?: string
+  topUpContribution: number
+  valuationBasis: string
 }
 
 export type Research2AccountSnapshot = {
@@ -1161,7 +1183,7 @@ export type Research2ExecutionChain = {
 
 export type Research2Performance = Research2AccountOverview & {
   closedTrades: number
-  curve: Array<Research2AccountSnapshot>
+  curve: Array<Research2AccountLedgerSnapshot>
   hitFiveCount: number
   hitLimitUpCount: number
   hitMinusThreeCount: number

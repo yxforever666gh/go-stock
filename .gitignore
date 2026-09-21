@@ -57,6 +57,7 @@ data.test
 /.playwright-mcp/
 /.playwright-cli/
 /output/
+/A股历史分钟线数据包/
 
 # Local workspace
 .claude/settings.local.json

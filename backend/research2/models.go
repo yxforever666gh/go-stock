@@ -259,6 +259,48 @@ type AccountSnapshot struct {
 
 func (AccountSnapshot) TableName() string { return "research2_account_snapshots" }
 
+// AccountCapitalEvent records capital supplied to an isolated slot and the
+// neutral legacy-pool adjustments required to partition the pre-slot history.
+// Trading cash flows remain in research2_trades so contributions can never be
+// mistaken for strategy profit.
+type AccountCapitalEvent struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	EventID     string    `json:"eventId" gorm:"size:64;uniqueIndex;not null"`
+	Slot        string    `json:"slot" gorm:"size:5;index:idx_research2_capital_events_slot_time,priority:1;not null"`
+	EventType   string    `json:"eventType" gorm:"size:32;index;not null"`
+	Amount      float64   `json:"amount" gorm:"not null"`
+	External    bool      `json:"external" gorm:"not null"`
+	Source      string    `json:"source" gorm:"size:64;not null"`
+	EffectiveAt time.Time `json:"effectiveAt" gorm:"index:idx_research2_capital_events_slot_time,priority:2;not null"`
+	TradingDate string    `json:"tradingDate" gorm:"size:10;index;not null"`
+	CreatedAt   time.Time `json:"createdAt"`
+}
+
+func (AccountCapitalEvent) TableName() string { return "research2_account_capital_events" }
+
+// AccountLedgerSnapshot is the derived, versioned valuation curve used for
+// account return and event-based drawdown. The older AccountSnapshot rows are
+// retained as raw audit history and are never rewritten by a capital rebase.
+type AccountLedgerSnapshot struct {
+	ID                        uint      `json:"id" gorm:"primaryKey"`
+	SnapshotID                string    `json:"snapshotId" gorm:"size:64;uniqueIndex;not null"`
+	Slot                      string    `json:"slot" gorm:"size:5;index:idx_research2_ledger_snapshots_slot_time,priority:1;not null"`
+	ValuedAt                  time.Time `json:"valuedAt" gorm:"index:idx_research2_ledger_snapshots_slot_time,priority:2;not null"`
+	TradingDate               string    `json:"tradingDate" gorm:"size:10;index;not null"`
+	SnapshotType              string    `json:"snapshotType" gorm:"size:32;index;not null"`
+	Cash                      float64   `json:"cash" gorm:"not null"`
+	PositionValue             float64   `json:"positionValue" gorm:"not null"`
+	NetAssetValue             float64   `json:"netAssetValue" gorm:"not null"`
+	CumulativeExternalCapital float64   `json:"cumulativeExternalCapital" gorm:"not null"`
+	NetInternalTransfer       float64   `json:"netInternalTransfer" gorm:"not null"`
+	NetProfit                 float64   `json:"netProfit" gorm:"not null"`
+	CumulativeCapitalReturn   float64   `json:"cumulativeCapitalReturn" gorm:"not null"`
+	ValuationBasis            string    `json:"valuationBasis" gorm:"size:32;not null"`
+	CreatedAt                 time.Time `json:"createdAt"`
+}
+
+func (AccountLedgerSnapshot) TableName() string { return "research2_account_ledger_snapshots" }
+
 type RecommendationDetail struct {
 	Recommendation Recommendation `json:"recommendation"`
 	Analysis       AnalysisRun    `json:"analysis"`
@@ -279,19 +321,26 @@ type AccountOverview struct {
 	OpenPositions int64     `json:"openPositions"`
 	PendingBuys   int64     `json:"pendingBuys"`
 	LastValuedAt  time.Time `json:"lastValuedAt"`
+
+	InitialContribution       float64 `json:"initialContribution"`
+	TopUpContribution         float64 `json:"topUpContribution"`
+	CumulativeExternalCapital float64 `json:"cumulativeExternalCapital"`
+	NetInternalTransfer       float64 `json:"netInternalTransfer"`
+	CumulativeCapitalReturn   float64 `json:"cumulativeCapitalReturn"`
+	ValuationBasis            string  `json:"valuationBasis"`
 }
 
 type Performance struct {
 	AccountOverview
-	ClosedTrades       int64             `json:"closedTrades"`
-	WinningTrades      int64             `json:"winningTrades"`
-	WinRate            *float64          `json:"winRate"`
-	TotalFees          float64           `json:"totalFees"`
-	MaxDrawdown        *float64          `json:"maxDrawdown"`
-	HitFiveCount       int64             `json:"hitFiveCount"`
-	HitLimitUpCount    int64             `json:"hitLimitUpCount"`
-	HitMinusThreeCount int64             `json:"hitMinusThreeCount"`
-	OnTimeReports      int64             `json:"onTimeReports"`
-	LateReports        int64             `json:"lateReports"`
-	Curve              []AccountSnapshot `json:"curve"`
+	ClosedTrades       int64                   `json:"closedTrades"`
+	WinningTrades      int64                   `json:"winningTrades"`
+	WinRate            *float64                `json:"winRate"`
+	TotalFees          float64                 `json:"totalFees"`
+	MaxDrawdown        *float64                `json:"maxDrawdown"`
+	HitFiveCount       int64                   `json:"hitFiveCount"`
+	HitLimitUpCount    int64                   `json:"hitLimitUpCount"`
+	HitMinusThreeCount int64                   `json:"hitMinusThreeCount"`
+	OnTimeReports      int64                   `json:"onTimeReports"`
+	LateReports        int64                   `json:"lateReports"`
+	Curve              []AccountLedgerSnapshot `json:"curve"`
 }
