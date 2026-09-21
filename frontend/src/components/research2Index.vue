@@ -1,5 +1,5 @@
 <script setup>
-import {computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import {computed, defineAsyncComponent, h, onBeforeUnmount, onMounted, ref, watch} from 'vue'
 import {useRoute, useRouter} from 'vue-router'
 import {RESEARCH2_SLOTS, validResearch2Slot} from '../utils/research2-slots.js'
 import {usePolling} from '../composables/usePolling.js'
@@ -22,8 +22,20 @@ const selectedSlotInfo = computed(() => RESEARCH2_SLOTS.find(slot => slot.value 
 const selectedSlotState = computed(() => slotStates.value.find(item => item.slot === selectedSlot.value))
 const slotOptions = computed(() => RESEARCH2_SLOTS.map(slot => {
  const state = slotStates.value.find(item => item.slot === slot.value)
- return {key: slot.value, label: `${slot.label} · ${state?.sellCompletedAt ? '已完成' : '尚未完成'}`}
+ return {key: slot.value, label: slot.label, sellLabel: state?.sellCompletedAt ? '定时卖出已完成' : '定时卖出等待'}
 }))
+function renderSlotLabel(option) {
+ const current = option.key === selectedSlot.value
+ return h('div', {class: 'research2-slot-option-label'}, [
+  h('span', {class: 'research2-slot-option-title'}, String(option.label)),
+  current ? h('span', {class: 'research2-slot-current-mark'}, '当前') : null,
+  h('span', {class: 'research2-slot-option-summary'}, String(option.sellLabel || '定时卖出等待')),
+ ])
+}
+function slotNodeProps(option) {
+ const current = option.key === selectedSlot.value
+ return current ? {class: 'research2-slot-option-current', 'aria-current': 'true'} : {'aria-current': 'false'}
+}
 function updateSlot(slot) {
  if (!validResearch2Slot(slot)) return
  selectedSlot.value = slot
@@ -48,9 +60,10 @@ onBeforeUnmount(() => EventsOff('changeResearch2Tab'))
 <template>
   <n-card>
     <div v-if="nowTab !== '设置'" class="research2-slot-toolbar">
-      <n-dropdown trigger="click" :options="slotOptions" @select="updateSlot">
-        <n-button secondary size="small" aria-label="选择五分钟区间">
-          {{ selectedSlotInfo.label }}
+      <n-dropdown trigger="click" :options="slotOptions" :render-label="renderSlotLabel" :node-props="slotNodeProps" @select="updateSlot">
+        <n-button secondary size="small" class="research2-slot-current-button" aria-label="选择五分钟区间">
+          <span class="research2-slot-current-prefix">当前选择</span>
+          <strong>{{ selectedSlotInfo.label }}</strong>
           <span class="research2-slot-chevron" aria-hidden="true">⌄</span>
         </n-button>
       </n-dropdown>
@@ -68,14 +81,64 @@ onBeforeUnmount(() => EventsOff('changeResearch2Tab'))
 .research2-slot-toolbar {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   min-height: 34px;
   margin-bottom: 16px;
+}
+
+.research2-slot-current-button {
+  border-color: #18a058 !important;
+  background: linear-gradient(135deg, #ecf9f0, #f8fffa) !important;
+  box-shadow: 0 5px 14px rgba(24, 160, 88, .2);
+  color: #087443;
+  font-weight: 700;
+}
+
+.research2-slot-current-prefix {
+  margin-right: 6px;
+  color: #18a058;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .research2-slot-chevron {
   margin-left: 8px;
   font-size: 14px;
   line-height: 1;
+}
+
+:global(.research2-slot-option-current .n-dropdown-option-body) {
+  background: linear-gradient(90deg, #e9f8ee, #f9fffb);
+  box-shadow: inset 3px 0 #18a058, 0 4px 12px rgba(24, 160, 88, .14);
+  font-weight: 700;
+}
+
+.research2-slot-option-label {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  min-width: 168px;
+}
+
+.research2-slot-option-title {
+  font-weight: 600;
+}
+
+.research2-slot-current-mark {
+  align-self: center;
+  border-radius: 999px;
+  background: #18a058;
+  color: #fff;
+  font-size: 11px;
+  line-height: 18px;
+  padding: 0 6px;
+}
+
+.research2-slot-option-summary {
+  grid-column: 1 / -1;
+  color: #7a7f87;
+  font-size: 12px;
+  font-weight: 400;
 }
 </style>
