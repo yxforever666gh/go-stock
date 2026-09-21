@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"go-stock/internal/trading"
@@ -245,30 +244,6 @@ func slotBuyStatus(chain ExecutionChain, exists bool, reportStatus string, count
 	return "no_purchase"
 }
 
-// DailyEmailRun is synthetic: one stable delivery key per trading day, without
-// manufacturing an analysis run or occupying any result slot.
-func (r *Repository) DailyEmailRun(ctx context.Context, at time.Time) (AnalysisRun, error) {
-	states, err := r.SlotStatuses(ctx, at)
-	if err != nil {
-		return AnalysisRun{}, err
-	}
-	var body strings.Builder
-	body.WriteString("# 研究中心2五分钟分区汇总\n\n")
-	for _, state := range states {
-		body.WriteString(fmt.Sprintf("## %s\n\n- 定时卖出完成：%t\n", state.Label, state.SellCompletedAt != nil))
-		if state.WinnerRunID == "" {
-			body.WriteString("- 尚无有效推荐报告\n\n")
-			continue
-		}
-		run, err := r.GetRun(ctx, state.WinnerRunID)
-		if err != nil {
-			return AnalysisRun{}, err
-		}
-		body.WriteString(run.ReportMarkdown + "\n\n")
-	}
-	return AnalysisRun{RunID: "research2-daily-" + at.In(shanghai()).Format("2006-01-02"), TradingDate: at.In(shanghai()).Format("2006-01-02"), Status: "success", GeneratedAt: &at, ReportMarkdown: body.String()}, nil
-}
-
 func validPrice(value float64) bool { return value > 0 && value < 1e100 }
 
 // FinalizeRun takes the SQLite writer lock before sampling the publication
@@ -352,13 +327,19 @@ func (r *Repository) finalizeSlotRun(ctx context.Context, run *AnalysisRun, item
 		if err := tx.Save(run).Error; err != nil {
 			return err
 		}
-		if !run.Published || len(items) == 0 {
+		if !run.Published {
 			return nil
 		}
-		rows := append([]Recommendation(nil), items...)
-		for i := range rows {
-			rows[i].ID = 0
+		if len(items) > 0 {
+			rows := append([]Recommendation(nil), items...)
+			for i := range rows {
+				rows[i].ID = 0
+			}
+			if err := tx.Create(&rows).Error; err != nil {
+				return err
+			}
 		}
-		return tx.Create(&rows).Error
+		_, err := queuePublishedRunEmail(ctx, tx, *run)
+		return err
 	})
 }

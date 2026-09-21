@@ -50,6 +50,7 @@ func sameResearchRuntimeConfig(left, right *models.SettingConfig) bool {
 		copy.Research2EmailTo, copy.Research2EmailFrom = "", ""
 		copy.Research2EmailSMTPHost, copy.Research2EmailSMTPUser, copy.Research2EmailSMTPPass = "", "", ""
 		copy.Research2EmailSMTPPort = 0
+		copy.Research2EmailSlots, copy.Research2EmailSlotsJSON = nil, ""
 		for _, model := range copy.AiConfigs {
 			if model != nil {
 				model.CreatedAt, model.UpdatedAt = time.Time{}, time.Time{}
@@ -95,8 +96,16 @@ func normalizeResearchSettings(center string, cfg *models.SettingConfig) error {
 		if err == nil {
 			cfg.AIReviewStartTime, cfg.AIReviewIntervalMinutes, err = data.NormalizeAIReviewSchedule(cfg.AIReviewStartTime, cfg.AIReviewIntervalMinutes)
 		}
-	} else if center == researchconfig.Research2 && cfg.Research2EmailEnabled {
-		_, _, err = research2.ValidateEmailConfig(research2EmailConfig(cfg))
+	} else if center == researchconfig.Research2 {
+		var encoded string
+		encoded, cfg.Research2EmailSlots, err = research2.MarshalEmailSlots(cfg.Research2EmailSlots)
+		cfg.Research2EmailSlotsJSON = encoded
+		if err == nil && cfg.Research2EmailEnabled && len(cfg.Research2EmailSlots) == 0 {
+			err = errors.New("开启研究中心2自动邮件时，请至少选择一个时间段")
+		}
+		if err == nil && cfg.Research2EmailEnabled {
+			_, _, err = research2.ValidateEmailConfig(research2EmailConfig(cfg))
+		}
 	}
 	if err != nil {
 		return fmt.Errorf("%w: %v", researchconfig.ErrInvalidConfig, err)

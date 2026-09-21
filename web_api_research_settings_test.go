@@ -146,9 +146,69 @@ func TestResearchRuntimeKeepsTaskSnapshotAndDoesNotReloadOtherCenter(t *testing.
 	}
 	// A mail-only edit must retain the same analysis runtime and collector state.
 	r2.Settings.Research2EmailTo = "new@example.test"
+	r2.Settings.Research2EmailSlots = []string{"10:00"}
 	same, err = app.ensureResearch2Runtime(r2.Settings)
 	if err != nil || same != other {
 		t.Fatal("mail-only settings replaced analysis runtime")
+	}
+}
+
+func TestResearch2EmailSettingsRequireSlotsAndPersistCanonicalOrder(t *testing.T) {
+	app := newResearchSettingsTestApp(t)
+	snapshot, err := app.researchConfiguration(t.Context(), researchconfig.Research2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := snapshot.Settings
+	settings.Research2EmailEnabled = true
+	settings.Research2EmailTo = "recipient@example.com"
+	settings.Research2EmailFrom = "sender@example.com"
+	settings.Research2EmailSMTPHost = "smtp.example.com"
+	settings.Research2EmailSMTPPort = 465
+	settings.Research2EmailSMTPUser = "sender@example.com"
+	settings.Research2EmailSMTPPass = "auth-code"
+	if _, err = app.saveResearchConfiguration(t.Context(), researchconfig.Research2, snapshot.Revision, settings); err == nil {
+		t.Fatal("enabled email without a slot was accepted")
+	}
+	settings.Research2EmailSlots = []string{"10:00", "09:30", "10:00"}
+	saved, err := app.saveResearchConfiguration(t.Context(), researchconfig.Research2, snapshot.Revision, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(saved.Settings.Research2EmailSlots, []string{"09:30", "10:00"}) {
+		t.Fatalf("slots=%v", saved.Settings.Research2EmailSlots)
+	}
+	settings.Research2EmailSlots = []string{"09:31"}
+	if _, err = app.saveResearchConfiguration(t.Context(), researchconfig.Research2, saved.Revision, settings); err == nil {
+		t.Fatal("invalid email slot was accepted")
+	}
+}
+
+type draftEmailTestMailer struct {
+	calls  int
+	config research2.EmailConfig
+}
+
+func (mailer *draftEmailTestMailer) Send(_ context.Context, config research2.EmailConfig, _ research2.EmailMessage) error {
+	mailer.calls++
+	mailer.config = config
+	return nil
+}
+
+func TestResearch2SMTPTestUsesDraftConfigWithoutSelectedSlots(t *testing.T) {
+	app := newResearchSettingsTestApp(t)
+	mailer := &draftEmailTestMailer{}
+	app.research2Factory = func(*models.SettingConfig) (*research2app.Runtime, error) {
+		repository := research2.NewRepository(app.researchDatabase)
+		return &research2app.Runtime{Repository: repository, Email: research2.NewEmailService(repository, mailer)}, nil
+	}
+	mux := http.NewServeMux()
+	registerResearch2Routes(mux, app)
+	body := bytes.NewBufferString(`{"to":"recipient@example.com","from":"sender@example.com","smtpHost":"smtp.example.com","smtpPort":465,"smtpUsername":"sender@example.com","smtpPassword":"draft-secret"}`)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/research2/email/test", body))
+	if recorder.Code != http.StatusOK || mailer.calls != 1 || mailer.config.Password != "draft-secret" {
+		t.Fatalf("status=%d body=%s calls=%d config=%+v", recorder.Code, recorder.Body.String(), mailer.calls, mailer.config)
 	}
 }
 

@@ -16,6 +16,11 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-stock/backend/researchconfig"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -75,7 +80,7 @@ func (s *EmailService) SetNowForTest(now func() time.Time) {
 
 func EligibleEmailStatus(status string) bool {
 	switch strings.TrimSpace(status) {
-	case "success", "no_recommendation", "missed_window":
+	case "success", "no_recommendation":
 		return true
 	default:
 		return false
@@ -137,29 +142,79 @@ func ValidateEmailConfig(config EmailConfig) (EmailConfig, []string, error) {
 }
 
 func (s *EmailService) Queue(ctx context.Context, run AnalysisRun, config EmailConfig) (bool, error) {
-	return s.queue(ctx, run, config, false)
-}
-
-func (s *EmailService) QueueFinal(ctx context.Context, run AnalysisRun, config EmailConfig) (bool, error) {
-	return s.queue(ctx, run, config, true)
-}
-
-func (s *EmailService) queue(ctx context.Context, run AnalysisRun, config EmailConfig, allowFailed bool) (bool, error) {
-	if s == nil || s.repository == nil || !config.Enabled || (!EligibleEmailStatus(run.Status) && !(allowFailed && run.Status == "failed")) {
+	if s == nil || s.repository == nil || !config.Enabled || !EligibleEmailStatus(run.Status) {
 		return false, nil
 	}
-	normalized, recipients, err := ValidateEmailConfig(config)
+	delivery, err := buildEmailDelivery(run, config, s.now())
 	if err != nil {
 		return false, err
 	}
+	return s.repository.CreateEmailDelivery(ctx, delivery)
+}
+
+func buildEmailDelivery(run AnalysisRun, config EmailConfig, now time.Time) (*EmailDelivery, error) {
+	normalized, recipients, err := ValidateEmailConfig(config)
+	if err != nil {
+		return nil, err
+	}
 	subject, body := reportEmailContent(run)
-	now := s.now()
-	delivery := EmailDelivery{
+	return &EmailDelivery{
 		AnalysisRunID: run.RunID, Status: EmailStatusPending, NextAttemptAt: &now,
 		Recipients: strings.Join(recipients, ","), Sender: normalized.From,
 		Subject: subject, Body: body, MessageID: fmt.Sprintf("<research2-%s@%s>", run.RunID, normalized.SMTPHost),
+	}, nil
+}
+
+// queuePublishedRunEmail is called inside the same transaction that publishes
+// the first report for an actual slot. Selection changes therefore apply only
+// to reports persisted after the settings save, and a crash cannot separate a
+// published report from its durable delivery task.
+func queuePublishedRunEmail(ctx context.Context, tx *gorm.DB, run AnalysisRun) (bool, error) {
+	if tx == nil || !run.Published || !EligibleEmailStatus(run.Status) || !ValidSlot(run.Slot) {
+		return false, nil
 	}
-	return s.repository.CreateEmailDelivery(ctx, &delivery)
+	migrator := tx.Migrator()
+	if !migrator.HasTable(&researchconfig.Record{}) || !migrator.HasTable(&EmailDelivery{}) {
+		return false, nil
+	}
+	var record researchconfig.Record
+	if err := tx.WithContext(ctx).Where("center = ?", researchconfig.Research2).First(&record).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	settings, err := researchconfig.DecodeConfig(researchconfig.Research2, []byte(record.ConfigJSON))
+	if err != nil {
+		return false, err
+	}
+	selected := false
+	for _, slot := range settings.Research2EmailSlots {
+		if slot == run.Slot {
+			selected = true
+			break
+		}
+	}
+	if !settings.Research2EmailEnabled || !selected {
+		return false, nil
+	}
+	config := EmailConfig{
+		Enabled: true, To: settings.Research2EmailTo, From: settings.Research2EmailFrom,
+		SMTPHost: settings.Research2EmailSMTPHost, SMTPPort: settings.Research2EmailSMTPPort,
+		Username: settings.Research2EmailSMTPUser, Password: settings.Research2EmailSMTPPass,
+	}
+	now := time.Now().In(shanghai())
+	if run.PersistedAt != nil && !run.PersistedAt.IsZero() {
+		now = *run.PersistedAt
+	}
+	delivery, err := buildEmailDelivery(run, config, now)
+	if err != nil {
+		// Settings are validated on save. A legacy or manually edited invalid
+		// SMTP value must not roll back an otherwise valid research report.
+		return false, nil
+	}
+	result := tx.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "analysis_run_id"}}, DoNothing: true}).Create(delivery)
+	return result.RowsAffected == 1, result.Error
 }
 
 func reportEmailContent(run AnalysisRun) (string, string) {
@@ -172,7 +227,11 @@ func reportEmailContent(run AnalysisRun) (string, string) {
 		suffix = "分析失败"
 	}
 	attemptNo := normalizedAttemptNo(run.AttemptNo)
-	subject := fmt.Sprintf("[go-stock][研究中心2] %s 第%d次尝试 %s", run.TradingDate, attemptNo, suffix)
+	slotPart := ""
+	if ValidSlot(run.Slot) {
+		slotPart = "[" + slotLabel(run.Slot) + "]"
+	}
+	subject := fmt.Sprintf("[go-stock][研究中心2]%s %s 第%d次尝试 %s", slotPart, run.TradingDate, attemptNo, suffix)
 	body := strings.TrimSpace(run.ReportMarkdown)
 	body = compactEmailDegradedReasons(body)
 	attemptLine := fmt.Sprintf("当日尝试：第%d次", attemptNo)

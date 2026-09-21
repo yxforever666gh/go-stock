@@ -6,6 +6,7 @@ import {EventsEmit} from '../services/browser-runtime.mjs'
 import MinuteProviderSettings from './settings/MinuteProviderSettings.vue'
 import AiConfigSettings from './settings/AiConfigSettings.vue'
 import {acceptSavedModelIDs, importResearchSettings, researchPayload} from './settings/research-settings.js'
+import {RESEARCH2_SLOTS, validResearch2Slot} from '../utils/research2-slots.js'
 
 const props = defineProps({
   settingsScope: {
@@ -52,6 +53,7 @@ const formValue = ref({
   research2AutoEnabled: true,
   research2Email: {
     enabled: false,
+    slots: [],
     to: '',
     from: '',
     smtpHost: '',
@@ -97,6 +99,7 @@ const aiProtocolOptions = [
   {label: 'OpenAI Responses', value: 'openai_responses'},
   {label: 'Anthropic Messages', value: 'anthropic_messages'},
 ]
+const research2EmailSlotOptions = RESEARCH2_SLOTS
 
 function normalizeAiProtocol(value) {
   return ['openai_responses', 'anthropic_messages'].includes(String(value || '').trim())
@@ -157,6 +160,7 @@ function applyConfigToForm(config) {
   formValue.value.research2AutoEnabled = config?.research2AutoEnabled !== false
   formValue.value.research2Email = {
     enabled: config?.research2EmailEnabled === true,
+    slots: [...new Set((Array.isArray(config?.research2EmailSlots) ? config.research2EmailSlots : []).filter(validResearch2Slot))],
     to: config?.research2EmailTo || '',
     from: config?.research2EmailFrom || '',
     smtpHost: config?.research2EmailSmtpHost || '',
@@ -281,6 +285,7 @@ function buildConfigPayload() {
     experimentalEvidenceEnabled: formValue.value.experimentalEvidenceEnabled === true,
     research2AutoEnabled: formValue.value.research2AutoEnabled,
     research2EmailEnabled: formValue.value.research2Email.enabled,
+    research2EmailSlots: formValue.value.research2Email.slots,
     research2EmailTo: formValue.value.research2Email.to,
     research2EmailFrom: formValue.value.research2Email.from,
     research2EmailSmtpHost: formValue.value.research2Email.smtpHost,
@@ -291,9 +296,10 @@ function buildConfigPayload() {
   return researchPayload(persistedConfig.value, values, formValue.value.openAI.aiConfigs)
 }
 
-function getResearch2EmailConfigError(requireConfig = formValue.value.research2Email.enabled) {
+function getResearch2EmailConfigError(requireConfig = formValue.value.research2Email.enabled, requireSlots = requireConfig) {
   if (props.settingsScope !== 'research2' || !requireConfig) return ''
   const email = formValue.value.research2Email
+  if (requireSlots && (!Array.isArray(email.slots) || email.slots.length === 0)) return '开启研究中心2自动邮件时，请至少选择一个时间段'
   if (!String(email.to || '').trim()) return '请填写研究中心2报告收件人'
   if (!String(email.smtpHost || '').trim()) return '请填写研究中心2 SMTP 主机'
   if (!Number.isInteger(email.smtpPort) || email.smtpPort < 1 || email.smtpPort > 65535) return '研究中心2 SMTP 端口必须在 1 到 65535 之间'
@@ -381,15 +387,22 @@ function saveGlobalSettings(field) {
 }
 
 async function testResearch2Email() {
-  const validationError = getResearch2EmailConfigError(true)
+  const validationError = getResearch2EmailConfigError(true, false)
   if (validationError) {
     message.error(validationError)
     return
   }
   research2EmailTesting.value = true
   try {
-    if (!await saveCurrentConfig({notifyError: true})) return
-    const result = await TestResearch2Email()
+    const email = formValue.value.research2Email
+    const result = await TestResearch2Email({
+      to: email.to,
+      from: email.from,
+      smtpHost: email.smtpHost,
+      smtpPort: email.smtpPort,
+      smtpUsername: email.smtpUsername,
+      smtpPassword: email.smtpPassword,
+    })
     message.success(result || '研究中心2测试邮件发送成功')
   } catch (error) {
     message.error(`测试邮件发送失败：${error?.message || error}`)
@@ -588,7 +601,12 @@ onBeforeUnmount(() => {
           <n-grid :cols="24" :x-gap="24">
             <n-form-item-gi :span="24" label="自动发送报告：" path="research2Email.enabled">
               <n-switch v-model:value="formValue.research2Email.enabled" @update:value="handleImmediateFieldChange"/>
-              <n-text depth="3" style="margin-left:12px">报告落库并完成交易处理后异步发送；失败后最多重试3次。</n-text>
+              <n-text depth="3" style="margin-left:12px">选中分区的首份有效报告落库后立即单独发送；失败后最多重试3次。</n-text>
+            </n-form-item-gi>
+            <n-form-item-gi :span="24" label="发送时间段：" path="research2Email.slots">
+              <n-select v-model:value="formValue.research2Email.slots" multiple filterable clearable
+                        max-tag-count="responsive" :options="research2EmailSlotOptions"
+                        placeholder="请选择一个或多个实际落盘时间段" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
             <n-form-item-gi :span="12" label="收件人：" path="research2Email.to">
               <n-input v-model:value="formValue.research2Email.to" type="textarea" :autosize="{minRows:2,maxRows:4}"
@@ -612,7 +630,7 @@ onBeforeUnmount(() => {
             <n-form-item-gi :span="12">
               <n-button type="primary" secondary :loading="research2EmailTesting" @click="testResearch2Email">发送测试邮件</n-button>
             </n-form-item-gi>
-            <n-gi :span="24"><n-alert type="info" :show-icon="false">支持465隐式TLS及STARTTLS。测试邮件只验证配置，不创建研究记录或模拟交易。</n-alert></n-gi>
+            <n-gi :span="24"><n-alert type="info" :show-icon="false">按报告实际落盘分区判断，多个分区分别发送；未生成报告的分区不发送。测试邮件只验证 SMTP，不要求选择时间段，也不创建研究记录或模拟交易。</n-alert></n-gi>
           </n-grid>
         </n-card>
 

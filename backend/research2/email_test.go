@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go-stock/backend/models"
+	"go-stock/backend/researchconfig"
 )
 
 type fakeMailer struct {
@@ -47,7 +48,7 @@ func validEmailConfig() EmailConfig {
 func eligibleRun(status string) AnalysisRun {
 	loc := shanghai()
 	now := time.Date(2026, 8, 27, 9, 58, 0, 0, loc)
-	return AnalysisRun{RunID: "00000000-0000-0000-0000-000000000001", TradingDate: "2026-08-27", AttemptNo: 2, ScheduledFor: now.Add(-8 * time.Minute), EvidenceCutoffAt: now.Add(-3 * time.Minute), GeneratedAt: &now, Status: status, RecommendationCount: 2, ReportMarkdown: "# 研究中心2报告\n\n正文", FailureReason: "报告生成窗口已经结束"}
+	return AnalysisRun{RunID: "00000000-0000-0000-0000-000000000001", TradingDate: "2026-08-27", Slot: "10:00", AttemptNo: 2, ScheduledFor: now.Add(-8 * time.Minute), EvidenceCutoffAt: now.Add(-3 * time.Minute), GeneratedAt: &now, Status: status, RecommendationCount: 2, ReportMarkdown: "# 研究中心2报告\n\n正文", FailureReason: "报告生成窗口已经结束"}
 }
 
 func TestEmailQueueEligibilityAndIdempotence(t *testing.T) {
@@ -63,13 +64,8 @@ func TestEmailQueueEligibilityAndIdempotence(t *testing.T) {
 	if created, err = service.Queue(context.Background(), eligibleRun("failed"), validEmailConfig()); err != nil || created {
 		t.Fatalf("failed run must not queue: created=%v err=%v", created, err)
 	}
-	failedFinal := eligibleRun("failed")
-	failedFinal.RunID = "00000000-0000-0000-0000-000000000002"
-	if created, err = service.QueueFinal(context.Background(), failedFinal, validEmailConfig()); err != nil || !created {
-		t.Fatalf("terminal failed chain must queue its final summary: created=%v err=%v", created, err)
-	}
 	var count int64
-	if err = repository.db.Model(&EmailDelivery{}).Count(&count).Error; err != nil || count != 2 {
+	if err = repository.db.Model(&EmailDelivery{}).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("delivery count=%d err=%v", count, err)
 	}
 }
@@ -105,7 +101,10 @@ func TestEmailDeliverySuccessAndCancellation(t *testing.T) {
 	service, repository := emailTestService(t, mailer)
 	now := time.Date(2026, 8, 27, 10, 0, 0, 0, shanghai())
 	service.SetNowForTest(func() time.Time { return now })
-	if _, err := service.Queue(context.Background(), eligibleRun("missed_window"), validEmailConfig()); err != nil {
+	if created, err := service.Queue(context.Background(), eligibleRun("missed_window"), validEmailConfig()); err != nil || created {
+		t.Fatalf("missed window must not queue: created=%v err=%v", created, err)
+	}
+	if _, err := service.Queue(context.Background(), eligibleRun("success"), validEmailConfig()); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.ProcessDue(context.Background(), validEmailConfig()); err != nil {
@@ -115,7 +114,7 @@ func TestEmailDeliverySuccessAndCancellation(t *testing.T) {
 	if err := repository.db.First(&delivery).Error; err != nil {
 		t.Fatal(err)
 	}
-	if delivery.Status != EmailStatusSent || delivery.SentAt == nil || mailer.calls != 1 || !strings.Contains(mailer.messages[0].Subject, "错过交易窗口") {
+	if delivery.Status != EmailStatusSent || delivery.SentAt == nil || mailer.calls != 1 || !strings.Contains(mailer.messages[0].Subject, "10:00–10:05") {
 		t.Fatalf("unexpected sent delivery: %+v messages=%+v", delivery, mailer.messages)
 	}
 
@@ -172,7 +171,6 @@ func TestReportEmailContentForAllEligibleResults(t *testing.T) {
 	}{
 		{status: "success", subjectPart: "分析报告（2只）", bodyPart: "# 研究中心2报告"},
 		{status: "no_recommendation", subjectPart: "无推荐", bodyPart: "# 研究中心2报告"},
-		{status: "missed_window", subjectPart: "错过交易窗口", bodyPart: "# 研究中心2报告"},
 	} {
 		t.Run(testCase.status, func(t *testing.T) {
 			subject, body := reportEmailContent(eligibleRun(testCase.status))
@@ -180,6 +178,113 @@ func TestReportEmailContentForAllEligibleResults(t *testing.T) {
 				t.Fatalf("subject=%q body=%q", subject, body)
 			}
 		})
+	}
+}
+
+func TestNormalizeEmailSlotsValidatesDeduplicatesAndSorts(t *testing.T) {
+	slots, err := NormalizeEmailSlots([]string{"10:00", "09:30", "10:00", "11:25"})
+	if err != nil || strings.Join(slots, ",") != "09:30,10:00,11:25" {
+		t.Fatalf("slots=%v err=%v", slots, err)
+	}
+	if _, err = NormalizeEmailSlots([]string{"09:31"}); err == nil {
+		t.Fatal("invalid slot was accepted")
+	}
+	encoded, normalized, err := MarshalEmailSlots([]string{"11:25", "09:30"})
+	parsed, parseErr := ParseEmailSlots(encoded)
+	if err != nil || parseErr != nil || encoded != `["09:30","11:25"]` || len(normalized) != 2 || strings.Join(parsed, ",") != "09:30,11:25" {
+		t.Fatalf("encoded=%s normalized=%v err=%v", encoded, normalized, err)
+	}
+}
+
+func configureSelectedEmailSlots(t *testing.T, repository *Repository, slots []string) {
+	t.Helper()
+	if err := repository.db.AutoMigrate(&EmailDelivery{}, &researchconfig.Record{}); err != nil {
+		t.Fatal(err)
+	}
+	config := &models.SettingConfig{
+		Settings: &models.Settings{
+			Research2AutoEnabled: true, Research2EmailEnabled: true,
+			Research2EmailTo: "recipient@example.com", Research2EmailFrom: "sender@example.com",
+			Research2EmailSMTPHost: "smtp.example.com", Research2EmailSMTPPort: 465,
+			Research2EmailSMTPUser: "sender@example.com", Research2EmailSMTPPass: "auth-code",
+		},
+		Research2EmailSlots: slots,
+	}
+	raw, err := researchconfig.ConfigJSON(researchconfig.Research2, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = repository.db.Create(&researchconfig.Record{Center: researchconfig.Research2, ConfigJSON: string(raw), Revision: 1}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublishedReportQueuesSelectedActualSlotInSameTransaction(t *testing.T) {
+	repository := slotRepository(t)
+	configureSelectedEmailSlots(t, repository, []string{"09:35", "10:00"})
+	ctx := context.Background()
+	now := slotClock(9, 36)
+	repository.now = func() time.Time { return now }
+	run := AnalysisRun{RunID: "selected-empty", TradingDate: "2026-09-18", ScheduledSlot: "09:30", AttemptNo: 1, Status: "no_recommendation"}
+	if err := repository.FinalizeRun(ctx, &run, nil, func() string { return "empty report" }); err != nil {
+		t.Fatal(err)
+	}
+	if !run.Published || run.Slot != "09:35" {
+		t.Fatalf("run=%+v", run)
+	}
+	var delivery EmailDelivery
+	if err := repository.db.Where("analysis_run_id = ?", run.RunID).First(&delivery).Error; err != nil {
+		t.Fatal(err)
+	}
+	if delivery.Status != EmailStatusPending || !strings.Contains(delivery.Subject, "09:35–09:40") || delivery.Body != "当日尝试：第1次\n\nempty report" {
+		t.Fatalf("delivery=%+v", delivery)
+	}
+	if err := repository.FinalizeRun(ctx, &run, nil, func() string { return "changed" }); err != nil {
+		t.Fatal(err)
+	}
+	var count int64
+	if err := repository.db.Model(&EmailDelivery{}).Where("analysis_run_id = ?", run.RunID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	archived := AnalysisRun{RunID: "same-slot-archived", TradingDate: "2026-09-18", ScheduledSlot: "09:35", AttemptNo: 2, Status: "success"}
+	if err := repository.FinalizeRun(ctx, &archived, []Recommendation{{RecommendationID: "archived-stock", StockCode: "sh600001"}}, func() string { return "archived report" }); err != nil {
+		t.Fatal(err)
+	}
+	count = 0
+	if archived.Published || archived.ArchiveReason == "" {
+		t.Fatalf("archived run=%+v", archived)
+	}
+	if err := repository.db.Model(&EmailDelivery{}).Where("analysis_run_id = ?", archived.RunID).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("archived delivery count=%d err=%v", count, err)
+	}
+
+	now = slotClock(9, 41)
+	unselected := AnalysisRun{RunID: "unselected", TradingDate: "2026-09-18", ScheduledSlot: "09:40", AttemptNo: 1, Status: "success"}
+	if err := repository.FinalizeRun(ctx, &unselected, []Recommendation{{RecommendationID: "unselected-stock", StockCode: "sh600000"}}, func() string { return "report" }); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.db.Model(&EmailDelivery{}).Where("analysis_run_id = ?", unselected.RunID).Count(&count).Error; err != nil || count != 0 {
+		t.Fatalf("unselected delivery count=%d err=%v", count, err)
+	}
+}
+
+func TestPublishedReportRollsBackWhenDeliveryInsertFails(t *testing.T) {
+	repository := slotRepository(t)
+	configureSelectedEmailSlots(t, repository, []string{"09:35"})
+	if err := repository.db.Exec(`CREATE TRIGGER fail_research2_email BEFORE INSERT ON research2_email_deliveries BEGIN SELECT RAISE(ABORT, 'email insert failed'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	repository.now = func() time.Time { return slotClock(9, 36) }
+	run := AnalysisRun{RunID: "atomic", TradingDate: "2026-09-18", ScheduledSlot: "09:35", AttemptNo: 1, Status: "no_recommendation"}
+	if err := repository.FinalizeRun(context.Background(), &run, nil, func() string { return "report" }); err == nil {
+		t.Fatal("expected delivery insert failure")
+	}
+	var runCount, chainCount, deliveryCount int64
+	repository.db.Model(&AnalysisRun{}).Where("run_id = ?", run.RunID).Count(&runCount)
+	repository.db.Model(&ExecutionChain{}).Where("winner_run_id = ?", run.RunID).Count(&chainCount)
+	repository.db.Model(&EmailDelivery{}).Where("analysis_run_id = ?", run.RunID).Count(&deliveryCount)
+	if runCount != 0 || chainCount != 0 || deliveryCount != 0 {
+		t.Fatalf("partial transaction persisted: run=%d chain=%d delivery=%d", runCount, chainCount, deliveryCount)
 	}
 }
 

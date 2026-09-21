@@ -78,7 +78,16 @@ func UpdateConfig(s *SettingConfig) string {
 	s.Research2EmailFrom = strings.TrimSpace(s.Research2EmailFrom)
 	s.Research2EmailSMTPHost = strings.TrimSpace(s.Research2EmailSMTPHost)
 	s.Research2EmailSMTPUser = strings.TrimSpace(s.Research2EmailSMTPUser)
+	encodedEmailSlots, normalizedEmailSlots, emailSlotsErr := research2.MarshalEmailSlots(s.Research2EmailSlots)
+	if emailSlotsErr != nil {
+		return "保存失败: " + emailSlotsErr.Error()
+	}
+	s.Research2EmailSlots = normalizedEmailSlots
+	s.Research2EmailSlotsJSON = encodedEmailSlots
 	if s.Research2EmailEnabled {
+		if len(normalizedEmailSlots) == 0 {
+			return "保存失败: 开启研究中心2自动邮件时，请至少选择一个时间段"
+		}
 		if _, _, emailErr := research2.ValidateEmailConfig(research2.EmailConfig{
 			Enabled: true, To: s.Research2EmailTo, From: s.Research2EmailFrom,
 			SMTPHost: s.Research2EmailSMTPHost, SMTPPort: s.Research2EmailSMTPPort,
@@ -167,6 +176,7 @@ func UpdateConfig(s *SettingConfig) string {
 		"research2_email_smtp_port":        s.Research2EmailSMTPPort,
 		"research2_email_smtp_user":        s.Research2EmailSMTPUser,
 		"research2_email_smtp_pass":        s.Research2EmailSMTPPass,
+		"research2_email_slots":            s.Research2EmailSlotsJSON,
 		"ai_analysis_config_id":            s.AIAnalysisConfigID,
 		"ai_review_start_time":             s.AIReviewStartTime,
 		"ai_review_interval_minutes":       s.AIReviewIntervalMinutes,
@@ -301,6 +311,9 @@ func applySettingDefaults(settings *Settings) {
 		settings.AITargetCapitalUtilization = defaultAITargetCapitalUtilization
 		settings.AIMaxImmediateBuysPerRun = defaultAIMaxImmediateBuysPerRun
 		settings.AIReanalysisIntervalMinutes = defaultAIReanalysisIntervalMinutes
+	}
+	if strings.TrimSpace(settings.Research2EmailSlotsJSON) == "" {
+		settings.Research2EmailSlotsJSON = "[]"
 	}
 	if strings.TrimSpace(settings.AIAnalysisTimes) == "" {
 		settings.AIAnalysisTimes = defaultAIAnalysisTimes
@@ -483,6 +496,11 @@ func applySettingConfigView(config *SettingConfig) {
 	}
 	order, _ := NormalizeMinuteProviderOrder(splitProviderOrder(config.Settings.MinuteProviderOrder), config.Settings.MinuteProviderMode)
 	config.MinuteProviderOrder = order
+	slots, err := research2.ParseEmailSlots(config.Settings.Research2EmailSlotsJSON)
+	if err != nil {
+		slots = []string{}
+	}
+	config.Research2EmailSlots = slots
 	autoEnabled := false
 	config.AIAnalysisAutoEnabled = &autoEnabled
 	config.LegacyAIAnalysisEnable = nil

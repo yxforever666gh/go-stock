@@ -35,7 +35,7 @@ akshareEnabled sinaMinuteEnabled tencentMinuteEnabled eastmoneyMinuteEnabled aks
 const research1Fields = `aiCapitalDeploymentEnabled aiTargetCapitalUtilization aiMaxImmediateBuysPerRun
 aiReanalysisIntervalMinutes aiReviewStartTime aiReviewIntervalMinutes`
 const research2Fields = `research2AutoEnabled research2EmailEnabled research2EmailTo research2EmailFrom
-research2EmailSmtpHost research2EmailSmtpPort research2EmailSmtpUsername research2EmailSmtpPassword`
+research2EmailSmtpHost research2EmailSmtpPort research2EmailSmtpUsername research2EmailSmtpPassword research2EmailSlots`
 
 func ownedFields(center string) ([]string, error) {
 	switch center {
@@ -63,6 +63,9 @@ func ConfigJSON(center string, cfg *models.SettingConfig) ([]byte, error) {
 		if cfg.Settings.MinuteProviderOrder != "" {
 			cfg.MinuteProviderOrder = strings.Split(cfg.Settings.MinuteProviderOrder, ",")
 		}
+	}
+	if center == Research2 && cfg.Research2EmailSlots == nil {
+		cfg.Research2EmailSlots = []string{}
 	}
 	encoded, err := json.Marshal(cfg)
 	if err != nil {
@@ -120,6 +123,7 @@ func Clone(cfg *models.SettingConfig) *models.SettingConfig {
 		copy.Settings = &settings
 	}
 	copy.MinuteProviderOrder = append([]string(nil), cfg.MinuteProviderOrder...)
+	copy.Research2EmailSlots = append([]string(nil), cfg.Research2EmailSlots...)
 	if cfg.AIAnalysisAutoEnabled != nil {
 		value := *cfg.AIAnalysisAutoEnabled
 		copy.AIAnalysisAutoEnabled = &value

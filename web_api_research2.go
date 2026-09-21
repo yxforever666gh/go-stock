@@ -1,7 +1,10 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"time"
 
@@ -42,13 +45,31 @@ func registerResearch2Routes(mux *http.ServeMux, app *App) {
 			return
 		}
 		if err == nil {
+			if setting.Research2EmailEnabled {
+				app.goTask(func(context.Context) { app.processResearch2Emails() })
+			}
 			app.processResearch2Trades(time.Now())
 		}
 
 		writeResearchResult(w, run, err)
 	})
 	mux.HandleFunc("POST /api/v1/research2/email/test", func(w http.ResponseWriter, r *http.Request) {
-		writeCommandResult(w, "研究中心2测试邮件发送成功", app.testResearch2Email(r.Context()))
+		var request *research2EmailTestRequest
+		var submitted research2EmailTestRequest
+		if err := json.NewDecoder(r.Body).Decode(&submitted); err == nil {
+			request = &submitted
+		} else if !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "测试邮件配置格式无效"})
+			return
+		}
+		var config *research2.EmailConfig
+		if request != nil {
+			config = &research2.EmailConfig{
+				To: request.To, From: request.From, SMTPHost: request.SMTPHost, SMTPPort: request.SMTPPort,
+				Username: request.SMTPUsername, Password: request.SMTPPassword,
+			}
+		}
+		writeCommandResult(w, "研究中心2测试邮件发送成功", app.testResearch2Email(r.Context(), config))
 	})
 	mux.HandleFunc("GET /api/v1/research2/analysis-runs", func(w http.ResponseWriter, r *http.Request) {
 		slot, ok := research2RequestSlot(w, r)
@@ -106,6 +127,15 @@ func registerResearch2Routes(mux *http.ServeMux, app *App) {
 		item, err := app.getResearch2Performance(r.Context(), slot)
 		writeResearchResult(w, item, err)
 	})
+}
+
+type research2EmailTestRequest struct {
+	To           string `json:"to"`
+	From         string `json:"from"`
+	SMTPHost     string `json:"smtpHost"`
+	SMTPPort     int    `json:"smtpPort"`
+	SMTPUsername string `json:"smtpUsername"`
+	SMTPPassword string `json:"smtpPassword"`
 }
 
 func research2RequestSlot(w http.ResponseWriter, r *http.Request) (string, bool) {

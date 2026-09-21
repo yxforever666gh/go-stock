@@ -3,7 +3,6 @@ package research2
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -279,65 +278,4 @@ func (r *Repository) AnalysisRunByID(ctx context.Context, runID string) (Analysi
 	var run AnalysisRun
 	err := r.db.WithContext(ctx).Where("run_id = ?", runID).First(&run).Error
 	return run, err
-}
-
-func (r *Repository) ExecutionChainEmailRun(ctx context.Context, chainID string) (AnalysisRun, error) {
-	chain, err := r.ExecutionChain(ctx, chainID)
-	if err != nil {
-		return AnalysisRun{}, err
-	}
-	var run AnalysisRun
-	if strings.TrimSpace(chain.LatestRunID) != "" {
-		run, err = r.AnalysisRunByID(ctx, chain.LatestRunID)
-	}
-	if strings.TrimSpace(chain.LatestRunID) == "" || errors.Is(err, gorm.ErrRecordNotFound) {
-		err = r.db.WithContext(ctx).Where("chain_id = ?", chainID).Order("attempt_no DESC, id DESC").First(&run).Error
-	}
-	if err != nil {
-		return AnalysisRun{}, err
-	}
-	var runs []AnalysisRun
-	if err = r.db.WithContext(ctx).Where("chain_id = ?", chainID).Order("attempt_no ASC, id ASC").Find(&runs).Error; err != nil {
-		return AnalysisRun{}, err
-	}
-	var recommendations []Recommendation
-	if err = r.db.WithContext(ctx).Table("research2_recommendations AS recommendations").Select("recommendations.*").
-		Joins("JOIN research2_analysis_runs AS runs ON runs.run_id = recommendations.analysis_run_id").
-		Where("runs.chain_id = ?", chainID).
-		Order("runs.attempt_no ASC, recommendations.selection_rank ASC, recommendations.id ASC").Find(&recommendations).Error; err != nil {
-		return AnalysisRun{}, err
-	}
-	var summary strings.Builder
-	summary.WriteString(strings.TrimSpace(run.ReportMarkdown))
-	summary.WriteString("\n\n## 当日报告执行汇总\n\n")
-	summary.WriteString(fmt.Sprintf("- 执行状态：%s\n- 分析轮次：%d\n- 目标买入：%d\n- 实际买入：%d\n- 剩余席位：%d\n", chain.Status, len(runs), chain.TargetSlots, chain.FilledSlots, max(0, chain.TargetSlots-chain.FilledSlots)))
-	if strings.TrimSpace(chain.StopReason) != "" {
-		summary.WriteString("- 结束原因：" + strings.TrimSpace(chain.StopReason) + "\n")
-	}
-	if len(recommendations) > 0 {
-		summary.WriteString("\n### 全部候选与执行结果\n\n")
-		for _, item := range recommendations {
-			line := fmt.Sprintf("- 第%d次 #%d %s %s：%s", attemptForRun(runs, item.AnalysisRunID), item.SelectionRank, item.StockCode, item.StockName, item.Status)
-			if strings.TrimSpace(item.ExecutionFailureCode) != "" {
-				line += " / " + item.ExecutionFailureCode
-			}
-			if strings.TrimSpace(item.FailureReason) != "" {
-				line += " / " + strings.TrimSpace(item.FailureReason)
-			}
-			summary.WriteString(line + "\n")
-		}
-	}
-	run.ReportMarkdown = summary.String()
-	run.RecommendationCount = chain.FilledSlots
-	run.FailureReason = chain.StopReason
-	return run, nil
-}
-
-func attemptForRun(runs []AnalysisRun, runID string) int {
-	for _, run := range runs {
-		if run.RunID == runID {
-			return run.AttemptNo
-		}
-	}
-	return 0
 }

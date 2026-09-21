@@ -131,18 +131,9 @@ func (a *App) recoverResearch2RunsOnStartup(now time.Time) error {
 		if err := repository.RecoverInterruptedRunsForDate(a.ctx, local.Format("2006-01-02"), local); err != nil {
 			return fmt.Errorf("恢复研究中心2中断运行: %w", err)
 		}
-		expired, expireErr := repository.ExpireStaleExecutionChains(a.ctx, local.Format("2006-01-02"), local)
+		_, expireErr := repository.ExpireStaleExecutionChains(a.ctx, local.Format("2006-01-02"), local)
 		if expireErr != nil {
 			return fmt.Errorf("结束研究中心2跨日补位链: %w", expireErr)
-		} else if setting := a.loadResearch2Settings(); setting != nil && setting.Settings != nil && setting.Research2EmailEnabled {
-			email := research2.NewEmailService(repository, nil)
-			for _, chain := range expired {
-				if run, runErr := repository.ExecutionChainEmailRun(a.ctx, chain.ChainID); runErr == nil {
-					if _, queueErr := email.QueueFinal(a.ctx, run, research2EmailConfig(setting)); queueErr != nil {
-						logger.SugaredLogger.Errorf("研究中心2跨日最终邮件入队失败: %v", queueErr)
-					}
-				}
-			}
 		}
 	}
 	return nil
@@ -198,6 +189,9 @@ func (a *App) runResearch2Analysis(scheduledFor time.Time) {
 		}
 		return
 	}
+	if setting.Research2EmailEnabled {
+		a.goTask(func(context.Context) { a.processResearch2Emails() })
+	}
 	a.processResearch2Trades(time.Now())
 }
 
@@ -246,14 +240,6 @@ func (a *App) processResearch2Emails() {
 		logger.SugaredLogger.Error("初始化研究中心2邮件服务失败: 邮件服务不可用")
 		return
 	}
-	now := time.Now().In(research2Location())
-	if now.Hour()*60+now.Minute() >= 11*60+30 && setting.Research2EmailEnabled {
-		if day, dayErr := data.NewResearchTradingCalendar(setting).IsTradingDay(a.ctx, now); dayErr == nil && day {
-			if run, summaryErr := runtime.Repository.DailyEmailRun(a.ctx, now); summaryErr == nil {
-				_, _ = runtime.Email.QueueFinal(a.ctx, run, research2EmailConfig(setting))
-			}
-		}
-	}
 	if err = runtime.Email.ProcessDue(a.ctx, research2EmailConfig(setting)); err != nil {
 		logger.SugaredLogger.Errorf("研究中心2报告邮件处理失败: %v", err)
 	}
@@ -270,19 +256,25 @@ func (a *App) cancelResearch2Emails() {
 	}
 }
 
-func (a *App) testResearch2Email(ctx context.Context) error {
+func (a *App) testResearch2Email(ctx context.Context, override *research2.EmailConfig) error {
 	setting := a.loadResearch2Settings()
 	if setting == nil || setting.Settings == nil {
 		return errors.New("研究中心2邮件配置不可用")
 	}
-	if _, _, configErr := research2.ValidateEmailConfig(research2EmailConfig(setting)); configErr != nil {
+	config := research2EmailConfig(setting)
+	if override != nil {
+		config = *override
+		config.Enabled = true
+		config.Timeout = 15 * time.Second
+	}
+	if _, _, configErr := research2.ValidateEmailConfig(config); configErr != nil {
 		return fmt.Errorf("%w: %s", service.ErrInvalidInput, configErr.Error())
 	}
 	runtime, err := a.ensureResearch2Runtime(setting)
 	if err != nil {
 		return err
 	}
-	return runtime.Email.SendTest(ctx, research2EmailConfig(setting))
+	return runtime.Email.SendTest(ctx, config)
 }
 
 func (a *App) processResearch2Trades(now time.Time) {

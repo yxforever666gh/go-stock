@@ -508,6 +508,19 @@ paths:
     post:
       operationId: testResearch2Email
       description: Sends a Research Center 2 SMTP configuration test message without creating an analysis run or simulated trade.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                to: {type: string}
+                from: {type: string}
+                smtpHost: {type: string}
+                smtpPort: {type: integer}
+                smtpUsername: {type: string}
+                smtpPassword: {type: string}
       responses: {"200": {description: Test email sent, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "500": {description: SMTP delivery failed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}}
   /api/v1/research2/analysis-runs/{id}:
     get:

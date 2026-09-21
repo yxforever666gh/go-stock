@@ -50,6 +50,7 @@ type Settings struct {
 	Research2EmailSMTPPort      int     `json:"research2EmailSmtpPort"`
 	Research2EmailSMTPUser      string  `json:"research2EmailSmtpUsername"`
 	Research2EmailSMTPPass      string  `json:"research2EmailSmtpPassword"`
+	Research2EmailSlotsJSON     string  `json:"-" gorm:"column:research2_email_slots;type:text;not null;default:'[]'"`
 	AIAnalysisConfigID          uint    `json:"aiAnalysisConfigId"`
 	AIAnalysisTimes             string  `json:"aiAnalysisTimes" gorm:"default:'09:30,11:30,14:30'"`
 	AIReviewStartTime           string  `json:"aiReviewStartTime" gorm:"default:'09:50'"`
@@ -130,6 +131,7 @@ type SettingConfig struct {
 	*Settings
 	AiConfigs              []*AIConfig `json:"aiConfigs"`
 	MinuteProviderOrder    []string    `json:"minuteProviderOrder" gorm:"-"`
+	Research2EmailSlots    []string    `json:"research2EmailSlots" gorm:"-"`
 	AIAnalysisAutoEnabled  *bool       `json:"aiAnalysisAutoEnabled" gorm:"-"`
 	LegacyAIAnalysisEnable *bool       `json:"aiAnalysisEnabled,omitempty" gorm:"-"`
 }
