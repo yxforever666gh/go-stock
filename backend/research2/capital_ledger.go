@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 const (
@@ -64,7 +65,7 @@ func research2CapitalSummary(ctx context.Context, database *gorm.DB, slot string
 		summary.transfer += item.Amount
 	}
 	if !summary.ledger || summary.external <= 0 || math.IsNaN(summary.external) || math.IsInf(summary.external, 0) {
-		return capitalSummary{external: fallback}, nil
+		return capitalSummary{}, errors.New("research2 slot has an incomplete capital ledger")
 	}
 	return summary, nil
 }
@@ -84,6 +85,7 @@ func newAccountLedgerSnapshot(slot, kind string, at time.Time, overview AccountO
 		NetInternalTransfer:       overview.NetInternalTransfer,
 		NetProfit:                 overview.NetProfit,
 		CumulativeCapitalReturn:   overview.CumulativeCapitalReturn,
+		ReturnRate:                overview.CumulativeCapitalReturn,
 		ValuationBasis:            overview.ValuationBasis,
 	}
 }
@@ -100,6 +102,7 @@ func accountLedgerSnapshotFromRaw(raw AccountSnapshot) AccountLedgerSnapshot {
 		NetAssetValue:           raw.NetAssetValue,
 		NetProfit:               raw.NetProfit,
 		CumulativeCapitalReturn: raw.ReturnRate,
+		ReturnRate:              raw.ReturnRate,
 		ValuationBasis:          CapitalValuationBasisLegacy,
 	}
 }
@@ -109,4 +112,38 @@ func validateCapitalSummary(summary capitalSummary) error {
 		return errors.New("research2 external capital is invalid")
 	}
 	return nil
+}
+
+// Write with the trade/account transaction so a crash cannot omit a cash-flow
+// event from the performance curve. Old schema fixtures keep their raw path.
+func saveCapitalTradeSnapshot(tx *gorm.DB, trade Trade) error {
+	if !research2CapitalLedgerAvailable(tx) {
+		return nil
+	}
+	overview, err := NewRepository(tx).WithSlot(trade.Slot).Overview(tx.Statement.Context)
+	if err != nil {
+		return err
+	}
+	point := newAccountLedgerSnapshot(trade.Slot, "trade", trade.TradedAt, overview)
+	point.SnapshotID = "trade-" + trade.TradeID
+	return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&point).Error
+}
+
+// Unitize only for drawdown: deposits/transfers change assets but not trading
+// performance. The displayed account return remains profit/external capital.
+func capitalEventDrawdown(curve []AccountLedgerSnapshot) float64 {
+	wealth, peak, drawdown := 1.0, 1.0, 0.0
+	previousNAV, previousFunding := 0.0, 0.0
+	for _, point := range curve {
+		funding := point.CumulativeExternalCapital + point.NetInternalTransfer
+		if previousNAV > 0 {
+			wealth *= math.Max(0, (point.NetAssetValue-(funding-previousFunding))/previousNAV)
+		}
+		peak = math.Max(peak, wealth)
+		if peak > 0 {
+			drawdown = math.Max(drawdown, (peak-wealth)/peak)
+		}
+		previousNAV, previousFunding = point.NetAssetValue, funding
+	}
+	return drawdown
 }

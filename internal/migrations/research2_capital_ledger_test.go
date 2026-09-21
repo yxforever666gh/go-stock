@@ -2,6 +2,7 @@ package migrations
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -147,5 +148,56 @@ func TestSchema31RefusesToRewriteSoldSameDayBuy(t *testing.T) {
 	}
 	if err := database.Transaction(applyResearch2CapitalLedger); err == nil {
 		t.Fatal("expected dependent-sell guard")
+	}
+}
+
+func TestSchema31PreservesScorePriorityWhenQuotesArriveOutOfOrder(t *testing.T) {
+	db := openMigrationTestDB(t)
+	if err := db.AutoMigrate(&research2.Account{}, &research2.AnalysisRun{}, &research2.ExecutionChain{}, &research2.Recommendation{}, &research2.Trade{}, &research2.AccountSnapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	at := research2CapitalTopUpAt.Add(40 * time.Minute)
+	for _, slot := range research2.Slots() {
+		if err := db.Create(&research2.Account{Slot: slot, InitialCash: 12000, Cash: 12000}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	run := research2.AnalysisRun{RunID: "rank-run", ChainID: "rank-chain", Slot: "10:05", ScheduledSlot: "10:05", TradingDate: research2CapitalRebaseDate, Published: true, Status: "success", GeneratedAt: &at}
+	chain := research2.ExecutionChain{ChainID: run.ChainID, Slot: run.Slot, TradingDate: run.TradingDate, WinnerRunID: run.RunID, Status: "completed", TargetSlots: 5}
+	for _, model := range []any{&run, &chain} {
+		if err := db.Create(model).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for rank := 1; rank <= 6; rank++ {
+		quotedAt := at.Add(time.Duration(7-rank) * time.Second)
+		item := research2.Recommendation{RecommendationID: fmt.Sprintf("rank-%d", rank), AnalysisRunID: run.RunID, Slot: run.Slot, StockCode: fmt.Sprintf("sh60000%d", rank), StockName: "ranked", SelectionRank: rank, FinalScore: float64(40 - rank), Status: "missed_cash", ExecutionQuotePrice: 10, ExecutionQuoteAt: &quotedAt}
+		if err := db.Create(&item).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Transaction(applyResearch2CapitalLedger); err != nil {
+		t.Fatal(err)
+	}
+	var items []research2.Recommendation
+	if err := db.Order("selection_rank ASC").Find(&items).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.SelectionRank <= 5 && (item.Status != "active" || item.Quantity != 300) {
+			t.Fatalf("higher-priority candidate lost its allocation: %+v", item)
+		}
+		if item.SelectionRank == 6 && (item.Quantity != 0 || item.BuyAt != nil) {
+			t.Fatalf("earlier low-priority quote stole a seat: %+v", item)
+		}
+	}
+	var trades []research2.Trade
+	if err := db.Find(&trades).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, trade := range trades {
+		if trade.QuoteAt == nil || trade.TradedAt.Before(*trade.QuoteAt) || trade.TradedAt.Before(at) {
+			t.Fatalf("execution predates evidence: %+v", trade)
+		}
 	}
 }

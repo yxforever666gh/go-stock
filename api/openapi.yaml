@@ -573,7 +573,7 @@ paths:
       parameters:
         - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
       responses:
-        "200": {description: Isolated 12000-yuan Research Center 2 account, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AccountOverview"}}}}
+        "200": {description: Isolated Research Center 2 account with external capital and neutral internal transfers, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AccountOverview"}}}}
   /api/v1/research2/account/performance:
     get:
       operationId: getResearch2Performance
@@ -2360,7 +2360,7 @@ components:
             curve: {type: array, items: {$ref: "#/components/schemas/Research2AccountLedgerSnapshot"}}
     Research2AccountLedgerSnapshot:
       type: object
-      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeExternalCapital, netInternalTransfer, netProfit, cumulativeCapitalReturn, valuationBasis]
+      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeExternalCapital, netInternalTransfer, netProfit, cumulativeCapitalReturn, returnRate, valuationBasis]
       properties:
         slot: {type: string}
         snapshotId: {type: string}
@@ -2374,4 +2374,5 @@ components:
         netInternalTransfer: {type: number}
         netProfit: {type: number}
         cumulativeCapitalReturn: {type: number}
+        returnRate: {type: number}
         valuationBasis: {type: string}

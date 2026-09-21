@@ -123,12 +123,21 @@ func research2BuildCapitalEvents(tx *gorm.DB) ([]research2.AccountCapitalEvent, 
 	if err := tx.Order("traded_at ASC, trade_id ASC, id ASC").Find(&trades).Error; err != nil {
 		return nil, err
 	}
+	sort.SliceStable(trades, func(i, j int) bool {
+		if !trades[i].TradedAt.Equal(trades[j].TradedAt) {
+			return trades[i].TradedAt.Before(trades[j].TradedAt)
+		}
+		return trades[i].TradeID < trades[j].TradeID
+	})
 	cash := make(map[string]float64, len(research2.Slots()))
 	for _, slot := range research2.Slots() {
 		cash[slot] = research2CapitalInitialAmount
 	}
 	for _, trade := range trades {
-		if !trade.TradedAt.Before(research2CapitalTopUpAt) || !research2.ValidSlot(trade.Slot) {
+		if !research2.ValidSlot(trade.Slot) || trade.TradedAt.Before(research2CapitalInitialAt) || math.IsNaN(trade.NetCashFlow) || math.IsInf(trade.NetCashFlow, 0) {
+			return nil, fmt.Errorf("invalid historical research2 trade %s", trade.TradeID)
+		}
+		if !trade.TradedAt.Before(research2CapitalTopUpAt) {
 			continue
 		}
 		if trade.NetCashFlow < 0 && cash[trade.Slot]+trade.NetCashFlow < -research2CapitalRebaseEpsilon {
@@ -169,6 +178,7 @@ type research2RebaseCandidate struct {
 	chainID        string
 	generatedAt    time.Time
 	quoteAt        time.Time
+	executeAt      time.Time
 	quote          float64
 	blocked        bool
 	result         research2RebaseResult
@@ -185,7 +195,6 @@ type research2RebaseResult struct {
 }
 
 type research2RebasePlan struct {
-	events      []research2.AccountCapitalEvent
 	candidates  []*research2RebaseCandidate
 	chainBases  map[string]float64
 	chainFilled map[string]int
@@ -204,7 +213,7 @@ type research2ReplayEvent struct {
 }
 
 func research2BuildRebasePlan(tx *gorm.DB, events []research2.AccountCapitalEvent) (research2RebasePlan, error) {
-	plan := research2RebasePlan{events: events, chainBases: map[string]float64{}, chainFilled: map[string]int{}, cash: map[string]float64{}}
+	plan := research2RebasePlan{chainBases: map[string]float64{}, chainFilled: map[string]int{}, cash: map[string]float64{}}
 	var chains []research2.ExecutionChain
 	if err := tx.Where("trading_date = ? AND TRIM(winner_run_id) <> ''", research2CapitalRebaseDate).Order("scheduled_for ASC, chain_id ASC").Find(&chains).Error; err != nil {
 		return plan, err
@@ -224,27 +233,52 @@ func research2BuildRebasePlan(tx *gorm.DB, events []research2.AccountCapitalEven
 		}
 		runByID[run.RunID] = run
 	}
+	for _, chain := range chains {
+		run, ok := runByID[chain.WinnerRunID]
+		if !ok || run.ChainID != chain.ChainID || run.Slot != chain.Slot || !run.Published {
+			return plan, fmt.Errorf("research2 capital rebase chain %s has an invalid winner", chain.ChainID)
+		}
+	}
 	var rows []research2.Recommendation
-	if err := tx.Where("analysis_run_id IN ?", winnerIDs).Order("analysis_run_id ASC, selection_rank ASC, id ASC").Find(&rows).Error; err != nil {
+	if err := tx.Where("analysis_run_id IN ?", winnerIDs).Order("analysis_run_id ASC, final_score DESC, selection_rank ASC, id ASC").Find(&rows).Error; err != nil {
 		return plan, err
 	}
 	targetIDs := make(map[string]bool, len(rows))
+	lastExecutionAt := map[string]time.Time{}
 	for _, row := range rows {
 		targetIDs[row.RecommendationID] = true
 		run, ok := runByID[row.AnalysisRunID]
 		if !ok {
 			return plan, fmt.Errorf("research2 capital rebase recommendation %s has no winner run", row.RecommendationID)
 		}
-		candidate := &research2RebaseCandidate{recommendation: row, chainID: run.ChainID, generatedAt: *run.GeneratedAt}
+		if row.Slot != run.Slot || row.SellAt != nil {
+			return plan, fmt.Errorf("research2 rebase recommendation %s has inconsistent ownership or a dependent sale", row.RecommendationID)
+		}
+		landedAt := *run.GeneratedAt
+		if run.PersistedAt != nil {
+			landedAt = *run.PersistedAt
+		}
+		candidate := &research2RebaseCandidate{recommendation: row, chainID: run.ChainID, generatedAt: landedAt}
 		candidate.quote = row.ExecutionQuotePrice
 		if candidate.quote <= 0 {
 			candidate.quote = row.BuyMarketPrice
 		}
-		candidate.quoteAt = candidate.generatedAt
-		if row.ExecutionQuoteAt != nil && !row.ExecutionQuoteAt.IsZero() && row.ExecutionQuoteAt.After(candidate.quoteAt) {
+		if row.ExecutionQuoteAt != nil && !row.ExecutionQuoteAt.IsZero() {
 			candidate.quoteAt = *row.ExecutionQuoteAt
+		} else if row.BuyAt != nil {
+			candidate.quoteAt = *row.BuyAt
 		}
 		candidate.blocked = research2BlockedExecutionFailure(row.ExecutionFailureCode)
+		candidate.executeAt = landedAt
+		if candidate.quoteAt.After(candidate.executeAt) {
+			candidate.executeAt = candidate.quoteAt
+		}
+		// Quotes from the same collection batch may arrive out of rank order.
+		// Preserve score priority, and never claim an execution before its quote.
+		if previous := lastExecutionAt[run.ChainID]; previous.After(candidate.executeAt) {
+			candidate.executeAt = previous
+		}
+		lastExecutionAt[run.ChainID] = candidate.executeAt
 		plan.candidates = append(plan.candidates, candidate)
 	}
 
@@ -260,14 +294,18 @@ func research2BuildRebasePlan(tx *gorm.DB, events []research2.AccountCapitalEven
 		if targetIDs[trade.RecommendationID] && trade.Side == "buy" {
 			continue
 		}
-		replay = append(replay, research2ReplayEvent{at: trade.TradedAt, priority: 2, sequence: trade.TradeID, slot: trade.Slot, kind: "trade", amount: trade.NetCashFlow})
+		replay = append(replay, research2ReplayEvent{at: trade.TradedAt, priority: 1, sequence: trade.TradeID, slot: trade.Slot, kind: "trade", amount: trade.NetCashFlow})
 	}
 	for _, chain := range chains {
 		run := runByID[chain.WinnerRunID]
-		replay = append(replay, research2ReplayEvent{at: *run.GeneratedAt, priority: 1, sequence: chain.ChainID, slot: chain.Slot, kind: "base", chainID: chain.ChainID})
+		landedAt := *run.GeneratedAt
+		if run.PersistedAt != nil {
+			landedAt = *run.PersistedAt
+		}
+		replay = append(replay, research2ReplayEvent{at: landedAt, priority: 2, sequence: chain.ChainID, slot: chain.Slot, kind: "base", chainID: chain.ChainID})
 	}
-	for _, candidate := range plan.candidates {
-		replay = append(replay, research2ReplayEvent{at: candidate.quoteAt, priority: 3, sequence: fmt.Sprintf("%s:%08d:%s", candidate.chainID, candidate.recommendation.SelectionRank, candidate.recommendation.RecommendationID), slot: candidate.recommendation.Slot, kind: "candidate", candidate: candidate})
+	for index, candidate := range plan.candidates {
+		replay = append(replay, research2ReplayEvent{at: candidate.executeAt, priority: 3, sequence: fmt.Sprintf("%08d", index), slot: candidate.recommendation.Slot, kind: "candidate", candidate: candidate})
 	}
 	sort.SliceStable(replay, func(i, j int) bool {
 		if !replay[i].at.Equal(replay[j].at) {
@@ -327,8 +365,12 @@ func research2PlanCandidateBuy(plan *research2RebasePlan, candidate *research2Re
 		candidate.result = research2RebaseResult{status: "missed_untradable", reason: item.FailureReason, tradeAt: candidate.quoteAt, marketPrice: candidate.quote}
 		return
 	}
-	if candidate.quote <= 0 {
+	if candidate.quote <= 0 || math.IsNaN(candidate.quote) || math.IsInf(candidate.quote, 0) || candidate.quoteAt.IsZero() {
 		candidate.result = research2RebaseResult{status: "analysis_only", reason: "历史执行报价不可用，仅保留分析", tradeAt: candidate.quoteAt}
+		return
+	}
+	if candidate.quoteAt.Before(candidate.generatedAt.Truncate(time.Second)) || candidate.executeAt.In(research2Shanghai()).Format("2006-01-02") != research2CapitalRebaseDate || candidate.executeAt.In(research2Shanghai()).Hour()*60+candidate.executeAt.Minute() >= 690 {
+		candidate.result = research2RebaseResult{status: "analysis_only", reason: "历史执行报价不在有效买入窗口，仅保留分析"}
 		return
 	}
 	if plan.chainFilled[candidate.chainID] >= 5 {
@@ -352,18 +394,22 @@ func research2PlanCandidateBuy(plan *research2RebasePlan, candidate *research2Re
 	}
 	plan.cash[item.Slot] += cost.NetCashFlow
 	plan.chainFilled[candidate.chainID]++
-	candidate.result = research2RebaseResult{status: "active", quantity: quantity, cost: cost, tradeAt: candidate.quoteAt, bought: true, marketPrice: candidate.quote}
+	candidate.result = research2RebaseResult{status: "active", quantity: quantity, cost: cost, tradeAt: candidate.executeAt, bought: true, marketPrice: candidate.quote}
 }
 
-// The live strategy persisted the execution roster in status/failure text;
-// current records intentionally do not use a score threshold. Rows retired
-// solely because five buys were already filled remain eligible when a replay
-// frees a slot, while genuine analysis-only rows stay out of trading.
+// Current winner rows have no score threshold. A stored accepted execution
+// quote also makes an unused row eligible when the replay frees a seat.
 func research2RebaseEligible(item research2.Recommendation) bool {
-	if item.Status != "analysis_only" {
+	switch item.Status {
+	case "active", "buy_pending", "standby", "standby_not_used", "missed_cash", "missed_untradable":
 		return true
+	case "analysis_only":
+		// Winner rows created under the current policy have no score gate;
+		// an accepted stored quote proves they were in the execution roster.
+		return item.ExecutionFailureCode == "" && item.ExecutionQuotePrice > 0 && item.ExecutionQuoteAt != nil
+	default:
+		return false
 	}
-	return strings.Contains(item.FailureReason, "五笔买入") || strings.Contains(item.FailureReason, "剩余评分")
 }
 
 func research2ApplyRebasePlan(tx *gorm.DB, accounts []research2.Account, plan research2RebasePlan) error {
@@ -392,7 +438,7 @@ func research2ApplyRebasePlan(tx *gorm.DB, accounts []research2.Account, plan re
 		updates := map[string]any{
 			"status": result.status, "failure_reason": result.reason,
 			"buy_at": nil, "buy_market_price": 0, "buy_price": 0, "quantity": 0, "buy_fees": 0,
-			"sell_at": nil, "sell_market_price": 0, "sell_price": 0, "sell_fees": 0,
+			"sell_at": nil, "sell_market_price": 0, "sell_price": 0, "sell_fees": 0, "target_sell_at": nil,
 			"net_pn_l": 0, "net_yield_rate": 0, "hit_five_before_sell": nil, "hit_limit_up_full_day": nil,
 			"hit_minus_three": nil, "metrics_finalized": false,
 		}
@@ -423,7 +469,7 @@ func research2ApplyRebasePlan(tx *gorm.DB, accounts []research2.Account, plan re
 				Side: "buy", TradedAt: result.tradeAt, MarketPrice: result.marketPrice, ExecutionPrice: result.cost.ExecutionPrice,
 				Quantity: result.quantity, Commission: result.cost.Commission, TransferFee: result.cost.TransferFee,
 				SlippageAmount: result.cost.SlippageAmount, NetCashFlow: result.cost.NetCashFlow,
-				PriceSource: "capital_rebase_stored_execution_quote", ExecutionMode: "capital_rebase_fixed_fifth", QuoteAt: &result.tradeAt,
+				PriceSource: "capital_rebase_stored_execution_quote", ExecutionMode: "capital_rebase_fixed_fifth", QuoteAt: &candidate.quoteAt,
 			}
 			if err := tx.Create(&trade).Error; err != nil {
 				return fmt.Errorf("write recalculated buy %s: %w", item.RecommendationID, err)
@@ -601,7 +647,6 @@ func verifyMainSchema31Runtime(tx *gorm.DB) error {
 		if count < 2 {
 			return fmt.Errorf("main schema 31 slot %s has %d derived ledger snapshots", account.Slot, count)
 		}
-		_ = transfer // Explicitly read so validation covers both event classes.
 	}
 	return nil
 }

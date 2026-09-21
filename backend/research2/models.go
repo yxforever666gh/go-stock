@@ -295,6 +295,7 @@ type AccountLedgerSnapshot struct {
 	NetInternalTransfer       float64   `json:"netInternalTransfer" gorm:"not null"`
 	NetProfit                 float64   `json:"netProfit" gorm:"not null"`
 	CumulativeCapitalReturn   float64   `json:"cumulativeCapitalReturn" gorm:"not null"`
+	ReturnRate                float64   `json:"returnRate" gorm:"-"`
 	ValuationBasis            string    `json:"valuationBasis" gorm:"size:32;not null"`
 	CreatedAt                 time.Time `json:"createdAt"`
 }

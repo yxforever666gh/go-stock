@@ -483,7 +483,7 @@ func (r *Repository) RecordBuy(ctx context.Context, recommendationID string, tra
 				return err
 			}
 		}
-		return nil
+		return saveCapitalTradeSnapshot(tx, trade)
 	})
 }
 
@@ -523,7 +523,10 @@ func (r *Repository) RecordSell(ctx context.Context, recommendationID string, tr
 		if err := tx.Create(&trade).Error; err != nil {
 			return err
 		}
-		return tx.Model(&account).Update("cash", account.Cash+trade.NetCashFlow).Error
+		if err := tx.Model(&account).Update("cash", account.Cash+trade.NetCashFlow).Error; err != nil {
+			return err
+		}
+		return saveCapitalTradeSnapshot(tx, trade)
 	})
 }
 
@@ -649,7 +652,11 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	if err = base.Count(&result.ClosedTrades).Error; err != nil {
 		return result, err
 	}
-	if err = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("status = ? AND coalesce(period_pn_l,net_pn_l) > 0", "closed").Count(&result.WinningTrades).Error; err != nil {
+	profitColumn := "coalesce(period_pn_l,net_pn_l)"
+	if ledgerBacked {
+		profitColumn = "net_pn_l"
+	}
+	if err = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("status = ? AND "+profitColumn+" > 0", "closed").Count(&result.WinningTrades).Error; err != nil {
 		return result, err
 	}
 	if result.ClosedTrades > 0 {
@@ -665,7 +672,7 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", true, []string{"success", "no_recommendation"}).Count(&result.OnTimeReports).Error
 	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", false, []string{"success", "no_recommendation"}).Count(&result.LateReports).Error
 	if ledgerBacked && research2CapitalLedgerAvailable(r.db) {
-		if err = r.accountQuery(ctx).Order("valued_at ASC, id ASC").Limit(500).Find(&result.Curve).Error; err != nil {
+		if err = r.accountQuery(ctx).Where("snapshot_type IN ?", []string{"trade", CapitalEventInitial, CapitalEventTopUp, CapitalEventLegacyPoolTransfer}).Order("valued_at ASC, id ASC").Find(&result.Curve).Error; err != nil {
 			return result, err
 		}
 	} else {
@@ -681,6 +688,14 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	current := newAccountLedgerSnapshot(r.accountSlot(), "current", overview.LastValuedAt, overview)
 	current.SnapshotID = "current-" + r.accountSlot()
 	result.Curve = append(result.Curve, current)
+	for index := range result.Curve {
+		result.Curve[index].ReturnRate = result.Curve[index].CumulativeCapitalReturn
+	}
+	if ledgerBacked {
+		maxDrawdown := capitalEventDrawdown(result.Curve)
+		result.MaxDrawdown = &maxDrawdown
+		return result, nil
+	}
 	peak, maxDrawdown := 0.0, 0.0
 	for _, point := range result.Curve {
 		wealth := 1 + point.CumulativeCapitalReturn

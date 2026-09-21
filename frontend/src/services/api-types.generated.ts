@@ -1041,6 +1041,7 @@ export type Research2AccountLedgerSnapshot = {
   netInternalTransfer: number
   netProfit: number
   positionValue: number
+  returnRate: number
   slot?: string
   snapshotId: string
   snapshotType: string
