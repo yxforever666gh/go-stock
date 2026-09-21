@@ -86,12 +86,20 @@ func (r *Repository) nowTime() time.Time {
 }
 
 type SlotStatus struct {
-	Slot            string     `json:"slot"`
-	Label           string     `json:"label"`
-	TradingDate     string     `json:"tradingDate"`
-	WinnerRunID     string     `json:"winnerRunId"`
-	SellCompletedAt *time.Time `json:"sellCompletedAt,omitempty"`
-	Status          string     `json:"status"`
+	Slot              string     `json:"slot"`
+	Label             string     `json:"label"`
+	TradingDate       string     `json:"tradingDate"`
+	WinnerRunID       string     `json:"winnerRunId"`
+	SellCompletedAt   *time.Time `json:"sellCompletedAt,omitempty"`
+	Status            string     `json:"status"`
+	ReportStatus      string     `json:"reportStatus"`
+	ReportOnTime      *bool      `json:"reportOnTime,omitempty"`
+	BuyStatus         string     `json:"buyStatus"`
+	BoughtCount       int        `json:"boughtCount"`
+	BuyTargetCount    int        `json:"buyTargetCount"`
+	PendingBuyCount   int        `json:"pendingBuyCount"`
+	OpenPositionCount int        `json:"openPositionCount"`
+	StopReason        string     `json:"stopReason,omitempty"`
 }
 
 func (r *Repository) SlotStatuses(ctx context.Context, at time.Time) ([]SlotStatus, error) {
@@ -104,16 +112,137 @@ func (r *Repository) SlotStatuses(ctx context.Context, at time.Time) ([]SlotStat
 	for _, chain := range chains {
 		bySlot[chain.Slot] = chain
 	}
+	runsByID, countsByChain, err := r.slotStatusDetails(ctx, chains)
+	if err != nil {
+		return nil, err
+	}
 	result := make([]SlotStatus, 0, 24)
 	for _, slot := range Slots() {
 		chain, exists := bySlot[slot]
 		state := "pending"
+		buyTarget := DailyTargetSlots
+		counts := slotExecutionCounts{}
 		if exists {
 			state = chain.Status
+			counts = countsByChain[chain.ChainID]
+			if chain.TargetSlots > 0 {
+				buyTarget = chain.TargetSlots
+			}
 		}
-		result = append(result, SlotStatus{Slot: slot, Label: slot + "–" + SlotTime(at, slot).Add(5*time.Minute).Format("15:04"), TradingDate: date, WinnerRunID: chain.WinnerRunID, SellCompletedAt: chain.SellCompletedAt, Status: state})
+		reportStatus, reportOnTime := slotReportState(chain, exists, runsByID)
+		result = append(result, SlotStatus{
+			Slot: slot, Label: slot + "–" + SlotTime(at, slot).Add(5*time.Minute).Format("15:04"), TradingDate: date,
+			WinnerRunID: chain.WinnerRunID, SellCompletedAt: chain.SellCompletedAt, Status: state,
+			ReportStatus: reportStatus, ReportOnTime: reportOnTime,
+			BuyStatus:   slotBuyStatus(chain, exists, reportStatus, counts, buyTarget),
+			BoughtCount: chain.FilledSlots, BuyTargetCount: buyTarget, PendingBuyCount: counts.pending, OpenPositionCount: counts.open,
+			StopReason: chain.StopReason,
+		})
 	}
 	return result, nil
+}
+
+type slotExecutionCounts struct {
+	pending int
+	open    int
+}
+
+func (r *Repository) slotStatusDetails(ctx context.Context, chains []ExecutionChain) (map[string]AnalysisRun, map[string]slotExecutionCounts, error) {
+	runsByID := make(map[string]AnalysisRun)
+	countsByChain := make(map[string]slotExecutionCounts)
+	chainIDs := make([]string, 0, len(chains))
+	for _, chain := range chains {
+		if chain.ChainID != "" {
+			chainIDs = append(chainIDs, chain.ChainID)
+		}
+	}
+	if len(chainIDs) == 0 {
+		return runsByID, countsByChain, nil
+	}
+
+	var runs []AnalysisRun
+	if err := r.db.WithContext(ctx).Where("chain_id IN ?", chainIDs).Find(&runs).Error; err != nil {
+		return nil, nil, err
+	}
+	runChain := make(map[string]string, len(runs))
+	runIDs := make([]string, 0, len(runs))
+	for _, run := range runs {
+		runsByID[run.RunID] = run
+		runChain[run.RunID] = run.ChainID
+		runIDs = append(runIDs, run.RunID)
+	}
+	if len(runIDs) == 0 {
+		return runsByID, countsByChain, nil
+	}
+
+	var recommendations []Recommendation
+	if err := r.db.WithContext(ctx).Where("analysis_run_id IN ?", runIDs).Find(&recommendations).Error; err != nil {
+		return nil, nil, err
+	}
+	for _, recommendation := range recommendations {
+		chainID := runChain[recommendation.AnalysisRunID]
+		counts := countsByChain[chainID]
+		switch recommendation.Status {
+		case "buy_pending", "standby":
+			counts.pending++
+		case "active", "sell_pending":
+			counts.open++
+		}
+		countsByChain[chainID] = counts
+	}
+	return runsByID, countsByChain, nil
+}
+
+func slotReportState(chain ExecutionChain, exists bool, runsByID map[string]AnalysisRun) (string, *bool) {
+	if !exists {
+		return "awaiting", nil
+	}
+	if run, ok := runsByID[chain.WinnerRunID]; ok {
+		switch run.Status {
+		case "success", "no_recommendation":
+			onTime := run.OnTime
+			return run.Status, &onTime
+		case "failed":
+			return "failed", nil
+		default:
+			return "awaiting", nil
+		}
+	}
+	switch chain.Status {
+	case "failed", "cutoff", "disabled":
+		return chain.Status, nil
+	default:
+		return "awaiting", nil
+	}
+}
+
+func slotBuyStatus(chain ExecutionChain, exists bool, reportStatus string, counts slotExecutionCounts, target int) string {
+	if !exists {
+		return "awaiting_report"
+	}
+	switch chain.Status {
+	case "cutoff", "disabled", "failed":
+		return chain.Status
+	}
+	if reportStatus == "no_recommendation" {
+		return "no_recommendation"
+	}
+	if reportStatus != "success" {
+		return "awaiting_report"
+	}
+	if counts.pending > 0 {
+		return "awaiting_quote"
+	}
+	if target > 0 && chain.FilledSlots >= target {
+		return "bought_full"
+	}
+	if chain.FilledSlots > 0 {
+		return "bought_partial"
+	}
+	if chain.Status == "running" {
+		return "processing"
+	}
+	return "no_purchase"
 }
 
 // DailyEmailRun is synthetic: one stable delivery key per trading day, without

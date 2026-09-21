@@ -1242,10 +1242,18 @@ export type Research2RecommendationDetail = {
 }
 
 export type Research2SlotStatus = {
+  boughtCount: number
+  buyStatus: "awaiting_report" | "awaiting_quote" | "bought_full" | "bought_partial" | "no_recommendation" | "cutoff" | "disabled" | "failed" | "processing" | "no_purchase"
+  buyTargetCount: number
   label: string
+  openPositionCount: number
+  pendingBuyCount: number
+  reportOnTime?: boolean | null
+  reportStatus: "awaiting" | "success" | "no_recommendation" | "failed" | "cutoff" | "disabled"
   sellCompletedAt?: string | null
   slot: string
   status: string
+  stopReason?: string
   tradingDate: string
   winnerRunId: string
 }

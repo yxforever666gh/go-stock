@@ -57,6 +57,67 @@ func TestSlotBoundaries(t *testing.T) {
 	}
 }
 
+func TestSlotStatusesDescribeReportTimelinessAndBuying(t *testing.T) {
+	r := slotRepository(t)
+	ctx := context.Background()
+	at := slotClock(10, 0)
+	date := at.Format("2006-01-02")
+	completedAt := slotClock(9, 45)
+	runs := []AnalysisRun{
+		{RunID: "on-time", TradingDate: date, ScheduledSlot: "09:30", Slot: "09:30", Published: true, ChainID: "chain-on-time", AttemptNo: 1, ScheduledFor: slotClock(9, 30), StartedAt: slotClock(9, 30), EvidenceCutoffAt: slotClock(9, 30), GeneratedAt: &at, Status: "success", OnTime: true},
+		{RunID: "late", TradingDate: date, ScheduledSlot: "09:35", Slot: "09:40", Published: true, ChainID: "chain-late", AttemptNo: 1, ScheduledFor: slotClock(9, 35), StartedAt: slotClock(9, 35), EvidenceCutoffAt: slotClock(9, 35), GeneratedAt: &at, Status: "success", OnTime: false},
+		{RunID: "empty", TradingDate: date, ScheduledSlot: "09:45", Slot: "09:45", Published: true, ChainID: "chain-empty", AttemptNo: 1, ScheduledFor: slotClock(9, 45), StartedAt: slotClock(9, 45), EvidenceCutoffAt: slotClock(9, 45), GeneratedAt: &at, Status: "no_recommendation", OnTime: true},
+	}
+	if err := r.db.WithContext(ctx).Create(&runs).Error; err != nil {
+		t.Fatal(err)
+	}
+	chains := []ExecutionChain{
+		{ChainID: "chain-on-time", Slot: "09:30", TradingDate: date, WinnerRunID: "on-time", Status: "running", TargetSlots: 5, FilledSlots: 2, ScheduledFor: slotClock(9, 30), StartedAt: slotClock(9, 30)},
+		{ChainID: "chain-late", Slot: "09:40", TradingDate: date, WinnerRunID: "late", Status: "completed", TargetSlots: 5, FilledSlots: 3, ScheduledFor: slotClock(9, 40), StartedAt: slotClock(9, 40), SellCompletedAt: &completedAt},
+		{ChainID: "chain-empty", Slot: "09:45", TradingDate: date, WinnerRunID: "empty", Status: "completed", TargetSlots: 5, ScheduledFor: slotClock(9, 45), StartedAt: slotClock(9, 45)},
+		{ChainID: "chain-cutoff", Slot: "09:50", TradingDate: date, Status: "cutoff", TargetSlots: 5, ScheduledFor: slotClock(9, 50), StartedAt: slotClock(9, 50), StopReason: "上午11:30买入窗口截止"},
+	}
+	if err := r.db.WithContext(ctx).Create(&chains).Error; err != nil {
+		t.Fatal(err)
+	}
+	recommendations := []Recommendation{
+		{RecommendationID: "on-active-one", AnalysisRunID: "on-time", Slot: "09:30", StockCode: "sh600001", StockName: "one", SignalAt: at, TargetBuyAt: at, Status: "active"},
+		{RecommendationID: "on-active-two", AnalysisRunID: "on-time", Slot: "09:30", StockCode: "sh600002", StockName: "two", SignalAt: at, TargetBuyAt: at, Status: "active"},
+		{RecommendationID: "on-pending", AnalysisRunID: "on-time", Slot: "09:30", StockCode: "sh600003", StockName: "pending", SignalAt: at, TargetBuyAt: at, Status: "buy_pending"},
+		{RecommendationID: "late-active-one", AnalysisRunID: "late", Slot: "09:40", StockCode: "sh600004", StockName: "one", SignalAt: at, TargetBuyAt: at, Status: "active"},
+		{RecommendationID: "late-active-two", AnalysisRunID: "late", Slot: "09:40", StockCode: "sh600005", StockName: "two", SignalAt: at, TargetBuyAt: at, Status: "active"},
+		{RecommendationID: "late-active-three", AnalysisRunID: "late", Slot: "09:40", StockCode: "sh600006", StockName: "three", SignalAt: at, TargetBuyAt: at, Status: "active"},
+	}
+	if err := r.CreateRecommendations(ctx, recommendations); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := r.SlotStatuses(ctx, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bySlot := make(map[string]SlotStatus, len(states))
+	for _, state := range states {
+		bySlot[state.Slot] = state
+	}
+	onTime := bySlot["09:30"]
+	if onTime.ReportStatus != "success" || onTime.ReportOnTime == nil || !*onTime.ReportOnTime || onTime.BuyStatus != "awaiting_quote" || onTime.BoughtCount != 2 || onTime.BuyTargetCount != 5 || onTime.PendingBuyCount != 1 || onTime.OpenPositionCount != 2 {
+		t.Fatalf("on-time state = %+v", onTime)
+	}
+	late := bySlot["09:40"]
+	if late.ReportStatus != "success" || late.ReportOnTime == nil || *late.ReportOnTime || late.BuyStatus != "bought_partial" || late.BoughtCount != 3 || late.BuyTargetCount != 5 || late.PendingBuyCount != 0 || late.OpenPositionCount != 3 || late.SellCompletedAt == nil {
+		t.Fatalf("late state = %+v", late)
+	}
+	empty := bySlot["09:45"]
+	if empty.ReportStatus != "no_recommendation" || empty.ReportOnTime == nil || !*empty.ReportOnTime || empty.BuyStatus != "no_recommendation" {
+		t.Fatalf("empty state = %+v", empty)
+	}
+	cutoff := bySlot["09:50"]
+	if cutoff.ReportStatus != "cutoff" || cutoff.ReportOnTime != nil || cutoff.BuyStatus != "cutoff" || cutoff.StopReason == "" {
+		t.Fatalf("cutoff state = %+v", cutoff)
+	}
+}
+
 func TestSlotConcurrentTaskClaimsAndFirstPublication(t *testing.T) {
 	r := slotRepository(t)
 	ctx := context.Background()

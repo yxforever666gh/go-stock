@@ -495,7 +495,7 @@ paths:
     get:
       operationId: listResearch2Slots
       responses:
-        "200": {description: Today slot publication and scheduled liquidation state, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2SlotStatus"}}}}}
+        "200": {description: Today slot report timeliness and buy execution state, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2SlotStatus"}}}}}
   /api/v1/research2/analysis-runs:
     get:
       operationId: listResearch2AnalysisRuns
@@ -1893,7 +1893,7 @@ components:
         metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}
     Research2SlotStatus:
       type: object
-      required: [slot, label, tradingDate, winnerRunId, status]
+      required: [slot, label, tradingDate, winnerRunId, status, reportStatus, buyStatus, boughtCount, buyTargetCount, pendingBuyCount, openPositionCount]
       properties:
         slot: {type: string}
         label: {type: string}
@@ -1901,6 +1901,14 @@ components:
         winnerRunId: {type: string}
         sellCompletedAt: {type: string, format: date-time, nullable: true}
         status: {type: string}
+        reportStatus: {type: string, enum: [awaiting, success, no_recommendation, failed, cutoff, disabled]}
+        reportOnTime: {type: boolean, nullable: true, description: "Whether the winning report persisted in its originally scheduled five-minute slot; null when no winning report exists."}
+        buyStatus: {type: string, enum: [awaiting_report, awaiting_quote, bought_full, bought_partial, no_recommendation, cutoff, disabled, failed, processing, no_purchase]}
+        boughtCount: {type: integer, minimum: 0}
+        buyTargetCount: {type: integer, minimum: 0}
+        pendingBuyCount: {type: integer, minimum: 0}
+        openPositionCount: {type: integer, minimum: 0}
+        stopReason: {type: string}
     Research2AnalysisRun:
       type: object
       required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
