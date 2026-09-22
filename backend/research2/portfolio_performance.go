@@ -29,6 +29,8 @@ type PerformanceBar struct {
 	High   float64
 	Low    float64
 	Close  float64
+	Volume float64
+	Amount float64
 	Source string
 }
 

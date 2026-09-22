@@ -42,7 +42,7 @@ func ensureExecutionChain(tx *gorm.DB, slot, tradingDate string, scheduledFor, s
 	if err := tx.Model(&Recommendation{}).Where("slot = ? AND buy_at >= ? AND buy_at < ?", slot, day, day.AddDate(0, 0, 1)).Count(&bought).Error; err != nil {
 		return ExecutionChain{}, err
 	}
-	chain := ExecutionChain{FilledSlots: int(bought), ChainID: deterministicExecutionChainID(tradingDate + ":" + slot), Slot: slot, TradingDate: tradingDate, ScheduledFor: scheduledFor, Status: "running", TargetSlots: DailyTargetSlots, StartedAt: startedAt, AllocationBaseCash: pendingAllocationBaseCash()}
+	chain := ExecutionChain{FilledSlots: int(bought), ChainID: deterministicExecutionChainID(tradingDate + ":" + slot), Slot: slot, TradingDate: tradingDate, ScheduledFor: scheduledFor, Status: "running", TargetSlots: DailyTargetSlots, StartedAt: startedAt, AllocationPolicy: AllocationPolicyRemainingCashSlots}
 	if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "trading_date"}, {Name: "slot"}}, DoNothing: true}).Create(&chain).Error; err != nil {
 		return chain, err
 	}

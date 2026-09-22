@@ -27,7 +27,7 @@ var strategyPrompt string
 
 var ErrOutsideAnalysisStartWindow = errors.New("research2 analysis start is outside the allowed window")
 
-const CurrentStrategyVersion = "research2-slots-v12"
+const CurrentStrategyVersion = "research2-slots-v13"
 
 type Evidence struct {
 	AvailableCash            float64
@@ -593,7 +593,7 @@ func buildPrompt(evidence preparedEvidence, cutoff time.Time) string {
 		"- 新催化参考起点（上一交易日收盘；--表示未核验）：" + formatResearch2Time(evidence.catalystWindowStartAt),
 		"- 09:30至11:25每五分钟独立启动；11:30停止启动，已运行任务允许完成，上午窗口外结果仅保留报告。",
 		"- 第一份有效报告按实际落盘时间归入五分钟账户并立即按有效行情买入；后到报告仅归档。各账户在交易日对应刻度独立定时卖出旧持仓，与研究结果无关。",
-		"- 本轮分析不预先按账户现金或持仓排除候选；成功落盘后归入实际五分钟账户。该账户以本轮落盘时现金的五分之一为单笔基准：一手含费成本达到或超过该值时买一手，其余成交严格低于该值；最多五只，不借款。",
+		"- 本轮分析不预先按账户现金或持仓排除候选；成功落盘后归入实际五分钟账户。买入上限依次为当前剩余现金除以剩余名额（五笔账户为1/5、1/4、1/3、1/2、1/1）：一手含费成本超过当笔上限时只买一手，否则按合法整手买到不超过上限；最多五只，不借款。",
 		"- 不得访问外部地址、推算缺失值或编造行情；只能使用下方注入的结构化证据。",
 		"- sourceRefs只能填写证据sources中存在且适用于该股票的sourceId，不得填写来源名称或URL。先读本轮候选评分依据中的明确板块、题材和催化关联；一般板块排行榜不是股票归属证明。",
 		"- recommendations必须逐只覆盖冻结候选集合，包含50分及以下股票，不得只输出过线股票或空数组。逐项给出评分和scoreReasons；缺失证据不加分，不为凑数抬分。程序重新计算总分，全部有效评分按分数降序参与执行，不设最低分或前六名限制。",
@@ -968,7 +968,7 @@ func renderAnalysisReport(run AnalysisRun, evidence preparedEvidence, output mod
 			lines = append(lines, scoreReportLines(item, modelValue, evidence)...)
 		}
 	}
-	lines = append(lines, "", "评分范围说明：保存通过校验的本轮候选评分，缺失或无效评分见数据校验，不代表全市场。不设最低分门槛，按评分顺序执行；所属五分钟账户以本轮落盘时现金的五分之一作为单笔基准，一手含费成本达到或超过该值时买一手，其余成交严格低于该值，最多五只且不借款。未买入股票不参与成交收益。相同市场分是正常现象，缺失分项不折算满分，也不为补位调分。")
+	lines = append(lines, "", "评分范围说明：保存通过校验的本轮候选评分，缺失或无效评分见数据校验，不代表全市场。不设最低分门槛，按评分顺序执行；所属五分钟账户按当前剩余现金除以剩余买入名额确定当笔上限，五笔依次为1/5、1/4、1/3、1/2、1/1。一手含费成本超过上限时只买一手，否则按合法整手买到不超过上限，最多五只且不借款。未买入股票不参与成交收益。相同市场分是正常现象，缺失分项不折算满分，也不为补位调分。")
 	if len(warnings) > 0 {
 		lines = append(lines, "", "> 数据校验："+strings.Join(warnings, "；"))
 	}
@@ -1271,7 +1271,7 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 			if run.ChainID != "" {
 				allocationBaseCash = chain.AllocationBaseCash
 			}
-			quantity, cost, sizeErr := sizeResearch2Buy(item.StockCode, snapshots[item.RecommendationID].Price, overview.Cash, slots, allocationBaseCash)
+			quantity, cost, sizeErr := sizeResearch2Buy(item.StockCode, snapshots[item.RecommendationID].Price, overview.Cash, slots, chain.AllocationPolicy, allocationBaseCash)
 			if sizeErr != nil {
 				lot, lotErr := trading.LotSize(item.StockCode)
 				if lotErr != nil {

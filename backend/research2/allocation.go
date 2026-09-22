@@ -2,23 +2,15 @@ package research2
 
 import (
 	"math"
+	"strings"
 
 	"go-stock/internal/trading"
 )
 
-// allocationBaseCashPending marks chains created by the current runtime before
-// their first winning report claims the actual slot. NULL remains the durable
-// marker for chains created before this allocation policy existed.
-const allocationBaseCashPending = -1.0
-
-func pendingAllocationBaseCash() *float64 {
-	value := allocationBaseCashPending
-	return &value
-}
-
-func allocationBaseCapturePending(value *float64) bool {
-	return value != nil && *value == allocationBaseCashPending
-}
+const (
+	AllocationPolicyLegacyRecorded     = "legacy_recorded"
+	AllocationPolicyRemainingCashSlots = "remaining_cash_by_open_slots"
+)
 
 func fixedAllocationBase(value *float64) (float64, bool) {
 	if value == nil || *value < 0 || math.IsNaN(*value) || math.IsInf(*value, 0) {
@@ -27,17 +19,20 @@ func fixedAllocationBase(value *float64) (float64, bool) {
 	return *value, true
 }
 
-// sizeResearch2Buy preserves the legacy remaining-cash allocator for NULL
-// historical chains. New chains use their persisted starting cash so retries
-// and later candidates cannot alter the fifth-of-account limit.
-func sizeResearch2Buy(code string, marketPrice, availableCash float64, remainingSlots int, allocationBaseCash *float64) (int64, trading.CostBreakdown, error) {
+// sizeResearch2Buy keeps the recorded fixed-base behavior only for chains that
+// have not yet been replayed. Current and replayed chains divide the remaining
+// cash by their remaining successful-buy slots.
+func sizeResearch2Buy(code string, marketPrice, availableCash float64, remainingSlots int, allocationPolicy string, allocationBaseCash *float64) (int64, trading.CostBreakdown, error) {
+	if strings.TrimSpace(allocationPolicy) == AllocationPolicyRemainingCashSlots {
+		return sizeRemainingCashBuy(code, marketPrice, availableCash, remainingSlots)
+	}
 	if allocationBase, ok := fixedAllocationBase(allocationBaseCash); ok {
 		return sizeFixedAllocationBuy(code, marketPrice, availableCash, allocationBase)
 	}
-	return sizeLegacyResearch2Buy(code, marketPrice, availableCash, remainingSlots)
+	return sizeRemainingCashBuy(code, marketPrice, availableCash, remainingSlots)
 }
 
-func sizeLegacyResearch2Buy(code string, marketPrice, availableCash float64, remainingSlots int) (int64, trading.CostBreakdown, error) {
+func sizeRemainingCashBuy(code string, marketPrice, availableCash float64, remainingSlots int) (int64, trading.CostBreakdown, error) {
 	if remainingSlots <= 0 {
 		return 0, trading.CostBreakdown{}, trading.ErrInsufficientCash
 	}
@@ -48,6 +43,12 @@ func sizeLegacyResearch2Buy(code string, marketPrice, availableCash float64, rem
 	lotCost := -trading.CalculateBuyCost(marketPrice, lot).NetCashFlow
 	cashCap := math.Min(availableCash, math.Max(availableCash/float64(remainingSlots), lotCost))
 	return trading.SizeBuy(code, marketPrice, cashCap)
+}
+
+// SizeRemainingCashBuy exposes the production remaining-cash allocator to the
+// deterministic full-history replay.
+func SizeRemainingCashBuy(code string, marketPrice, availableCash float64, remainingSlots int) (int64, trading.CostBreakdown, error) {
+	return sizeRemainingCashBuy(code, marketPrice, availableCash, remainingSlots)
 }
 
 func sizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationBaseCash float64) (int64, trading.CostBreakdown, error) {

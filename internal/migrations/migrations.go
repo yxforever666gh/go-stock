@@ -326,6 +326,7 @@ var mainMigrations = []migration{
 	{id: 31, name: "research2_capital_ledger_rebase", description: "Rebuilds Research Center 2 slot capital from 10000 initial capital, a 2026-09-21 pre-open top-up and neutral legacy-pool transfers; recalculates same-day fixed-fifth executions from stored prices.", definition: mainMigrationV31Definition, apply: applyResearch2CapitalLedger, verify: verifyMainSchema31Runtime},
 	{id: 32, name: "research2_slot_report_email", description: "Adds an ordered multi-slot selection for immediate per-report Research Center 2 email and retires pending deliveries created by the former combined-summary workflow.", definition: mainMigrationV32Definition, apply: applyResearch2SlotReportEmail, verify: verifyMainSchema32Runtime},
 	{id: 33, name: "research2_portfolio_performance", description: "Adds rebuildable buy-day limit outcomes and per-slot daily valuations for filterable individual and equal-weight portfolio TWR without rewriting trades, cash, positions or reports.", definition: mainMigrationV33Definition, apply: applyResearch2PortfolioPerformance, verify: verifyMainSchema33Runtime},
+	{id: 34, name: "research2_dynamic_remaining_cash_allocation", description: "Versions Research Center 2 remaining-cash allocation and adds an auditable full-history replay receipt without rewriting business history during migration.", definition: mainMigrationV34Definition, apply: applyResearch2DynamicAllocation, verify: verifyMainSchema34Runtime},
 }
 
 var legacyStrategyTables = []string{

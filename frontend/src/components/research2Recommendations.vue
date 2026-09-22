@@ -24,7 +24,7 @@ const statusLabels = {buy_pending: '待买入', standby: '待买入', standby_no
 const statusType = status => status === 'closed' ? 'success' : status === 'analysis_only' ? 'default' : ['missed_cash', 'missed_untradable', 'missed_window', 'cancelled_price'].includes(status) ? 'error' : 'warning'
 const colorType = value => Number(value || 0) >= 0 ? 'error' : 'success'
 const hasBuy = row => Boolean(row.buyAt) && Number(row.buyPrice || 0) > 0
-const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '历史目标分钟价', scheduled_slot_sell: '分区定时卖出', recovered_slot_sell: '重启恢复卖出'}
+const executionModeLabels = {live_after_signal: '信号后实时成交', recovered_target_minute: '历史目标分钟价', scheduled_slot_sell: '分区定时卖出', recovered_slot_sell: '重启恢复卖出', historical_allocation_replay_v1: '历史动态仓位重放'}
 const executionMode = trade => executionModeLabels[trade?.executionMode] || trade?.executionMode || '--'
 const degradedReason = analysis => analysis?.degraded === null || analysis?.degraded === undefined ? '历史运行未记录证据质量' : analysis.degraded ? '辅助证据不完整，具体来源状态请查看证据审计' : '无'
 const rankLabel = value => Number(value) > 0 ? formatInteger(value) : '--'
@@ -69,7 +69,7 @@ onMounted(refresh)
   <n-space vertical>
     <n-alert type="info" :bordered="false">每五分钟独立研究；第一份成功落盘报告进入对应时间账户，立即按评分和可用现金买入，每账户每天最多5只；当前现金不足一手时跳过并尝试后续股票。旧持仓在账户对应刻度独立定时卖出；后到报告仅在AI分析报告中保留。</n-alert>
     <n-flex justify="space-between" align="center">
-      <n-text depth="3">每个时间段使用独立账户。本分区以本轮报告落盘时的可用现金为基准：一手含费成本达到或超过五分之一时买一手，其余成交严格低于五分之一；任何成交均不得超过当前可用现金，不借款。当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
+      <n-text depth="3">每个时间段使用独立账户。买入上限按当前剩余现金除以剩余名额计算，五笔依次为 1/5、1/4、1/3、1/2、1/1；一手含费成本超过当笔上限时只买一手，否则按合法整手买到不超过上限。任何成交均不得超过当前可用现金，不借款。当前价与收益按最新行情估值。拖动表头可调整列顺序，点击股票可查看持仓期分钟走势。</n-text>
       <n-button :loading="loading" @click="refresh">刷新</n-button>
     </n-flex>
     <div ref="tableRef">

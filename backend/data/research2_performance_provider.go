@@ -49,7 +49,7 @@ func (provider *research2PerformanceProvider) BuyDayData(ctx context.Context, it
 	if provider.chart.chartAnyCacheWindowCovered(keys, from, to) {
 		snapshot, err = provider.chart.LoadCached(ctx, item.StockCode, from, to)
 	} else {
-		snapshot, err = provider.chart.Refresh(ctx, item.StockCode, from, to, []string{buyDay.Format("2006-01-02")})
+		snapshot, err = provider.chart.RefreshHistorical(ctx, item.StockCode, from, to, []string{buyDay.Format("2006-01-02")})
 	}
 	result := research2.BuyDayMarketData{SourceStatusJSON: research2PerformanceSourceJSON(snapshot.ProviderErrors, snapshot.Bars, dailySources)}
 	if err != nil {
@@ -63,7 +63,7 @@ func (provider *research2PerformanceProvider) BuyDayData(ctx context.Context, it
 	for _, bar := range snapshot.Bars {
 		local := bar.At.In(cnLocation())
 		if local.Format("2006-01-02") == buyDay.Format("2006-01-02") {
-			result.Bars = append(result.Bars, research2.PerformanceBar{At: bar.At, Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close, Source: bar.Source})
+			result.Bars = append(result.Bars, research2.PerformanceBar{At: bar.At, Open: bar.Open, High: bar.High, Low: bar.Low, Close: bar.Close, Volume: bar.Volume, Amount: bar.Amount, Source: bar.Source})
 		}
 	}
 	if result.PreviousClose <= 0 {

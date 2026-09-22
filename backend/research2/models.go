@@ -95,6 +95,7 @@ type ExecutionChain struct {
 	WinnerRunID        string     `json:"winnerRunId"`
 	SellCompletedAt    *time.Time `json:"sellCompletedAt,omitempty"`
 	AllocationBaseCash *float64   `json:"-" gorm:"column:allocation_base_cash"`
+	AllocationPolicy   string     `json:"-" gorm:"column:allocation_policy;size:48;index;not null;default:'legacy_recorded'"`
 
 	ID           uint       `json:"id" gorm:"primaryKey"`
 	ChainID      string     `json:"chainId" gorm:"size:36;uniqueIndex;not null"`
@@ -200,6 +201,8 @@ type Recommendation struct {
 	BuyDayLimitAttemptCount   int        `json:"buyDayLimitAttemptCount" gorm:"column:buy_day_limit_attempt_count;not null;default:0"`
 	BuyDayLimitSourceJSON     string     `json:"buyDayLimitSourceJson" gorm:"column:buy_day_limit_source_json;type:text;not null;default:'[]'"`
 	BuyDayLimitFailureReason  string     `json:"buyDayLimitFailureReason,omitempty" gorm:"column:buy_day_limit_failure_reason;type:text"`
+	HistoricalReplayID        string     `json:"-" gorm:"column:historical_replay_id;size:64;index"`
+	HistoricalSellBlocked     bool       `json:"-" gorm:"column:historical_sell_blocked;index;not null;default:false"`
 	FailureReason             string     `json:"failureReason" gorm:"type:text"`
 	CreatedAt                 time.Time  `json:"createdAt"`
 	UpdatedAt                 time.Time  `json:"updatedAt"`
@@ -329,6 +332,29 @@ type AccountDailyValuation struct {
 }
 
 func (AccountDailyValuation) TableName() string { return "research2_account_daily_valuations" }
+
+// AllocationReplay records the immutable identity and summary of a completed
+// full-history allocation replay. The report and AI audit rows remain the
+// source inputs; only derived execution/account state is replaced.
+type AllocationReplay struct {
+	ID               uint       `json:"id" gorm:"primaryKey"`
+	ReplayID         string     `json:"replayId" gorm:"size:64;uniqueIndex;not null"`
+	PolicyVersion    string     `json:"policyVersion" gorm:"size:48;index;not null"`
+	PlanHash         string     `json:"planHash" gorm:"size:64;uniqueIndex;not null"`
+	Status           string     `json:"status" gorm:"size:16;index;not null"`
+	CandidateCount   int        `json:"candidateCount" gorm:"not null"`
+	BuyCount         int        `json:"buyCount" gorm:"not null"`
+	SellCount        int        `json:"sellCount" gorm:"not null"`
+	MissingBuyCount  int        `json:"missingBuyCount" gorm:"not null"`
+	MissingSellCount int        `json:"missingSellCount" gorm:"not null"`
+	SummaryJSON      string     `json:"summaryJson" gorm:"type:text;not null;default:'{}'"`
+	StartedAt        time.Time  `json:"startedAt" gorm:"not null"`
+	CompletedAt      *time.Time `json:"completedAt,omitempty" gorm:"index"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
+}
+
+func (AllocationReplay) TableName() string { return "research2_allocation_replays" }
 
 type RecommendationDetail struct {
 	Recommendation Recommendation `json:"recommendation"`

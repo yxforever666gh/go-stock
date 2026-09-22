@@ -154,6 +154,7 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
 	fmt.Fprintln(w, "  research run-once  运行一次研究任务")
 	fmt.Fprintln(w, "  research2 backfill-performance --all  补算研究中心2触板结果与日收益")
+	fmt.Fprintln(w, "  research2 replay-allocation --all  重放研究中心2历史动态仓位")
 	fmt.Fprintln(w, "  db status|archive|backup|compact|migrate|verify  管理、归档并校验主库和分钟库")
 	fmt.Fprintln(w, "  release inspect  查看 App 与数据库版本身份")
 }

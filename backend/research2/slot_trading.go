@@ -26,7 +26,7 @@ func (s *TradingService) processSlotSells(ctx context.Context, now time.Time) er
 			continue
 		}
 		var items []Recommendation
-		if err = repository.accountQuery(ctx).Where("status IN ? AND buy_at < ?", []string{"active", "sell_pending"}, scheduled).Find(&items).Error; err != nil {
+		if err = repository.accountQuery(ctx).Where("status IN ? AND buy_at < ? AND historical_sell_blocked = ?", []string{"active", "sell_pending"}, scheduled, false).Find(&items).Error; err != nil {
 			return err
 		}
 		for _, item := range items {

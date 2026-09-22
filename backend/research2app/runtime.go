@@ -21,6 +21,7 @@ type Runtime struct {
 	Trading             *research2.TradingService
 	Email               *research2.EmailService
 	PerformanceBackfill *research2.PerformanceBackfillService
+	AllocationReplay    *research2.AllocationReplayService
 }
 
 // Dependencies contains only the infrastructure capabilities needed to build
@@ -70,5 +71,6 @@ func NewRuntime(mainDB *gorm.DB, dependencies Dependencies) (*Runtime, error) {
 		Trading:             research2.NewTradingService(repository, dependencies.Market, dependencies.Calendar),
 		Email:               research2.NewEmailService(repository, dependencies.Mailer),
 		PerformanceBackfill: research2.NewPerformanceBackfillService(repository, dependencies.PerformanceHistory, dependencies.Calendar),
+		AllocationReplay:    research2.NewAllocationReplayService(repository, dependencies.PerformanceHistory, dependencies.Calendar),
 	}, nil
 }

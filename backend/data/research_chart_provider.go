@@ -100,6 +100,16 @@ func dedupeProvenResearchChartBars(rows []minuteBar) ([]minuteBar, int) {
 }
 
 func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string, start, end time.Time, sessionDates []string) (recommendationchart.ProviderSnapshot, error) {
+	return provider.refresh(ctx, code, start, end, sessionDates, true)
+}
+
+// RefreshHistorical fills and reads an explicitly historical minute window
+// without making an unrelated current-quote request for every replay symbol.
+func (provider *ResearchChartProvider) RefreshHistorical(ctx context.Context, code string, start, end time.Time, sessionDates []string) (recommendationchart.ProviderSnapshot, error) {
+	return provider.refresh(ctx, code, start, end, sessionDates, false)
+}
+
+func (provider *ResearchChartProvider) refresh(ctx context.Context, code string, start, end time.Time, sessionDates []string, includeCurrentQuote bool) (recommendationchart.ProviderSnapshot, error) {
 	keys, err := chartMinuteCacheKeys(code)
 	if err != nil {
 		return recommendationchart.ProviderSnapshot{}, err
@@ -189,13 +199,15 @@ func (provider *ResearchChartProvider) Refresh(ctx context.Context, code string,
 	if err != nil {
 		return result, err
 	}
-	if quote, quoteErr := provider.quotes.CurrentQuote(ctx, code); quoteErr == nil {
-		result.Quote = &recommendationchart.Quote{Price: quote.Price, PreviousClose: quote.PreviousClose, At: quote.At}
-		if result.RefreshedAt.IsZero() || quote.At.After(result.RefreshedAt) {
-			result.RefreshedAt = quote.At
+	if includeCurrentQuote {
+		if quote, quoteErr := provider.quotes.CurrentQuote(ctx, code); quoteErr == nil {
+			result.Quote = &recommendationchart.Quote{Price: quote.Price, PreviousClose: quote.PreviousClose, At: quote.At}
+			if result.RefreshedAt.IsZero() || quote.At.After(result.RefreshedAt) {
+				result.RefreshedAt = quote.At
+			}
+		} else if !hasChartProviderError(errorsOut, "realtime_quote") {
+			errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: "realtime_quote", Message: sanitizeChartError(quoteErr)})
 		}
-	} else if !hasChartProviderError(errorsOut, "realtime_quote") {
-		errorsOut = append(errorsOut, recommendationchart.ProviderError{Provider: "realtime_quote", Message: sanitizeChartError(quoteErr)})
 	}
 	result.ProviderErrors = append(result.ProviderErrors, errorsOut...)
 	return result, nil

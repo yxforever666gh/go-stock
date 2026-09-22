@@ -13,20 +13,20 @@ import (
 	"github.com/google/uuid"
 )
 
-func TestSizeResearch2BuyUsesFixedOneFifthAllocation(t *testing.T) {
+func TestSizeResearch2BuyUsesRemainingCashAllocation(t *testing.T) {
 	const availableCash = 12000.0
 	base := availableCash
 	limit := base / float64(DailyTargetSlots)
 
-	t.Run("ordinary lot stays strictly below fixed fifth", func(t *testing.T) {
-		quantity, cost, err := sizeResearch2Buy("sh600000", 10, availableCash, 5, &base)
-		if err != nil || quantity != 200 || -cost.NetCashFlow >= limit {
+	t.Run("ordinary lot stays at or below current share", func(t *testing.T) {
+		quantity, cost, err := sizeResearch2Buy("sh600000", 10, availableCash, 5, AllocationPolicyRemainingCashSlots, nil)
+		if err != nil || quantity != 200 || -cost.NetCashFlow > limit+1e-8 {
 			t.Fatalf("quantity=%d cost=%f limit=%f err=%v", quantity, -cost.NetCashFlow, limit, err)
 		}
 	})
 
 	t.Run("expensive lot buys exactly one lot", func(t *testing.T) {
-		quantity, cost, err := sizeResearch2Buy("sh600000", 30, availableCash, 5, &base)
+		quantity, cost, err := sizeResearch2Buy("sh600000", 30, availableCash, 5, AllocationPolicyRemainingCashSlots, nil)
 		oneLot := -trading.CalculateBuyCost(30, 100).NetCashFlow
 		if err != nil || quantity != 100 || math.Abs(-cost.NetCashFlow-oneLot) > 1e-8 || oneLot <= limit {
 			t.Fatalf("quantity=%d cost=%f oneLot=%f limit=%f err=%v", quantity, -cost.NetCashFlow, oneLot, limit, err)
@@ -36,41 +36,41 @@ func TestSizeResearch2BuyUsesFixedOneFifthAllocation(t *testing.T) {
 	t.Run("one lot equal to fifth is the allowed exception", func(t *testing.T) {
 		oneLot := -trading.CalculateBuyCost(10, 100).NetCashFlow
 		equalBase := oneLot * float64(DailyTargetSlots)
-		quantity, cost, err := sizeResearch2Buy("sh600000", 10, equalBase, 5, &equalBase)
+		quantity, cost, err := sizeResearch2Buy("sh600000", 10, equalBase, 5, AllocationPolicyRemainingCashSlots, nil)
 		if err != nil || quantity != 100 || math.Abs(-cost.NetCashFlow-oneLot) > 1e-8 {
 			t.Fatalf("quantity=%d cost=%f oneLot=%f err=%v", quantity, -cost.NetCashFlow, oneLot, err)
 		}
 	})
 
-	t.Run("ordinary order never equals fixed fifth", func(t *testing.T) {
+	t.Run("ordinary order may equal current share", func(t *testing.T) {
 		twoLots := -trading.CalculateBuyCost(10, 200).NetCashFlow
 		strictBase := twoLots * float64(DailyTargetSlots)
-		quantity, cost, err := sizeResearch2Buy("sh600000", 10, strictBase, 5, &strictBase)
-		if err != nil || quantity != 100 || -cost.NetCashFlow >= strictBase/float64(DailyTargetSlots) {
+		quantity, cost, err := sizeResearch2Buy("sh600000", 10, strictBase, 5, AllocationPolicyRemainingCashSlots, nil)
+		if err != nil || quantity != 200 || math.Abs(-cost.NetCashFlow-strictBase/float64(DailyTargetSlots)) > 1e-8 {
 			t.Fatalf("quantity=%d cost=%f limit=%f err=%v", quantity, -cost.NetCashFlow, strictBase/float64(DailyTargetSlots), err)
 		}
 	})
 
 	t.Run("star market keeps its 200-share lot", func(t *testing.T) {
-		quantity, cost, err := sizeResearch2Buy("sh688001", 10, availableCash, 5, &base)
-		if err != nil || quantity != 200 || quantity%200 != 0 || -cost.NetCashFlow >= limit {
+		quantity, cost, err := sizeResearch2Buy("sh688001", 10, availableCash, 5, AllocationPolicyRemainingCashSlots, nil)
+		if err != nil || quantity != 200 || quantity%200 != 0 || -cost.NetCashFlow > limit+1e-8 {
 			t.Fatalf("quantity=%d cost=%f limit=%f err=%v", quantity, -cost.NetCashFlow, limit, err)
 		}
 	})
 
 	t.Run("one-lot exception still cannot overdraft", func(t *testing.T) {
 		oneLot := -trading.CalculateBuyCost(30, 100).NetCashFlow
-		if _, _, err := sizeResearch2Buy("sh600000", 30, oneLot-0.01, 5, &base); err == nil {
+		if _, _, err := sizeResearch2Buy("sh600000", 30, oneLot-0.01, 5, AllocationPolicyRemainingCashSlots, nil); err == nil {
 			t.Fatal("expected insufficient cash")
 		}
 	})
 
-	t.Run("nil base retains legacy remaining-slot allocation", func(t *testing.T) {
-		quantity, _, err := sizeResearch2Buy("sh600000", 12, availableCash, 4, nil)
+	t.Run("recorded legacy policy remains compatible until replay", func(t *testing.T) {
+		quantity, _, err := sizeResearch2Buy("sh600000", 12, availableCash, 4, AllocationPolicyRemainingCashSlots, nil)
 		if err != nil || quantity != 200 {
 			t.Fatalf("quantity=%d err=%v", quantity, err)
 		}
-		quantity, _, err = sizeResearch2Buy("sh600000", 12, availableCash, 4, &base)
+		quantity, _, err = sizeResearch2Buy("sh600000", 12, availableCash, 4, AllocationPolicyLegacyRecorded, &base)
 		if err != nil || quantity != 100 {
 			t.Fatalf("fixed quantity=%d err=%v", quantity, err)
 		}
@@ -107,7 +107,7 @@ func finalizeAllocationRun(t *testing.T, repository *Repository, at time.Time, s
 	return chain, run
 }
 
-func TestFinalizeRunCapturesAllocationBaseForActualSlot(t *testing.T) {
+func TestFinalizeRunUsesRemainingCashPolicyForActualSlot(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	at := time.Date(2026, 9, 21, 10, 11, 0, 0, shanghai())
@@ -117,11 +117,11 @@ func TestFinalizeRunCapturesAllocationBaseForActualSlot(t *testing.T) {
 		}
 	}
 	precreated, err := repository.WithSlot("10:10").EnsureExecutionChain(ctx, at.Format("2006-01-02"), SlotTime(at, "10:10"), at)
-	if err != nil || !allocationBaseCapturePending(precreated.AllocationBaseCash) {
+	if err != nil || precreated.AllocationBaseCash != nil || precreated.AllocationPolicy != AllocationPolicyRemainingCashSlots {
 		t.Fatalf("precreated=%+v err=%v", precreated, err)
 	}
 	chain, run := finalizeAllocationRun(t, repository, at, "10:05")
-	if run.Slot != "10:10" || chain.AllocationBaseCash == nil || *chain.AllocationBaseCash != 8000 {
+	if run.Slot != "10:10" || chain.AllocationBaseCash != nil || chain.AllocationPolicy != AllocationPolicyRemainingCashSlots {
 		t.Fatalf("run=%+v chain=%+v", run, chain)
 	}
 	if err := repository.DB().Model(&Account{}).Where("slot = ?", "10:10").Update("cash", 1).Error; err != nil {
@@ -131,17 +131,17 @@ func TestFinalizeRunCapturesAllocationBaseForActualSlot(t *testing.T) {
 		t.Fatal(err)
 	}
 	stored, err := repository.ExecutionChain(ctx, chain.ChainID)
-	if err != nil || stored.AllocationBaseCash == nil || *stored.AllocationBaseCash != 8000 {
+	if err != nil || stored.AllocationBaseCash != nil || stored.AllocationPolicy != AllocationPolicyRemainingCashSlots {
 		t.Fatalf("stored=%+v err=%v", stored, err)
 	}
 }
 
-func TestFixedAllocationBaseSurvivesQuoteRetryAndRepositoryRestart(t *testing.T) {
+func TestRemainingCashAllocationSurvivesQuoteRetryAndRepositoryRestart(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	at := time.Date(2026, 9, 21, 10, 0, 5, 0, shanghai())
 	chain, run := finalizeAllocationRun(t, repository, at, "10:00")
-	if chain.AllocationBaseCash == nil || *chain.AllocationBaseCash != InitialCash {
+	if chain.AllocationBaseCash != nil || chain.AllocationPolicy != AllocationPolicyRemainingCashSlots {
 		t.Fatalf("chain=%+v", chain)
 	}
 	items := []Recommendation{
@@ -174,16 +174,16 @@ func TestFixedAllocationBaseSurvivesQuoteRetryAndRepositoryRestart(t *testing.T)
 		t.Fatal(err)
 	}
 	stored, err := restarted.GetRecommendation(ctx, items[1].RecommendationID)
-	if err != nil || stored.Recommendation.Quantity != 200 || stored.Recommendation.Status != "active" {
+	if err != nil || stored.Recommendation.Quantity != 100 || stored.Recommendation.Status != "active" {
 		t.Fatalf("stored=%+v err=%v", stored.Recommendation, err)
 	}
 	chain, err = restarted.ExecutionChain(ctx, chain.ChainID)
-	if err != nil || chain.AllocationBaseCash == nil || *chain.AllocationBaseCash != InitialCash {
+	if err != nil || chain.AllocationBaseCash != nil || chain.AllocationPolicy != AllocationPolicyRemainingCashSlots {
 		t.Fatalf("chain=%+v err=%v", chain, err)
 	}
 }
 
-func TestFixedAllocationBaseCapsFiveConsecutiveBuys(t *testing.T) {
+func TestRemainingCashAllocationCapsFiveConsecutiveBuys(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	at := time.Date(2026, 9, 21, 10, 0, 5, 0, shanghai())
@@ -205,7 +205,7 @@ func TestFixedAllocationBaseCapsFiveConsecutiveBuys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseLimit := *chain.AllocationBaseCash / float64(DailyTargetSlots)
+	expectedQuantities := []int64{200, 200, 200, 200, 300}
 	bought := 0
 	for _, item := range stored {
 		if item.BuyAt == nil {
@@ -214,11 +214,10 @@ func TestFixedAllocationBaseCapsFiveConsecutiveBuys(t *testing.T) {
 			}
 			continue
 		}
-		bought++
-		cost := -trading.CalculateBuyCost(10, item.Quantity).NetCashFlow
-		if item.Quantity != 200 || cost >= baseLimit {
-			t.Fatalf("fixed allocation breached: %+v cost=%f limit=%f", item, cost, baseLimit)
+		if item.Quantity != expectedQuantities[bought] {
+			t.Fatalf("remaining-cash allocation mismatch: %+v want=%d", item, expectedQuantities[bought])
 		}
+		bought++
 	}
 	if bought != DailyTargetSlots {
 		t.Fatalf("bought=%d rows=%+v", bought, stored)
@@ -233,7 +232,7 @@ func TestFixedAllocationBaseCapsFiveConsecutiveBuys(t *testing.T) {
 	}
 }
 
-func TestFixedAllocationBasesStayWithinTheirOwnSlots(t *testing.T) {
+func TestRemainingCashAllocationsStayWithinTheirOwnSlots(t *testing.T) {
 	repository := research2TestRepository(t)
 	ctx := context.Background()
 	firstAt := time.Date(2026, 9, 21, 10, 0, 5, 0, shanghai())
@@ -243,7 +242,7 @@ func TestFixedAllocationBasesStayWithinTheirOwnSlots(t *testing.T) {
 		t.Fatal(err)
 	}
 	secondChain, secondRun := finalizeAllocationRun(t, repository, secondAt, "10:05")
-	if firstChain.AllocationBaseCash == nil || *firstChain.AllocationBaseCash != 12000 || secondChain.AllocationBaseCash == nil || *secondChain.AllocationBaseCash != 6000 {
+	if firstChain.AllocationPolicy != AllocationPolicyRemainingCashSlots || secondChain.AllocationPolicy != AllocationPolicyRemainingCashSlots || firstChain.AllocationBaseCash != nil || secondChain.AllocationBaseCash != nil {
 		t.Fatalf("first=%+v second=%+v", firstChain, secondChain)
 	}
 	items := []Recommendation{
