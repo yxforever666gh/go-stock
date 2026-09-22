@@ -666,9 +666,6 @@ func (r *Repository) Performance(ctx context.Context) (Performance, error) {
 	if err = trades.Model(&Trade{}).Select("COALESCE(SUM(commission + stamp_duty + transfer_fee), 0)").Scan(&result.TotalFees).Error; err != nil {
 		return result, err
 	}
-	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_five_before_sell = ?", true).Count(&result.HitFiveCount).Error
-	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_limit_up_full_day = ?", true).Count(&result.HitLimitUpCount).Error
-	_ = period.Session(&gorm.Session{}).Model(&Recommendation{}).Where("hit_minus_three = ?", true).Count(&result.HitMinusThreeCount).Error
 	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", true, []string{"success", "no_recommendation"}).Count(&result.OnTimeReports).Error
 	_ = reports.Session(&gorm.Session{}).Model(&AnalysisRun{}).Where("on_time = ? AND status IN ?", false, []string{"success", "no_recommendation"}).Count(&result.LateReports).Error
 	if ledgerBacked && research2CapitalLedgerAvailable(r.db) {
@@ -751,16 +748,6 @@ func livePrice(item Recommendation) float64 {
 		return item.BuyMarketPrice
 	}
 	return item.BuyPrice
-}
-
-func (r *Repository) UnfinalizedMetrics(ctx context.Context) ([]Recommendation, error) {
-	var items []Recommendation
-	err := r.db.WithContext(ctx).Where("status = ? AND metrics_finalized = ?", "closed", false).Find(&items).Error
-	return items, err
-}
-
-func (r *Repository) FinalizeMetrics(ctx context.Context, id string, five, limitUp, minusThree bool) error {
-	return r.db.WithContext(ctx).Model(&Recommendation{}).Where("recommendation_id = ? AND metrics_finalized = ? AND status = ?", id, false, "closed").Updates(map[string]any{"hit_five_before_sell": five, "hit_limit_up_full_day": limitUp, "hit_minus_three": minusThree, "metrics_finalized": true}).Error
 }
 
 func shanghai() *time.Location {

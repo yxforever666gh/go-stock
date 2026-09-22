@@ -8,6 +8,7 @@ const moduleURL = source => `data:text/javascript;base64,${Buffer.from(source).t
 const uiStub = moduleURL("export const NButton='button', NTag='tag', NText='text'; export const useMessage=()=>({error(){},warning(){},success(){}})")
 const childStub = moduleURL('export default {render(){return null}}')
 const dragStub = moduleURL(`import {ref} from ${JSON.stringify(import.meta.resolve('vue'))}; export const useDraggableDataTableColumns=columns=>({tableRef:ref(null),columnsRef:ref(columns)})`)
+const routerStub = moduleURL("export const useRoute=()=>({query:{},name:'research2'}); export const useRouter=()=>({replace:async()=>{}})")
 const renderer = createRenderer({
   createComment: text => ({text}), insert() {}, remove() {}, parentNode: () => null,
   nextSibling: () => null, createElement: tag => ({tag}), createText: text => ({text}),
@@ -60,6 +61,7 @@ async function pageComponent(filename) {
   }).replace(/from (['"])([^'"]+)\1/g, (_, quote, specifier) => {
     let resolved = specifier
     if (specifier === 'naive-ui') resolved = uiStub
+    else if (specifier === 'vue-router') resolved = routerStub
     else if (specifier.endsWith('.vue')) resolved = childStub
     else if (specifier.includes('useDraggableDataTableColumns')) resolved = dragStub
     else if (specifier.startsWith('.')) resolved = new URL(/\.(?:js|mjs)$/.test(specifier) ? specifier : `${specifier}.js`, url).href
@@ -179,30 +181,31 @@ test('research2 report explains the one-report daily limit and does not offer an
   }
 })
 
-test('research2 yield keeps unbought rows out of displayed returns regardless of score and legacy role', async () => {
-  const rows = [
-    {recommendationId: 'pending', status: 'buy_pending', finalScore: 10, netPnl: 0, netYieldRate: 0},
-    {recommendationId: 'skipped', status: 'missed_cash', finalScore: 90, netPnl: 0, netYieldRate: 0},
-    {recommendationId: 'analysis', status: 'analysis_only', selectionRole: 'observation', netPnl: 0, netYieldRate: 0},
-    {recommendationId: 'bought', status: 'active', selectionRole: 'observation', finalScore: 0, buyAt: '2026-09-15T09:52:00+08:00', buyPrice: 10, quantity: 100, netPnl: 8, netYieldRate: 0.008},
-  ]
-  globalThis.__researchPageFixtures = {GetResearch2Performance: async () => ({}), ListResearch2Recommendations: async () => rows}
+test('research2 yield lists only bought rows and exposes one mutually exclusive limit outcome', async () => {
+  const rows = [{recommendationId: 'bought', status: 'active', buyAt: '2026-09-15T09:52:00+08:00', buyPrice: 10, quantity: 100, netPnl: 8, netYieldRate: 0.008, buyDayLimitStatus: 'complete', buyDayLimitOutcome: 'sealed'}]
+  globalThis.__researchPageFixtures = {
+    GetResearch2Performance: async () => ({}),
+    GetResearch2PortfolioPerformance: async () => ({slots: ['09:50'], curve: [], sealed: {count: 1, rate: 1}, broken: {count: 0, rate: 0}, untouched: {count: 0, rate: 0}}),
+    ListResearch2PerformanceRecommendations: async () => rows,
+  }
   const app = renderer.createApp(await pageComponent('research2Yield.vue'))
   const vm = app.mount({})
   try {
     await flush()
     const state = vm.$.setupState
-    for (const key of ['quantity', 'netPnl', 'netYieldRate', 'hitFiveBeforeSell', 'hitLimitUpFullDay', 'hitMinusThree']) {
-      const column = state.columns.find(column => column.key === key)
-      for (const row of rows.slice(0, 3)) assert.equal(column.render(row), '--')
-    }
-    assert.equal(state.columns.find(column => column.key === 'quantity').render(rows[3]), '100')
-    assert.notEqual(state.columns.find(column => column.key === 'netPnl').render(rows[3]), '--')
-    assert.equal(state.hasBuy(rows[3]), true)
+    assert.deepEqual(state.rows.map(row => row.recommendationId), ['bought'])
+    assert.equal(state.columns.find(column => column.key === 'quantity').render(rows[0]), '100')
+    assert.equal(state.outcomeText(rows[0]), '封板')
+    assert.equal(state.columns.some(column => ['hitFiveBeforeSell', 'hitLimitUpFullDay', 'hitMinusThree'].includes(column.key)), false)
     const source = await readFile(new URL('research2Yield.vue', import.meta.url), 'utf8')
     assert.match(source, /累计投入本金/)
     assert.match(source, /历史内部划拨/)
     assert.match(source, /交易事件最大回撤/)
+    assert.match(source, /独立账户/)
+    assert.match(source, /集成账户/)
+    assert.match(source, /买入日触板结果/)
+    assert.match(source, /performanceSlots/)
+    assert.match(source, /multiple filterable clearable/)
   } finally {
     app.unmount()
     delete globalThis.__researchPageFixtures

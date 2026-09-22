@@ -190,10 +190,16 @@ type Recommendation struct {
 	SellFees                  float64    `json:"sellFees"`
 	NetPnL                    float64    `json:"netPnl"`
 	NetYieldRate              float64    `json:"netYieldRate"`
-	HitFiveBeforeSell         *bool      `json:"hitFiveBeforeSell"`
-	HitLimitUpFullDay         *bool      `json:"hitLimitUpFullDay"`
-	HitMinusThree             *bool      `json:"hitMinusThree"`
-	MetricsFinalized          bool       `json:"metricsFinalized"`
+	HitFiveBeforeSell         *bool      `json:"-"`
+	HitLimitUpFullDay         *bool      `json:"-"`
+	HitMinusThree             *bool      `json:"-"`
+	MetricsFinalized          bool       `json:"-"`
+	BuyDayLimitOutcome        string     `json:"buyDayLimitOutcome,omitempty" gorm:"column:buy_day_limit_outcome;size:16;index"`
+	BuyDayLimitStatus         string     `json:"buyDayLimitStatus" gorm:"column:buy_day_limit_status;size:16;index;not null;default:'pending'"`
+	BuyDayLimitEvaluatedAt    *time.Time `json:"buyDayLimitEvaluatedAt,omitempty" gorm:"column:buy_day_limit_evaluated_at;index"`
+	BuyDayLimitAttemptCount   int        `json:"buyDayLimitAttemptCount" gorm:"column:buy_day_limit_attempt_count;not null;default:0"`
+	BuyDayLimitSourceJSON     string     `json:"buyDayLimitSourceJson" gorm:"column:buy_day_limit_source_json;type:text;not null;default:'[]'"`
+	BuyDayLimitFailureReason  string     `json:"buyDayLimitFailureReason,omitempty" gorm:"column:buy_day_limit_failure_reason;type:text"`
 	FailureReason             string     `json:"failureReason" gorm:"type:text"`
 	CreatedAt                 time.Time  `json:"createdAt"`
 	UpdatedAt                 time.Time  `json:"updatedAt"`
@@ -302,6 +308,28 @@ type AccountLedgerSnapshot struct {
 
 func (AccountLedgerSnapshot) TableName() string { return "research2_account_ledger_snapshots" }
 
+// AccountDailyValuation is a derived, rebuildable end-of-day valuation used
+// only for period TWR. It never replaces the cash ledger or trade history.
+type AccountDailyValuation struct {
+	ID               uint      `json:"id" gorm:"primaryKey"`
+	ValuationID      string    `json:"valuationId" gorm:"size:64;uniqueIndex;not null"`
+	Slot             string    `json:"slot" gorm:"size:5;uniqueIndex:idx_research2_daily_valuation_slot_date,priority:1;not null"`
+	TradingDate      string    `json:"tradingDate" gorm:"size:10;uniqueIndex:idx_research2_daily_valuation_slot_date,priority:2;not null"`
+	ValuedAt         time.Time `json:"valuedAt" gorm:"index;not null"`
+	Cash             float64   `json:"cash" gorm:"not null"`
+	PositionValue    float64   `json:"positionValue" gorm:"not null"`
+	NetAssetValue    float64   `json:"netAssetValue" gorm:"not null"`
+	NeutralFunding   float64   `json:"neutralFunding" gorm:"not null"`
+	DailyReturn      *float64  `json:"dailyReturn,omitempty"`
+	DataStatus       string    `json:"dataStatus" gorm:"size:16;index;not null"`
+	SourceStatusJSON string    `json:"sourceStatusJson" gorm:"type:text;not null;default:'[]'"`
+	FailureReason    string    `json:"failureReason,omitempty" gorm:"type:text"`
+	CreatedAt        time.Time `json:"createdAt"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+func (AccountDailyValuation) TableName() string { return "research2_account_daily_valuations" }
+
 type RecommendationDetail struct {
 	Recommendation Recommendation `json:"recommendation"`
 	Analysis       AnalysisRun    `json:"analysis"`
@@ -333,15 +361,45 @@ type AccountOverview struct {
 
 type Performance struct {
 	AccountOverview
-	ClosedTrades       int64                   `json:"closedTrades"`
-	WinningTrades      int64                   `json:"winningTrades"`
-	WinRate            *float64                `json:"winRate"`
-	TotalFees          float64                 `json:"totalFees"`
-	MaxDrawdown        *float64                `json:"maxDrawdown"`
-	HitFiveCount       int64                   `json:"hitFiveCount"`
-	HitLimitUpCount    int64                   `json:"hitLimitUpCount"`
-	HitMinusThreeCount int64                   `json:"hitMinusThreeCount"`
-	OnTimeReports      int64                   `json:"onTimeReports"`
-	LateReports        int64                   `json:"lateReports"`
-	Curve              []AccountLedgerSnapshot `json:"curve"`
+	ClosedTrades  int64                   `json:"closedTrades"`
+	WinningTrades int64                   `json:"winningTrades"`
+	WinRate       *float64                `json:"winRate"`
+	TotalFees     float64                 `json:"totalFees"`
+	MaxDrawdown   *float64                `json:"maxDrawdown"`
+	OnTimeReports int64                   `json:"onTimeReports"`
+	LateReports   int64                   `json:"lateReports"`
+	Curve         []AccountLedgerSnapshot `json:"curve"`
+}
+
+type OutcomeMetric struct {
+	Count int64    `json:"count"`
+	Rate  *float64 `json:"rate,omitempty"`
+}
+
+type PortfolioReturnPoint struct {
+	TradingDate            string  `json:"tradingDate"`
+	ReturnRate             float64 `json:"returnRate"`
+	EffectiveAccountCount  int     `json:"effectiveAccountCount"`
+	IncompleteAccountCount int     `json:"incompleteAccountCount"`
+}
+
+type PortfolioPerformance struct {
+	Slots                  []string               `json:"slots"`
+	From                   string                 `json:"from,omitempty"`
+	To                     string                 `json:"to,omitempty"`
+	SelectedAccountCount   int                    `json:"selectedAccountCount"`
+	EffectiveAccountCount  int                    `json:"effectiveAccountCount"`
+	IncompleteAccountCount int                    `json:"incompleteAccountCount"`
+	NoActivityAccountCount int                    `json:"noActivityAccountCount"`
+	PeriodReturn           *float64               `json:"periodReturn,omitempty"`
+	BoughtTrades           int64                  `json:"boughtTrades"`
+	ClosedTrades           int64                  `json:"closedTrades"`
+	WinningTrades          int64                  `json:"winningTrades"`
+	WinRate                *float64               `json:"winRate,omitempty"`
+	ClassifiedTrades       int64                  `json:"classifiedTrades"`
+	PendingOutcomeCount    int64                  `json:"pendingOutcomeCount"`
+	Sealed                 OutcomeMetric          `json:"sealed"`
+	Broken                 OutcomeMetric          `json:"broken"`
+	Untouched              OutcomeMetric          `json:"untouched"`
+	Curve                  []PortfolioReturnPoint `json:"curve"`
 }

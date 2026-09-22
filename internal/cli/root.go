@@ -81,6 +81,8 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		runErr = runAI(cmdArgs, opts, stdout, stderr, resolver)
 	case "research":
 		runErr = runResearch(cmdArgs, opts, stdout, stderr)
+	case "research2":
+		runErr = runResearch2(cmdArgs, opts, stdout, stderr)
 	case "help", "-h", "--help":
 		printRootUsage(stdout)
 		return 0
@@ -99,7 +101,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 
 func IsCommand(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "quote", "search", "ai", "research", "db", "release", "help", "-h", "--help":
+	case "quote", "search", "ai", "research", "research2", "db", "release", "help", "-h", "--help":
 		return true
 	default:
 		return false
@@ -151,6 +153,7 @@ func printRootUsage(w io.Writer) {
 	fmt.Fprintln(w, "  search  自然语言选股")
 	fmt.Fprintln(w, "  ai      流式 AI 分析")
 	fmt.Fprintln(w, "  research run-once  运行一次研究任务")
+	fmt.Fprintln(w, "  research2 backfill-performance --all  补算研究中心2触板结果与日收益")
 	fmt.Fprintln(w, "  db status|archive|backup|compact|migrate|verify  管理、归档并校验主库和分钟库")
 	fmt.Fprintln(w, "  release inspect  查看 App 与数据库版本身份")
 }

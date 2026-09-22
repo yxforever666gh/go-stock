@@ -239,9 +239,6 @@ func (m slotMarket) PriceAt(context.Context, string, time.Time, bool) (PriceSnap
 	}
 	return PriceSnapshot{Price: 12, At: m.at, Source: "test", Suspended: true, LimitDown: true}, nil
 }
-func (slotMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
-	return MetricSnapshot{}, nil
-}
 
 func TestSlotTimedSellIndependentOfResearchAndRestart(t *testing.T) {
 	r := slotRepository(t)

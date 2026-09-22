@@ -560,6 +560,10 @@ paths:
       operationId: listResearch2Recommendations
       parameters:
         - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
+        - {name: slots, in: query, required: false, description: "Comma-separated five-minute account identities for performance views.", schema: {type: string}}
+        - {name: from, in: query, required: false, schema: {type: string, format: date}}
+        - {name: to, in: query, required: false, schema: {type: string, format: date}}
+        - {name: boughtOnly, in: query, required: false, schema: {type: boolean}}
       responses:
         "200": {description: Research Center 2 recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2Recommendation"}}}}}
   /api/v1/research2/recommendations/{id}:
@@ -594,6 +598,16 @@ paths:
         - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
       responses:
         "200": {description: Research Center 2 overnight performance, content: {application/json: {schema: {$ref: "#/components/schemas/Research2Performance"}}}}
+  /api/v1/research2/portfolio/performance:
+    get:
+      operationId: getResearch2PortfolioPerformance
+      parameters:
+        - {name: slots, in: query, required: false, description: "Comma-separated five-minute accounts; omitted selects all 24 accounts.", schema: {type: string}}
+        - {name: from, in: query, required: false, schema: {type: string, format: date}}
+        - {name: to, in: query, required: false, schema: {type: string, format: date}}
+      responses:
+        "200": {description: Filterable single-account or equal-weight portfolio TWR and buy-day limit outcomes, content: {application/json: {schema: {$ref: "#/components/schemas/Research2PortfolioPerformance"}}}}
+        "400": {$ref: "#/components/responses/BadRequest"}
   /api/v1/research/replays:
     post:
       operationId: createResearchReplay
@@ -2229,7 +2243,7 @@ components:
             - {type: "null"}
     Research2Recommendation:
       type: object
-      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, metricsFinalized]
+      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, buyDayLimitStatus, buyDayLimitAttemptCount, buyDayLimitSourceJson]
       properties:
         slot: {type: string}
         legacySlotException: {type: boolean}
@@ -2285,10 +2299,12 @@ components:
         currentPriceAt: {type: string, format: date-time}
         netPnl: {type: number}
         netYieldRate: {type: number}
-        hitFiveBeforeSell: {type: boolean, nullable: true}
-        hitLimitUpFullDay: {type: boolean, nullable: true}
-        hitMinusThree: {type: boolean, nullable: true}
-        metricsFinalized: {type: boolean}
+        buyDayLimitOutcome: {type: string, enum: [sealed, broken, untouched]}
+        buyDayLimitStatus: {type: string, enum: [pending, complete, unavailable]}
+        buyDayLimitEvaluatedAt: {type: string, format: date-time}
+        buyDayLimitAttemptCount: {type: integer}
+        buyDayLimitSourceJson: {type: string}
+        buyDayLimitFailureReason: {type: string}
         failureReason: {type: string}
     Research2Trade:
       type: object
@@ -2358,19 +2374,52 @@ components:
       allOf:
         - {$ref: "#/components/schemas/Research2AccountOverview"}
         - type: object
-          required: [closedTrades, winningTrades, totalFees, hitFiveCount, hitLimitUpCount, hitMinusThreeCount, onTimeReports, lateReports, curve]
+          required: [closedTrades, winningTrades, totalFees, onTimeReports, lateReports, curve]
           properties:
             closedTrades: {type: integer, format: int64}
             winningTrades: {type: integer, format: int64}
             winRate: {type: number, nullable: true}
             totalFees: {type: number}
             maxDrawdown: {type: number, nullable: true}
-            hitFiveCount: {type: integer, format: int64}
-            hitLimitUpCount: {type: integer, format: int64}
-            hitMinusThreeCount: {type: integer, format: int64}
             onTimeReports: {type: integer, format: int64}
             lateReports: {type: integer, format: int64}
             curve: {type: array, items: {$ref: "#/components/schemas/Research2AccountLedgerSnapshot"}}
+    Research2OutcomeMetric:
+      type: object
+      required: [count]
+      properties:
+        count: {type: integer, format: int64}
+        rate: {type: number, nullable: true}
+    Research2PortfolioReturnPoint:
+      type: object
+      required: [tradingDate, returnRate, effectiveAccountCount, incompleteAccountCount]
+      properties:
+        tradingDate: {type: string, format: date}
+        returnRate: {type: number}
+        effectiveAccountCount: {type: integer}
+        incompleteAccountCount: {type: integer}
+    Research2PortfolioPerformance:
+      type: object
+      required: [slots, selectedAccountCount, effectiveAccountCount, incompleteAccountCount, noActivityAccountCount, boughtTrades, closedTrades, winningTrades, classifiedTrades, pendingOutcomeCount, sealed, broken, untouched, curve]
+      properties:
+        slots: {type: array, items: {type: string}}
+        from: {type: string, format: date}
+        to: {type: string, format: date}
+        selectedAccountCount: {type: integer}
+        effectiveAccountCount: {type: integer}
+        incompleteAccountCount: {type: integer}
+        noActivityAccountCount: {type: integer}
+        periodReturn: {type: number, nullable: true}
+        boughtTrades: {type: integer, format: int64}
+        closedTrades: {type: integer, format: int64}
+        winningTrades: {type: integer, format: int64}
+        winRate: {type: number, nullable: true}
+        classifiedTrades: {type: integer, format: int64}
+        pendingOutcomeCount: {type: integer, format: int64}
+        sealed: {$ref: "#/components/schemas/Research2OutcomeMetric"}
+        broken: {$ref: "#/components/schemas/Research2OutcomeMetric"}
+        untouched: {$ref: "#/components/schemas/Research2OutcomeMetric"}
+        curve: {type: array, items: {$ref: "#/components/schemas/Research2PortfolioReturnPoint"}}
     Research2AccountLedgerSnapshot:
       type: object
       required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeExternalCapital, netInternalTransfer, netProfit, cumulativeCapitalReturn, returnRate, valuationBasis]

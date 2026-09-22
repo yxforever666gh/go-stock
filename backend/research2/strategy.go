@@ -101,15 +101,8 @@ type PriceSnapshot struct {
 	Source        string
 }
 
-type MetricSnapshot struct {
-	HitFiveBeforeSell bool
-	HitLimitUpFullDay bool
-	HitMinusThree     bool
-}
-
 type MarketProvider interface {
 	PriceAt(context.Context, string, time.Time, bool) (PriceSnapshot, error)
-	Metrics(context.Context, Recommendation) (MetricSnapshot, error)
 }
 
 type modelOutput struct {
@@ -1372,32 +1365,6 @@ func atOrAfterClose(value time.Time) bool {
 	local := value.In(shanghai())
 	closeTime := time.Date(local.Year(), local.Month(), local.Day(), 15, 0, 0, 0, shanghai())
 	return !local.Before(closeTime)
-}
-
-func (s *TradingService) FinalizeMetrics(ctx context.Context, now time.Time) error {
-	items, err := s.repository.UnfinalizedMetrics(ctx)
-	if err != nil {
-		return err
-	}
-	for _, item := range items {
-		metricsItem := item
-		if item.SellAt != nil {
-			metricsItem.TargetSellAt = item.SellAt
-		}
-		metrics, metricErr := s.market.Metrics(ctx, metricsItem)
-		if metricErr != nil {
-			continue
-		}
-		if err = s.repository.FinalizeMetrics(ctx, item.RecommendationID, metrics.HitFiveBeforeSell, metrics.HitLimitUpFullDay, metrics.HitMinusThree); err != nil {
-			return err
-		}
-	}
-	for _, slot := range Slots() {
-		if _, err = s.repository.WithSlot(slot).SaveSnapshot(ctx, "daily_close", now); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (s *TradingService) nextTradingDayAt(ctx context.Context, from time.Time, hour, minute int) (time.Time, error) {

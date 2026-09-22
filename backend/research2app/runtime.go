@@ -15,30 +15,32 @@ import (
 
 // Runtime is the application-level Research 2 service graph.
 type Runtime struct {
-	Repository *research2.Repository
-	Valuation  *research2.Service
-	Runner     *research2.Runner
-	Trading    *research2.TradingService
-	Email      *research2.EmailService
+	Repository          *research2.Repository
+	Valuation           *research2.Service
+	Runner              *research2.Runner
+	Trading             *research2.TradingService
+	Email               *research2.EmailService
+	PerformanceBackfill *research2.PerformanceBackfillService
 }
 
 // Dependencies contains only the infrastructure capabilities needed to build
 // the Research 2 application. Concrete HTTP and storage adapters live outside
 // this package.
 type Dependencies struct {
-	Quotes          research2.CurrentQuoteProvider
-	Chart           recommendationchart.Provider
-	ChartCalendar   recommendationchart.Calendar
-	AI              ai.AIClient
-	Evidence        EvidenceProvider
-	EvidenceStore   EvidenceRepository
-	EvidenceBuild   EvidenceItemBuilder
-	EvidenceProfile string
-	Calendar        research2.Calendar
-	Market          research2.MarketProvider
-	Audit           *researchaudit.Recorder
-	Knowledge       knowledge.ResearchRetriever
-	Mailer          research2.Mailer
+	Quotes             research2.CurrentQuoteProvider
+	Chart              recommendationchart.Provider
+	ChartCalendar      recommendationchart.Calendar
+	AI                 ai.AIClient
+	Evidence           EvidenceProvider
+	EvidenceStore      EvidenceRepository
+	EvidenceBuild      EvidenceItemBuilder
+	EvidenceProfile    string
+	Calendar           research2.Calendar
+	Market             research2.MarketProvider
+	Audit              *researchaudit.Recorder
+	Knowledge          knowledge.ResearchRetriever
+	Mailer             research2.Mailer
+	PerformanceHistory research2.PerformanceHistoryProvider
 }
 
 func NewRuntime(mainDB *gorm.DB, dependencies Dependencies) (*Runtime, error) {
@@ -62,10 +64,11 @@ func NewRuntime(mainDB *gorm.DB, dependencies Dependencies) (*Runtime, error) {
 		runner.ConfigureKnowledge(dependencies.Knowledge)
 	}
 	return &Runtime{
-		Repository: repository,
-		Valuation:  valuation,
-		Runner:     runner,
-		Trading:    research2.NewTradingService(repository, dependencies.Market, dependencies.Calendar),
-		Email:      research2.NewEmailService(repository, dependencies.Mailer),
+		Repository:          repository,
+		Valuation:           valuation,
+		Runner:              runner,
+		Trading:             research2.NewTradingService(repository, dependencies.Market, dependencies.Calendar),
+		Email:               research2.NewEmailService(repository, dependencies.Mailer),
+		PerformanceBackfill: research2.NewPerformanceBackfillService(repository, dependencies.PerformanceHistory, dependencies.Calendar),
 	}, nil
 }

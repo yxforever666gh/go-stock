@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"go-stock/backend/research2"
@@ -85,6 +86,16 @@ func registerResearch2Routes(mux *http.ServeMux, app *App) {
 		writeResearchResult(w, item, err)
 	})
 	mux.HandleFunc("GET /api/v1/research2/recommendations", func(w http.ResponseWriter, r *http.Request) {
+		if strings.EqualFold(r.URL.Query().Get("boughtOnly"), "true") || strings.TrimSpace(r.URL.Query().Get("slots")) != "" {
+			query, ok := research2PortfolioRequest(w, r)
+			if !ok {
+				return
+			}
+			limit, offset := webPage(r)
+			items, err := app.listResearch2PerformanceRecommendations(r.Context(), research2.PerformanceRecommendationQuery{PortfolioQuery: query, BoughtOnly: true, Limit: limit, Offset: offset})
+			writeResearchResult(w, items, err)
+			return
+		}
 		slot, ok := research2RequestSlot(w, r)
 		if !ok {
 			return
@@ -127,6 +138,14 @@ func registerResearch2Routes(mux *http.ServeMux, app *App) {
 		item, err := app.getResearch2Performance(r.Context(), slot)
 		writeResearchResult(w, item, err)
 	})
+	mux.HandleFunc("GET /api/v1/research2/portfolio/performance", func(w http.ResponseWriter, r *http.Request) {
+		query, ok := research2PortfolioRequest(w, r)
+		if !ok {
+			return
+		}
+		item, err := app.getResearch2PortfolioPerformance(r.Context(), query)
+		writeResearchResult(w, item, err)
+	})
 }
 
 type research2EmailTestRequest struct {
@@ -145,4 +164,18 @@ func research2RequestSlot(w http.ResponseWriter, r *http.Request) (string, bool)
 		return "", false
 	}
 	return slot, true
+}
+
+func research2PortfolioRequest(w http.ResponseWriter, r *http.Request) (research2.PortfolioQuery, bool) {
+	raw := strings.TrimSpace(r.URL.Query().Get("slots"))
+	slots := research2.Slots()
+	if raw != "" {
+		slots = strings.Split(raw, ",")
+	}
+	query, err := research2.NormalizePortfolioQuery(research2.PortfolioQuery{Slots: slots, From: strings.TrimSpace(r.URL.Query().Get("from")), To: strings.TrimSpace(r.URL.Query().Get("to"))})
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return research2.PortfolioQuery{}, false
+	}
+	return query, true
 }

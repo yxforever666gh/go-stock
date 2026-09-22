@@ -100,10 +100,6 @@ type research2ResumeMarket struct{}
 func (research2ResumeMarket) PriceAt(context.Context, string, time.Time, bool) (research2.PriceSnapshot, error) {
 	panic("resume fixture must not trade")
 }
-func (research2ResumeMarket) Metrics(context.Context, research2.Recommendation) (research2.MetricSnapshot, error) {
-	panic("resume fixture must not finalize metrics")
-}
-
 func TestResearch2ResumeRetriesFailedRunWithoutActiveChain(t *testing.T) {
 	for _, tc := range []struct {
 		name, chainStatus, runStatus string

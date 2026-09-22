@@ -56,6 +56,15 @@ func TestResearchIsRecognizedAsCLICommand(t *testing.T) {
 	}
 }
 
+func TestResearch2BackfillIsRecognizedAsCLICommand(t *testing.T) {
+	if !IsCommand("research2") || !HasCommand([]string{"--db-path", "stock.db", "research2", "backfill-performance", "--all"}) {
+		t.Fatal("research2 command was not recognized")
+	}
+	if err := runResearch2([]string{"help"}, GlobalOptions{}, io.Discard, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestResearchRepairCommandsAreRetired(t *testing.T) {
 	for _, command := range []string{"repair-missed-cash", "repair-xd-sell", "repair-post-sell-buy"} {
 		t.Run(command, func(t *testing.T) {

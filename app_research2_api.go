@@ -308,8 +308,12 @@ func (a *App) finalizeResearch2Metrics(now time.Time) {
 		logger.SugaredLogger.Errorf("初始化研究中心2失败: %v", err)
 		return
 	}
-	if err = runtime.Trading.FinalizeMetrics(a.ctx, now); err != nil {
-		logger.SugaredLogger.Errorf("研究中心2指标结算失败: %v", err)
+	if runtime.PerformanceBackfill == nil {
+		logger.SugaredLogger.Error("研究中心2收益统计结算失败: 历史估值服务不可用")
+		return
+	}
+	if _, err = runtime.PerformanceBackfill.FinalizeDate(a.ctx, now); err != nil {
+		logger.SugaredLogger.Errorf("研究中心2收益统计结算失败: %v", err)
 	}
 }
 
@@ -361,6 +365,13 @@ func (a *App) listResearch2Recommendations(ctx context.Context, limit, offset in
 	}
 	return valuation.ListRecommendations(ctx, limit, offset)
 }
+func (a *App) listResearch2PerformanceRecommendations(ctx context.Context, query research2.PerformanceRecommendationQuery) ([]research2.Recommendation, error) {
+	valuation, err := a.research2Valuation()
+	if err != nil {
+		return nil, err
+	}
+	return valuation.ListPerformanceRecommendations(ctx, query)
+}
 func (a *App) getResearch2Recommendation(ctx context.Context, id string) (research2.RecommendationDetail, error) {
 	valuation, err := a.research2Valuation()
 	if err != nil {
@@ -387,6 +398,13 @@ func (a *App) getResearch2Performance(ctx context.Context, slots ...string) (res
 		valuation = valuation.WithSlot(slots[0])
 	}
 	return valuation.Performance(ctx)
+}
+func (a *App) getResearch2PortfolioPerformance(ctx context.Context, query research2.PortfolioQuery) (research2.PortfolioPerformance, error) {
+	valuation, err := a.research2Valuation()
+	if err != nil {
+		return research2.PortfolioPerformance{}, err
+	}
+	return valuation.PortfolioPerformance(ctx, query)
 }
 func (a *App) getResearch2RecommendationChart(ctx context.Context, id string, refresh bool) (recommendationchart.Chart, error) {
 	valuation, err := a.research2Valuation()

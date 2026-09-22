@@ -183,62 +183,8 @@ func TestBuyChecksClockAfterQuoteRequest(t *testing.T) {
 	}
 }
 
-type retryMetricMarket struct {
-	testMarket
-	failed bool
-	calls  int
-}
-
-func (m *retryMetricMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
-	m.calls++
-	if m.failed {
-		return MetricSnapshot{}, errors.New("incomplete target-session data")
-	}
-	return MetricSnapshot{HitFiveBeforeSell: true}, nil
-}
-
-func TestIncompleteMetricsRemainUnknownUntilEvidenceIsComplete(t *testing.T) {
-	repository := research2TestRepository(t)
-	now := time.Date(2026, 9, 7, 15, 5, 0, 0, shanghai())
-	item := Recommendation{RecommendationID: "metric-retry", AnalysisRunID: "run", StockCode: "sh600001", SignalAt: now, Status: "closed"}
-	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
-		t.Fatal(err)
-	}
-	market := &retryMetricMarket{failed: true}
-	service := NewTradingService(repository, market, testCalendar{})
-	if err := service.FinalizeMetrics(context.Background(), now); err != nil {
-		t.Fatal(err)
-	}
-	var stored Recommendation
-	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
-		t.Fatal(err)
-	}
-	if stored.MetricsFinalized || stored.HitFiveBeforeSell != nil || stored.HitLimitUpFullDay != nil || stored.HitMinusThree != nil {
-		t.Fatalf("unknown metrics became false: %+v", stored)
-	}
-	market.failed = false
-	if err := service.FinalizeMetrics(context.Background(), now.AddDate(0, 0, 1)); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.FinalizeMetrics(context.Background(), item.RecommendationID, false, true, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := service.FinalizeMetrics(context.Background(), now.AddDate(0, 0, 2)); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
-		t.Fatal(err)
-	}
-	if !stored.MetricsFinalized || stored.HitFiveBeforeSell == nil || !*stored.HitFiveBeforeSell || *stored.HitLimitUpFullDay || *stored.HitMinusThree || market.calls != 2 {
-		t.Fatalf("final metrics changed: %+v calls=%d", stored, market.calls)
-	}
-}
-
 func (m testMarket) PriceAt(_ context.Context, code string, target time.Time, _ bool) (PriceSnapshot, error) {
 	return PriceSnapshot{Code: code, Price: m.price, At: target, Source: "test"}, nil
-}
-func (testMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
-	return MetricSnapshot{}, nil
 }
 
 type recordingMarket struct {
@@ -250,9 +196,6 @@ func (m *recordingMarket) PriceAt(_ context.Context, code string, target time.Ti
 	m.currentFlags = append(m.currentFlags, current)
 	return PriceSnapshot{Code: code, Price: m.prices[code], At: target, Source: "test"}, nil
 }
-func (*recordingMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
-	return MetricSnapshot{}, nil
-}
 
 type timestampMarket struct {
 	price float64
@@ -261,9 +204,6 @@ type timestampMarket struct {
 
 func (m timestampMarket) PriceAt(_ context.Context, code string, _ time.Time, _ bool) (PriceSnapshot, error) {
 	return PriceSnapshot{Code: code, Price: m.price, At: m.at, Source: "timestamp-test"}, nil
-}
-func (timestampMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
-	return MetricSnapshot{}, nil
 }
 
 func research2TestRepository(t *testing.T) *Repository {

@@ -14,7 +14,6 @@ import (
 	"unicode/utf8"
 
 	"go-stock/backend/research2"
-	"go-stock/internal/marketquote"
 )
 
 // research2RoundTripFunc provides deterministic HTTP fixtures for provider tests.
@@ -241,78 +240,5 @@ func TestResearch2TargetMinuteFailureRetainsEverySourceReason(t *testing.T) {
 		if !strings.Contains(err.Error(), part) {
 			t.Fatalf("missing %q: %v", part, err)
 		}
-	}
-}
-
-type research2MetricQuote struct {
-	value marketquote.Quote
-	err   error
-}
-
-func (q research2MetricQuote) CurrentQuote(context.Context, string) (marketquote.Quote, error) {
-	return q.value, q.err
-}
-
-func research2MetricFixture() (research2.Recommendation, []minuteBar, marketquote.Quote) {
-	buy := time.Date(2026, 9, 4, 14, 59, 30, 0, shanghaiDataLocation())
-	sell := time.Date(2026, 9, 7, 10, 0, 0, 0, shanghaiDataLocation())
-	bar := func(at time.Time) minuteBar {
-		return minuteBar{TradeTime: at, Open: 10, High: 10, Low: 10, Close: 10, Volume: 100}
-	}
-	rows := []minuteBar{bar(buy.Truncate(time.Minute).Add(time.Minute))}
-	rows[0].High = 10.6
-	for _, window := range [][2]int{{9*60 + 31, 11*60 + 30}, {13*60 + 1, 15 * 60}} {
-		for minute := window[0]; minute <= window[1]; minute++ {
-			rows = append(rows, bar(time.Date(2026, 9, 7, minute/60, minute%60, 0, 0, shanghaiDataLocation())))
-		}
-	}
-	for i := range rows {
-		if rows[i].TradeTime.Equal(sell) {
-			rows[i].Low = 9.6
-		}
-	}
-	rows[len(rows)-1].High = 11
-	return research2.Recommendation{StockCode: "sh600001", BuyAt: &buy, TargetSellAt: &sell, BuyPrice: 10}, rows, marketquote.Quote{Code: "sh600001", Price: 10, PreviousClose: 10, At: sell.Add(5 * time.Hour)}
-}
-
-func TestResearch2MetricsRequireCompleteWindowAndTargetSessionPreviousClose(t *testing.T) {
-	item, complete, quote := research2MetricFixture()
-	for _, tc := range []struct {
-		name     string
-		rows     []minuteBar
-		quote    marketquote.Quote
-		quoteErr error
-		wantErr  bool
-	}{
-		{"complete weekend window", complete, quote, nil, false},
-		{"missing buy-session close", complete[1:], quote, nil, true},
-		{"missing sell-session close", complete[:len(complete)-1], quote, nil, true},
-		{"missing middle minute", append(append([]minuteBar{}, complete[:25]...), complete[26:]...), quote, nil, true},
-		{"quote failed", complete, quote, errors.New("quote unavailable"), true},
-		{"wrong session previous close", complete, marketquote.Quote{Price: 10, PreviousClose: 9, At: quote.At.AddDate(0, 0, 1)}, nil, true},
-		{"unknown previous close", complete, marketquote.Quote{Price: 10, At: quote.At}, nil, true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			provider := research2MarketProvider{quotes: research2MetricQuote{value: tc.quote, err: tc.quoteErr}, minutes: []research2MinuteSource{fixedResearch2MinuteSource("fixture", tc.rows, nil, nil)}}
-			metrics, err := provider.Metrics(context.Background(), item)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("metrics=%+v err=%v wantErr=%v", metrics, err, tc.wantErr)
-			}
-			if !tc.wantErr && (!metrics.HitFiveBeforeSell || !metrics.HitMinusThree || !metrics.HitLimitUpFullDay) {
-				t.Fatalf("complete evidence lost hits: %+v", metrics)
-			}
-		})
-	}
-}
-
-func TestResearch2MetricsFallBackOnPartialMinuteResponse(t *testing.T) {
-	item, complete, quote := research2MetricFixture()
-	var calls []string
-	provider := research2MarketProvider{quotes: research2MetricQuote{value: quote}, minutes: []research2MinuteSource{fixedResearch2MinuteSource("primary", complete[:1], nil, &calls), fixedResearch2MinuteSource("fallback", complete, nil, &calls), fixedResearch2MinuteSource("unused", nil, nil, &calls)}}
-	if _, err := provider.Metrics(context.Background(), item); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(calls, ",") != "primary,fallback" {
-		t.Fatalf("calls=%v", calls)
 	}
 }

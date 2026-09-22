@@ -92,6 +92,20 @@ func (s *Service) ListRecommendations(ctx context.Context, limit, offset int) ([
 	return s.repository.ListRecommendations(ctx, limit, offset)
 }
 
+func (s *Service) ListPerformanceRecommendations(ctx context.Context, query PerformanceRecommendationQuery) ([]Recommendation, error) {
+	if err := s.ensureRepository(); err != nil {
+		return nil, err
+	}
+	items, err := s.repository.ListPerformanceRecommendations(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if err = s.refresh(ctx, items); err != nil {
+		return nil, err
+	}
+	return s.repository.ListPerformanceRecommendations(ctx, query)
+}
+
 func (s *Service) GetRecommendation(ctx context.Context, id string) (RecommendationDetail, error) {
 	if err := s.ensureRepository(); err != nil {
 		return RecommendationDetail{}, err
@@ -118,6 +132,13 @@ func (s *Service) Performance(ctx context.Context) (Performance, error) {
 		return Performance{}, err
 	}
 	return s.repository.Performance(ctx)
+}
+
+func (s *Service) PortfolioPerformance(ctx context.Context, query PortfolioQuery) (PortfolioPerformance, error) {
+	if err := s.ensureRepository(); err != nil {
+		return PortfolioPerformance{}, err
+	}
+	return s.repository.PortfolioPerformance(ctx, query)
 }
 
 func (s *Service) RefreshCurrentQuotes(ctx context.Context) error {

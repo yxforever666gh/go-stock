@@ -46,6 +46,7 @@ export const API_PATHS = {
   getResearch2AnalysisRun: "/api/v1/research2/analysis-runs/{id}",
   getResearch2AnalysisRunAudit: "/api/v1/research2/analysis-runs/{id}/audit",
   getResearch2Performance: "/api/v1/research2/account/performance",
+  getResearch2PortfolioPerformance: "/api/v1/research2/portfolio/performance",
   getResearch2Recommendation: "/api/v1/research2/recommendations/{id}",
   getResearch2RecommendationChart: "/api/v1/research2/recommendations/{id}/chart",
   getResearchAnalysisRunAudit: "/api/v1/research/analysis-runs/{id}/audit",
@@ -1182,12 +1183,14 @@ export type Research2ExecutionChain = {
   winnerRunId?: string
 }
 
+export type Research2OutcomeMetric = {
+  count: number
+  rate?: number | null
+}
+
 export type Research2Performance = Research2AccountOverview & {
   closedTrades: number
   curve: Array<Research2AccountLedgerSnapshot>
-  hitFiveCount: number
-  hitLimitUpCount: number
-  hitMinusThreeCount: number
   lateReports: number
   maxDrawdown?: number | null
   onTimeReports: number
@@ -1196,10 +1199,44 @@ export type Research2Performance = Research2AccountOverview & {
   winningTrades: number
 }
 
+export type Research2PortfolioPerformance = {
+  boughtTrades: number
+  broken: Research2OutcomeMetric
+  classifiedTrades: number
+  closedTrades: number
+  curve: Array<Research2PortfolioReturnPoint>
+  effectiveAccountCount: number
+  from?: string
+  incompleteAccountCount: number
+  noActivityAccountCount: number
+  pendingOutcomeCount: number
+  periodReturn?: number | null
+  sealed: Research2OutcomeMetric
+  selectedAccountCount: number
+  slots: Array<string>
+  to?: string
+  untouched: Research2OutcomeMetric
+  winRate?: number | null
+  winningTrades: number
+}
+
+export type Research2PortfolioReturnPoint = {
+  effectiveAccountCount: number
+  incompleteAccountCount: number
+  returnRate: number
+  tradingDate: string
+}
+
 export type Research2Recommendation = {
   analysisRunId: string
   baselineValue?: number
   buyAt?: string
+  buyDayLimitAttemptCount: number
+  buyDayLimitEvaluatedAt?: string
+  buyDayLimitFailureReason?: string
+  buyDayLimitOutcome?: "sealed" | "broken" | "untouched"
+  buyDayLimitSourceJson: string
+  buyDayLimitStatus: "pending" | "complete" | "unavailable"
   buyFees?: number
   buyLower: number
   buyMarketPrice?: number
@@ -1220,14 +1257,10 @@ export type Research2Recommendation = {
   failureReason?: string
   finalScore: number
   freshCatalyst?: string
-  hitFiveBeforeSell?: boolean | null
-  hitLimitUpFullDay?: boolean | null
-  hitMinusThree?: boolean | null
   late: boolean
   legacySlotException?: boolean
   mainRisk?: string
   marketScore?: number
-  metricsFinalized: boolean
   netPnl: number
   netYieldRate: number
   oldBackground?: string

@@ -39,10 +39,6 @@ func (m chainMarket) PriceAt(_ context.Context, code string, target time.Time, _
 	return snapshot, nil
 }
 
-func (chainMarket) Metrics(context.Context, Recommendation) (MetricSnapshot, error) {
-	return MetricSnapshot{}, nil
-}
-
 func TestMainBoardLimitDistanceThresholds(t *testing.T) {
 	if got := MainBoardLimitPrice(1.15); got != 1.27 {
 		t.Fatalf("half-cent rounding limit=%v want=1.27", got)

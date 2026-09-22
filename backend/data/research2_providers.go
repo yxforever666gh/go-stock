@@ -46,6 +46,7 @@ func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *
 	sources := NewResearchSourceCollectorWithProviders(news, stocks)
 	marketEvidence := NewMarketEvidenceServiceWithSettings(mainDB, minuteDB, setting)
 	chartProvider := NewResearchChartProviderWithStorage(quoteProvider, minuteDB)
+	performanceProvider := newResearch2PerformanceProvider(mainDB, minuteDB, chartProvider, calendar)
 	collector := &research2EvidenceCollector{
 		sources: sources, stocks: stocks, market: marketEvidence,
 		minuteWindows: &research2DefaultMinuteWindowProvider{stocks: stocks, cache: chartProvider},
@@ -55,7 +56,7 @@ func NewResearch2Dependencies(configID int, mainDB, minuteDB *gorm.DB, setting *
 		Quotes: quoteProvider, Chart: chartProvider, ChartCalendar: calendar,
 		AI: ai.NewResearchClient(configID, ResearchAIClientOptionsForSettings(setting)), Evidence: collector, EvidenceStore: marketdata.NewRepository(mainDB),
 		EvidenceBuild: buildResearch2EvidenceItem, EvidenceProfile: research2EvidenceProfileV7,
-		Calendar: calendar, Market: market,
+		Calendar: calendar, Market: market, PerformanceHistory: performanceProvider,
 		Audit: researchaudit.NewRecorder(researchaudit.NewRepository(mainDB)),
 	}
 	if setting.ExperimentalEvidenceEnabled {
@@ -648,88 +649,6 @@ func loadResearch2CachedMinuteBars(ctx context.Context, cache *ResearchChartProv
 			Volume: bar.Volume, Amount: bar.Amount, Source: bar.Source})
 	}
 	return bars, nil
-}
-
-func (p *research2MarketProvider) Metrics(ctx context.Context, item research2.Recommendation) (research2.MetricSnapshot, error) {
-	if item.BuyAt == nil || item.TargetSellAt == nil {
-		return research2.MetricSnapshot{}, errors.New("trade window is incomplete")
-	}
-	sellDay := item.TargetSellAt.In(shanghaiDataLocation())
-	end := time.Date(sellDay.Year(), sellDay.Month(), sellDay.Day(), 15, 0, 0, 0, shanghaiDataLocation())
-	var bars []minuteBar
-	_, _, err := p.loadMinutes(ctx, item.StockCode, *item.BuyAt, end, func(candidate []minuteBar) error {
-		var windowErr error
-		bars, windowErr = completeResearch2MetricWindow(candidate, item)
-		return windowErr
-	})
-	if err != nil {
-		return research2.MetricSnapshot{}, fmt.Errorf("metric minute window is incomplete: %w", err)
-	}
-	if p.quotes == nil {
-		return research2.MetricSnapshot{}, errors.New("target-session previous close is unavailable")
-	}
-	quote, err := p.quotes.CurrentQuote(ctx, item.StockCode)
-	if err != nil {
-		return research2.MetricSnapshot{}, fmt.Errorf("target-session previous close is unavailable: %w", err)
-	}
-	// A quote's previous close belongs to its own trading session. A later
-	// recovery must not substitute another day's value (or infer it across
-	// corporate actions from an unadjusted historical closing price).
-	if quote.At.IsZero() || quote.At.In(shanghaiDataLocation()).Format("2006-01-02") != sellDay.Format("2006-01-02") || quote.PreviousClose <= 0 || math.IsNaN(quote.PreviousClose) || math.IsInf(quote.PreviousClose, 0) {
-		return research2.MetricSnapshot{}, errors.New("verified previous close for target trading session is unavailable")
-	}
-	sellDayPreviousClose := quote.PreviousClose
-	result := research2.MetricSnapshot{}
-	limitPrice := research2.MainBoardLimitPrice(sellDayPreviousClose)
-	for _, bar := range bars {
-		if item.TargetSellAt != nil && !bar.TradeTime.After(*item.TargetSellAt) && bar.High >= item.BuyPrice*1.05 {
-			result.HitFiveBeforeSell = true
-		}
-		if item.TargetSellAt != nil && !bar.TradeTime.After(*item.TargetSellAt) && bar.Low <= item.BuyPrice*0.97 {
-			result.HitMinusThree = true
-		}
-		if sellDayPreviousClose > 0 && bar.TradeTime.Format("2006-01-02") == item.TargetSellAt.Format("2006-01-02") && bar.High >= limitPrice-0.001 {
-			result.HitLimitUpFullDay = true
-		}
-	}
-	return result, nil
-}
-
-// Minute endpoints label completed buckets by their ending minute. Require
-// every post-entry bucket on the buy session and every bucket on the target
-// sell session; overnight, lunch and intervening holidays are not gaps.
-func completeResearch2MetricWindow(rows []minuteBar, item research2.Recommendation) ([]minuteBar, error) {
-	if item.BuyAt == nil || item.TargetSellAt == nil {
-		return nil, errors.New("trade window is incomplete")
-	}
-	buyDay, sellDay := item.BuyAt.In(shanghaiDataLocation()), item.TargetSellAt.In(shanghaiDataLocation())
-	if buyDay.Format("2006-01-02") >= sellDay.Format("2006-01-02") {
-		return nil, errors.New("target session must follow buy session")
-	}
-	byMinute := make(map[int64]minuteBar, len(rows))
-	for _, bar := range rows {
-		if validResearch2ExecutionBar(bar) {
-			byMinute[bar.TradeTime.Truncate(time.Minute).Unix()] = bar
-		}
-	}
-	result := make([]minuteBar, 0, len(rows))
-	for _, day := range []time.Time{buyDay, sellDay} {
-		for minute := 9*60 + 31; minute <= 15*60; minute++ {
-			if minute > 11*60+30 && minute < 13*60+1 {
-				continue
-			}
-			at := time.Date(day.Year(), day.Month(), day.Day(), minute/60, minute%60, 0, 0, shanghaiDataLocation())
-			if !at.After(*item.BuyAt) {
-				continue
-			}
-			bar, ok := byMinute[at.Unix()]
-			if !ok {
-				return nil, fmt.Errorf("missing valid metric minute %s", at.Format(time.RFC3339))
-			}
-			result = append(result, bar)
-		}
-	}
-	return result, nil
 }
 
 type research2TrendsResponse struct {
