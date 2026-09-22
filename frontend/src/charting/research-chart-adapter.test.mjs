@@ -21,9 +21,26 @@ test('research adapter preserves real bars, source errors, PnL and missing sessi
   assert.equal(model.missingIntervals[0].reason, '交易日分钟数据缺失')
   assert.equal(model.errors[0].provider, 'sina')
   const overlays = researchChartOverlays(model, trades, {showPriceLines: true})
+  assert.equal(overlays.mainPercentBase, 10)
   assert.ok(overlays.mainMarkPoints.some(item => item.value === 'B'))
   assert.ok(overlays.mainMarkLines.some(item => item.name === '买入均价'))
   assert.match(overlays.tooltipLines(model.bars[0]).join(' '), /预估净收益/)
+})
+
+test('percentage axis uses the latest visible trading session previous close', () => {
+  const current = {
+    ...chart,
+    sessions: [
+      {date: '2026-01-02', previousClose: 10, status: 'complete'},
+      {date: '2026-01-05', previousClose: 12.5, status: 'complete'},
+    ],
+    bars: [
+      chart.bars[0],
+      {...chart.bars[1], at: '2026-01-05T09:31:00+08:00'},
+    ],
+  }
+  assert.equal(researchChartOverlays(adaptResearchChart(current)).mainPercentBase, 12.5)
+  assert.equal(researchChartOverlays(adaptResearchChart({...current, sessions: []})).mainPercentBase, null)
 })
 
 test('data as-of comes from quotes or bars, never from a later collection time', () => {

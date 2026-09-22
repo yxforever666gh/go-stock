@@ -117,8 +117,11 @@ export function researchChartOverlays(model, trades = [], {showPriceLines = fals
     if (sellPrice > 0) lines.push({name: '卖出均价', yAxis: sellPrice, label: {formatter: `卖出 ${formatPrice(sellPrice)}`}, lineStyle: {color: '#18a058', type: 'dashed'}})
   }
   const sessions = chartData.sessions || []
+  const latestSessionDate = model.bars.at(-1)?.time?.slice(0, 10)
+  const latestPreviousClose = finite(sessions.find(item => item.date === latestSessionDate)?.previousClose)
   return {
     mainName: '研究复盘',
+    mainPercentBase: latestPreviousClose > 0 ? latestPreviousClose : null,
     mainMarkPoints: [...tradeMarkPoints(model, trades), ...extremaMarkPoints(model)],
     mainMarkLines: lines,
     tooltipLines(bar) {

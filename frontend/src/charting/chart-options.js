@@ -83,6 +83,39 @@ function lineSeries(id, name, data, color, axis = 0) {
   }
 }
 
+function percentAxisLabel(value, base) {
+  const price = Number(value)
+  if (!Number.isFinite(price) || !Number.isFinite(base) || base <= 0) return ''
+  const change = (price - base) / base
+  const normalized = Math.abs(change) < 0.0000005 ? 0 : change
+  const label = `${normalized > 0 ? '+' : ''}${(normalized * 100).toFixed(2)}%`
+  return `{${normalized > 0 ? 'up' : (normalized < 0 ? 'down' : 'flat')}|${label}}`
+}
+
+function percentScaleSeries(viewMode, mainData) {
+  const transparent = 'rgba(0,0,0,0)'
+  return {
+    id: 'price:percent-scale',
+    type: viewMode === 'line' ? 'line' : 'candlestick',
+    data: mainData,
+    xAxisIndex: 0,
+    yAxisIndex: 2,
+    silent: true,
+    showSymbol: false,
+    lineStyle: {width: 0, opacity: 0, color: transparent},
+    areaStyle: viewMode === 'line' ? {opacity: 0, color: transparent} : undefined,
+    itemStyle: viewMode === 'candle' ? {
+      opacity: 0,
+      color: transparent,
+      color0: transparent,
+      borderColor: transparent,
+      borderColor0: transparent,
+    } : {opacity: 0, color: transparent},
+    emphasis: {disabled: true},
+    tooltip: {show: false},
+  }
+}
+
 function subIndicatorSeries(kind, indicators, bars) {
   if (kind === 'MACD') {
     return [
@@ -142,6 +175,8 @@ export function buildChartOption(model, config = {}, overlays = {}, drawings = [
     markLine: {symbol: ['none', 'none'], silent: true, data: overlays.mainMarkLines || []},
     markArea: {silent: true, data: missingMarkAreas(model, categories)},
   }
+  const percentBase = Number(overlays.mainPercentBase)
+  const showPercentAxis = Number.isFinite(percentBase) && percentBase > 0
   const mainOverlaySeries = []
   if (mainIndicators.has('MA')) {
     Object.entries(indicators.ma).forEach(([name, values], index) => {
@@ -161,6 +196,7 @@ export function buildChartOption(model, config = {}, overlays = {}, drawings = [
     ...subIndicatorSeries(subIndicator, indicators, bars),
     ...(overlays.extraSeries || []),
     ...buildDrawingSeries(drawings),
+    ...(showPercentAxis ? [percentScaleSeries(viewMode, mainData)] : []),
   ]
 
   return {
@@ -187,8 +223,17 @@ export function buildChartOption(model, config = {}, overlays = {}, drawings = [
       {type: 'category', gridIndex: 1, data: categories, boundaryGap: true, axisLabel: {show: false}},
     ],
     yAxis: [
-      {type: 'value', scale: true, position: 'right', axisLine: {show: true}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.3}}},
+      {type: 'value', scale: true, position: 'right', splitNumber: 5, axisLine: {show: true}, splitLine: {lineStyle: {type: 'dashed', opacity: 0.3}}},
       {type: 'value', scale: true, gridIndex: 1, position: 'right', splitNumber: 3, axisLine: {show: true}, splitLine: {show: false}},
+      ...(showPercentAxis ? [{
+        type: 'value', scale: true, gridIndex: 0, position: 'left', splitNumber: 5, alignTicks: true,
+        axisLine: {show: true}, splitLine: {show: false},
+        axisLabel: {
+          formatter: value => percentAxisLabel(value, percentBase),
+          rich: {up: {color: upColor}, down: {color: downColor}, flat: {color: '#6b7280'}},
+        },
+        axisPointer: {label: {formatter: params => percentAxisLabel(params?.value, percentBase).replace(/^\{\w+\|(.+)\}$/, '$1')}},
+      }] : []),
     ],
     dataZoom: [
       {type: 'inside', xAxisIndex: [0, 1], start, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true},

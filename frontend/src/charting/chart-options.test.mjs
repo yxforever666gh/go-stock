@@ -48,6 +48,27 @@ test('line mode shares the same axes, zoom and source-aware tooltip', () => {
   assert.match(option.tooltip.formatter([{seriesId: 'price:main', dataIndex: 0}]), /来源：fixture/)
 })
 
+test('research percentage axis mirrors the price scale on the left', () => {
+  const model = fixtureModel()
+  const option = buildChartOption(model, {viewMode: 'line', mainIndicators: []}, {mainPercentBase: 20})
+  assert.equal(option.yAxis.length, 3)
+  assert.equal(option.yAxis[0].position, 'right')
+  assert.equal(option.yAxis[2].position, 'left')
+  assert.equal(option.yAxis[2].gridIndex, 0)
+  assert.equal(option.yAxis[2].alignTicks, true)
+  assert.equal(option.yAxis[2].axisLabel.formatter(21), '{up|+5.00%}')
+  assert.equal(option.yAxis[2].axisLabel.formatter(20), '{flat|0.00%}')
+  assert.equal(option.yAxis[2].axisLabel.formatter(19), '{down|-5.00%}')
+  const mirror = option.series.find(item => item.id === 'price:percent-scale')
+  assert.equal(mirror.yAxisIndex, 2)
+  assert.equal(mirror.silent, true)
+  assert.deepEqual(mirror.data, option.series[0].data)
+
+  const withoutBase = buildChartOption(model, {viewMode: 'line', mainIndicators: []})
+  assert.equal(withoutBase.yAxis.length, 2)
+  assert.equal(withoutBase.series.some(item => item.id === 'price:percent-scale'), false)
+})
+
 test('a missing interval between adjacent bars remains visibly marked', () => {
   const model = fixtureModel()
   model.missingIntervals = [{from: '2026-01-10T10:00:00Z', to: '2026-01-10T10:05:00Z', reason: 'no bars'}]
