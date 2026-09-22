@@ -55,6 +55,24 @@ function Assert-ChildPath {
     return $resolvedPath
 }
 
+function Invoke-TransientFileOperation {
+    param(
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][scriptblock]$Action,
+        [int]$TimeoutSeconds = 15
+    )
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ($true) {
+        try { return & $Action }
+        catch {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw "$Name remained unavailable after ${TimeoutSeconds}s: $($_.Exception.Message)"
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
+
 function Assert-DatabasePaths {
     if ($MainDB -eq $MinuteDB) { throw "Main and minute database paths must differ" }
     foreach ($path in @($MainDB, $MinuteDB)) {
@@ -200,8 +218,11 @@ function Invoke-ReleaseValidation {
 
 function Get-ArtifactInspection {
     param([string]$Binary)
-    $output = @(& $Binary release inspect)
-    if ($LASTEXITCODE -ne 0) { throw 'Artifact release inspect failed' }
+    $output = @(Invoke-TransientFileOperation 'Artifact release inspection' {
+        $value = @(& $Binary release inspect)
+        if ($LASTEXITCODE -ne 0) { throw 'Artifact release inspect failed' }
+        return $value
+    })
     return (($output -join "`n") | ConvertFrom-Json)
 }
 
@@ -278,7 +299,7 @@ function Invoke-ReleaseCandidateBuild {
         if((Get-ReleaseInputs $ProjectRoot).identity -ne $inputs.identity -or (Get-ReleaseTreeHash (Join-Path $ProjectRoot 'frontend/dist')) -ne $record.frontendHash){throw 'Full candidate inputs changed during build'}
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Context.ReleaseDir) | Out-Null
         # Same-volume directory rename fails rather than nesting or overwriting.
-        [IO.Directory]::Move($staging, $Context.ReleaseDir)
+        Invoke-TransientFileOperation 'Candidate atomic promotion' { [IO.Directory]::Move($staging, $Context.ReleaseDir) }
     } finally {
         $canClean=$true
         if($script:BuildJobPath){$job=Read-ReleaseState $script:BuildJobPath;$canClean=$job.nativeStatus -notin @('launching','running')}
