@@ -94,6 +94,67 @@ func CalculateSellCost(marketPrice float64, quantity int64) CostBreakdown {
 	}
 }
 
+// CalculateAShareBuyCost applies the current Research 2 broker schedule. The
+// legacy calculators above remain fixed for frozen Research 1 and migrations.
+func CalculateAShareBuyCost(code string, marketPrice float64, quantity int64) (CostBreakdown, error) {
+	normalized, ok := NormalizeMainlandCode(code)
+	if !ok {
+		return CostBreakdown{}, errors.New("unknown market trading rule")
+	}
+	notional := marketPrice * float64(quantity)
+	commission := math.Max(MinimumCommission, notional*0.0002)
+	transfer := 0.0
+	if strings.HasPrefix(normalized, "sh") {
+		transfer = notional * TransferFeeRate
+	}
+	return CostBreakdown{
+		ExecutionPrice: marketPrice, Notional: notional,
+		Commission: commission, TransferFee: transfer,
+		TotalFees: commission + transfer, NetCashFlow: -(notional + commission + transfer),
+	}, nil
+}
+
+func CalculateAShareSellCost(code string, marketPrice float64, quantity int64) (CostBreakdown, error) {
+	normalized, ok := NormalizeMainlandCode(code)
+	if !ok {
+		return CostBreakdown{}, errors.New("unknown market trading rule")
+	}
+	notional := marketPrice * float64(quantity)
+	commission := math.Max(MinimumCommission, notional*0.0002)
+	stamp := notional * StampDutyRate
+	transfer := 0.0
+	if strings.HasPrefix(normalized, "sh") {
+		transfer = notional * TransferFeeRate
+	}
+	return CostBreakdown{
+		ExecutionPrice: marketPrice, Notional: notional,
+		Commission: commission, StampDuty: stamp, TransferFee: transfer,
+		TotalFees: commission + stamp + transfer, NetCashFlow: notional - commission - stamp - transfer,
+	}, nil
+}
+
+func SizeAShareBuy(code string, marketPrice, availableCash float64) (int64, CostBreakdown, error) {
+	lot, err := LotSize(code)
+	if err != nil {
+		return 0, CostBreakdown{}, err
+	}
+	if availableCash <= 0 || marketPrice <= 0 {
+		return 0, CostBreakdown{}, ErrInsufficientCash
+	}
+	quantity := int64(math.Floor(availableCash/marketPrice/float64(lot))) * lot
+	for quantity >= lot {
+		cost, err := CalculateAShareBuyCost(code, marketPrice, quantity)
+		if err != nil {
+			return 0, CostBreakdown{}, err
+		}
+		if -cost.NetCashFlow <= availableCash+1e-8 {
+			return quantity, cost, nil
+		}
+		quantity -= lot
+	}
+	return 0, CostBreakdown{}, ErrMinimumOrder
+}
+
 func SizeBuy(code string, marketPrice, availableCash float64) (int64, CostBreakdown, error) {
 	lot, err := LotSize(code)
 	if err != nil {

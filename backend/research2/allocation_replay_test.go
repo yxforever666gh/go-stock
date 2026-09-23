@@ -100,6 +100,11 @@ func TestAllocationReplayUsesLegacyThreeSlotsAndBlocksMissingSell(t *testing.T) 
 	if states["replay-rec-1"].buyTrade.Quantity != 100 || states["replay-rec-2"].buyTrade.Quantity != 100 || states["replay-rec-3"].status != "missed_cash" || states["replay-rec-4"].buyTrade.Quantity != 500 {
 		t.Fatalf("unexpected replay sizing: one=%+v two=%+v three=%+v four=%+v", states["replay-rec-1"], states["replay-rec-2"], states["replay-rec-3"], states["replay-rec-4"])
 	}
+	for _, trade := range plan.trades {
+		if trade.ExecutionPrice != trade.MarketPrice || trade.SlippageAmount != 0 {
+			t.Fatalf("replayed trade retained slippage: %+v", trade)
+		}
+	}
 	if !states["replay-rec-2"].historicalBlocked || states["replay-rec-2"].status != "sell_pending" {
 		t.Fatalf("missing sell was not blocked: %+v", states["replay-rec-2"])
 	}
@@ -125,6 +130,20 @@ func TestAllocationReplayUsesLegacyThreeSlotsAndBlocksMissingSell(t *testing.T) 
 	reused, err := service.applyPlan(ctx, plan)
 	if err != nil || !reused {
 		t.Fatalf("idempotent replay reused=%t err=%v", reused, err)
+	}
+}
+
+func TestAllocationReplayHashIncludesFeeEconomics(t *testing.T) {
+	plan := allocationReplayPlan{trades: []Trade{{TradeID: "buy", Side: "buy", MarketPrice: 10, ExecutionPrice: 10, Quantity: 100, Commission: 5, TransferFee: 0.01, NetCashFlow: -1005.01}}}
+	first, err := allocationReplayPlanHash(plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.trades[0].TransferFee = 0
+	plan.trades[0].NetCashFlow = -1005
+	second, err := allocationReplayPlanHash(plan, nil)
+	if err != nil || second == first {
+		t.Fatalf("fee change must change replay identity: first=%s second=%s err=%v", first, second, err)
 	}
 }
 

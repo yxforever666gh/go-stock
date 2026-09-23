@@ -13,7 +13,6 @@ import (
 	"go-stock/backend/knowledge"
 	"go-stock/backend/researchaudit"
 	"go-stock/internal/researchevidence"
-	"go-stock/internal/trading"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -669,7 +668,7 @@ func TestTradingServiceRebalancesRemainingCashAfterEachBuy(t *testing.T) {
 		if item.Status != "active" || item.Quantity != expected[item.StockCode] {
 			t.Fatalf("recommendation=%+v", item)
 		}
-		total -= trading.CalculateBuyCost(10, item.Quantity).NetCashFlow
+		total -= testAShareBuyCost(item.StockCode, 10, item.Quantity).NetCashFlow
 	}
 	overview, err := repository.Overview(context.Background())
 	if err != nil || overview.Cash < 0 || math.Abs(overview.Cash-(InitialCash-total)) > 1e-7 {
@@ -705,7 +704,7 @@ func TestTradingServiceAllowsExpensiveFirstLotThenReallocatesRemainingCash(t *te
 		if item.StockCode == "sh600000" && item.Quantity != 100 {
 			t.Fatalf("expensive first lot=%+v", item)
 		}
-		total -= trading.CalculateBuyCost(prices[item.StockCode], item.Quantity).NetCashFlow
+		total -= testAShareBuyCost(item.StockCode, prices[item.StockCode], item.Quantity).NetCashFlow
 	}
 	overview, err := r.Overview(ctx)
 	if err != nil || overview.Cash < 0 || math.Abs(overview.Cash-(InitialCash-total)) > 1e-7 {

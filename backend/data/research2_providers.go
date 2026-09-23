@@ -451,7 +451,11 @@ func selectResearch2CandidatesWithExclusions(rows []research2MarketRow, limit in
 			continue
 		}
 		lot, lotErr := trading.LotSize(code)
-		if lotErr != nil || -trading.CalculateBuyCost(row.Price, lot).NetCashFlow > availableCash {
+		if lotErr != nil {
+			continue
+		}
+		lotCost, costErr := trading.CalculateAShareBuyCost(code, row.Price, lot)
+		if costErr != nil || -lotCost.NetCashFlow > availableCash {
 			continue
 		}
 		eligible = append(eligible, row)

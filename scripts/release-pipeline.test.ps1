@@ -126,7 +126,7 @@ function Invoke-RestMethod {
 }
 
 function New-DatabaseArchive {
-    param($PreviousPointer,$NewPointer)
+    param($PreviousPointer,$NewPointer,[switch]$Force)
     $script:Events.Add('archive')
     $path=Join-Path $FixtureRoot 'archive.zip'; 'fixture archive' | Set-Content $path
     return @{Path=$path;SHA256=(Get-SHA256 $path)}
@@ -134,6 +134,17 @@ function New-DatabaseArchive {
 function Invoke-DatabaseJSON {
     param([string]$Binary,[string[]]$Arguments)
     $script:Events.Add('database-'+$Arguments[1])
+    if ($Arguments[0] -eq 'research2') {
+        if ($Arguments -contains '--dry-run') {
+            $script:Events.Add('replay-dry-run')
+            return @{dryRun=$true;planHash='fixture-replay-plan'}
+        }
+        $script:Events.Add('replay-apply')
+        'replayed main' | Set-Content $MainDB
+        'replayed minute' | Set-Content $MinuteDB
+        if ($script:FailReplay) { throw 'fixture replay failed' }
+        return @{dryRun=$false;reused=$false;planHash='fixture-replay-plan';replayId='fixture-replay';buyCount=1;sellCount=1;performance=@{valuationsUnavailable=0}}
+    }
     if ($Arguments[1] -eq 'migrate') {
         'partial migration' | Set-Content $MainDB
         'partial migration' | Set-Content $MinuteDB
@@ -167,8 +178,9 @@ function New-ReleaseFixture {
     $script:MainDB=Join-Path $FixtureRoot 'stock.db';$script:MinuteDB=Join-Path $FixtureRoot 'minute.db'
     $script:WebAddr='127.0.0.1:34115'
     $script:NotesFile=Join-Path $FixtureRoot 'release-notes.md';$script:Resume=''
+    $script:ReplayResearch2Allocation=$false;$script:EffectiveReplayResearch2Allocation=$false
     $script:RejectProxy=$false;$script:Toolchain='fixture-v1';$script:FailPush='';$script:FailValidation='';$script:FailBuild=$false;$script:BadInspection=$false;$script:FailRuntimeVersion=''
-    $script:FailReceiptAfterDeploy=$false;$script:RuntimeFault='';$script:FailMigration=$false
+    $script:FailReceiptAfterDeploy=$false;$script:RuntimeFault='';$script:FailMigration=$false;$script:FailReplay=$false
     $script:FrontendSuffix=''
     $script:FailMaintenanceWrite=''
     $script:PushCalls=0;$script:TagCalls=0;$script:FrontendBuilds=0;$script:GoBuilds=0;$script:Starts=0;$script:Stops=0;$script:NextPID=100
@@ -385,6 +397,25 @@ try {
     Resume-Fixture
     Set-Item Function:Get-MatchingBuildProcess $savedMatcher
     Assert-True ($livePolls -eq 2 -and $GoBuilds -eq 1 -and $FrontendBuilds -eq 1) 'Surviving worker caused concurrent or duplicate build'
+    $passed++
+
+    New-ReleaseFixture;Add-DevelopmentCommit;$script:ReplayResearch2Allocation=$true
+    Invoke-Publish
+    $replayRecord=Read-ReleaseState (Get-FixtureReceipt)
+    Assert-True ($replayRecord.replayResearch2Allocation -and $Events.IndexOf('archive') -lt $Events.IndexOf('replay-dry-run') -and $Events.IndexOf('replay-dry-run') -lt $Events.IndexOf('replay-apply') -and $Events.IndexOf('replay-apply') -lt $Events.IndexOf('database-verify') -and $Events.IndexOf('database-verify') -lt $Events.IndexOf('start')) 'Research 2 replay maintenance order is wrong'
+    Assert-True ((Get-Content $MainDB -Raw).Trim() -eq 'replayed main' -and -not $Events.Contains('database-migrate')) 'Same-schema replay was not applied'
+    $script:ReplayResearch2Allocation=$false
+    Resume-Fixture
+    Assert-True ($Starts -eq 1 -and @($Events | Where-Object { $_ -eq 'replay-apply' }).Count -eq 1) 'Completed replay repeated on resume'
+    $passed++
+
+    New-ReleaseFixture;Add-DevelopmentCommit;$script:ReplayResearch2Allocation=$true;$script:FailReplay=$true
+    Assert-Fails {Invoke-Publish} 'fixture replay failed'
+    Assert-True ((Get-Content $MainDB -Raw).Trim() -eq 'original main' -and (Get-Content $MinuteDB -Raw).Trim() -eq 'original minute' -and (Get-Content $CurrentPointer -Raw|ConvertFrom-Json).appVersion -eq '1.0.0') 'Failed replay did not restore both databases and old runtime'
+    $beforeBuild=$GoBuilds;$beforeTag=$TagCalls
+    $script:ReplayResearch2Allocation=$false;$script:FailReplay=$false
+    Resume-Fixture
+    Assert-True ($GoBuilds -eq $beforeBuild -and $TagCalls -eq $beforeTag -and (Get-Content $MainDB -Raw).Trim() -eq 'replayed main') 'Replay resume lost recorded opt-in or rebuilt the release'
     $passed++
 
     foreach($failure in @('migration','startup')) {

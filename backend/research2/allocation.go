@@ -27,7 +27,7 @@ func sizeResearch2Buy(code string, marketPrice, availableCash float64, remaining
 		return sizeRemainingCashBuy(code, marketPrice, availableCash, remainingSlots)
 	}
 	if allocationBase, ok := fixedAllocationBase(allocationBaseCash); ok {
-		return sizeFixedAllocationBuy(code, marketPrice, availableCash, allocationBase)
+		return sizeFixedAllocationBuy(code, marketPrice, availableCash, allocationBase, false)
 	}
 	return sizeRemainingCashBuy(code, marketPrice, availableCash, remainingSlots)
 }
@@ -40,9 +40,13 @@ func sizeRemainingCashBuy(code string, marketPrice, availableCash float64, remai
 	if err != nil {
 		return 0, trading.CostBreakdown{}, err
 	}
-	lotCost := -trading.CalculateBuyCost(marketPrice, lot).NetCashFlow
+	lotCostBreakdown, err := trading.CalculateAShareBuyCost(code, marketPrice, lot)
+	if err != nil {
+		return 0, trading.CostBreakdown{}, err
+	}
+	lotCost := -lotCostBreakdown.NetCashFlow
 	cashCap := math.Min(availableCash, math.Max(availableCash/float64(remainingSlots), lotCost))
-	return trading.SizeBuy(code, marketPrice, cashCap)
+	return trading.SizeAShareBuy(code, marketPrice, cashCap)
 }
 
 // SizeRemainingCashBuy exposes the production remaining-cash allocator to the
@@ -51,12 +55,21 @@ func SizeRemainingCashBuy(code string, marketPrice, availableCash float64, remai
 	return sizeRemainingCashBuy(code, marketPrice, availableCash, remainingSlots)
 }
 
-func sizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationBaseCash float64) (int64, trading.CostBreakdown, error) {
+func sizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationBaseCash float64, legacy bool) (int64, trading.CostBreakdown, error) {
 	lot, err := trading.LotSize(code)
 	if err != nil {
 		return 0, trading.CostBreakdown{}, err
 	}
-	lotCost := trading.CalculateBuyCost(marketPrice, lot)
+	buyCost := func(quantity int64) (trading.CostBreakdown, error) {
+		if legacy {
+			return trading.CalculateBuyCost(marketPrice, quantity), nil
+		}
+		return trading.CalculateAShareBuyCost(code, marketPrice, quantity)
+	}
+	lotCost, err := buyCost(lot)
+	if err != nil {
+		return 0, trading.CostBreakdown{}, err
+	}
 	lotCash := -lotCost.NetCashFlow
 	allocationLimit := allocationBaseCash / float64(DailyTargetSlots)
 
@@ -69,7 +82,13 @@ func sizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationB
 		return lot, lotCost, nil
 	}
 
-	quantity, cost, err := trading.SizeBuy(code, marketPrice, availableCash)
+	var quantity int64
+	var cost trading.CostBreakdown
+	if legacy {
+		quantity, cost, err = trading.SizeBuy(code, marketPrice, availableCash)
+	} else {
+		quantity, cost, err = trading.SizeAShareBuy(code, marketPrice, availableCash)
+	}
 	if err != nil {
 		return 0, trading.CostBreakdown{}, err
 	}
@@ -80,14 +99,17 @@ func sizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationB
 		if quantity < lot {
 			return 0, trading.CostBreakdown{}, trading.ErrMinimumOrder
 		}
-		cost = trading.CalculateBuyCost(marketPrice, quantity)
+		cost, err = buyCost(quantity)
+		if err != nil {
+			return 0, trading.CostBreakdown{}, err
+		}
 	}
 	return quantity, cost, nil
 }
 
-// SizeFixedAllocationBuy exposes the fixed one-fifth sizing rule to the
-// durable capital-rebase migration. It deliberately shares the production
-// implementation so a historical replay cannot drift from live execution.
+// SizeFixedAllocationBuy preserves the original fixed one-fifth rule and cost
+// schedule for the already released capital-rebase migration. Live execution
+// and the full-history replay use the current A-share schedule instead.
 func SizeFixedAllocationBuy(code string, marketPrice, availableCash, allocationBaseCash float64) (int64, trading.CostBreakdown, error) {
-	return sizeFixedAllocationBuy(code, marketPrice, availableCash, allocationBaseCash)
+	return sizeFixedAllocationBuy(code, marketPrice, availableCash, allocationBaseCash, true)
 }

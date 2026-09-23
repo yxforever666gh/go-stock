@@ -8,8 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/internal/trading"
-
 	"github.com/google/uuid"
 )
 
@@ -27,14 +25,14 @@ func TestSizeResearch2BuyUsesRemainingCashAllocation(t *testing.T) {
 
 	t.Run("expensive lot buys exactly one lot", func(t *testing.T) {
 		quantity, cost, err := sizeResearch2Buy("sh600000", 30, availableCash, 5, AllocationPolicyRemainingCashSlots, nil)
-		oneLot := -trading.CalculateBuyCost(30, 100).NetCashFlow
+		oneLot := -testAShareBuyCost("sh600000", 30, 100).NetCashFlow
 		if err != nil || quantity != 100 || math.Abs(-cost.NetCashFlow-oneLot) > 1e-8 || oneLot <= limit {
 			t.Fatalf("quantity=%d cost=%f oneLot=%f limit=%f err=%v", quantity, -cost.NetCashFlow, oneLot, limit, err)
 		}
 	})
 
 	t.Run("one lot equal to fifth is the allowed exception", func(t *testing.T) {
-		oneLot := -trading.CalculateBuyCost(10, 100).NetCashFlow
+		oneLot := -testAShareBuyCost("sh600000", 10, 100).NetCashFlow
 		equalBase := oneLot * float64(DailyTargetSlots)
 		quantity, cost, err := sizeResearch2Buy("sh600000", 10, equalBase, 5, AllocationPolicyRemainingCashSlots, nil)
 		if err != nil || quantity != 100 || math.Abs(-cost.NetCashFlow-oneLot) > 1e-8 {
@@ -43,7 +41,7 @@ func TestSizeResearch2BuyUsesRemainingCashAllocation(t *testing.T) {
 	})
 
 	t.Run("ordinary order may equal current share", func(t *testing.T) {
-		twoLots := -trading.CalculateBuyCost(10, 200).NetCashFlow
+		twoLots := -testAShareBuyCost("sh600000", 10, 200).NetCashFlow
 		strictBase := twoLots * float64(DailyTargetSlots)
 		quantity, cost, err := sizeResearch2Buy("sh600000", 10, strictBase, 5, AllocationPolicyRemainingCashSlots, nil)
 		if err != nil || quantity != 200 || math.Abs(-cost.NetCashFlow-strictBase/float64(DailyTargetSlots)) > 1e-8 {
@@ -59,7 +57,7 @@ func TestSizeResearch2BuyUsesRemainingCashAllocation(t *testing.T) {
 	})
 
 	t.Run("one-lot exception still cannot overdraft", func(t *testing.T) {
-		oneLot := -trading.CalculateBuyCost(30, 100).NetCashFlow
+		oneLot := -testAShareBuyCost("sh600000", 30, 100).NetCashFlow
 		if _, _, err := sizeResearch2Buy("sh600000", 30, oneLot-0.01, 5, AllocationPolicyRemainingCashSlots, nil); err == nil {
 			t.Fatal("expected insufficient cash")
 		}

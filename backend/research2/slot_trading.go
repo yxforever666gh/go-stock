@@ -58,7 +58,10 @@ func (s *TradingService) processSlotSells(ctx context.Context, now time.Time) er
 			if !validPrice(snapshot.Price) {
 				return fmt.Errorf("%s has no valid simulated sell price", item.RecommendationID)
 			}
-			cost := trading.CalculateSellCost(snapshot.Price, item.Quantity)
+			cost, costErr := trading.CalculateAShareSellCost(item.StockCode, snapshot.Price, item.Quantity)
+			if costErr != nil {
+				return costErr
+			}
 			mode := "scheduled_slot_sell"
 			if checked.Sub(scheduled) >= time.Minute {
 				mode = "recovered_slot_sell"

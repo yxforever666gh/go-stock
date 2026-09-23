@@ -9,7 +9,8 @@ param(
     [string]$RuntimeWorkingDirectory = "",
     [string]$NotesFile = '',
     [string]$TargetVersion = '',
-    [string]$Resume = ''
+    [string]$Resume = '',
+    [switch]$ReplayResearch2Allocation
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +36,7 @@ $ManifestPath = Join-Path $ProjectRoot "internal\releaseinfo\release_manifest.js
 $CurrentPointer = Join-Path $RuntimeRoot "current.json"
 $PidFile = Join-Path $RuntimeRoot "go-stock-web.pid"
 $script:DeploymentReceiptPath = ''
+$script:EffectiveReplayResearch2Allocation = [bool]$ReplayResearch2Allocation
 . (Join-Path $ScriptDir 'release-state.ps1')
 $script:BuildJobPath=''
 . (Join-Path $ScriptDir 'release-build-process.ps1')
@@ -447,10 +449,10 @@ function Get-SchemaTransition {
 }
 
 function New-DatabaseArchive {
-    param($PreviousPointer, $NewPointer)
+    param($PreviousPointer, $NewPointer, [switch]$Force)
     $transition = Get-SchemaTransition $PreviousPointer $NewPointer
-    if (-not $transition.RequiresMigration) {
-        throw "Database archive is only created for a schema upgrade"
+    if (-not $transition.RequiresMigration -and -not $Force) {
+        throw "Database archive requires a schema upgrade or explicit data maintenance"
     }
     New-Item -ItemType Directory -Force -Path $ArchivesRoot | Out-Null
     $name = "pre-$($NewPointer.appVersion)-main$($NewPointer.mainSchemaVersion)-minute$($NewPointer.minuteSchemaVersion)-$([DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')).zip"
@@ -463,6 +465,23 @@ function New-DatabaseArchive {
     if ($actualHash -ne ([string]$result.archive.sha256).ToLowerInvariant()) { throw "Permanent archive hash mismatch" }
     Write-Host "Verified permanent database archive: $path"
     return [pscustomobject]@{ Path = $path; SHA256 = $actualHash }
+}
+
+function Invoke-Research2AllocationReplay {
+    param([string]$Binary)
+    $dryRun = Invoke-DatabaseJSON $Binary @('research2', 'replay-allocation', '--all', '--dry-run')
+    if (-not $dryRun.dryRun -or -not $dryRun.planHash) { throw 'Research 2 dry-run did not return a valid plan' }
+    $result = Invoke-DatabaseJSON $Binary @('research2', 'replay-allocation', '--all')
+    $performanceError = ''
+    if ($result -is [System.Collections.IDictionary]) {
+        if ($result.Contains('performanceError')) { $performanceError = [string]$result.performanceError }
+    } elseif ($result.PSObject.Properties.Name -contains 'performanceError') {
+        $performanceError = [string]$result.performanceError
+    }
+    if ($result.dryRun -or $result.reused -or $result.planHash -ne $dryRun.planHash -or $performanceError) {
+        throw 'Research 2 replay did not apply the verified plan'
+    }
+    Write-Host "Research 2 replay $($result.replayId): buys $($result.buyCount), sells $($result.sellCount), unavailable valuations $($result.performance.valuationsUnavailable)"
 }
 
 function Expand-VerifiedDatabaseArchive {
@@ -602,6 +621,7 @@ function Invoke-Deploy {
     Assert-VersionTagMatchesCommit $context
     $pointer = Read-BuildArtifact $context
     $previous = if (Test-Path -LiteralPath $CurrentPointer) { Read-ReleasePointer $CurrentPointer } else { $null }
+    if ($script:EffectiveReplayResearch2Allocation -and $null -eq $previous) { throw 'Research 2 replay requires an existing deployed release for rollback' }
     foreach ($pending in @(Get-PendingSchemaMaintenance)) {
         $reconciled = $false
         if ($previous -and $previous.commit -eq $pending.State.commit -and $previous.artifactSHA256 -eq $pending.State.artifactSHA256) {
@@ -621,21 +641,26 @@ function Invoke-Deploy {
     $script:DeploymentReceiptPath = $receiptPath
     $archive = $null
     $maintenanceReceipt = $null
-    $migrationStarted = $false
+    $maintenanceStarted = $false
     $safetyCopy = ""
     try {
-        if ($null -ne $schemaTransition -and $schemaTransition.RequiresMigration) {
+        if ($null -ne $schemaTransition -and ($schemaTransition.RequiresMigration -or $script:EffectiveReplayResearch2Allocation)) {
             Invoke-ReleaseDiagnostic 'stop process' { Stop-Current }
-            $archive = Invoke-ReleaseDiagnostic 'database archive (including ZIP and verification)' { New-DatabaseArchive $previous $pointer }
+            $archive = Invoke-ReleaseDiagnostic 'database archive (including ZIP and verification)' { New-DatabaseArchive $previous $pointer -Force:$script:EffectiveReplayResearch2Allocation }
             $maintenanceReceipt = New-RollbackReceipt $previous $archive.Path $archive.SHA256
             Write-JSONAtomic $receiptPath $maintenanceReceipt
             Write-ReleaseState (Join-Path $DeploymentsRoot ("maintenance-" + [Guid]::NewGuid().ToString('N') + '.json')) @{
                 status='started'; commit=$pointer.commit; artifactSHA256=$pointer.artifactSHA256; rollbackReceipt=$receiptPath
             }
-            $migrationStarted = $true
-            Invoke-ReleaseDiagnostic 'database migrate' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "migrate")) }
-            if ($schemaTransition.MainChanged) {
-                Invoke-ReleaseDiagnostic 'database compact' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "compact", "--database", "main")) }
+            $maintenanceStarted = $true
+            if ($schemaTransition.RequiresMigration) {
+                Invoke-ReleaseDiagnostic 'database migrate' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "migrate")) }
+                if ($schemaTransition.MainChanged) {
+                    Invoke-ReleaseDiagnostic 'database compact' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "compact", "--database", "main")) }
+                }
+            }
+            if ($script:EffectiveReplayResearch2Allocation) {
+                Invoke-ReleaseDiagnostic 'research2 allocation replay' { Invoke-Research2AllocationReplay $pointer.binary }
             }
             Invoke-ReleaseDiagnostic 'database verify' { [void](Invoke-DatabaseJSON $pointer.binary @("db", "verify")) }
         } elseif ($null -ne $previous) {
@@ -649,22 +674,22 @@ function Invoke-Deploy {
         try {
             Invoke-ReleaseDiagnostic 'rollback stop process' { Stop-Current }
             if ($null -ne $previous) {
-                if ($migrationStarted) {
+                if ($maintenanceStarted) {
                     $safetyCopy = Invoke-ReleaseDiagnostic 'rollback restore databases' { Restore-FromReceipt ([pscustomobject]$maintenanceReceipt) }
                 }
                 Write-JSONAtomic $CurrentPointer $previous
                 Start-Pointer $previous
                 Remove-RestorationSafetyCopy $safetyCopy
-                if ($migrationStarted) { Complete-SchemaMaintenance $receiptPath 'rolled_back' }
+                if ($maintenanceStarted) { Complete-SchemaMaintenance $receiptPath 'rolled_back' }
             }
         } catch {
             throw "Deployment failed: $($deployError.Exception.Message). Automatic rollback also failed: $($_.Exception.Message)"
         }
         throw "Deployment failed and was rolled back safely: $($deployError.Exception.Message)"
     }
-    if ($migrationStarted) { Complete-SchemaMaintenance $receiptPath 'complete' }
+    if ($maintenanceStarted) { Complete-SchemaMaintenance $receiptPath 'complete' }
     Write-Output "Deployed App $($pointer.appVersion) to http://$WebAddr"
-    if ($archive) { Write-Output "Permanent pre-schema archive: $($archive.Path)" }
+    if ($archive) { Write-Output "Permanent pre-maintenance archive: $($archive.Path)" }
 }
 
 function Invoke-Rollback {
@@ -693,7 +718,7 @@ function Invoke-Rollback {
 
 . (Join-Path $ScriptDir 'release-publish.ps1')
 if ($MyInvocation.InvocationName -ne ".") {
-    if (($NotesFile -or $Resume -or $TargetVersion) -and $Command -ne 'publish') { throw 'NotesFile and Resume belong to publish' }
+    if (($NotesFile -or $Resume -or $TargetVersion -or $ReplayResearch2Allocation) -and $Command -ne 'publish') { throw 'Publish options belong to publish' }
     $releaseLock = Enter-ReleaseLock
     try { switch ($Command) {
         'publish' { Invoke-Publish }

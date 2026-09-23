@@ -122,6 +122,8 @@ function Assert-PublishBranch {
 function Assert-PublishRecord {
     param([string]$Path, $Record)
     if ($TargetVersion -and $Record.version -ne $TargetVersion) { throw 'TargetVersion differs from the saved release record' }
+    if ($ReplayResearch2Allocation -and -not ($Record.Contains('replayResearch2Allocation') -and $Record.replayResearch2Allocation)) { throw 'ReplayResearch2Allocation differs from the saved release record' }
+    $script:EffectiveReplayResearch2Allocation = $Record.Contains('replayResearch2Allocation') -and [bool]$Record.replayResearch2Allocation
     [void](Assert-ChildPath $Path $DeploymentsRoot)
     if ($Record.formatVersion -ne 1 -or $Record.projectRoot -ne $ProjectRoot -or $Record.version -notmatch '^\d+\.\d+\.\d+$' -or
         $Record.sourceCommit -notmatch '^[0-9a-f]{40}$' -or ($Record.commit -and $Record.commit -notmatch '^[0-9a-f]{40}$')) { throw 'Invalid publish receipt' }
@@ -200,6 +202,7 @@ function New-PublishRecord {
     $newNotes = $oldNotes.Substring(0,$headingEnd) + "`n`n## $version - $(Get-Date -Format yyyy-MM-dd)`n`n$notes`n`n" + $oldNotes.Substring($headingEnd).TrimStart()
     $path = Join-Path $DeploymentsRoot ('publish-' + [Guid]::NewGuid().ToString('N') + '.json')
     $record = @{formatVersion=1; projectRoot=$ProjectRoot; sourceCommit=$SourceCommit; commit=''; version=$version; status='preparing'; steps=@{};
+        replayResearch2Allocation=[bool]$ReplayResearch2Allocation;
         verificationIdentity=''; frontendHash=''; createdAt=[DateTime]::UtcNow.ToString('o'); lastError='';
         originalFiles=@{'internal/releaseinfo/release_manifest.json'=$manifestText; 'RELEASE_NOTES.md'=$oldNotes};
         expectedFiles=@{'internal/releaseinfo/release_manifest.json'=($manifest|ConvertTo-Json)+"`n"; 'RELEASE_NOTES.md'=$newNotes}}

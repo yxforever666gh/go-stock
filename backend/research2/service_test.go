@@ -10,7 +10,6 @@ import (
 
 	"go-stock/internal/marketquote"
 	"go-stock/internal/recommendationchart"
-	"go-stock/internal/trading"
 
 	"github.com/google/uuid"
 )
@@ -22,7 +21,8 @@ func TestRecordBuyInitializesCurrentMarkAndLiveReturnIsNotPersisted(t *testing.T
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	trade := Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now, MarketPrice: 10, ExecutionPrice: 10.01, Quantity: 100, Commission: 5, TransferFee: 0.01, NetCashFlow: -1006.01}
+	buyCost := testAShareBuyCost(item.StockCode, 10, 100)
+	trade := Trade{TradeID: uuid.NewString(), RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now, MarketPrice: 10, ExecutionPrice: buyCost.ExecutionPrice, Quantity: 100, Commission: buyCost.Commission, TransferFee: buyCost.TransferFee, NetCashFlow: buyCost.NetCashFlow}
 	if err := repository.RecordBuy(context.Background(), item.RecommendationID, trade, now.AddDate(0, 0, 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -34,12 +34,12 @@ func TestRecordBuyInitializesCurrentMarkAndLiveReturnIsNotPersisted(t *testing.T
 	if stored.CurrentPrice != 10 || stored.CurrentPriceAt == nil || !stored.CurrentPriceAt.Equal(now) {
 		t.Fatalf("buy mark = %.2f/%v", stored.CurrentPrice, stored.CurrentPriceAt)
 	}
-	wantPnL := trading.CalculateSellCost(10, 100).NetCashFlow - 1006.01
+	wantPnL := testAShareSellCost(item.StockCode, 10, 100).NetCashFlow + buyCost.NetCashFlow
 	rows, err := repository.ListRecommendations(context.Background(), 10, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || math.Abs(rows[0].NetPnL-wantPnL) > 1e-8 || math.Abs(rows[0].NetYieldRate-wantPnL/1006.01) > 1e-8 {
+	if len(rows) != 1 || math.Abs(rows[0].NetPnL-wantPnL) > 1e-8 || math.Abs(rows[0].NetYieldRate-wantPnL/(-buyCost.NetCashFlow)) > 1e-8 {
 		t.Fatalf("live row = %+v, want pnl %.8f", rows, wantPnL)
 	}
 	if err := repository.DB().Where("recommendation_id = ?", item.RecommendationID).First(&stored).Error; err != nil {
@@ -118,7 +118,7 @@ func TestServiceRefreshesHoldingsConcurrentlyAndFallsBackToLastMark(t *testing.T
 	if maximum < 2 {
 		t.Fatalf("quotes were not fetched concurrently, max=%d", maximum)
 	}
-	wantValue := trading.CalculateSellCost(11, 100).NetCashFlow + trading.CalculateSellCost(20, 100).NetCashFlow
+	wantValue := testAShareSellCost("sh600000", 11, 100).NetCashFlow + testAShareSellCost("sz000001", 20, 100).NetCashFlow
 	if math.Abs(result.value.PositionValue-wantValue) > 1e-8 || math.Abs(result.value.NetAssetValue-(9000+wantValue)) > 1e-8 {
 		t.Fatalf("overview=%+v want position value %.8f", result.value, wantValue)
 	}
@@ -211,11 +211,12 @@ func TestRecommendationChartAdaptsResearch2TradesToSharedEngine(t *testing.T) {
 	if err := repository.CreateRun(context.Background(), &run); err != nil {
 		t.Fatal(err)
 	}
-	item := Recommendation{RecommendationID: "chart-recommendation", AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "chart", SignalAt: now.Add(-7 * time.Minute), Status: "active", BuyAt: timePointer(now.Add(-5 * time.Minute)), BuyPrice: 10.01, BuyFees: 5.02, Quantity: 100, CurrentPrice: 11, CurrentPriceAt: timePointer(now)}
+	buyCost := testAShareBuyCost("sh600000", 10, 100)
+	item := Recommendation{RecommendationID: "chart-recommendation", AnalysisRunID: run.RunID, StockCode: "sh600000", StockName: "chart", SignalAt: now.Add(-7 * time.Minute), Status: "active", BuyAt: timePointer(now.Add(-5 * time.Minute)), BuyPrice: buyCost.ExecutionPrice, BuyFees: buyCost.TotalFees, Quantity: 100, CurrentPrice: 11, CurrentPriceAt: timePointer(now)}
 	if err := repository.CreateRecommendations(context.Background(), []Recommendation{item}); err != nil {
 		t.Fatal(err)
 	}
-	trade := Trade{TradeID: "chart-trade", RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now.Add(-5 * time.Minute), MarketPrice: 10, ExecutionPrice: 10.01, Quantity: 100, Commission: 5, TransferFee: 0.02, NetCashFlow: -1006.02}
+	trade := Trade{TradeID: "chart-trade", RecommendationID: item.RecommendationID, Side: "buy", TradedAt: now.Add(-5 * time.Minute), MarketPrice: 10, ExecutionPrice: buyCost.ExecutionPrice, Quantity: 100, Commission: buyCost.Commission, TransferFee: buyCost.TransferFee, NetCashFlow: buyCost.NetCashFlow}
 	if err := repository.DB().Create(&trade).Error; err != nil {
 		t.Fatal(err)
 	}
@@ -234,10 +235,10 @@ func TestRecommendationChartAdaptsResearch2TradesToSharedEngine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(chart.Trades) != 1 || math.Abs(chart.Trades[0].TotalFees-5.02) > 1e-8 || chart.Trades[0].MarkerAt == nil || chart.Trades[0].MarkerSnapped {
+	if len(chart.Trades) != 1 || math.Abs(chart.Trades[0].TotalFees-buyCost.TotalFees) > 1e-8 || chart.Trades[0].MarkerAt == nil || chart.Trades[0].MarkerSnapped {
 		t.Fatalf("chart trades=%+v", chart.Trades)
 	}
-	wantPnL := trading.CalculateSellCost(11, 100).NetCashFlow - 1006.02
+	wantPnL := testAShareSellCost(item.StockCode, 11, 100).NetCashFlow + buyCost.NetCashFlow
 	if chart.CurrentPrice != 11 || math.Abs(chart.CurrentNetPnL-wantPnL) > 1e-8 || len(chart.Bars) != 2 {
 		t.Fatalf("chart=%+v want pnl %.8f", chart, wantPnL)
 	}

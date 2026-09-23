@@ -29,21 +29,29 @@ func TestBreadthFallsBackFromEOFToCompleteDelayedPages(t *testing.T) {
 	}))
 	defer direct.Close()
 
-	var requests atomic.Int32
-	delayed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		requests.Add(1)
-		page, _ := strconv.Atoi(request.URL.Query().Get("pn"))
-		pageSize, _ := strconv.Atoi(request.URL.Query().Get("pz"))
-		start := (page - 1) * pageSize
-		end := start + pageSize
-		if end > total {
-			end = total
-		}
+	pagePayloads := make(map[int][]byte, (total+breadthPageSize-1)/breadthPageSize)
+	for page := 1; page <= (total+breadthPageSize-1)/breadthPageSize; page++ {
+		start := (page - 1) * breadthPageSize
+		end := min(start+breadthPageSize, total)
 		rows := make([]map[string]any, 0, end-start)
 		for index := start; index < end; index++ {
 			rows = append(rows, eastmoneyBreadthFixtureRow(index, quoteAt.Unix()))
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"rc": 0, "data": map[string]any{"total": total, "diff": rows}})
+		payload, err := json.Marshal(map[string]any{"rc": 0, "data": map[string]any{"total": total, "diff": rows}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		pagePayloads[page] = payload
+	}
+	var requests atomic.Int32
+	delayed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		page, _ := strconv.Atoi(request.URL.Query().Get("pn"))
+		if request.URL.Query().Get("pz") != strconv.Itoa(breadthPageSize) || pagePayloads[page] == nil {
+			http.Error(w, "unexpected page", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write(pagePayloads[page])
 	}))
 	defer delayed.Close()
 

@@ -8,6 +8,7 @@ import (
 
 	"go-stock/internal/marketquote"
 	"go-stock/internal/recommendationchart"
+	"go-stock/internal/trading"
 )
 
 const defaultQuoteRefreshConcurrency = 5
@@ -76,6 +77,13 @@ func (s *Service) RecommendationChart(ctx context.Context, id string, refresh bo
 		StockName:        detail.Recommendation.StockName,
 		SignalAt:         detail.Recommendation.SignalAt,
 		Trades:           trades,
+	}
+	if _, err := trading.LotSize(chartDetail.StockCode); err != nil {
+		return recommendationchart.Chart{}, err
+	}
+	chartDetail.ExitCash = func(price float64, quantity int64) float64 {
+		cost, _ := trading.CalculateAShareSellCost(chartDetail.StockCode, price, quantity)
+		return cost.NetCashFlow
 	}
 	if detail.Recommendation.Status == "active" || detail.Recommendation.Status == "sell_pending" {
 		chartDetail.Position = &recommendationchart.Position{

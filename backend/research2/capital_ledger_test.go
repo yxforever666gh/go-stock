@@ -5,8 +5,6 @@ import (
 	"math"
 	"testing"
 	"time"
-
-	"go-stock/internal/trading"
 )
 
 func TestCapitalLedgerUsesHistoricSlotReturnsAndNeutralTransfers(t *testing.T) {
@@ -65,7 +63,7 @@ func TestCapitalLedgerUsesHistoricSlotReturnsAndNeutralTransfers(t *testing.T) {
 	if err = repository.DB().Create(&pending).Error; err != nil {
 		t.Fatal(err)
 	}
-	cost := trading.CalculateBuyCost(10, 100)
+	cost := testAShareBuyCost(pending.StockCode, 10, 100)
 	buy := Trade{TradeID: "new-ledger-buy", RecommendationID: pending.RecommendationID, Side: "buy", TradedAt: buyAt, Quantity: 100, MarketPrice: 10, ExecutionPrice: cost.ExecutionPrice, Commission: cost.Commission, TransferFee: cost.TransferFee, NetCashFlow: cost.NetCashFlow}
 	if err = repository.DB().Exec("CREATE TRIGGER reject_ledger_snapshot BEFORE INSERT ON research2_account_ledger_snapshots BEGIN SELECT RAISE(ABORT,'fixture'); END").Error; err != nil {
 		t.Fatal(err)
@@ -83,7 +81,7 @@ func TestCapitalLedgerUsesHistoricSlotReturnsAndNeutralTransfers(t *testing.T) {
 	if err = repository.RecordBuy(ctx, pending.RecommendationID, buy, buyAt.AddDate(0, 0, 1)); err != nil {
 		t.Fatal(err)
 	}
-	sellCost := trading.CalculateSellCost(11, 100)
+	sellCost := testAShareSellCost(pending.StockCode, 11, 100)
 	sell := Trade{TradeID: "new-ledger-sell", RecommendationID: pending.RecommendationID, Side: "sell", TradedAt: buyAt.AddDate(0, 0, 1), Quantity: 100, MarketPrice: 11, ExecutionPrice: sellCost.ExecutionPrice, Commission: sellCost.Commission, TransferFee: sellCost.TransferFee, StampDuty: sellCost.StampDuty, NetCashFlow: sellCost.NetCashFlow}
 	if err = repository.RecordSell(ctx, pending.RecommendationID, sell); err != nil {
 		t.Fatal(err)

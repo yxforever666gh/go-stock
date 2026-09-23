@@ -82,6 +82,7 @@ type Detail struct {
 	SignalAt         time.Time
 	Trades           []Trade
 	Position         *Position
+	ExitCash         func(float64, int64) float64
 }
 
 type Trade struct {
@@ -324,7 +325,7 @@ func buildChart(detail Detail, snapshot ProviderSnapshot, from, to time.Time, se
 	}
 	trades := append([]Trade(nil), detail.Trades...)
 	sort.SliceStable(trades, func(i, j int) bool { return trades[i].TradedAt.Before(trades[j].TradedAt) })
-	applyReturns(bars, trades)
+	applyReturns(bars, trades, detail.ExitCash)
 
 	result := Chart{RecommendationID: detail.RecommendationID, StockCode: detail.StockCode, StockName: detail.StockName,
 		RangeFrom: from, RangeTo: to, RefreshedAt: snapshot.RefreshedAt, MissingSessions: []string{},
@@ -344,7 +345,7 @@ func buildChart(detail Detail, snapshot ProviderSnapshot, from, to time.Time, se
 	} else if detail.Position != nil && detail.Position.CurrentPrice > 0 {
 		result.CurrentPrice, result.QuoteAt = detail.Position.CurrentPrice, detail.Position.CurrentPriceAt
 	}
-	result.CurrentNetPnL, result.CurrentNetYieldRate = currentReturn(trades, result.CurrentPrice)
+	result.CurrentNetPnL, result.CurrentNetYieldRate = currentReturn(trades, result.CurrentPrice, detail.ExitCash)
 	return result
 }
 
@@ -455,7 +456,7 @@ func coverageStatus(sessions []Session, bars int) string {
 	return "complete"
 }
 
-func applyReturns(bars []MinuteBar, trades []Trade) {
+func applyReturns(bars []MinuteBar, trades []Trade, exitCash func(float64, int64) float64) {
 	for index := range bars {
 		barEnd := bars[index].At.Truncate(time.Minute).Add(time.Minute)
 		buyOut, soldIn, quantity := cashState(trades, barEnd)
@@ -464,14 +465,14 @@ func applyReturns(bars []MinuteBar, trades []Trade) {
 		}
 		value := soldIn
 		if quantity > 0 {
-			value += trading.CalculateSellCost(bars[index].Close, quantity).NetCashFlow
+			value += sellProceeds(bars[index].Close, quantity, exitCash)
 		}
 		bars[index].NetPnL = value - buyOut
 		bars[index].NetYieldRate = bars[index].NetPnL / buyOut
 	}
 }
 
-func currentReturn(trades []Trade, price float64) (float64, float64) {
+func currentReturn(trades []Trade, price float64, exitCash func(float64, int64) float64) (float64, float64) {
 	buyOut, soldIn, quantity := cashState(trades, time.Time{})
 	if buyOut <= 0 {
 		return 0, 0
@@ -481,10 +482,17 @@ func currentReturn(trades []Trade, price float64) (float64, float64) {
 	}
 	value := soldIn
 	if quantity > 0 && price > 0 {
-		value += trading.CalculateSellCost(price, quantity).NetCashFlow
+		value += sellProceeds(price, quantity, exitCash)
 	}
 	pnl := value - buyOut
 	return pnl, pnl / buyOut
+}
+
+func sellProceeds(price float64, quantity int64, exitCash func(float64, int64) float64) float64 {
+	if exitCash != nil {
+		return exitCash(price, quantity)
+	}
+	return trading.CalculateSellCost(price, quantity).NetCashFlow
 }
 
 func cashState(trades []Trade, before time.Time) (float64, float64, int64) {

@@ -579,7 +579,11 @@ func (r *Repository) Overview(ctx context.Context) (AccountOverview, error) {
 	}
 	positionValue := 0.0
 	for _, item := range active {
-		positionValue += livePositionValue(item)
+		value, costErr := livePositionValue(item)
+		if costErr != nil {
+			return AccountOverview{}, costErr
+		}
+		positionValue += value
 	}
 	nav := account.Cash + positionValue
 	summary, err := research2CapitalSummary(ctx, r.db, r.accountSlot(), account.InitialCash)
@@ -725,19 +729,24 @@ func enrichLiveRecommendation(item *Recommendation) {
 	}
 	item.CurrentPrice = price
 	buyCost := item.BuyPrice*float64(item.Quantity) + item.BuyFees
-	item.NetPnL = trading.CalculateSellCost(price, item.Quantity).NetCashFlow - buyCost
+	cost, err := trading.CalculateAShareSellCost(item.StockCode, price, item.Quantity)
+	if err != nil {
+		return
+	}
+	item.NetPnL = cost.NetCashFlow - buyCost
 	item.NetYieldRate = 0
 	if buyCost > 0 {
 		item.NetYieldRate = item.NetPnL / buyCost
 	}
 }
 
-func livePositionValue(item Recommendation) float64 {
+func livePositionValue(item Recommendation) (float64, error) {
 	price := livePrice(item)
 	if price <= 0 || item.Quantity <= 0 {
-		return 0
+		return 0, nil
 	}
-	return trading.CalculateSellCost(price, item.Quantity).NetCashFlow
+	cost, err := trading.CalculateAShareSellCost(item.StockCode, price, item.Quantity)
+	return cost.NetCashFlow, err
 }
 
 func livePrice(item Recommendation) float64 {

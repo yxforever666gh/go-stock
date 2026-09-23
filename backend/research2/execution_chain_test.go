@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"go-stock/internal/trading"
-
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -258,7 +256,7 @@ func TestTradingServiceCompletesUnderfilledReportWithoutAnotherAnalysis(t *testi
 		t.Fatalf("chain=%+v err=%v", chain, err)
 	}
 	overview, err := repository.Overview(context.Background())
-	if err != nil || math.Abs(overview.Cash-(InitialCash+trading.CalculateBuyCost(10, 200).NetCashFlow)) > 1e-7 {
+	if err != nil || math.Abs(overview.Cash-(InitialCash+testAShareBuyCost("sh600011", 10, 200).NetCashFlow)) > 1e-7 {
 		t.Fatalf("cash=%v err=%v; one executed slot must preserve remaining cash", overview.Cash, err)
 	}
 }
@@ -329,7 +327,7 @@ func TestExecutionChainConcurrentBuysNeverExceedFive(t *testing.T) {
 	if err = repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
 	}
-	cost := trading.CalculateBuyCost(10, 100)
+	cost := testAShareBuyCost("sh600100", 10, 100)
 	var wait sync.WaitGroup
 	errorsByIndex := make([]error, len(items))
 	for index, item := range items {
@@ -388,7 +386,7 @@ func TestChainlessLegacyPendingCannotExceedAccountDailyFiveBuys(t *testing.T) {
 	if err := repository.CreateRecommendations(context.Background(), items); err != nil {
 		t.Fatal(err)
 	}
-	cost := trading.CalculateBuyCost(10, 100)
+	cost := testAShareBuyCost(pending.StockCode, 10, 100)
 	trade := Trade{TradeID: uuid.NewString(), RecommendationID: pending.RecommendationID, Side: "buy", TradedAt: now, MarketPrice: 10, ExecutionPrice: cost.ExecutionPrice, Quantity: 100, Commission: cost.Commission, TransferFee: cost.TransferFee, SlippageAmount: cost.SlippageAmount, NetCashFlow: cost.NetCashFlow}
 	if err := repository.RecordBuy(context.Background(), pending.RecommendationID, trade, now.AddDate(0, 0, 1)); err == nil {
 		t.Fatal("chainless fourth same-day buy was accepted")

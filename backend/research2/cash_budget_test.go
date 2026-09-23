@@ -12,14 +12,13 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"go-stock/internal/researchevidence"
-	"go-stock/internal/trading"
 	"gorm.io/gorm"
 )
 
 func TestRecommendationAffordabilityUsesAvailableCashIncludingFees(t *testing.T) {
 	at := time.Date(2026, 9, 10, 10, 0, 0, 0, shanghai())
 	value := modelRecommendation{Code: "sh600000", MarketScore: 10, SectorScore: 10, StockScore: 20, FinalScore: 40, ReferencePrice: 60, SourceRefs: scoreFixtureRefs("sh600000")}
-	cost := -trading.CalculateBuyCost(60, 100).NetCashFlow
+	cost := -testAShareBuyCost("sh600000", 60, 100).NetCashFlow
 	for _, sample := range []struct {
 		name string
 		cash float64
@@ -69,7 +68,7 @@ func TestConcurrentBuyUsesCurrentCashAndFeesWithoutOverdraft(t *testing.T) {
 	ctx := context.Background()
 	at := time.Date(2026, 9, 10, 10, 0, 0, 0, shanghai())
 	_, run := createChainRun(t, r, at)
-	cost := trading.CalculateBuyCost(10, 100)
+	cost := testAShareBuyCost("sh600001", 10, 100)
 	initial := -cost.NetCashFlow + 0.01
 	if err := r.DB().Model(&Account{}).Where("id = ?", 1).Update("cash", initial).Error; err != nil {
 		t.Fatal(err)

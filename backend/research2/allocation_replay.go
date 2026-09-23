@@ -19,7 +19,7 @@ import (
 )
 
 const (
-	AllocationReplayPolicyVersion = "remaining_cash_by_open_slots_v1"
+	AllocationReplayPolicyVersion = "remaining_cash_by_open_slots_ashare_cost_v2"
 	allocationReplayMode          = "historical_allocation_replay_v1"
 	allocationReplayEpsilon       = 1e-7
 )
@@ -421,7 +421,10 @@ func (planner *allocationReplayPlanner) replaySlot(ctx context.Context, slot str
 				planner.gaps = append(planner.gaps, AllocationReplayGap{RecommendationID: candidate.item.RecommendationID, Slot: slot, StockCode: candidate.item.StockCode, Phase: "sell", At: position.targetAt, Reason: reason})
 				continue
 			}
-			cost := trading.CalculateSellCost(quote.marketPrice, state.buyTrade.Quantity)
+			cost, err := trading.CalculateAShareSellCost(candidate.item.StockCode, quote.marketPrice, state.buyTrade.Quantity)
+			if err != nil {
+				return err
+			}
 			eventOrdinal++
 			tradedAt := quote.at.Add(time.Duration(eventOrdinal) * time.Millisecond)
 			quoteAt := quote.at
@@ -473,7 +476,11 @@ func (planner *allocationReplayPlanner) replaySlot(ctx context.Context, slot str
 			if lotErr != nil {
 				return 0, nil, nil, lotErr
 			}
-			lotCash := -trading.CalculateBuyCost(quote.marketPrice, lot).NetCashFlow
+			lotCost, costErr := trading.CalculateAShareBuyCost(candidate.item.StockCode, quote.marketPrice, lot)
+			if costErr != nil {
+				return 0, nil, nil, costErr
+			}
+			lotCash := -lotCost.NetCashFlow
 			state.status, state.reason = "missed_cash", fmt.Sprintf("历史重放剩余现金%.2f元不足支付一手含费成本%.2f元", cash, lotCash)
 			continue
 		}
@@ -683,10 +690,20 @@ func allocationReplayPlanHash(plan allocationReplayPlan, capital []AccountCapita
 		ID, Slot, At string
 		Amount       float64
 	}
+	type tradeHash struct {
+		ID, Side       string
+		ExecutionPrice float64
+		Commission     float64
+		StampDuty      float64
+		TransferFee    float64
+		SlippageAmount float64
+		NetCashFlow    float64
+	}
 	payload := struct {
 		Policy  string
 		States  []stateHash
 		Capital []capitalHash
+		Trades  []tradeHash
 	}{Policy: AllocationReplayPolicyVersion}
 	for _, state := range plan.states {
 		row := stateHash{ID: state.item.RecommendationID, Status: state.status, Failure: state.failureCode, Blocked: state.historicalBlocked}
@@ -700,6 +717,11 @@ func allocationReplayPlanHash(plan allocationReplayPlan, capital []AccountCapita
 	}
 	for _, event := range capital {
 		payload.Capital = append(payload.Capital, capitalHash{ID: event.EventID, Slot: event.Slot, At: event.EffectiveAt.Format(time.RFC3339Nano), Amount: event.Amount})
+	}
+	for _, trade := range plan.trades {
+		payload.Trades = append(payload.Trades, tradeHash{ID: trade.TradeID, Side: trade.Side, ExecutionPrice: trade.ExecutionPrice,
+			Commission: trade.Commission, StampDuty: trade.StampDuty, TransferFee: trade.TransferFee,
+			SlippageAmount: trade.SlippageAmount, NetCashFlow: trade.NetCashFlow})
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -834,6 +856,14 @@ func allocationReplayRecommendationUpdates(replayID string, state *allocationRep
 }
 
 func rebuildAllocationReplayLedger(tx *gorm.DB) error {
+	var recommendationRows []Recommendation
+	if err := tx.Select("recommendation_id", "stock_code").Find(&recommendationRows).Error; err != nil {
+		return err
+	}
+	recommendations := make(map[string]string, len(recommendationRows))
+	for _, item := range recommendationRows {
+		recommendations[item.RecommendationID] = item.StockCode
+	}
 	var capital []AccountCapitalEvent
 	if err := tx.Order("effective_at ASC, event_id ASC").Find(&capital).Error; err != nil {
 		return err
@@ -896,7 +926,11 @@ func rebuildAllocationReplayLedger(tx *gorm.DB) error {
 		}
 		positionValue := 0.0
 		for _, holding := range positions[event.slot] {
-			positionValue += trading.CalculateSellCost(holding.MarketPrice, holding.Quantity).NetCashFlow
+			cost, err := trading.CalculateAShareSellCost(recommendations[holding.RecommendationID], holding.MarketPrice, holding.Quantity)
+			if err != nil {
+				return err
+			}
+			positionValue += cost.NetCashFlow
 		}
 		nav := cash[event.slot] + positionValue
 		profit := nav - external[event.slot] - transfer[event.slot]

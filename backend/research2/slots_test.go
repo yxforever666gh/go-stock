@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
-	"go-stock/internal/trading"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -258,7 +257,7 @@ func TestSlotTimedSellIndependentOfResearchAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := InitialCash + trading.CalculateSellCost(12, 100).NetCashFlow
+	want := InitialCash + testAShareSellCost("sh600000", 12, 100).NetCashFlow
 	if math.Abs(overview.Cash-want) > 1e-8 {
 		t.Fatalf("cash %f want %f", overview.Cash, want)
 	}
@@ -336,7 +335,7 @@ func TestSlotFullPipelineEvidenceAnalysisBuyScheduledExitAndPerformance(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := trading.CalculateSellCost(11, quantity).NetCashFlow + trading.CalculateBuyCost(10, quantity).NetCashFlow
+	want := testAShareSellCost("sh600000", 11, quantity).NetCashFlow + testAShareBuyCost("sh600000", 10, quantity).NetCashFlow
 	if performance.ClosedTrades != 1 || performance.OpenPositions != 0 || math.Abs(performance.NetProfit-want) > 1e-6 {
 		t.Fatalf("performance=%+v wantPnl=%f", performance, want)
 	}

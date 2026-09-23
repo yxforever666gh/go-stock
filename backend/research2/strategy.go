@@ -684,7 +684,12 @@ func validateRecommendations(runID string, generated time.Time, evidence prepare
 			continue
 		}
 		lot, _ := trading.LotSize(code)
-		lotCost := -trading.CalculateBuyCost(referencePrice, lot).NetCashFlow
+		lotCostBreakdown, costErr := trading.CalculateAShareBuyCost(code, referencePrice, lot)
+		if costErr != nil {
+			warnings = append(warnings, code+"交易费用规则不可用")
+			continue
+		}
+		lotCost := -lotCostBreakdown.NetCashFlow
 		if lotCost > evidence.AvailableCash+1e-7 {
 			warnings = append(warnings, fmt.Sprintf("%s一手含费成本超过本轮可用现金%.2f元", code, evidence.AvailableCash))
 			continue
@@ -1277,7 +1282,11 @@ func (s *TradingService) processBuys(ctx context.Context, now time.Time) error {
 				if lotErr != nil {
 					return lotErr
 				}
-				lotCost := -trading.CalculateBuyCost(snapshots[item.RecommendationID].Price, lot).NetCashFlow
+				lotCostBreakdown, costErr := trading.CalculateAShareBuyCost(item.StockCode, snapshots[item.RecommendationID].Price, lot)
+				if costErr != nil {
+					return costErr
+				}
+				lotCost := -lotCostBreakdown.NetCashFlow
 				reason := fmt.Sprintf("剩余现金%.2f元不足支付一手含费成本%.2f元", overview.Cash, lotCost)
 				if err := s.repository.MarkStatus(ctx, item.RecommendationID, "missed_cash", reason); err != nil {
 					return err

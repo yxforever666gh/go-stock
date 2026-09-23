@@ -296,7 +296,12 @@ func (service *PerformanceBackfillService) rebuildSlotValuations(ctx context.Con
 				missing = "missing unadjusted daily close for " + item.StockCode
 				break
 			}
-			positionValue += trading.CalculateSellCost(close.Close, holding.Quantity).NetCashFlow
+			cost, costErr := trading.CalculateAShareSellCost(item.StockCode, close.Close, holding.Quantity)
+			if costErr != nil {
+				missing = "invalid A-share trading rule for " + item.StockCode
+				break
+			}
+			positionValue += cost.NetCashFlow
 			usedSources[item.StockCode] = close.Source
 		}
 		nav := cash + positionValue
