@@ -151,3 +151,22 @@ func TestAllocationReplayAcceptsThreeMatchingCapitalEventsAndRejectsDrift(t *tes
 		t.Fatal("allocation replay accepted mismatched slot capital")
 	}
 }
+
+func TestAllocationReplayUsesAuditedStoredSellWhenTargetMinuteIsMissing(t *testing.T) {
+	target := time.Date(2026, 9, 23, 9, 30, 0, 0, shanghai())
+	quoteAt := target.Add(-20 * time.Second)
+	item := Recommendation{RecommendationID: "stored-sell", StockCode: "sh600000"}
+	planner := allocationReplayPlanner{storedSells: map[string]Trade{
+		item.RecommendationID: {
+			RecommendationID: item.RecommendationID, Side: "sell", TradedAt: target.Add(300 * time.Millisecond),
+			MarketPrice: 10.2, ExecutionPrice: 10.1898, Quantity: 100, PriceSource: "tencent_realtime", QuoteAt: &quoteAt,
+		},
+	}}
+	quote, ok := planner.storedSellQuote(item, target)
+	if !ok || quote.marketPrice != 10.2 || !quote.quoteAt.Equal(quoteAt) || quote.source != "stored_trade:tencent_realtime" || !quote.at.Equal(target) {
+		t.Fatalf("stored sell quote=%+v ok=%t", quote, ok)
+	}
+	if _, ok := planner.storedSellQuote(item, target.Add(time.Minute)); ok {
+		t.Fatal("stored sell quote matched a different target minute")
+	}
+}

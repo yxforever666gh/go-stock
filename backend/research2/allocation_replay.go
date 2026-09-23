@@ -75,6 +75,7 @@ type allocationReplayCandidate struct {
 
 type allocationReplayQuote struct {
 	at            time.Time
+	quoteAt       time.Time
 	marketPrice   float64
 	previousClose float64
 	limitPrice    float64
@@ -115,6 +116,7 @@ type allocationReplayPlanner struct {
 	now          time.Time
 	sessions     map[string]allocationReplaySession
 	nextSellDays map[string]time.Time
+	storedSells  map[string]Trade
 	gaps         []AllocationReplayGap
 }
 
@@ -203,6 +205,7 @@ func (service *AllocationReplayService) buildPlan(ctx context.Context, startedAt
 	if err := service.repository.db.WithContext(ctx).Find(&allTrades).Error; err != nil {
 		return plan, err
 	}
+	storedSells := make(map[string]Trade)
 	allowed := make(map[string]struct{}, len(recommendations))
 	for _, item := range recommendations {
 		allowed[item.RecommendationID] = struct{}{}
@@ -210,6 +213,12 @@ func (service *AllocationReplayService) buildPlan(ctx context.Context, startedAt
 	for _, trade := range allTrades {
 		if _, ok := allowed[trade.RecommendationID]; !ok {
 			return plan, fmt.Errorf("research2 trade %s is outside successful report history", trade.TradeID)
+		}
+		if trade.Side == "sell" {
+			if _, exists := storedSells[trade.RecommendationID]; exists {
+				return plan, fmt.Errorf("research2 recommendation %s has multiple stored sell trades", trade.RecommendationID)
+			}
+			storedSells[trade.RecommendationID] = trade
 		}
 	}
 	var chains []ExecutionChain
@@ -254,7 +263,7 @@ func (service *AllocationReplayService) buildPlan(ctx context.Context, startedAt
 		bySlot[item.Slot] = append(bySlot[item.Slot], candidate)
 		plan.states = append(plan.states, state)
 	}
-	planner := &allocationReplayPlanner{service: service, now: startedAt, sessions: map[string]allocationReplaySession{}, nextSellDays: map[string]time.Time{}}
+	planner := &allocationReplayPlanner{service: service, now: startedAt, sessions: map[string]allocationReplaySession{}, nextSellDays: map[string]time.Time{}, storedSells: storedSells}
 	for _, slot := range Slots() {
 		candidates := bySlot[slot]
 		sort.SliceStable(candidates, func(i, j int) bool { return allocationReplayCandidateLess(candidates[i], candidates[j]) })
@@ -401,7 +410,12 @@ func (planner *allocationReplayPlanner) replaySlot(ctx context.Context, slot str
 		for _, position := range due {
 			position.attempted = true
 			candidate, state := position.candidate, position.candidate.state
-			quote, _, reason := planner.executionQuote(ctx, candidate.item, position.targetAt, true)
+			quote, code, reason := planner.executionQuote(ctx, candidate.item, position.targetAt, true)
+			if reason != "" && (code == "historical_minute_missing" || code == "historical_quote_unavailable") {
+				if stored, ok := planner.storedSellQuote(candidate.item, position.targetAt); ok {
+					quote, reason = stored, ""
+				}
+			}
 			if reason != "" {
 				state.status, state.reason, state.historicalBlocked = "sell_pending", "历史目标卖出未重放："+reason, true
 				planner.gaps = append(planner.gaps, AllocationReplayGap{RecommendationID: candidate.item.RecommendationID, Slot: slot, StockCode: candidate.item.StockCode, Phase: "sell", At: position.targetAt, Reason: reason})
@@ -411,6 +425,9 @@ func (planner *allocationReplayPlanner) replaySlot(ctx context.Context, slot str
 			eventOrdinal++
 			tradedAt := quote.at.Add(time.Duration(eventOrdinal) * time.Millisecond)
 			quoteAt := quote.at
+			if !quote.quoteAt.IsZero() {
+				quoteAt = quote.quoteAt
+			}
 			trade := Trade{
 				TradeID: allocationReplayTradeID(candidate.item.RecommendationID, "sell"), Slot: slot, RecommendationID: candidate.item.RecommendationID,
 				Side: "sell", TradedAt: tradedAt, MarketPrice: quote.marketPrice, ExecutionPrice: cost.ExecutionPrice, Quantity: state.buyTrade.Quantity,
@@ -500,6 +517,26 @@ func (planner *allocationReplayPlanner) replaySlot(ctx context.Context, slot str
 		return 0, nil, nil, fmt.Errorf("research2 allocation replay leaves slot %s cash negative: %.4f", slot, cash)
 	}
 	return cash, trades, filled, nil
+}
+
+func (planner *allocationReplayPlanner) storedSellQuote(item Recommendation, target time.Time) (allocationReplayQuote, bool) {
+	trade, ok := planner.storedSells[item.RecommendationID]
+	if !ok || trade.Side != "sell" || trade.MarketPrice <= 0 || trade.ExecutionPrice <= 0 || trade.Quantity <= 0 || trade.TradedAt.IsZero() {
+		return allocationReplayQuote{}, false
+	}
+	tradedAt := trade.TradedAt.In(shanghai())
+	if !tradedAt.Truncate(time.Minute).Equal(target.In(shanghai()).Truncate(time.Minute)) {
+		return allocationReplayQuote{}, false
+	}
+	quoteAt := tradedAt
+	if trade.QuoteAt != nil && !trade.QuoteAt.IsZero() {
+		quoteAt = trade.QuoteAt.In(shanghai())
+	}
+	source := "stored_trade"
+	if value := strings.TrimSpace(trade.PriceSource); value != "" {
+		source += ":" + value
+	}
+	return allocationReplayQuote{at: tradedAt.Truncate(time.Minute), quoteAt: quoteAt, marketPrice: trade.MarketPrice, source: source}, true
 }
 
 func (planner *allocationReplayPlanner) targetSellAt(ctx context.Context, candidate *allocationReplayCandidate) (time.Time, error) {
