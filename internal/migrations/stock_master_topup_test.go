@@ -65,6 +65,14 @@ func TestSchema35RepairsStockMasterMetadataAndCreditsEverySlotOnce(t *testing.T)
 	if err := verifyMainSchema35Runtime(database); err != nil {
 		t.Fatal(err)
 	}
+	if err := database.Model(&research2.AccountLedgerSnapshot{}).
+		Where("slot = ? AND snapshot_type = ? AND valued_at = ?", "09:30", research2.CapitalEventTopUp, research2CapitalSecondTopUpAt).
+		Update("snapshot_id", "replay-derived-top-up-09-30").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyMainSchema35Runtime(database); err != nil {
+		t.Fatalf("schema 35 verifier rejected an equivalent replay-derived snapshot: %v", err)
+	}
 }
 
 func TestSchema35RejectsMissingAccountAndBrokenCashEquation(t *testing.T) {

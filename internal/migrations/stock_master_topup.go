@@ -132,13 +132,12 @@ func verifyMainSchema35Runtime(tx *gorm.DB) error {
 		if math.Abs(account.Cash-(external+transfer+tradeFlow)) > 0.01 {
 			return fmt.Errorf("main schema 35 slot %s cash %.2f does not match capital/trade replay %.2f", account.Slot, account.Cash, external+transfer+tradeFlow)
 		}
-		snapshotID := research2LedgerSnapshotID(account.Slot, research2.CapitalEventTopUp, expected.EventID)
-		var snapshots int64
-		if err := tx.Model(&research2.AccountLedgerSnapshot{}).Where("snapshot_id = ?", snapshotID).Count(&snapshots).Error; err != nil {
+		var snapshots []research2.AccountLedgerSnapshot
+		if err := tx.Where("slot = ? AND snapshot_type = ? AND valued_at = ?", account.Slot, research2.CapitalEventTopUp, expected.EffectiveAt).Find(&snapshots).Error; err != nil {
 			return err
 		}
-		if snapshots != 1 {
-			return fmt.Errorf("main schema 35 slot %s top-up ledger snapshot count is %d", account.Slot, snapshots)
+		if len(snapshots) != 1 || snapshots[0].TradingDate != expected.TradingDate || math.Abs(snapshots[0].CumulativeExternalCapital-30000) > 0.01 || snapshots[0].ValuationBasis != research2.CapitalValuationBasisLedger {
+			return fmt.Errorf("main schema 35 slot %s top-up ledger snapshot is invalid", account.Slot)
 		}
 	}
 	return nil
