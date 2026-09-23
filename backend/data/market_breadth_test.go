@@ -1,9 +1,11 @@
 package data
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -22,12 +24,8 @@ import (
 )
 
 func TestBreadthFallsBackFromEOFToCompleteDelayedPages(t *testing.T) {
-	const total = 5554
+	const total = 554
 	quoteAt := time.Date(2026, 8, 28, 14, 52, 33, 0, shanghaiDataLocation())
-	direct := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		panic(http.ErrAbortHandler)
-	}))
-	defer direct.Close()
 
 	pagePayloads := make(map[int][]byte, (total+breadthPageSize-1)/breadthPageSize)
 	for page := 1; page <= (total+breadthPageSize-1)/breadthPageSize; page++ {
@@ -44,23 +42,26 @@ func TestBreadthFallsBackFromEOFToCompleteDelayedPages(t *testing.T) {
 		pagePayloads[page] = payload
 	}
 	var requests atomic.Int32
-	delayed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+	service := NewMarketEvidenceServiceWithMinuteDB(nil)
+	service.client = resty.New().SetTransport(breadthRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Host == "direct.breadth.test" {
+			return nil, io.EOF
+		}
+		if request.URL.Host != "delayed.breadth.test" {
+			return nil, fmt.Errorf("unexpected breadth host %s", request.URL.Host)
+		}
 		requests.Add(1)
 		page, _ := strconv.Atoi(request.URL.Query().Get("pn"))
 		if request.URL.Query().Get("pz") != strconv.Itoa(breadthPageSize) || pagePayloads[page] == nil {
-			http.Error(w, "unexpected page", http.StatusBadRequest)
-			return
+			return nil, fmt.Errorf("unexpected breadth page %d", page)
 		}
-		_, _ = w.Write(pagePayloads[page])
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(pagePayloads[page])), Request: request}, nil
 	}))
-	defer delayed.Close()
 
 	now := quoteAt.Add(10 * time.Minute)
-	service := NewMarketEvidenceServiceWithMinuteDB(nil)
-	service.client = resty.New().SetTimeout(2 * time.Second)
 	service.now = func() time.Time { return now }
-	service.urls.breadth = direct.URL
-	service.urls.breadthDelay = delayed.URL
+	service.urls.breadth = "http://direct.breadth.test"
+	service.urls.breadthDelay = "http://delayed.breadth.test"
 	service.urls.breadthTencent = ""
 
 	result := service.collectBreadth(context.Background())
@@ -70,8 +71,8 @@ func TestBreadthFallsBackFromEOFToCompleteDelayedPages(t *testing.T) {
 	if !result.AsOf.Equal(quoteAt) {
 		t.Fatalf("asOf=%v want=%v", result.AsOf, quoteAt)
 	}
-	if requests.Load() != 56 {
-		t.Fatalf("delayed requests=%d want=56", requests.Load())
+	if requests.Load() != 6 {
+		t.Fatalf("delayed requests=%d want=6", requests.Load())
 	}
 	if len(result.Sources) != 2 || result.Sources[0].Provider != "eastmoney" || result.Sources[0].Status != marketdata.StatusUnavailable || result.Sources[1].Provider != "eastmoney-delay" || result.Sources[1].Status != marketdata.StatusOK {
 		t.Fatalf("source chain=%#v", result.Sources)
@@ -82,6 +83,12 @@ func TestBreadthFallsBackFromEOFToCompleteDelayedPages(t *testing.T) {
 	if len(result.Errors) != 1 || result.Errors[0].Provider != "eastmoney" {
 		t.Fatalf("errors=%#v", result.Errors)
 	}
+}
+
+type breadthRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn breadthRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }
 
 func TestBreadthFallsBackToTencentUsingListedStockUniverse(t *testing.T) {

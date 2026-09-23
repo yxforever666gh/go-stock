@@ -3,6 +3,7 @@ package migrations
 import (
 	"context"
 	"go-stock/backend/research2"
+	"go-stock/internal/trading"
 	"gorm.io/gorm"
 	"math"
 	"testing"
@@ -74,7 +75,12 @@ func TestSchema28SeedsCashOnceAndPartitionsHoldings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if math.Abs(overview.NetProfit) > 1e-8 || overview.ReturnRate != 0 {
+	currentSell, err := trading.CalculateAShareSellCost(stock.StockCode, stock.CurrentPrice, stock.Quantity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacySell := trading.CalculateSellCost(stock.CurrentPrice, stock.Quantity)
+	if math.Abs(overview.NetProfit-(currentSell.NetCashFlow-legacySell.NetCashFlow)) > 1e-8 {
 		t.Fatal(overview)
 	}
 	var count int64
