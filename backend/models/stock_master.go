@@ -22,7 +22,7 @@ type StockMasterSeedManifest struct {
 }
 
 // StockMasterRefreshMetadata is the singleton audit record for the last
-// accepted security-master snapshot. Its schema is owned by migration 3.
+// accepted security-master snapshot. Its schema is owned by migration 35.
 type StockMasterRefreshMetadata struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	Source    string    `json:"source" gorm:"size:64;not null"`

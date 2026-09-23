@@ -627,7 +627,19 @@ func verifyMainSchema31Runtime(tx *gorm.DB) error {
 		if err := tx.Model(&research2.AccountCapitalEvent{}).Where("slot = ? AND external = ?", account.Slot, false).Select("COALESCE(SUM(amount), 0)").Scan(&transfer).Error; err != nil {
 			return err
 		}
-		if math.Abs(external-2*research2CapitalInitialAmount) > 0.01 {
+		for _, required := range []research2.AccountCapitalEvent{
+			research2CapitalEvent(account.Slot, research2.CapitalEventInitial, research2CapitalInitialAmount, true, "user_initial_capital", research2CapitalInitialAt, "initial"),
+			research2CapitalEvent(account.Slot, research2.CapitalEventTopUp, research2CapitalInitialAmount, true, "user_top_up", research2CapitalTopUpAt, "top-up-20260921"),
+		} {
+			var stored research2.AccountCapitalEvent
+			if err := tx.Where("event_id = ?", required.EventID).First(&stored).Error; err != nil {
+				return fmt.Errorf("main schema 31 slot %s required capital event %s is unavailable: %w", account.Slot, required.EventID, err)
+			}
+			if !research2CapitalEventMatches(stored, required) {
+				return fmt.Errorf("main schema 31 slot %s required capital event %s conflicts", account.Slot, required.EventID)
+			}
+		}
+		if external < 2*research2CapitalInitialAmount-research2CapitalRebaseEpsilon {
 			return fmt.Errorf("main schema 31 slot %s external capital is %.2f", account.Slot, external)
 		}
 		if math.Abs(account.InitialCash-research2CapitalInitialAmount) > 0.01 || account.Cash < -research2CapitalRebaseEpsilon {

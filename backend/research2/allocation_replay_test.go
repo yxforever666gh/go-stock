@@ -127,3 +127,27 @@ func TestAllocationReplayUsesLegacyThreeSlotsAndBlocksMissingSell(t *testing.T) 
 		t.Fatalf("idempotent replay reused=%t err=%v", reused, err)
 	}
 }
+
+func TestAllocationReplayAcceptsThreeMatchingCapitalEventsAndRejectsDrift(t *testing.T) {
+	initialAt := time.Date(2026, 8, 27, 9, 30, 0, 0, shanghai())
+	firstTopUp := time.Date(2026, 9, 21, 9, 25, 0, 0, shanghai())
+	secondTopUp := time.Date(2026, 9, 23, 9, 25, 0, 0, shanghai())
+	eventsBySlot := make(map[string][]AccountCapitalEvent, len(Slots()))
+	for _, slot := range Slots() {
+		eventsBySlot[slot] = []AccountCapitalEvent{
+			{EventID: "initial-" + slot, Slot: slot, EventType: CapitalEventInitial, Amount: 10000, External: true, Source: "user_initial_capital", EffectiveAt: initialAt, TradingDate: "2026-08-27"},
+			{EventID: "topup-1-" + slot, Slot: slot, EventType: CapitalEventTopUp, Amount: 10000, External: true, Source: "user_top_up", EffectiveAt: firstTopUp, TradingDate: "2026-09-21"},
+			{EventID: "topup-2-" + slot, Slot: slot, EventType: CapitalEventTopUp, Amount: 10000, External: true, Source: "user_top_up", EffectiveAt: secondTopUp, TradingDate: "2026-09-23"},
+		}
+	}
+	total, err := validateAllocationReplayCapital(eventsBySlot)
+	if err != nil || math.Abs(total-30000) > 0.01 {
+		t.Fatalf("three-event capital timeline total=%f err=%v", total, err)
+	}
+	drifted := append([]AccountCapitalEvent(nil), eventsBySlot["11:25"]...)
+	drifted[2].Amount = 9999
+	eventsBySlot["11:25"] = drifted
+	if _, err := validateAllocationReplayCapital(eventsBySlot); err == nil {
+		t.Fatal("allocation replay accepted mismatched slot capital")
+	}
+}

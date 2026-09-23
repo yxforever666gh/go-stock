@@ -229,16 +229,13 @@ func (service *AllocationReplayService) buildPlan(ctx context.Context, startedAt
 	}
 	eventsBySlot := make(map[string][]AccountCapitalEvent, len(Slots()))
 	for _, event := range capital {
+		if !ValidSlot(event.Slot) {
+			return plan, fmt.Errorf("research2 external capital event %s has invalid slot %s", event.EventID, event.Slot)
+		}
 		eventsBySlot[event.Slot] = append(eventsBySlot[event.Slot], event)
 	}
-	for _, slot := range Slots() {
-		total := 0.0
-		for _, event := range eventsBySlot[slot] {
-			total += event.Amount
-		}
-		if math.Abs(total-20000) > 0.01 {
-			return plan, fmt.Errorf("research2 slot %s external capital is %.2f, want 20000", slot, total)
-		}
+	if _, err := validateAllocationReplayCapital(eventsBySlot); err != nil {
+		return plan, err
 	}
 
 	bySlot := make(map[string][]*allocationReplayCandidate, len(Slots()))
@@ -291,6 +288,45 @@ func (service *AllocationReplayService) buildPlan(ctx context.Context, startedAt
 	plan.planHash = hash
 	plan.replayID = "allocation-" + hash[:40]
 	return plan, nil
+}
+
+func validateAllocationReplayCapital(eventsBySlot map[string][]AccountCapitalEvent) (float64, error) {
+	var template []AccountCapitalEvent
+	expectedTotal := 0.0
+	for _, slot := range Slots() {
+		events := eventsBySlot[slot]
+		if len(events) == 0 {
+			return 0, fmt.Errorf("research2 slot %s has no external capital events", slot)
+		}
+		if template != nil && len(events) != len(template) {
+			return 0, fmt.Errorf("research2 slot %s has %d external capital events, want %d", slot, len(events), len(template))
+		}
+		total := 0.0
+		for index, event := range events {
+			if !event.External || event.Amount <= 0 || math.IsNaN(event.Amount) || math.IsInf(event.Amount, 0) || event.EffectiveAt.IsZero() {
+				return 0, fmt.Errorf("research2 slot %s external capital event %s is invalid", slot, event.EventID)
+			}
+			if event.TradingDate != event.EffectiveAt.In(shanghai()).Format("2006-01-02") {
+				return 0, fmt.Errorf("research2 slot %s external capital event %s has inconsistent trading date", slot, event.EventID)
+			}
+			total += event.Amount
+			if template != nil {
+				expected := template[index]
+				if event.EventType != expected.EventType || math.Abs(event.Amount-expected.Amount) > 0.01 || event.Source != expected.Source || !event.EffectiveAt.Equal(expected.EffectiveAt) || event.TradingDate != expected.TradingDate {
+					return 0, fmt.Errorf("research2 slot %s external capital timeline differs from %s", slot, Slots()[0])
+				}
+			}
+		}
+		if template == nil {
+			template = append([]AccountCapitalEvent(nil), events...)
+			expectedTotal = total
+			continue
+		}
+		if math.Abs(total-expectedTotal) > 0.01 {
+			return 0, fmt.Errorf("research2 slot %s external capital is %.2f, want %.2f with %d events", slot, total, expectedTotal, len(template))
+		}
+	}
+	return expectedTotal, nil
 }
 
 func allocationReplayCandidateLess(left, right *allocationReplayCandidate) bool {

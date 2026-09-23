@@ -327,6 +327,7 @@ var mainMigrations = []migration{
 	{id: 32, name: "research2_slot_report_email", description: "Adds an ordered multi-slot selection for immediate per-report Research Center 2 email and retires pending deliveries created by the former combined-summary workflow.", definition: mainMigrationV32Definition, apply: applyResearch2SlotReportEmail, verify: verifyMainSchema32Runtime},
 	{id: 33, name: "research2_portfolio_performance", description: "Adds rebuildable buy-day limit outcomes and per-slot daily valuations for filterable individual and equal-weight portfolio TWR without rewriting trades, cash, positions or reports.", definition: mainMigrationV33Definition, apply: applyResearch2PortfolioPerformance, verify: verifyMainSchema33Runtime},
 	{id: 34, name: "research2_dynamic_remaining_cash_allocation", description: "Versions Research Center 2 remaining-cash allocation and adds an auditable full-history replay receipt without rewriting business history during migration.", definition: mainMigrationV34Definition, apply: applyResearch2DynamicAllocation, verify: verifyMainSchema34Runtime},
+	{id: 35, name: "stock_master_metadata_and_research2_20260923_topup", description: "Repairs stock-master refresh metadata and records the user-authorized 2026-09-23 pre-open top-up for every Research Center 2 slot account.", definition: mainMigrationV35Definition, apply: applyStockMasterMetadataAndResearch2TopUp, verify: verifyMainSchema35Runtime},
 }
 
 var legacyStrategyTables = []string{
