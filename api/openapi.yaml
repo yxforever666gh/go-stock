@@ -1,513 +1,848 @@
 openapi: 3.1.0
-info:
-  title: Go-Stock Local Web API
-  version: 1.0.0
-  description: Local-only Web API for market data, watchlists, funds, settings, and AI research.
+info: {title: Stock God Local Web API, version: 2.0.0, description: 'Local stock prediction, retained market data,
+    settings and audit APIs.'}
 servers:
-  - url: http://127.0.0.1:34115
+- {url: 'http://127.0.0.1:34115'}
 paths:
   /livez:
     get:
       operationId: getLiveness
       responses:
-        "200": {description: Process is alive, content: {application/json: {schema: {$ref: "#/components/schemas/LivenessStatus"}}}}
+        '200':
+          description: Process is alive
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/LivenessStatus'}
   /readyz:
     get:
       operationId: getReadiness
       responses:
-        "200": {description: Ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
-        "503": {description: Not ready, content: {application/json: {schema: {$ref: "#/components/schemas/SystemVersionStatus"}}}}
+        '200':
+          description: Ready
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemVersionStatus'}
+        '503':
+          description: Not ready
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemVersionStatus'}
   /api/v1/system/info:
     get:
       operationId: getSystemInfo
       responses:
-        "200": {description: Display version information, content: {application/json: {schema: {$ref: "#/components/schemas/SystemInfo"}}}}
+        '200':
+          description: Display version information
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SystemInfo'}
   /api/v1/system/shutdown:
     post:
       operationId: shutdownSystem
-      responses: {"200": {description: Shutdown requested, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "403": {$ref: "#/components/responses/Forbidden"}}
+      responses:
+        '200':
+          description: Shutdown requested
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '403': {$ref: '#/components/responses/Forbidden'}
   /api/v1/settings:
-    get: {operationId: getSettings, responses: {"200": {description: Settings}}}
+    get:
+      operationId: getSettings
+      responses:
+        '200': {description: Settings}
     put:
       operationId: updateSettings
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
-      responses: {"200": {description: Settings updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/ai/configs:
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/JsonObject'}
+      responses:
+        '200':
+          description: Settings updated
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/prediction/ai/configs:
     get:
-      operationId: listAIConfigs
-      parameters: [{name: center, in: query, schema: {type: string, enum: [global, research1, research2], default: global}}]
-      responses: {"200": {description: Enabled models belonging to the requested center}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/research-centers/{center}/settings:
-    parameters: [{name: center, in: path, required: true, schema: {type: string, enum: [research1, research2]}}]
+      operationId: listPredictionAIConfigs
+      responses:
+        '200': {description: Enabled models belonging to the requested center}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/prediction/settings:
     get:
-      operationId: getResearchSettings
-      responses: {"200": {description: Independent research configuration, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchSettings"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+      operationId: getPredictionSettings
+      responses:
+        '200':
+          description: Independent research configuration
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionSettings'}
+        '400': {$ref: '#/components/responses/BadRequest'}
     put:
-      operationId: updateResearchSettings
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchSettings"}}}}
-      responses: {"200": {description: Saved configuration and new revision, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchSettings"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "409": {$ref: "#/components/responses/Conflict"}}
-  /api/v1/ai/configs/test:
+      operationId: updatePredictionSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PredictionSettings'}
+      responses:
+        '200':
+          description: Saved configuration and new revision
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionSettings'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+  /api/v1/prediction/ai/configs/test:
     post:
-      operationId: testAIConfig
-      parameters: [{name: center, in: query, schema: {type: string, enum: [global, research1, research2], default: global}}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/AIConfigTestRequest"}}}}
-      responses: {"200": {description: AI configuration test result}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/groups:
-    get: {operationId: listGroups, responses: {"200": {description: Groups}}}
-    post:
-      operationId: createGroup
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/JsonObject"}}}}
-      responses: {"200": {description: Group created, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/groups/initialize-sort:
-    post: {operationId: initializeGroupSort, responses: {"200": {description: Group sort initialized}}}
-  /api/v1/groups/{id}:
-    delete: {operationId: deleteGroup, responses: {"200": {description: Group deleted}}}
-  /api/v1/groups/{id}/sort:
-    put:
-      operationId: updateGroupSort
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/GroupSortRequest"}}}}
-      responses: {"200": {description: Group sort updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/groups/{id}/stocks:
-    post:
-      operationId: addGroupStock
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockCodeRequest"}}}}
-      responses: {"200": {description: Stock added to group, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/groups/{id}/stocks/{code}:
-    delete: {operationId: removeGroupStock, responses: {"200": {description: Stock removed from group}}}
+      operationId: testPredictionAIConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AIConfigTestRequest'}
+      responses:
+        '200': {description: AI configuration test result}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/stocks/search:
-    get: {operationId: searchStockMaster, responses: {"200": {description: Stock master search}}}
+    get:
+      operationId: searchStockMaster
+      responses:
+        '200': {description: Stock master search}
   /api/v1/stocks/query:
     post:
       operationId: queryStocks
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockQueryRequest"}}}}
-      responses: {"200": {description: Indicator stock query}, "400": {$ref: "#/components/responses/BadRequest"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/StockQueryRequest'}
+      responses:
+        '200': {description: Indicator stock query}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/stocks/{code}/snapshot:
-    get: {operationId: getStockSnapshot, responses: {"200": {description: Stock snapshot}}}
+    get:
+      operationId: getStockSnapshot
+      responses:
+        '200': {description: Stock snapshot}
   /api/v1/stocks/{code}/kline:
-    get: {operationId: getStockKLine, responses: {"200": {description: Stock daily bars}}}
+    get:
+      operationId: getStockKLine
+      responses:
+        '200': {description: Stock daily bars}
   /api/v1/stocks/{code}/minute-line:
-    get: {operationId: getStockMinuteLine, responses: {"200": {description: Stock minute line}}}
-  /api/v1/watchlist/stocks:
-    get: {operationId: listFollowedStocks, responses: {"200": {description: Followed stocks}}}
-    post:
-      operationId: followStock
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockCodeRequest"}}}}
-      responses: {"200": {description: Stock followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/watchlist/stocks/{code}:
-    delete: {operationId: unfollowStock, responses: {"200": {description: Stock unfollowed}}}
-  /api/v1/watchlist/stocks/{code}/position:
-    put:
-      operationId: updateStockPosition
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockPositionRequest"}}}}
-      responses: {"200": {description: Position updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/watchlist/stocks/{code}/alarm:
-    put:
-      operationId: updateStockAlarm
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockAlarmRequest"}}}}
-      responses: {"200": {description: Alarm updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/watchlist/stocks/{code}/sort:
-    put:
-      operationId: updateStockSort
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/StockSortRequest"}}}}
-      responses: {"200": {description: Sort updated, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+    get:
+      operationId: getStockMinuteLine
+      responses:
+        '200': {description: Stock minute line}
   /api/v1/funds/search:
-    get: {operationId: searchFunds, responses: {"200": {description: Fund search}}}
+    get:
+      operationId: searchFunds
+      responses:
+        '200': {description: Fund search}
   /api/v1/funds/rankings:
     get:
       operationId: fundRankings
       parameters:
-        - {name: category, in: query, schema: {type: string, enum: [all, stock, mixed, bond, index, qdii, fof]}}
-        - {name: period, in: query, schema: {type: string, enum: [day, week, month, 3m, 6m, 1y, 3y, ytd, since_inception, scale]}}
-        - {name: q, in: query, schema: {type: string}}
-        - {name: sortDirection, in: query, schema: {type: string, enum: [asc, desc]}}
-        - {name: page, in: query, schema: {type: integer, minimum: 1}}
-        - {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      - name: category
+        in: query
+        schema:
+          type: string
+          enum: [all, stock, mixed, bond, index, qdii, fof]
+      - name: period
+        in: query
+        schema:
+          type: string
+          enum: [day, week, month, 3m, 6m, 1y, 3y, ytd, since_inception, scale]
+      - name: q
+        in: query
+        schema: {type: string}
+      - name: sortDirection
+        in: query
+        schema:
+          type: string
+          enum: [asc, desc]
+      - name: page
+        in: query
+        schema: {type: integer, minimum: 1}
+      - name: pageSize
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100}
       responses:
-        "200": {description: Off-exchange fund rankings with normalized NAV date and provider state, content: {application/json: {schema: {$ref: "#/components/schemas/FundRankingEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
+        '200':
+          description: Off-exchange fund rankings with normalized NAV date and provider state
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FundRankingEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/etfs/rankings:
     get:
       operationId: etfRankings
       parameters:
-        - {name: category, in: query, schema: {type: string, enum: [all, broad, industry, cross_border, bond, commodity, money]}}
-        - {name: q, in: query, schema: {type: string}}
-        - {name: sort, in: query, schema: {type: string, enum: [changeRate, amount, turnoverRate, premiumRate, scale, netInflow]}}
-        - {name: sortDirection, in: query, schema: {type: string, enum: [asc, desc]}}
-        - {name: page, in: query, schema: {type: integer, minimum: 1}}
-        - {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100}}
+      - name: category
+        in: query
+        schema:
+          type: string
+          enum: [all, broad, industry, cross_border, bond, commodity, money]
+      - name: q
+        in: query
+        schema: {type: string}
+      - name: sort
+        in: query
+        schema:
+          type: string
+          enum: [changeRate, amount, turnoverRate, premiumRate, scale, netInflow]
+      - name: sortDirection
+        in: query
+        schema:
+          type: string
+          enum: [asc, desc]
+      - name: page
+        in: query
+        schema: {type: integer, minimum: 1}
+      - name: pageSize
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100}
       responses:
-        "200": {description: Exchange-traded-fund rankings, content: {application/json: {schema: {$ref: "#/components/schemas/ETFRankingEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
+        '200':
+          description: Exchange-traded-fund rankings
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ETFRankingEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/etfs/search:
     get:
       operationId: etfSearch
       parameters:
-        - {name: q, in: query, required: true, schema: {type: string, minLength: 1}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50}}
+      - name: q
+        in: query
+        required: true
+        schema: {type: string, minLength: 1}
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 50}
       responses:
-        "200": {description: Search listed exchange-traded funds by normalized code or name, content: {application/json: {schema: {$ref: "#/components/schemas/ETFSearchEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
+        '200':
+          description: Search listed exchange-traded funds by normalized code or name
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ETFSearchEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/etfs/{code}:
     get:
       operationId: etfDetail
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
       responses:
-        "200": {description: Exchange-traded-fund identity, quote, NAV, scale, flow and holdings, content: {application/json: {schema: {$ref: "#/components/schemas/ETFDetailEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-  /api/v1/watchlist/funds:
-    get: {operationId: listFollowedFunds, responses: {"200": {description: Followed funds}}}
-    post:
-      operationId: followFund
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/FundCodeRequest"}}}}
-      responses: {"200": {description: Fund followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/watchlist/funds/{code}:
-    delete: {operationId: unfollowFund, responses: {"200": {description: Fund unfollowed}}}
-  /api/v1/watchlist/etfs:
-    get:
-      operationId: listFollowedETFs
-      responses: {"200": {description: Followed exchange-traded funds, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/ETFWatchlistItem"}}}}}}
-    post:
-      operationId: followETF
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/ETFWatchlistRequest"}}}}
-      responses: {"200": {description: ETF followed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
-  /api/v1/watchlist/etfs/{code}:
-    delete:
-      operationId: unfollowETF
-      parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
-      responses: {"200": {description: ETF unfollowed, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "404": {$ref: "#/components/responses/NotFound"}}
+        '200':
+          description: Exchange-traded-fund identity
+          quote: null
+          NAV: null
+          scale: null
+          flow and holdings: null
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ETFDetailEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
   /api/v1/market/telegraphs:
-    get: {operationId: listTelegraphs, responses: {"200": {description: Telegraphs}}}
+    get:
+      operationId: listTelegraphs
+      responses:
+        '200': {description: Telegraphs}
   /api/v1/market/telegraphs/refresh:
     post:
       operationId: refreshTelegraphs
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/TelegraphRefreshRequest"}}}}
-      responses: {"200": {description: Telegraphs refreshed}, "400": {$ref: "#/components/responses/BadRequest"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/TelegraphRefreshRequest'}
+      responses:
+        '200': {description: Telegraphs refreshed}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/market/indexes/global:
-    get: {operationId: getGlobalIndexes, responses: {"200": {description: Global indexes}}}
+    get:
+      operationId: getGlobalIndexes
+      responses:
+        '200': {description: Global indexes}
   /api/v1/market/industries/rank:
-    get: {operationId: getIndustryRank, responses: {"200": {description: Industry rank}}}
+    get:
+      operationId: getIndustryRank
+      responses:
+        '200': {description: Industry rank}
   /api/v1/market/industries/money-rank:
-    get: {operationId: getIndustryMoneyRank, responses: {"200": {description: Industry money rank}}}
+    get:
+      operationId: getIndustryMoneyRank
+      responses:
+        '200': {description: Industry money rank}
   /api/v1/market/stocks/money-rank:
-    get: {operationId: getStockMoneyRank, responses: {"200": {description: Stock money rank}}}
+    get:
+      operationId: getStockMoneyRank
+      responses:
+        '200': {description: Stock money rank}
   /api/v1/market/stocks/{code}/money-trend:
-    get: {operationId: getStockMoneyTrend, responses: {"200": {description: Stock money trend}}}
+    get:
+      operationId: getStockMoneyTrend
+      responses:
+        '200': {description: Stock money trend}
   /api/v1/market/long-tiger:
-    get: {operationId: getLongTigerRank, responses: {"200": {description: Long tiger rank}}}
+    get:
+      operationId: getLongTigerRank
+      responses:
+        '200': {description: Long tiger rank}
   /api/v1/market/stocks/research-reports:
-    get: {operationId: listStockResearchReports, responses: {"200": {description: All recent stock research reports}}}
+    get:
+      operationId: listStockResearchReports
+      responses:
+        '200': {description: All recent stock research reports}
   /api/v1/market/stocks/{code}/research-reports:
-    get: {operationId: getStockResearchReports, responses: {"200": {description: Stock research reports}}}
+    get:
+      operationId: getStockResearchReports
+      responses:
+        '200': {description: Stock research reports}
   /api/v1/market/stocks/notices:
-    get: {operationId: listStockNotices, responses: {"200": {description: All recent stock notices}}}
+    get:
+      operationId: listStockNotices
+      responses:
+        '200': {description: All recent stock notices}
   /api/v1/market/stocks/{code}/notices:
-    get: {operationId: getStockNotices, responses: {"200": {description: Stock notices}}}
+    get:
+      operationId: getStockNotices
+      responses:
+        '200': {description: Stock notices}
   /api/v1/market/industries/research-reports:
-    get: {operationId: listIndustryResearchReports, responses: {"200": {description: All recent industry research reports}}}
+    get:
+      operationId: listIndustryResearchReports
+      responses:
+        '200': {description: All recent industry research reports}
   /api/v1/market/industries/{code}/research-reports:
-    get: {operationId: getIndustryResearchReports, responses: {"200": {description: Industry research reports}}}
+    get:
+      operationId: getIndustryResearchReports
+      responses:
+        '200': {description: Industry research reports}
   /api/v1/market/dictionary:
-    get: {operationId: getMarketDictionary, responses: {"200": {description: Market dictionary}}}
+    get:
+      operationId: getMarketDictionary
+      responses:
+        '200': {description: Market dictionary}
   /api/v1/market/sentiment/weighted:
     post:
       operationId: analyzeWeightedSentiment
-      requestBody: {required: true, content: {application/json: {schema: {$ref: "#/components/schemas/SentimentRequest"}}}}
-      responses: {"200": {description: Weighted sentiment}, "400": {$ref: "#/components/responses/BadRequest"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/SentimentRequest'}
+      responses:
+        '200': {description: Weighted sentiment}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/market/hot/words:
     get:
       operationId: listMarketHotWords
       parameters:
-        - {name: hours, in: query, schema: {type: integer, minimum: 1, maximum: 72, default: 24}}
-        - {name: baselineDays, in: query, schema: {type: integer, minimum: 3, maximum: 30, default: 7}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
+      - name: hours
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 72, default: 24}
+      - name: baselineDays
+        in: query
+        schema: {type: integer, minimum: 3, maximum: 30, default: 7}
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100, default: 30}
       responses:
-        "200": {description: Explainable recent market hot words, content: {application/json: {schema: {$ref: "#/components/schemas/HotWordsEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: Explainable recent market hot words
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/HotWordsEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/market/hot/stocks:
-    get: {operationId: listHotStocks, responses: {"200": {description: Hot stocks}}}
+    get:
+      operationId: listHotStocks
+      responses:
+        '200': {description: Hot stocks}
   /api/v1/market/hot/events:
-    get: {operationId: listHotEvents, responses: {"200": {description: Hot events}}}
+    get:
+      operationId: listHotEvents
+      responses:
+        '200': {description: Hot events}
   /api/v1/market/hot/topics:
-    get: {operationId: listHotTopics, responses: {"200": {description: Hot topics}}}
+    get:
+      operationId: listHotTopics
+      responses:
+        '200': {description: Hot topics}
   /api/v1/market/calendars/investment:
-    get: {operationId: getInvestmentCalendar, responses: {"200": {description: Investment calendar}}}
+    get:
+      operationId: getInvestmentCalendar
+      responses:
+        '200': {description: Investment calendar}
   /api/v1/market/calendars/cls:
-    get: {operationId: getCLSCalendar, responses: {"200": {description: CLS calendar}}}
+    get:
+      operationId: getCLSCalendar
+      responses:
+        '200': {description: CLS calendar}
   /api/v1/market/breadth:
     get:
       operationId: getMarketBreadth
       responses:
-        "200": {description: Market breadth evidence, content: {application/json: {schema: {$ref: "#/components/schemas/MarketBreadthEnvelope"}}}}
+        '200':
+          description: Market breadth evidence
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MarketBreadthEnvelope'}
   /api/v1/market/fund-flows:
     get:
       operationId: listMarketFundFlows
       parameters:
-        - {name: scope, in: query, required: true, schema: {type: string, enum: [sector, concept]}}
-        - {name: date, in: query, deprecated: true, description: Compatibility parameter; the public source only serves its latest trading day., schema: {type: string, format: date}}
-        - {name: sort, in: query, schema: {type: string, enum: [netamount, main_ratio, super_large_netamount, large_netamount, medium_netamount, small_netamount, change_pct, inamount, outamount, avg_changeratio]}}
-        - {name: limit, in: query, schema: {type: integer}}
+      - name: scope
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [sector, concept]
+      - name: date
+        in: query
+        deprecated: true
+        description: Compatibility parameter; the public source only serves its latest trading day.
+        schema: {type: string, format: date}
+      - name: sort
+        in: query
+        schema:
+          type: string
+          enum: [netamount, main_ratio, super_large_netamount, large_netamount, medium_netamount, small_netamount,
+            change_pct, inamount, outamount, avg_changeratio]
+      - name: limit
+        in: query
+        schema: {type: integer}
       responses:
-        "200": {description: Sector or concept fund-flow evidence, content: {application/json: {schema: {$ref: "#/components/schemas/FundFlowEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: Sector or concept fund-flow evidence
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FundFlowEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/market/fund-flows/{code}/timeline:
     get:
       operationId: getMarketFundFlowTimeline
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string, pattern: '^BK[0-9]{4}$'}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string, pattern: '^BK[0-9]{4}$'}
       responses:
-        "200": {description: Latest trading-session minute fund-flow timeline for a sector or concept, content: {application/json: {schema: {$ref: "#/components/schemas/FundFlowTimelineEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: Latest trading-session minute fund-flow timeline for a sector or concept
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FundFlowTimelineEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/market/futures/positions:
     get:
       operationId: listFuturesPositions
       parameters:
-        - {name: symbol, in: query, required: true, schema: {type: string, enum: [IF, IH, IC, IM]}}
-        - {name: date, in: query, schema: {type: string, format: date}}
+      - name: symbol
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [IF, IH, IC, IM]
+      - name: date
+        in: query
+        schema: {type: string, format: date}
       responses:
-        "200": {description: CFFEX aggregate long/short position trend, content: {application/json: {schema: {$ref: "#/components/schemas/FuturesPositionsEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: CFFEX aggregate long/short position trend
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/FuturesPositionsEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/market/margin:
     get:
       operationId: getMarginTrading
       parameters:
-        - {name: scope, in: query, schema: {type: string, enum: [market, security]}}
-        - {name: code, in: query, schema: {type: string}}
-        - {name: date, in: query, schema: {type: string, format: date}}
+      - name: scope
+        in: query
+        schema:
+          type: string
+          enum: [market, security]
+      - name: code
+        in: query
+        schema: {type: string}
+      - name: date
+        in: query
+        schema: {type: string, format: date}
       responses:
-        "200": {description: SSE and SZSE margin-financing evidence, content: {application/json: {schema: {$ref: "#/components/schemas/MarginEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: SSE and SZSE margin-financing evidence
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/MarginEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/instruments/{code}/auction:
     get:
       operationId: getInstrumentAuction
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
-        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
-        - {name: date, in: query, schema: {type: string, format: date}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
+      - name: assetType
+        in: query
+        schema:
+          type: string
+          enum: [stock, index, etf]
+      - name: date
+        in: query
+        schema: {type: string, format: date}
       responses:
-        "200": {description: Call-auction snapshots, content: {application/json: {schema: {$ref: "#/components/schemas/AuctionEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: Call-auction snapshots
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/AuctionEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/instruments/{code}/trades:
     get:
       operationId: listInstrumentTrades
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
-        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
-        - {name: date, in: query, schema: {type: string, format: date}}
-        - {name: cursor, in: query, schema: {type: string}}
-        - {name: limit, in: query, schema: {type: integer}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
+      - name: assetType
+        in: query
+        schema:
+          type: string
+          enum: [stock, index, etf]
+      - name: date
+        in: query
+        schema: {type: string, format: date}
+      - name: cursor
+        in: query
+        schema: {type: string}
+      - name: limit
+        in: query
+        schema: {type: integer}
       responses:
-        "200": {description: Time-and-sales evidence, content: {application/json: {schema: {$ref: "#/components/schemas/TradesEnvelope"}}}}
-        "400": {$ref: "#/components/responses/MarketDataBadRequest"}
+        '200':
+          description: Time-and-sales evidence
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/TradesEnvelope'}
+        '400': {$ref: '#/components/responses/MarketDataBadRequest'}
   /api/v1/instruments/{code}/chart:
     get:
       operationId: getInstrumentChart
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
-        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
-        - {name: market, in: query, schema: {type: string, enum: [SH, SZ]}}
-        - {name: period, in: query, schema: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}}
-        - {name: adjustment, in: query, schema: {type: string, enum: [none, qfq, hfq]}}
-        - {name: from, in: query, schema: {type: string, format: date-time}}
-        - {name: to, in: query, schema: {type: string, format: date-time}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 5000}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
+      - name: assetType
+        in: query
+        schema:
+          type: string
+          enum: [stock, index, etf]
+      - name: market
+        in: query
+        schema:
+          type: string
+          enum: [SH, SZ]
+      - name: period
+        in: query
+        schema:
+          type: string
+          enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]
+      - name: adjustment
+        in: query
+        schema:
+          type: string
+          enum: [none, qfq, hfq]
+      - name: from
+        in: query
+        schema: {type: string, format: date-time}
+      - name: to
+        in: query
+        schema: {type: string, format: date-time}
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 5000}
       responses:
-        "200": {description: Unified stock, index, or exchange-traded-fund chart, content: {application/json: {schema: {$ref: "#/components/schemas/ChartEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
+        '200':
+          description: Unified stock
+          index: null
+          or exchange-traded-fund chart: null
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChartEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
   /api/v1/instruments/{code}/drawings:
     get:
       operationId: getInstrumentDrawings
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
-        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
-        - {name: market, in: query, schema: {type: string, enum: [SH, SZ]}}
-        - {name: period, in: query, required: true, schema: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}}
-        - {name: adjustment, in: query, required: true, schema: {type: string, enum: [none, qfq, hfq]}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
+      - name: assetType
+        in: query
+        schema:
+          type: string
+          enum: [stock, index, etf]
+      - name: market
+        in: query
+        schema:
+          type: string
+          enum: [SH, SZ]
+      - name: period
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]
+      - name: adjustment
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [none, qfq, hfq]
       responses:
-        "200": {description: Current drawing document for the isolated chart scope, content: {application/json: {schema: {$ref: "#/components/schemas/ChartDrawingDocument"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
+        '200':
+          description: Current drawing document for the isolated chart scope
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChartDrawingDocument'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
     put:
       operationId: putInstrumentDrawings
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
       requestBody:
         required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/PutChartDrawingsRequest"}}}
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/PutChartDrawingsRequest'}
       responses:
-        "200": {description: Revised drawing document, content: {application/json: {schema: {$ref: "#/components/schemas/ChartDrawingDocument"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
+        '200':
+          description: Revised drawing document
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChartDrawingDocument'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
     delete:
       operationId: deleteInstrumentDrawings
       parameters:
-        - {name: code, in: path, required: true, schema: {type: string}}
-        - {name: assetType, in: query, schema: {type: string, enum: [stock, index, etf]}}
-        - {name: market, in: query, schema: {type: string, enum: [SH, SZ]}}
-        - {name: period, in: query, required: true, schema: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}}
-        - {name: adjustment, in: query, required: true, schema: {type: string, enum: [none, qfq, hfq]}}
-        - {name: expectedRevision, in: query, required: true, schema: {type: integer, format: int64, minimum: 0}}
+      - name: code
+        in: path
+        required: true
+        schema: {type: string}
+      - name: assetType
+        in: query
+        schema:
+          type: string
+          enum: [stock, index, etf]
+      - name: market
+        in: query
+        schema:
+          type: string
+          enum: [SH, SZ]
+      - name: period
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]
+      - name: adjustment
+        in: query
+        required: true
+        schema:
+          type: string
+          enum: [none, qfq, hfq]
+      - name: expectedRevision
+        in: query
+        required: true
+        schema: {type: integer, format: int64, minimum: 0}
       responses:
-        "200": {description: Soft-deleted drawing document, content: {application/json: {schema: {$ref: "#/components/schemas/ChartDrawingDocument"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
+        '200':
+          description: Soft-deleted drawing document
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ChartDrawingDocument'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
   /api/v1/themes:
     get:
       operationId: listThemes
       parameters:
-        - {name: date, in: query, schema: {type: string, format: date}}
-        - {name: stage, in: query, schema: {type: string, enum: [观察, 发酵, 加速, 分歧, 退潮]}}
-        - {name: q, in: query, schema: {type: string}}
-        - {name: sort, in: query, schema: {type: string, enum: [rank, heat, stage], default: rank}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
-        - {name: cursor, in: query, schema: {type: string}}
+      - name: date
+        in: query
+        schema: {type: string, format: date}
+      - name: stage
+        in: query
+        schema:
+          type: string
+          enum: [观察, 发酵, 加速, 分歧, 退潮]
+      - name: q
+        in: query
+        schema: {type: string}
+      - name: sort
+        in: query
+        schema:
+          type: string
+          enum: [rank, heat, stage]
+          default: rank
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      - name: cursor
+        in: query
+        schema: {type: string}
       responses:
-        "200": {description: Frozen daily theme ranking, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeListEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
+        '200':
+          description: Frozen daily theme ranking
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ThemeListEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
   /api/v1/themes/{id}:
     get:
       operationId: getTheme
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-        - {name: date, in: query, schema: {type: string, format: date}}
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+      - name: date
+        in: query
+        schema: {type: string, format: date}
       responses:
-        "200": {description: Theme identity, selected snapshot and constituents, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeDetailEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
+        '200':
+          description: Theme identity
+          selected snapshot and constituents: null
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ThemeDetailEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
   /api/v1/themes/{id}/daily-snapshots:
     get:
       operationId: listThemeDailySnapshots
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-        - {name: from, in: query, schema: {type: string, format: date}}
-        - {name: to, in: query, schema: {type: string, format: date}}
-        - {name: stage, in: query, schema: {type: string, enum: [观察, 发酵, 加速, 分歧, 退潮]}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 30}}
-        - {name: cursor, in: query, schema: {type: string}}
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+      - name: from
+        in: query
+        schema: {type: string, format: date}
+      - name: to
+        in: query
+        schema: {type: string, format: date}
+      - name: stage
+        in: query
+        schema:
+          type: string
+          enum: [观察, 发酵, 加速, 分歧, 退潮]
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100, default: 30}
+      - name: cursor
+        in: query
+        schema: {type: string}
       responses:
-        "200": {description: Immutable daily lifecycle snapshots, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeDailySnapshotsEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
+        '200':
+          description: Immutable daily lifecycle snapshots
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ThemeDailySnapshotsEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
   /api/v1/themes/{id}/catalysts:
     get:
       operationId: listThemeCatalysts
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-        - {name: date, in: query, schema: {type: string, format: date}}
-        - {name: status, in: query, schema: {type: string, enum: [active, disputed, retracted, expired]}}
-        - {name: minCredibility, in: query, schema: {type: integer, minimum: 0, maximum: 100}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
-        - {name: cursor, in: query, schema: {type: string}}
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
+      - name: date
+        in: query
+        schema: {type: string, format: date}
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum: [active, disputed, retracted, expired]
+      - name: minCredibility
+        in: query
+        schema: {type: integer, minimum: 0, maximum: 100}
+      - name: limit
+        in: query
+        schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      - name: cursor
+        in: query
+        schema: {type: string}
       responses:
-        "200": {description: Catalyst timeline with parallel supporting and contradicting source claims, content: {application/json: {schema: {$ref: "#/components/schemas/ThemeCatalystsEnvelope"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research/analysis-runs:
+        '200':
+          description: Catalyst timeline with parallel supporting and contradicting source claims
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ThemeCatalystsEnvelope'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+  /api/v1/prediction/slots:
     get:
-      operationId: listAnalysisRuns
+      operationId: listPredictionSlots
       responses:
-        "200": {description: Analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AnalysisRunSummary"}}}}}
-  /api/v1/research/analysis-runs/{id}:
+        '200':
+          description: Today slot report timeliness and buy execution state
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PredictionSlotStatus'}
+  /api/v1/prediction/analysis-runs:
     get:
-      operationId: getAnalysisRun
-      responses:
-        "200": {description: Analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/AnalysisRun"}}}}
-  /api/v1/research/analysis-runs/{id}/audit:
-    get:
-      operationId: getResearchAnalysisRunAudit
+      operationId: listPredictionAnalysisRuns
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      responses:
-        "200": {description: Immutable redacted audit detail or an explicit legacy-unavailable result, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchAuditDetail"}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research/analysis-runs/{id}/audit/export:
-    get:
-      operationId: exportResearchAnalysisRunAudit
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      responses:
-        "200": {description: Redacted immutable audit ZIP bundle, content: {application/zip: {schema: {type: string, format: binary}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research/recommendations:
-    get:
-      operationId: listRecommendations
-      responses:
-        "200": {description: Recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Recommendation"}}}}}
-  /api/v1/research/capital-deployment/status:
-    get:
-      operationId: getCapitalDeploymentStatus
-      description: Returns the current event-driven capital deployment capacity and next eligible analysis time.
-      responses:
-        "200": {description: Capital deployment status, content: {application/json: {schema: {$ref: "#/components/schemas/CapitalDeploymentStatus"}}}}
-  /api/v1/research/buy-opportunities:
-    get:
-      operationId: listBuyOpportunities
-      description: Lists structured buy-now, wait, and reject decisions produced by event-driven analysis runs.
-      responses:
-        "200": {description: Buy opportunities, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/BuyOpportunity"}}}}}
-  /api/v1/research/recommendations/{id}:
-    get:
-      operationId: getRecommendation
-      responses:
-        "200": {description: Recommendation detail, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationDetail"}}}}
-  /api/v1/research/recommendations/{id}/chart:
-    get:
-      operationId: getRecommendationChart
-      description: Reads the persisted unadjusted minute cache and never calls an upstream provider.
-      responses:
-        "200": {description: Cached professional chart data, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
-  /api/v1/research/recommendations/{id}/chart/refresh:
-    post:
-      operationId: refreshRecommendationChart
-      description: Fills missing minute coverage using only enabled providers, refreshes the quote, and returns the chart data.
-      responses:
-        "200": {description: Refreshed professional chart data, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
-        "409": {description: The same recommendation is already being refreshed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
-  /api/v1/research/account:
-    get:
-      operationId: getSimulatedAccount
-      responses:
-        "200": {description: Simulated account and net yield, content: {application/json: {schema: {$ref: "#/components/schemas/AccountOverview"}}}}
-  /api/v1/research/account/cash-flows:
-    get:
-      operationId: listAccountCashFlows
-      description: Lists external simulated-account contributions; trading cash flows are excluded.
-      responses:
-        "200": {description: Account contribution ledger, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/AccountCashFlow"}}}}}
-  /api/v1/research/account/performance:
-    get:
-      operationId: getAccountPerformance
-      description: Returns unitized TWR, valuation points and strategy-quality metrics.
-      responses:
-        "200": {description: Account performance, content: {application/json: {schema: {$ref: "#/components/schemas/AccountPerformance"}}}}
-  /api/v1/research2/slots:
-    get:
-      operationId: listResearch2Slots
-      responses:
-        "200": {description: Today slot report timeliness and buy execution state, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2SlotStatus"}}}}}
-  /api/v1/research2/analysis-runs:
-    get:
-      operationId: listResearch2AnalysisRuns
-      parameters:
-        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
+      - name: slot
+        in: query
+        required: false
+        description: Five-minute account identity, e.g. 09:50; omitted reports include all slots
+        schema: {type: string}
       description: Lists independent five-minute analysis attempts including archived late reports.
       responses:
-        "200": {description: Research Center 2 analysis runs, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2AnalysisRunSummary"}}}}}
-  /api/v1/research2/email/test:
+        '200':
+          description: stock prediction analysis runs
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PredictionAnalysisRunSummary'}
+  /api/v1/prediction/email/test:
     post:
-      operationId: testResearch2Email
-      description: Sends a Research Center 2 SMTP configuration test message without creating an analysis run or simulated trade.
+      operationId: testPredictionEmail
+      description: Sends a stock prediction SMTP configuration test message without creating an analysis run or
+        simulated trade.
       requestBody:
         required: false
         content:
@@ -521,295 +856,310 @@ paths:
                 smtpPort: {type: integer}
                 smtpUsername: {type: string}
                 smtpPassword: {type: string}
-      responses: {"200": {description: Test email sent, content: {application/json: {schema: {$ref: "#/components/schemas/CommandResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}, "500": {description: SMTP delivery failed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}}
-  /api/v1/research2/analysis-runs/{id}:
-    get:
-      operationId: getResearch2AnalysisRun
       responses:
-        "200": {description: Research Center 2 analysis run, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AnalysisRun"}}}}
-  /api/v1/research2/analysis-runs/{id}/rerun:
+        '200':
+          description: Test email sent
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CommandResponse'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '500':
+          description: SMTP delivery failed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+  /api/v1/prediction/analysis-runs/{id}:
+    get:
+      operationId: getPredictionAnalysisRun
+      responses:
+        '200':
+          description: stock prediction analysis run
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionAnalysisRun'}
+  /api/v1/prediction/analysis-runs/{id}/rerun:
     post:
-      operationId: rerunResearch2AnalysisRun
-      description: Retry the latest failed attempt for its scheduled slot in the morning start window. Successful and empty reports cannot be rerun.
+      operationId: rerunPredictionAnalysisRun
+      description: Retry the latest failed attempt for its scheduled slot in the morning start window. Successful
+        and empty reports cannot be rerun.
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
       responses:
-        "200": {description: New persisted research run, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AnalysisRun"}}}}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research2/analysis-runs/{id}/audit:
+        '200':
+          description: New persisted research run
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionAnalysisRun'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+  /api/v1/prediction/analysis-runs/{id}/audit:
     get:
-      operationId: getResearch2AnalysisRunAudit
+      operationId: getPredictionAnalysisRunAudit
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
       responses:
-        "200": {description: Immutable redacted audit detail or an explicit legacy-unavailable result, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchAuditDetail"}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research2/analysis-runs/{id}/audit/export:
+        '200':
+          description: Immutable redacted audit detail or an explicit legacy-unavailable result
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionAuditDetail'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+  /api/v1/prediction/analysis-runs/{id}/audit/export:
     get:
-      operationId: exportResearch2AnalysisRunAudit
+      operationId: exportPredictionAnalysisRunAudit
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
+      - name: id
+        in: path
+        required: true
+        schema: {type: string}
       responses:
-        "200": {description: Redacted immutable audit ZIP bundle, content: {application/zip: {schema: {type: string, format: binary}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research2/recommendations:
+        '200':
+          description: Redacted immutable audit ZIP bundle
+          content:
+            application/zip:
+              schema: {type: string, format: binary}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+  /api/v1/prediction/recommendations:
     get:
-      operationId: listResearch2Recommendations
+      operationId: listPredictionRecommendations
       parameters:
-        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
-        - {name: slots, in: query, required: false, description: "Comma-separated five-minute account identities for performance views.", schema: {type: string}}
-        - {name: from, in: query, required: false, schema: {type: string, format: date}}
-        - {name: to, in: query, required: false, schema: {type: string, format: date}}
-        - {name: boughtOnly, in: query, required: false, schema: {type: boolean}}
+      - name: slot
+        in: query
+        required: false
+        description: Five-minute account identity, e.g. 09:50; omitted reports include all slots
+        schema: {type: string}
+      - name: slots
+        in: query
+        required: false
+        description: Comma-separated five-minute account identities for performance views.
+        schema: {type: string}
+      - name: from
+        in: query
+        required: false
+        schema: {type: string, format: date}
+      - name: to
+        in: query
+        required: false
+        schema: {type: string, format: date}
+      - name: boughtOnly
+        in: query
+        required: false
+        schema: {type: boolean}
       responses:
-        "200": {description: Research Center 2 recommendations, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/Research2Recommendation"}}}}}
-  /api/v1/research2/recommendations/{id}:
+        '200':
+          description: stock prediction recommendations
+          content:
+            application/json:
+              schema:
+                type: array
+                items: {$ref: '#/components/schemas/PredictionRecommendation'}
+  /api/v1/prediction/recommendations/{id}:
     get:
-      operationId: getResearch2Recommendation
+      operationId: getPredictionRecommendation
       responses:
-        "200": {description: Research Center 2 recommendation detail, content: {application/json: {schema: {$ref: "#/components/schemas/Research2RecommendationDetail"}}}}
-  /api/v1/research2/recommendations/{id}/chart:
+        '200':
+          description: stock prediction recommendation detail
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionRecommendationDetail'}
+  /api/v1/prediction/recommendations/{id}/chart:
     get:
-      operationId: getResearch2RecommendationChart
+      operationId: getPredictionRecommendationChart
       description: Reads the persisted unadjusted minute cache and never calls an upstream provider.
       responses:
-        "200": {description: Cached Research Center 2 recommendation minute chart, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
-  /api/v1/research2/recommendations/{id}/chart/refresh:
+        '200':
+          description: Cached stock prediction recommendation minute chart
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecommendationChart'}
+  /api/v1/prediction/recommendations/{id}/chart/refresh:
     post:
-      operationId: refreshResearch2RecommendationChart
-      description: Fills missing minute coverage using only enabled providers, refreshes the quote, and returns the chart data.
+      operationId: refreshPredictionRecommendationChart
+      description: Fills missing minute coverage using only enabled providers, refreshes the quote, and returns
+        the chart data.
       responses:
-        "200": {description: Refreshed Research Center 2 recommendation minute chart, content: {application/json: {schema: {$ref: "#/components/schemas/RecommendationChart"}}}}
-        "409": {description: The same recommendation is already being refreshed, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
-  /api/v1/research2/account:
+        '200':
+          description: Refreshed stock prediction recommendation minute chart
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecommendationChart'}
+        '409':
+          description: The same recommendation is already being refreshed
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+  /api/v1/prediction/account:
     get:
-      operationId: getResearch2Account
+      operationId: getPredictionAccount
       parameters:
-        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
+      - name: slot
+        in: query
+        required: false
+        description: Five-minute account identity, e.g. 09:50; omitted reports include all slots
+        schema: {type: string}
       responses:
-        "200": {description: Isolated Research Center 2 account with external capital and neutral internal transfers, content: {application/json: {schema: {$ref: "#/components/schemas/Research2AccountOverview"}}}}
-  /api/v1/research2/account/performance:
+        '200':
+          description: Isolated stock prediction account with external capital and neutral internal transfers
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionAccountOverview'}
+  /api/v1/prediction/account/performance:
     get:
-      operationId: getResearch2Performance
+      operationId: getPredictionPerformance
       parameters:
-        - {name: slot, in: query, required: false, description: "Five-minute account identity, e.g. 09:50; omitted reports include all slots", schema: {type: string}}
+      - name: slot
+        in: query
+        required: false
+        description: Five-minute account identity, e.g. 09:50; omitted reports include all slots
+        schema: {type: string}
       responses:
-        "200": {description: Research Center 2 overnight performance, content: {application/json: {schema: {$ref: "#/components/schemas/Research2Performance"}}}}
-  /api/v1/research2/portfolio/performance:
+        '200':
+          description: stock prediction overnight performance
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionPerformance'}
+  /api/v1/prediction/portfolio/performance:
     get:
-      operationId: getResearch2PortfolioPerformance
+      operationId: getPredictionPortfolioPerformance
       parameters:
-        - {name: slots, in: query, required: false, description: "Comma-separated five-minute accounts; omitted selects all 24 accounts.", schema: {type: string}}
-        - {name: from, in: query, required: false, schema: {type: string, format: date}}
-        - {name: to, in: query, required: false, schema: {type: string, format: date}}
+      - name: slots
+        in: query
+        required: false
+        description: Comma-separated five-minute accounts; omitted selects all 24 accounts.
+        schema: {type: string}
+      - name: from
+        in: query
+        required: false
+        schema: {type: string, format: date}
+      - name: to
+        in: query
+        required: false
+        schema: {type: string, format: date}
       responses:
-        "200": {description: Filterable single-account or equal-weight portfolio TWR and buy-day limit outcomes, content: {application/json: {schema: {$ref: "#/components/schemas/Research2PortfolioPerformance"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-  /api/v1/research/replays:
+        '200':
+          description: Filterable single-account or equal-weight portfolio TWR and buy-day limit outcomes
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionPortfolioPerformance'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+  /api/v1/prediction/replays:
     post:
-      operationId: createResearchReplay
-      description: Replays one immutable evidence and prompt snapshot with another model configuration without writing formal recommendations, trades, positions, or accounts.
+      operationId: createPredictionReplay
+      description: Replays one immutable evidence and prompt snapshot with another model configuration without writing
+        formal recommendations, trades, positions, or accounts.
       requestBody:
         required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/CreateResearchReplayRequest"}}}
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CreatePredictionReplayRequest'}
       responses:
-        "202": {description: Replay accepted, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchReplay"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/research/replays/{id}:
+        '202':
+          description: Replay accepted
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionReplay'}
+        '400': {$ref: '#/components/responses/BadRequest'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '409': {$ref: '#/components/responses/Conflict'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
+  /api/v1/prediction/replays/{id}:
     get:
-      operationId: getResearchReplay
+      operationId: getPredictionReplay
       parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      responses:
-        "200": {description: Replay state, immutable result, and comparison summary, content: {application/json: {schema: {$ref: "#/components/schemas/ResearchReplay"}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/documents:
-    get:
-      operationId: knowledgeDocuments
-      parameters:
-        - {name: page, in: query, schema: {type: integer, minimum: 1, default: 1}}
-        - {name: pageSize, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 20}}
-        - {name: status, in: query, schema: {type: string, enum: [draft, approved, rejected, superseded]}}
-        - {name: q, in: query, schema: {type: string}}
-      responses:
-        "200": {description: Paged knowledge documents, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentPage"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-    post:
-      operationId: createKnowledgeDocument
-      requestBody:
+      - name: id
+        in: path
         required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeDocumentRequest"}}}
+        schema: {type: string}
       responses:
-        "201": {description: Draft immutable knowledge document version, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "413": {description: Decoded document exceeds 10 MiB, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/documents/from-research:
-    post:
-      operationId: knowledgeFromResearch
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeFromResearchRequest"}}}
-      responses:
-        "201": {description: Research report saved as a knowledge draft, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/documents/{id}:
-    get:
-      operationId: knowledgeDocument
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      responses:
-        "200": {description: Knowledge document and latest immutable version, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/documents/{id}/versions:
-    get:
-      operationId: knowledgeDocumentVersions
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      responses:
-        "200": {description: Immutable knowledge document versions, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/KnowledgeDocumentVersion"}}}}}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-    post:
-      operationId: createKnowledgeDocumentVersion
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeDocumentRequest"}}}
-      responses:
-        "201": {description: New draft immutable version, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDocumentDetail"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "413": {description: Decoded document exceeds 10 MiB, content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/versions/{id}/decision:
-    post:
-      operationId: knowledgeVersionDecision
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDecisionRequest"}}}
-      responses:
-        "200": {description: Updated user decision state, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeVersionDecisionState"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/search:
-    get:
-      operationId: knowledgeSearch
-      parameters:
-        - {name: q, in: query, required: true, schema: {type: string}}
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 50, default: 20}}
-      responses:
-        "200": {description: Approved non-superseded FTS5 results, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/KnowledgeSearchHit"}}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/memory-candidates:
-    get:
-      operationId: knowledgeMemoryCandidates
-      parameters:
-        - {name: status, in: query, schema: {type: string, enum: [draft, approved, rejected]}}
-      responses:
-        "200": {description: AI-generated memory candidates awaiting a user decision, content: {application/json: {schema: {type: array, items: {$ref: "#/components/schemas/KnowledgeMemoryCandidate"}}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-    post:
-      operationId: createKnowledgeMemoryCandidate
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/CreateKnowledgeMemoryCandidateRequest"}}}
-      responses:
-        "201": {description: Draft memory candidate, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeMemoryCandidate"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/knowledge/memory-candidates/{id}/decision:
-    post:
-      operationId: knowledgeMemoryCandidateDecision
-      parameters:
-        - {name: id, in: path, required: true, schema: {type: string}}
-      requestBody:
-        required: true
-        content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeDecisionRequest"}}}
-      responses:
-        "200": {description: User-approved or rejected memory candidate, content: {application/json: {schema: {$ref: "#/components/schemas/KnowledgeMemoryCandidate"}}}}
-        "400": {$ref: "#/components/responses/BadRequest"}
-        "404": {$ref: "#/components/responses/NotFound"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "500": {$ref: "#/components/responses/InternalServerError"}
-  /api/v1/exports/config:
-    post:
-      operationId: exportConfig
-      requestBody: {content: {application/json: {schema: {$ref: "#/components/schemas/ExportRequest"}}}}
-      responses: {"200": {description: Export, content: {application/json: {schema: {$ref: "#/components/schemas/ExportResponse"}}}}, "400": {$ref: "#/components/responses/BadRequest"}}
+        '200':
+          description: Replay state
+          immutable result: null
+          and comparison summary: null
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/PredictionReplay'}
+        '404': {$ref: '#/components/responses/NotFound'}
+        '500': {$ref: '#/components/responses/InternalServerError'}
   /api/v1/events/ws:
     get:
       operationId: connectEventsWebSocket
-      responses: {"101": {description: Event stream}}
+      responses:
+        '101': {description: Event stream}
+      x-websocket: true
 components:
   responses:
     BadRequest:
       description: Invalid JSON request or parameters
-      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
     MarketDataBadRequest:
       description: Invalid market-data query parameters
-      content: {application/json: {schema: {$ref: "#/components/schemas/DataEnvelope"}}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/DataEnvelope'}
     NotFound:
       description: Requested resource was not found
-      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
     Conflict:
       description: Request conflicts with the current resource revision
-      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
     InternalServerError:
       description: Request failed because of an internal service or storage error
-      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
     Forbidden:
       description: Request is not from the bound loopback origin
-      content: {application/json: {schema: {$ref: "#/components/schemas/ErrorResponse"}}}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/ErrorResponse'}
   schemas:
-    ResearchSettings:
+    PredictionSettings:
       type: object
       additionalProperties: false
       required: [revision, config, aiConfigs]
       properties:
         revision: {type: integer, minimum: 1}
-        config: {$ref: "#/components/schemas/JsonObject"}
-        aiConfigs: {type: array, items: {$ref: "#/components/schemas/JsonObject"}}
-    JsonObject:
-      type: object
-      description: Provider- or configuration-defined JSON object whose stable fields are not owned by this transport layer.
+        config: {$ref: '#/components/schemas/JsonObject'}
+        aiConfigs:
+          type: array
+          items: {$ref: '#/components/schemas/JsonObject'}
+    JsonObject: {type: object, description: Provider- or configuration-defined JSON object whose stable fields are
+        not owned by this transport layer.}
     DataEnvelope:
       type: object
       required: [data, source, asOf, fetchedAt, status, errors]
       properties:
         data:
           oneOf:
-            - {$ref: "#/components/schemas/JsonObject"}
-            - {type: array, items: {$ref: "#/components/schemas/JsonObject"}}
+          - {$ref: '#/components/schemas/JsonObject'}
+          - type: array
+            items: {$ref: '#/components/schemas/JsonObject'}
         source: {type: string}
         asOf: {type: string, format: date-time}
         fetchedAt: {type: string, format: date-time}
-        status: {type: string, enum: [ok, partial, empty, stale, unavailable, after_cutoff]}
+        status:
+          type: string
+          enum: [ok, partial, empty, stale, unavailable, after_cutoff]
         errors:
           type: array
-          items: {$ref: "#/components/schemas/DataSourceError"}
+          items: {$ref: '#/components/schemas/DataSourceError'}
         sources:
           type: array
-          items: {$ref: "#/components/schemas/DataSourceState"}
+          items: {$ref: '#/components/schemas/DataSourceState'}
         warnings:
           type: array
           items: {type: string}
@@ -827,7 +1177,9 @@ components:
       required: [provider, status]
       properties:
         provider: {type: string}
-        status: {type: string, enum: [ok, partial, stale, unavailable, after_cutoff]}
+        status:
+          type: string
+          enum: [ok, partial, stale, unavailable, after_cutoff]
         asOf: {type: string, format: date-time}
         availableAt: {type: string, format: date-time}
         sourceRef: {type: string}
@@ -838,7 +1190,9 @@ components:
       properties:
         code: {type: string}
         name: {type: string}
-        category: {type: string, enum: [all, stock, mixed, bond, index, qdii, fof]}
+        category:
+          type: string
+          enum: [all, stock, mixed, bond, index, qdii, fof]
         nav: {type: number, nullable: true}
         navDate: {type: string, format: date}
         dayReturn: {type: number, nullable: true}
@@ -857,27 +1211,38 @@ components:
       type: object
       required: [items, total, page, pageSize, category, period]
       properties:
-        items: {type: array, items: {$ref: "#/components/schemas/FundRankingItem"}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/FundRankingItem'}
         total: {type: integer, minimum: 0}
         page: {type: integer, minimum: 1}
         pageSize: {type: integer, minimum: 1, maximum: 100}
-        category: {type: string, enum: [all, stock, mixed, bond, index, qdii, fof]}
-        period: {type: string, enum: [day, week, month, 3m, 6m, 1y, 3y, ytd, since_inception, scale]}
+        category:
+          type: string
+          enum: [all, stock, mixed, bond, index, qdii, fof]
+        period:
+          type: string
+          enum: [day, week, month, 3m, 6m, 1y, 3y, ytd, since_inception, scale]
         navDate: {type: string, format: date}
     FundRankingEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/FundRankingPage"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/FundRankingPage'}
     ETFRankingItem:
       type: object
       required: [code, name, market, category, rank]
       properties:
         code: {type: string}
         name: {type: string}
-        market: {type: string, enum: [SH, SZ]}
-        category: {type: string, enum: [broad, industry, cross_border, bond, commodity, money]}
+        market:
+          type: string
+          enum: [SH, SZ]
+        category:
+          type: string
+          enum: [broad, industry, cross_border, bond, commodity, money]
         price: {type: number, nullable: true}
         changeRate: {type: number, nullable: true}
         amount: {type: number, nullable: true}
@@ -894,24 +1259,34 @@ components:
       type: object
       required: [items, total, page, pageSize, category, sort]
       properties:
-        items: {type: array, items: {$ref: "#/components/schemas/ETFRankingItem"}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ETFRankingItem'}
         total: {type: integer, minimum: 0}
         page: {type: integer, minimum: 1}
         pageSize: {type: integer, minimum: 1, maximum: 100}
-        category: {type: string, enum: [all, broad, industry, cross_border, bond, commodity, money]}
-        sort: {type: string, enum: [changeRate, amount, turnoverRate, premiumRate, scale, netInflow]}
+        category:
+          type: string
+          enum: [all, broad, industry, cross_border, bond, commodity, money]
+        sort:
+          type: string
+          enum: [changeRate, amount, turnoverRate, premiumRate, scale, netInflow]
     ETFRankingEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ETFRankingPage"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ETFRankingPage'}
     ETFSearchEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {type: array, items: {$ref: "#/components/schemas/ETFRankingItem"}}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data:
+            type: array
+            items: {$ref: '#/components/schemas/ETFRankingItem'}
     ETFHolding:
       type: object
       required: [code, name]
@@ -922,37 +1297,24 @@ components:
         asOf: {type: string, format: date}
     ETFDetail:
       allOf:
-        - {$ref: "#/components/schemas/ETFRankingItem"}
-        - type: object
-          required: [trackingIndex, managementFee, holdings, chartInstrument]
-          properties:
-            trackingIndex: {type: string}
-            managementFee: {type: number, nullable: true}
-            listDate: {type: string, format: date}
-            holdings: {type: array, items: {$ref: "#/components/schemas/ETFHolding"}}
-            chartInstrument: {$ref: "#/components/schemas/InstrumentID"}
+      - {$ref: '#/components/schemas/ETFRankingItem'}
+      - type: object
+        required: [trackingIndex, managementFee, holdings, chartInstrument]
+        properties:
+          trackingIndex: {type: string}
+          managementFee: {type: number, nullable: true}
+          listDate: {type: string, format: date}
+          holdings:
+            type: array
+            items: {$ref: '#/components/schemas/ETFHolding'}
+          chartInstrument: {$ref: '#/components/schemas/InstrumentID'}
     ETFDetailEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ETFDetail"}}
-    ETFWatchlistRequest:
-      type: object
-      required: [code, name, market, category]
-      properties:
-        code: {type: string}
-        name: {type: string}
-        market: {type: string, enum: [SH, SZ]}
-        category: {type: string, enum: [broad, industry, cross_border, bond, commodity, money]}
-    ETFWatchlistItem:
-      allOf:
-        - {$ref: "#/components/schemas/ETFWatchlistRequest"}
-        - type: object
-          required: [createdAt, updatedAt]
-          properties:
-            createdAt: {type: string, format: date-time}
-            updatedAt: {type: string, format: date-time}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ETFDetail'}
     MarketBreadthData:
       type: object
       required: [total, advances, declines, flat, limitUps, limitDowns, medianChangePct]
@@ -983,7 +1345,9 @@ components:
         effectiveDays: {type: integer}
         documentCount: {type: integer}
         available: {type: boolean}
-        mode: {type: string, enum: [burst, coverage_fallback]}
+        mode:
+          type: string
+          enum: [burst, coverage_fallback]
     HotWordsSentiment:
       type: object
       required: [score, category, description, positiveCount, negativeCount]
@@ -1005,7 +1369,8 @@ components:
         url: {type: string, format: uri}
     HotWordItem:
       type: object
-      required: [rank, word, score, documentCount, occurrenceCount, documentShare, baselineDocumentCount, sourceCount, sources, latestAt, confidence, representativeNews]
+      required: [rank, word, score, documentCount, occurrenceCount, documentShare, baselineDocumentCount, sourceCount,
+        sources, latestAt, confidence, representativeNews]
       properties:
         rank: {type: integer}
         word: {type: string}
@@ -1017,19 +1382,28 @@ components:
         burstRatio: {type: number, nullable: true}
         growthPct: {type: number, nullable: true}
         sourceCount: {type: integer}
-        sources: {type: array, items: {type: string}}
+        sources:
+          type: array
+          items: {type: string}
         latestAt: {type: string, format: date-time}
-        confidence: {type: string, enum: [low, medium, high]}
-        representativeNews: {type: array, maxItems: 3, items: {$ref: "#/components/schemas/HotWordRepresentativeNews"}}
+        confidence:
+          type: string
+          enum: [low, medium, high]
+        representativeNews:
+          type: array
+          maxItems: 3
+          items: {$ref: '#/components/schemas/HotWordRepresentativeNews'}
     HotWordsData:
       type: object
       required: [window, baseline, currentDocumentCount, sentiment, items]
       properties:
-        window: {$ref: "#/components/schemas/HotWordsWindow"}
-        baseline: {$ref: "#/components/schemas/HotWordsBaseline"}
+        window: {$ref: '#/components/schemas/HotWordsWindow'}
+        baseline: {$ref: '#/components/schemas/HotWordsBaseline'}
         currentDocumentCount: {type: integer}
-        sentiment: {$ref: "#/components/schemas/HotWordsSentiment"}
-        items: {type: array, items: {$ref: "#/components/schemas/HotWordItem"}}
+        sentiment: {$ref: '#/components/schemas/HotWordsSentiment'}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/HotWordItem'}
     FundFlowRow:
       type: object
       required: [code, name, netAmount]
@@ -1062,10 +1436,13 @@ components:
         code: {type: string}
         name: {type: string}
         tradingDate: {type: string, format: date}
-        points: {type: array, items: {$ref: "#/components/schemas/FundFlowTimelinePoint"}}
+        points:
+          type: array
+          items: {$ref: '#/components/schemas/FundFlowTimelinePoint'}
     FuturesPositionRow:
       type: object
-      required: [tradeDate, settlePrice, longPosition, longChange, shortPosition, shortChange, netPosition, indexClose, indexChange, basis]
+      required: [tradeDate, settlePrice, longPosition, longChange, shortPosition, shortChange, netPosition, indexClose,
+        indexChange, basis]
       properties:
         tradeDate: {type: string, format: date}
         settlePrice: {type: number}
@@ -1081,11 +1458,15 @@ components:
       type: object
       required: [variety, varietyName, contractCode, indexCode, rows]
       properties:
-        variety: {type: string, enum: [IF, IH, IC, IM]}
+        variety:
+          type: string
+          enum: [IF, IH, IC, IM]
         varietyName: {type: string}
         contractCode: {type: string}
         indexCode: {type: string}
-        rows: {type: array, items: {$ref: "#/components/schemas/FuturesPositionRow"}}
+        rows:
+          type: array
+          items: {$ref: '#/components/schemas/FuturesPositionRow'}
     MarginRow:
       type: object
       required: [date, financingBalance, securitiesBalance, marginBalance, financingBuy, securitiesSell]
@@ -1102,8 +1483,12 @@ components:
       type: object
       required: [scope, rows]
       properties:
-        scope: {type: string, enum: [market, security]}
-        rows: {type: array, items: {$ref: "#/components/schemas/MarginRow"}}
+        scope:
+          type: string
+          enum: [market, security]
+        rows:
+          type: array
+          items: {$ref: '#/components/schemas/MarginRow'}
     AuctionSnapshot:
       type: object
       required: [time, price, matchedVolume, matchedAmount]
@@ -1119,10 +1504,14 @@ components:
       required: [code, assetType, date, snapshots]
       properties:
         code: {type: string}
-        assetType: {type: string, enum: [stock, index, etf]}
+        assetType:
+          type: string
+          enum: [stock, index, etf]
         date: {type: string, format: date}
-        snapshots: {type: array, items: {$ref: "#/components/schemas/AuctionSnapshot"}}
-        finalSnapshot: {$ref: "#/components/schemas/AuctionSnapshot"}
+        snapshots:
+          type: array
+          items: {$ref: '#/components/schemas/AuctionSnapshot'}
+        finalSnapshot: {$ref: '#/components/schemas/AuctionSnapshot'}
         auctionStrength: {type: number, nullable: true}
         gapPct: {type: number, nullable: true}
     TradeTick:
@@ -1133,70 +1522,90 @@ components:
         price: {type: number}
         volume: {type: number}
         amount: {type: number}
-        side: {type: string, enum: [buy, sell, neutral]}
+        side:
+          type: string
+          enum: [buy, sell, neutral]
     TradesData:
       type: object
       required: [code, assetType, date, items]
       properties:
         code: {type: string}
-        assetType: {type: string, enum: [stock, index, etf]}
+        assetType:
+          type: string
+          enum: [stock, index, etf]
         date: {type: string, format: date}
-        items: {type: array, items: {$ref: "#/components/schemas/TradeTick"}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/TradeTick'}
         nextCursor: {type: string}
     MarketBreadthEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/MarketBreadthData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/MarketBreadthData'}
     HotWordsEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/HotWordsData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/HotWordsData'}
     FundFlowEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {type: array, items: {$ref: "#/components/schemas/FundFlowRow"}}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data:
+            type: array
+            items: {$ref: '#/components/schemas/FundFlowRow'}
     FundFlowTimelineEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/FundFlowTimelineData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/FundFlowTimelineData'}
     FuturesPositionsEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/FuturesPositionsData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/FuturesPositionsData'}
     MarginEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/MarginData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/MarginData'}
     AuctionEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/AuctionData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/AuctionData'}
     TradesEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/TradesData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/TradesData'}
     InstrumentID:
       type: object
       required: [assetType, market, code]
       properties:
-        assetType: {type: string, enum: [stock, index, etf]}
-        market: {type: string, enum: [SH, SZ, BJ, CFFEX]}
+        assetType:
+          type: string
+          enum: [stock, index, etf]
+        market:
+          type: string
+          enum: [SH, SZ, BJ, CFFEX]
         code: {type: string}
     ChartBar:
       type: object
@@ -1221,20 +1630,29 @@ components:
       type: object
       required: [instrument, period, adjustment, timezone, rangeFrom, rangeTo, bars, missingIntervals]
       properties:
-        instrument: {$ref: "#/components/schemas/InstrumentID"}
-        period: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}
-        adjustment: {type: string, enum: [none, qfq, hfq]}
+        instrument: {$ref: '#/components/schemas/InstrumentID'}
+        period:
+          type: string
+          enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]
+        adjustment:
+          type: string
+          enum: [none, qfq, hfq]
         timezone: {type: string}
         rangeFrom: {type: string, format: date-time}
         rangeTo: {type: string, format: date-time}
-        bars: {type: array, items: {$ref: "#/components/schemas/ChartBar"}}
-        missingIntervals: {type: array, items: {$ref: "#/components/schemas/ChartMissingInterval"}}
+        bars:
+          type: array
+          items: {$ref: '#/components/schemas/ChartBar'}
+        missingIntervals:
+          type: array
+          items: {$ref: '#/components/schemas/ChartMissingInterval'}
     ChartEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ChartData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ChartData'}
     ChartDrawingPoint:
       type: object
       required: [time, value]
@@ -1246,9 +1664,13 @@ components:
       required: [id, type, points]
       properties:
         id: {type: string}
-        type: {type: string, enum: [measure, trend_line, ray, horizontal_line, wave, fibonacci_retracement]}
-        points: {type: array, items: {$ref: "#/components/schemas/ChartDrawingPoint"}}
-        style: {$ref: "#/components/schemas/JsonObject"}
+        type:
+          type: string
+          enum: [measure, trend_line, ray, horizontal_line, wave, fibonacci_retracement]
+        points:
+          type: array
+          items: {$ref: '#/components/schemas/ChartDrawingPoint'}
+        style: {$ref: '#/components/schemas/JsonObject'}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
         deletedAt: {type: string, format: date-time, nullable: true}
@@ -1256,37 +1678,57 @@ components:
       type: object
       required: [instrument, period, adjustment, revision, drawings, updatedAt]
       properties:
-        instrument: {$ref: "#/components/schemas/InstrumentID"}
-        period: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}
-        adjustment: {type: string, enum: [none, qfq, hfq]}
+        instrument: {$ref: '#/components/schemas/InstrumentID'}
+        period:
+          type: string
+          enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]
+        adjustment:
+          type: string
+          enum: [none, qfq, hfq]
         revision: {type: integer, format: int64, minimum: 0}
-        drawings: {type: array, items: {$ref: "#/components/schemas/ChartDrawing"}}
+        drawings:
+          type: array
+          items: {$ref: '#/components/schemas/ChartDrawing'}
         deletedAt: {type: string, format: date-time, nullable: true}
         updatedAt: {type: string, format: date-time}
     PutChartDrawingsRequest:
       type: object
       required: [assetType, market, period, adjustment, expectedRevision, drawings]
       properties:
-        assetType: {type: string, enum: [stock, index, etf]}
-        market: {type: string, enum: [SH, SZ]}
-        period: {type: string, enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]}
-        adjustment: {type: string, enum: [none, qfq, hfq]}
+        assetType:
+          type: string
+          enum: [stock, index, etf]
+        market:
+          type: string
+          enum: [SH, SZ]
+        period:
+          type: string
+          enum: [1m, 5m, 15m, 30m, 60m, day, week, month, quarter, year]
+        adjustment:
+          type: string
+          enum: [none, qfq, hfq]
         expectedRevision: {type: integer, format: int64, minimum: 0}
-        drawings: {type: array, maxItems: 500, items: {$ref: "#/components/schemas/ChartDrawing"}}
+        drawings:
+          type: array
+          maxItems: 500
+          items: {$ref: '#/components/schemas/ChartDrawing'}
     ThemeLifecycleStage:
       type: string
       enum: [观察, 发酵, 加速, 分歧, 退潮]
     ThemeSummary:
       type: object
-      required: [themeId, name, aliases, snapshotId, cycleNo, lifecycleStage, stageChanged, rank, heatScore, summary, constituentCount, catalystCount, conflictingCatalystCount, representativeSecurities, observedAt, frozenAt]
+      required: [themeId, name, aliases, snapshotId, cycleNo, lifecycleStage, stageChanged, rank, heatScore, summary,
+        constituentCount, catalystCount, conflictingCatalystCount, representativeSecurities, observedAt, frozenAt]
       properties:
         themeId: {type: string}
         name: {type: string}
-        aliases: {type: array, items: {type: string}}
+        aliases:
+          type: array
+          items: {type: string}
         snapshotId: {type: string}
         cycleNo: {type: integer, minimum: 1}
-        lifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
-        previousLifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        lifecycleStage: {$ref: '#/components/schemas/ThemeLifecycleStage'}
+        previousLifecycleStage: {$ref: '#/components/schemas/ThemeLifecycleStage'}
         stageChanged: {type: boolean}
         rank: {type: integer, minimum: 1}
         heatScore: {type: number}
@@ -1294,14 +1736,19 @@ components:
         constituentCount: {type: integer, minimum: 0}
         catalystCount: {type: integer, minimum: 0}
         conflictingCatalystCount: {type: integer, minimum: 0}
-        representativeSecurities: {type: array, maxItems: 3, items: {$ref: "#/components/schemas/ThemeRepresentativeSecurity"}}
+        representativeSecurities:
+          type: array
+          maxItems: 3
+          items: {$ref: '#/components/schemas/ThemeRepresentativeSecurity'}
         observedAt: {type: string, format: date-time}
         frozenAt: {type: string, format: date-time}
     ThemeRepresentativeSecurity:
       type: object
       required: [assetType, market, code, name, role]
       properties:
-        assetType: {type: string, enum: [stock, index, etf, fund]}
+        assetType:
+          type: string
+          enum: [stock, index, etf, fund]
         market: {type: string}
         code: {type: string}
         name: {type: string}
@@ -1311,31 +1758,39 @@ components:
       required: [tradeDate, items]
       properties:
         tradeDate: {type: string, format: date}
-        items: {type: array, items: {$ref: "#/components/schemas/ThemeSummary"}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ThemeSummary'}
         nextCursor: {type: string}
     ThemeListEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ThemeListData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ThemeListData'}
     ThemeIdentity:
       type: object
       required: [themeId, name, aliases, description, status]
       properties:
         themeId: {type: string}
         name: {type: string}
-        aliases: {type: array, items: {type: string}}
+        aliases:
+          type: array
+          items: {type: string}
         description: {type: string}
-        status: {type: string, enum: [active, archived]}
+        status:
+          type: string
+          enum: [active, archived]
     ThemeSnapshot:
       type: object
-      required: [snapshotId, tradeDate, cycleNo, lifecycleStage, rank, heatScore, summary, constituentCount, catalystCount, conflictingCatalystCount, observedAt, frozenAt]
+      required: [snapshotId, tradeDate, cycleNo, lifecycleStage, rank, heatScore, summary, constituentCount, catalystCount,
+        conflictingCatalystCount, observedAt, frozenAt]
       properties:
         snapshotId: {type: string}
         tradeDate: {type: string, format: date}
         cycleNo: {type: integer, minimum: 1}
-        lifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        lifecycleStage: {$ref: '#/components/schemas/ThemeLifecycleStage'}
         rank: {type: integer, minimum: 1}
         heatScore: {type: number}
         summary: {type: string}
@@ -1349,7 +1804,9 @@ components:
       required: [constituentId, assetType, market, code, name, role, rank, contributionScore]
       properties:
         constituentId: {type: string}
-        assetType: {type: string, enum: [stock, index, etf, fund]}
+        assetType:
+          type: string
+          enum: [stock, index, etf, fund]
         market: {type: string}
         code: {type: string}
         name: {type: string}
@@ -1368,27 +1825,31 @@ components:
       type: object
       required: [theme, snapshot, constituents, catalystSummary]
       properties:
-        theme: {$ref: "#/components/schemas/ThemeIdentity"}
+        theme: {$ref: '#/components/schemas/ThemeIdentity'}
         snapshot:
           oneOf:
-            - {$ref: "#/components/schemas/ThemeSnapshot"}
-            - {type: "null"}
-        constituents: {type: array, items: {$ref: "#/components/schemas/ThemeConstituent"}}
-        catalystSummary: {$ref: "#/components/schemas/ThemeCatalystSummary"}
+          - {$ref: '#/components/schemas/ThemeSnapshot'}
+          - {type: 'null'}
+        constituents:
+          type: array
+          items: {$ref: '#/components/schemas/ThemeConstituent'}
+        catalystSummary: {$ref: '#/components/schemas/ThemeCatalystSummary'}
     ThemeDetailEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ThemeDetailData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ThemeDetailData'}
     ThemeDailySnapshot:
       type: object
-      required: [snapshotId, tradeDate, cycleNo, lifecycleStage, rank, heatScore, summary, constituentCount, catalystCount, frozenAt]
+      required: [snapshotId, tradeDate, cycleNo, lifecycleStage, rank, heatScore, summary, constituentCount, catalystCount,
+        frozenAt]
       properties:
         snapshotId: {type: string}
         tradeDate: {type: string, format: date}
         cycleNo: {type: integer, minimum: 1}
-        lifecycleStage: {$ref: "#/components/schemas/ThemeLifecycleStage"}
+        lifecycleStage: {$ref: '#/components/schemas/ThemeLifecycleStage'}
         rank: {type: integer, minimum: 1}
         heatScore: {type: number}
         summary: {type: string}
@@ -1400,31 +1861,40 @@ components:
       required: [themeId, items]
       properties:
         themeId: {type: string}
-        items: {type: array, items: {$ref: "#/components/schemas/ThemeDailySnapshot"}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ThemeDailySnapshot'}
         nextCursor: {type: string}
     ThemeDailySnapshotsEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ThemeDailySnapshotsData"}}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ThemeDailySnapshotsData'}
     ThemeCatalystSource:
       type: object
-      required: [sourceClaimId, sourceName, sourceRef, stance, sourceCredibilityScore, summary, availableAt, collectedAt, evidenceItemIds]
+      required: [sourceClaimId, sourceName, sourceRef, stance, sourceCredibilityScore, summary, availableAt, collectedAt,
+        evidenceItemIds]
       properties:
         sourceClaimId: {type: string}
         sourceName: {type: string}
         sourceRef: {type: string}
-        stance: {type: string, enum: [supports, contradicts, neutral]}
+        stance:
+          type: string
+          enum: [supports, contradicts, neutral]
         sourceCredibilityScore: {type: integer, minimum: 0, maximum: 100}
         summary: {type: string}
         publishedAt: {type: string, format: date-time, nullable: true}
         availableAt: {type: string, format: date-time}
         collectedAt: {type: string, format: date-time}
-        evidenceItemIds: {type: array, items: {type: string}}
+        evidenceItemIds:
+          type: array
+          items: {type: string}
     ThemeCatalyst:
       type: object
-      required: [catalystEventId, eventType, title, summary, eventAt, firstAvailableAt, credibilityScore, status, hasConflict, sources]
+      required: [catalystEventId, eventType, title, summary, eventAt, firstAvailableAt, credibilityScore, status,
+        hasConflict, sources]
       properties:
         catalystEventId: {type: string}
         eventType: {type: string}
@@ -1433,56 +1903,30 @@ components:
         eventAt: {type: string, format: date-time}
         firstAvailableAt: {type: string, format: date-time}
         credibilityScore: {type: integer, minimum: 0, maximum: 100}
-        status: {type: string, enum: [active, disputed, retracted, expired]}
+        status:
+          type: string
+          enum: [active, disputed, retracted, expired]
         hasConflict: {type: boolean}
-        sources: {type: array, items: {$ref: "#/components/schemas/ThemeCatalystSource"}}
+        sources:
+          type: array
+          items: {$ref: '#/components/schemas/ThemeCatalystSource'}
     ThemeCatalystsData:
       type: object
       required: [themeId, tradeDate, items]
       properties:
         themeId: {type: string}
         tradeDate: {type: string, format: date}
-        items: {type: array, items: {$ref: "#/components/schemas/ThemeCatalyst"}}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ThemeCatalyst'}
         nextCursor: {type: string}
     ThemeCatalystsEnvelope:
       allOf:
-        - {$ref: "#/components/schemas/DataEnvelope"}
-        - type: object
-          required: [data]
-          properties: {data: {$ref: "#/components/schemas/ThemeCatalystsData"}}
-    EvidenceBatch:
-      type: object
-      required: [evidenceSetId, ownerType, ownerId, cutoffAt, status, contentHash]
-      properties:
-        evidenceSetId: {type: string}
-        ownerType: {type: string}
-        ownerId: {type: string}
-        cutoffAt: {type: string, format: date-time}
-        collectorVersion: {type: string}
-        evidenceProfileVersion: {type: string}
-        status: {type: string, enum: [collecting, frozen, partial, failed]}
-        contentHash: {type: string}
-        frozenAt: {type: string, format: date-time, nullable: true}
-        items: {type: array, items: {$ref: "#/components/schemas/EvidenceItem"}}
-    EvidenceItem:
-      type: object
-      required: [evidenceItemId, evidenceSetId, sourceId, sourceName, category, collectedAt, status, contentHash]
-      properties:
-        evidenceItemId: {type: string}
-        evidenceSetId: {type: string}
-        sourceId: {type: string}
-        sourceName: {type: string}
-        sourceRef: {type: string}
-        category: {type: string}
-        entityType: {type: string}
-        entityId: {type: string}
-        eventAt: {type: string, format: date-time}
-        availableAt: {type: string, format: date-time}
-        collectedAt: {type: string, format: date-time}
-        status: {type: string, enum: [ok, partial, stale, unavailable, after_cutoff]}
-        summary: {type: string}
-        contentHash: {type: string}
-        errorMessage: {type: string}
+      - {$ref: '#/components/schemas/DataEnvelope'}
+      - type: object
+        required: [data]
+        properties:
+          data: {$ref: '#/components/schemas/ThemeCatalystsData'}
     SystemInfo:
       type: object
       required: [version, content, icon]
@@ -1493,67 +1937,39 @@ components:
     ErrorResponse:
       type: object
       required: [error]
-      properties: {error: {type: string}}
+      properties:
+        error: {type: string}
     CommandResponse:
       type: object
       required: [ok]
-      properties: {ok: {type: boolean}, message: {type: string}}
+      properties:
+        ok: {type: boolean}
+        message: {type: string}
     AIConfigTestRequest:
       type: object
       required: [id]
-      properties: {id: {type: integer}}
-    GroupSortRequest:
-      type: object
-      required: [sort]
-      properties: {sort: {type: integer}}
-    StockCodeRequest:
-      type: object
-      required: [stockCode]
-      properties: {stockCode: {type: string}}
+      properties:
+        id: {type: integer}
     StockQueryRequest:
       type: object
       required: [words]
-      properties: {words: {type: string}}
-    StockPositionRequest:
-      type: object
-      required: [price, volume]
-      properties: {price: {type: number}, volume: {type: integer, format: int64}}
-    StockAlarmRequest:
-      type: object
-      required: [value, alarmPrice]
-      properties: {value: {type: number}, alarmPrice: {type: number}}
-    StockSortRequest:
-      type: object
-      required: [sort]
-      properties: {sort: {type: integer, format: int64}}
-    FundCodeRequest:
-      type: object
-      required: [fundCode]
-      properties: {fundCode: {type: string}}
+      properties:
+        words: {type: string}
     TelegraphRefreshRequest:
       type: object
       required: [source]
-      properties: {source: {type: string}}
+      properties:
+        source: {type: string}
     SentimentRequest:
       type: object
       required: [text]
-      properties: {text: {type: string}}
-    ExportRequest:
-      type: object
-      properties: {mode: {type: string, enum: [download, server]}}
-    ExportResponse:
-      type: object
-      required: [mode, filename]
       properties:
-        mode: {type: string, enum: [download, server]}
-        filename: {type: string}
-        mime: {type: string}
-        contentBase64: {type: string}
-        path: {type: string}
+        text: {type: string}
     LivenessStatus:
       type: object
       required: [ok]
-      properties: {ok: {type: boolean}}
+      properties:
+        ok: {type: boolean}
     ReadinessStatus:
       type: object
       required: [migrations, database, services, scheduler, ready]
@@ -1576,207 +1992,7 @@ components:
         mainSchemaVersion: {type: integer}
         minuteSchemaVersion: {type: integer}
         startedAt: {type: string, format: date-time}
-        readiness: {$ref: "#/components/schemas/ReadinessStatus"}
-    AnalysisRun:
-      type: object
-      required: [runId, status, startedAt, finalReport, recommendationCount]
-      properties:
-        runId: {type: string}
-        scheduledFor: {type: string, format: date-time}
-        startedAt: {type: string, format: date-time}
-        completedAt: {type: string, format: date-time}
-        status: {type: string}
-        providerName: {type: string}
-        modelName: {type: string}
-        marketReport: {type: string}
-        sectorReport: {type: string}
-        stockReport: {type: string}
-        finalReport: {type: string}
-        sourceStatusJson: {type: string}
-        modelAttemptLogJson: {type: string}
-        strategyVersion: {type: string}
-        dataProfileVersion: {type: string}
-        evidenceProfileVersion: {type: string}
-        evidenceSetId: {type: string}
-        failureReason: {type: string}
-        recommendationCount: {type: integer}
-        triggerId: {type: string}
-        triggerIdsJson: {type: string}
-        triggerSource: {type: string, description: Trigger source; absent on legacy scheduled runs.}
-        triggerReason: {type: string}
-        fundingCash: {type: number}
-        fundingReservedCash: {type: number}
-        fundingNetAssetValue: {type: number}
-        fundingCapitalBuffer: {type: number}
-        fundingDeployableCash: {type: number}
-        fundingAvailableSlots: {type: integer}
-        leaseOwner: {type: string}
-        leaseExpiresAt: {type: string, format: date-time}
-        buyNowCount: {type: integer}
-        waitCount: {type: integer}
-        rejectCount: {type: integer}
-        opportunities:
-          type: array
-          items: {$ref: "#/components/schemas/BuyOpportunity"}
-    AnalysisRunSummary:
-      type: object
-      required: [runId, scheduledFor, startedAt, status, recommendationCount, sourceCount, failedSourceCount]
-      properties:
-        runId: {type: string}
-        strategyVersion: {type: string}
-        dataProfileVersion: {type: string}
-        scheduledFor: {type: string, format: date-time}
-        startedAt: {type: string, format: date-time}
-        completedAt: {type: string, format: date-time}
-        status: {type: string}
-        providerName: {type: string}
-        modelName: {type: string}
-        recommendationCount: {type: integer}
-        failureReason: {type: string}
-        sourceCount: {type: integer}
-        failedSourceCount: {type: integer}
-        noMatchNewsCount: {type: integer, description: Successful stock news searches with no matches; not provider failures.}
-        triggerSource: {type: string, description: Trigger source; absent on legacy scheduled runs.}
-        triggerReason: {type: string}
-        buyNowCount: {type: integer}
-        waitCount: {type: integer}
-        rejectCount: {type: integer}
-    CapitalDeploymentStatus:
-      type: object
-      required: [enabled, state, cash, reservedCash, netAssetValue, reserveTarget, deployableCash, capitalUtilization, availableSlots, pendingEventCount, watchingCandidateCount, reason]
-      properties:
-        enabled: {type: boolean}
-        state: {type: string}
-        cash: {type: number}
-        reservedCash: {type: number}
-        netAssetValue: {type: number}
-        reserveTarget: {type: number}
-        deployableCash: {type: number}
-        capitalUtilization: {type: number}
-        availableSlots: {type: integer}
-        pendingEventCount: {type: integer}
-        watchingCandidateCount: {type: integer}
-        lastTriggeredAt: {type: string, format: date-time}
-        nextEligibleAt: {type: string, format: date-time}
-        reason: {type: string}
-    BuyOpportunity:
-      type: object
-      required: [opportunityId, analysisRunId, action, stockCode, stockName, status, createdAt]
-      properties:
-        opportunityId: {type: string}
-        analysisRunId: {type: string}
-        recommendationId: {type: string}
-        stockCode: {type: string}
-        stockName: {type: string}
-        requestedAction: {type: string, enum: [buy_now, wait, reject]}
-        action: {type: string, enum: [buy_now, wait, reject]}
-        priceLow: {type: number}
-        priceHigh: {type: number}
-        quotePrice: {type: number}
-        quoteAt: {type: string, format: date-time}
-        decisionQuoteStatus: {type: string, enum: [ok, stale, unavailable, invalid, legacy-recorded, legacy-unavailable]}
-        aiSummary: {type: string}
-        mainRisk: {type: string}
-        sourceRefs: {type: string}
-        source: {type: string}
-        status: {type: string}
-        timingReason: {type: string}
-        expiresAt: {type: string, format: date-time, deprecated: true, description: Legacy expiry field; v3 waits use reanalysisAt.}
-        reanalysisAt: {type: string, format: date-time}
-        supersededAt: {type: string, format: date-time}
-        supersededByRunId: {type: string}
-        dataProfileVersion: {type: string}
-        validationReason: {type: string}
-        createdAt: {type: string, format: date-time}
-        updatedAt: {type: string, format: date-time}
-    Recommendation:
-      type: object
-      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, status]
-      properties:
-        recommendationId: {type: string}
-        opportunityId: {type: string}
-        analysisRunId: {type: string}
-        stockCode: {type: string}
-        stockName: {type: string}
-        signalAt: {type: string, format: date-time}
-        aiSummary: {type: string}
-        activationCondition: {type: string, description: Legacy pre-1.6.5 activation field; empty for new recommendations.}
-        mainRisk: {type: string}
-        sourceRefs: {type: string}
-        status: {type: string, enum: [buy_pending, pending, active, sell_pending, invalidated, missed_cash, missed_untradable, closed]}
-        nextCheckAt: {type: string, format: date-time}
-        activatedAt: {type: string, format: date-time, description: Simulated buy time; legacy JSON name retained for compatibility.}
-        activationPrice: {type: number, description: Simulated buy execution price; legacy JSON name retained for compatibility.}
-        quantity: {type: integer}
-        closedAt: {type: string, format: date-time}
-        closePrice: {type: number}
-        totalFees: {type: number}
-        netPnl: {type: number}
-        netYieldRate: {type: number}
-        buyAmount: {type: number, description: Actual net cash paid for the simulated buy, including buy-side costs.}
-        sellAmount: {type: number, description: Actual net cash received from the simulated sell, after sell-side costs.}
-        currentAmount: {type: number, description: Open position value at the latest price after estimated sell-side costs.}
-        buyPrice: {type: number, description: Quantity-weighted simulated buy execution price per share.}
-        sellPrice: {type: number, description: Quantity-weighted simulated sell execution price per share.}
-        currentPrice: {type: number, description: Latest price per share for an open position; zero after the position is closed.}
-        dataPauseSeconds: {type: integer, format: int64}
-        reservedCash: {type: number, description: Cash reserved while the recommendation is waiting for its one-shot buy attempt.}
-    LifecycleMessage:
-      type: object
-      properties: {sequence: {type: integer}, role: {type: string}, phase: {type: string}, content: {type: string}, responseId: {type: string}, createdAt: {type: string, format: date-time}}
-    DecisionEvent:
-      type: object
-      properties: {eventId: {type: string}, decisionType: {type: string}, decidedAt: {type: string, format: date-time}, aiResponse: {type: string}, reason: {type: string}, quotePrice: {type: number}, quoteAt: {type: string, format: date-time}, sourceRefs: {type: string}, dataStatus: {type: string}, decisionPolicyVersion: {type: string}}
-    LifecycleObservation:
-      type: object
-      required: [observationId, recommendationId, phase, windowFrom, observedAt, status, quoteJson, minuteSummaryJson, evidenceJson, sourceStatusJson, modelInvoked]
-      properties:
-        observationId: {type: string}
-        recommendationId: {type: string}
-        phase: {type: string}
-        windowFrom: {type: string, format: date-time}
-        observedAt: {type: string, format: date-time}
-        status: {type: string}
-        quoteJson: {type: string}
-        minuteSummaryJson: {type: string}
-        evidenceJson: {type: string}
-        sourceStatusJson: {type: string}
-        criticalFailure: {type: string}
-        contentFingerprint: {type: string}
-        modelInvoked: {type: boolean}
-        dataProfileVersion: {type: string}
-    MinuteWindowSummary:
-      type: object
-      required: [minutes, bars, returnRate, high, low, volume, amount, averagePrice, averagePriceMethod]
-      properties:
-        minutes: {type: integer}
-        bars: {type: integer}
-        returnRate: {type: number}
-        high: {type: number}
-        low: {type: number}
-        volume: {type: number}
-        amount: {type: number}
-        averagePrice: {type: number}
-        averagePriceMethod: {type: string, enum: [amount_divided_by_share_volume, amount_divided_by_lot_volume_times_100, volume_weighted_minute_price_proxy]}
-    SimulatedTrade:
-      type: object
-      properties: {side: {type: string}, tradedAt: {type: string, format: date-time}, marketPrice: {type: number}, executionPrice: {type: number}, quantity: {type: integer}, totalFees: {type: number}, netCashFlow: {type: number}}
-    Position:
-      type: object
-      properties: {stockCode: {type: string}, stockName: {type: string}, quantity: {type: integer}, entryAt: {type: string, format: date-time}, entryPrice: {type: number}, buyFees: {type: number}, currentPrice: {type: number}, currentPriceAt: {type: string, format: date-time}, status: {type: string}, sellFees: {type: number}, netPnl: {type: number}, netYieldRate: {type: number}, estimatedSellFees: {type: number}, netSellValue: {type: number}}
-    RecommendationDetail:
-      type: object
-      required: [recommendation, analysis, messages, decisions, observations, trades, activationTradingElapsedSeconds, activationRemainingSeconds]
-      properties:
-        recommendation: {$ref: "#/components/schemas/Recommendation"}
-        analysis: {$ref: "#/components/schemas/AnalysisRun"}
-        messages: {type: array, items: {$ref: "#/components/schemas/LifecycleMessage"}}
-        decisions: {type: array, items: {$ref: "#/components/schemas/DecisionEvent"}}
-        observations: {type: array, items: {$ref: "#/components/schemas/LifecycleObservation"}}
-        trades: {type: array, items: {$ref: "#/components/schemas/SimulatedTrade"}}
-        position: {$ref: "#/components/schemas/Position"}
-        activationTradingElapsedSeconds: {type: integer, format: int64}
-        activationRemainingSeconds: {type: integer, format: int64}
+        readiness: {$ref: '#/components/schemas/ReadinessStatus'}
     RecommendationChartBar:
       type: object
       required: [at, open, high, low, close, volume, amount, source, netPnl, netYieldRate]
@@ -1795,14 +2011,17 @@ components:
       type: object
       required: [side, tradedAt, marketPrice, executionPrice, quantity, totalFees, netCashFlow, markerSnapped]
       properties:
-        side: {type: string, enum: [buy, sell]}
+        side:
+          type: string
+          enum: [buy, sell]
         tradedAt: {type: string, format: date-time}
         marketPrice: {type: number}
         executionPrice: {type: number}
         quantity: {type: integer, format: int64}
         totalFees: {type: number}
         netCashFlow: {type: number}
-        markerAt: {type: string, format: date-time, description: Nearest bar in the same trading segment within five minutes; omitted if unavailable.}
+        markerAt: {type: string, format: date-time, description: Nearest bar in the same trading segment within
+            five minutes; omitted if unavailable.}
         markerSnapped: {type: boolean}
     RecommendationChartSession:
       type: object
@@ -1810,7 +2029,9 @@ components:
       properties:
         date: {type: string, format: date}
         previousClose: {type: number}
-        status: {type: string, enum: [complete, partial, missing]}
+        status:
+          type: string
+          enum: [complete, partial, missing]
     ChartProviderError:
       type: object
       required: [provider, message]
@@ -1819,12 +2040,15 @@ components:
         message: {type: string}
     RecommendationChart:
       type: object
-      required: [recommendationId, stockCode, stockName, status, rangeFrom, rangeTo, refreshedAt, currentPrice, currentNetPnl, currentNetYieldRate, missingSessions, providerErrors, sessions, bars, trades]
+      required: [recommendationId, stockCode, stockName, status, rangeFrom, rangeTo, refreshedAt, currentPrice,
+        currentNetPnl, currentNetYieldRate, missingSessions, providerErrors, sessions, bars, trades]
       properties:
         recommendationId: {type: string}
         stockCode: {type: string}
         stockName: {type: string}
-        status: {type: string, enum: [complete, partial, empty]}
+        status:
+          type: string
+          enum: [complete, partial, empty]
         rangeFrom: {type: string, format: date-time}
         rangeTo: {type: string, format: date-time}
         refreshedAt: {type: string, format: date-time}
@@ -1832,95 +2056,25 @@ components:
         currentPrice: {type: number}
         currentNetPnl: {type: number}
         currentNetYieldRate: {type: number}
-        missingSessions: {type: array, items: {type: string, format: date}}
-        providerErrors: {type: array, items: {$ref: "#/components/schemas/ChartProviderError"}}
-        sessions: {type: array, items: {$ref: "#/components/schemas/RecommendationChartSession"}}
-        bars: {type: array, items: {$ref: "#/components/schemas/RecommendationChartBar"}}
-        trades: {type: array, items: {$ref: "#/components/schemas/RecommendationChartTrade"}}
-    AccountOverview:
+        missingSessions:
+          type: array
+          items: {type: string, format: date}
+        providerErrors:
+          type: array
+          items: {$ref: '#/components/schemas/ChartProviderError'}
+        sessions:
+          type: array
+          items: {$ref: '#/components/schemas/RecommendationChartSession'}
+        bars:
+          type: array
+          items: {$ref: '#/components/schemas/RecommendationChartBar'}
+        trades:
+          type: array
+          items: {$ref: '#/components/schemas/RecommendationChartTrade'}
+    PredictionSlotStatus:
       type: object
-      required: [initialCash, cash, positionValue, netAssetValue, cumulativeNetContribution, currentPositions, pendingBuys, netProfit, netYieldRate, timeWeightedReturn, cumulativeCapitalReturn, valuedAt, valuationStatus, positions]
-      properties:
-        frozen: {type: boolean}
-        frozenAt: {type: string, format: date-time, nullable: true}
-        frozenReason: {type: string}
-        initialCash: {type: number}
-        cash: {type: number}
-        positionValue: {type: number}
-        netAssetValue: {type: number}
-        cumulativeNetContribution: {type: number}
-        currentPositions: {type: integer}
-        pendingBuys: {type: integer}
-        netProfit: {type: number}
-        netYieldRate: {type: number, description: Compatibility alias of timeWeightedReturn.}
-        timeWeightedReturn: {type: number, description: Unitized time-weighted return excluding external contributions.}
-        cumulativeCapitalReturn: {type: number, description: Net profit divided by cumulative net contribution.}
-        valuedAt: {type: string, format: date-time}
-        valuationStatus: {type: string, enum: [live, partial, stored]}
-        positions: {type: array, items: {$ref: "#/components/schemas/Position"}}
-    AccountCashFlow:
-      type: object
-      required: [flowId, sequence, type, amount, effectiveAt, tradingDate, netAssetValueBefore, netAssetValueAfter, unitValueBefore, unitsIssued, createdAt]
-      properties:
-        flowId: {type: string}
-        sequence: {type: integer}
-        type: {type: string, enum: [initial_deposit, scheduled_deposit]}
-        amount: {type: number}
-        effectiveAt: {type: string, format: date-time}
-        tradingDate: {type: string, format: date}
-        netAssetValueBefore: {type: number}
-        netAssetValueAfter: {type: number}
-        unitValueBefore: {type: number}
-        unitsIssued: {type: number}
-        createdAt: {type: string, format: date-time}
-    AccountPerformancePoint:
-      type: object
-      required: [valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeNetContribution, unitValue, timeWeightedReturn, valuationStatus]
-      properties:
-        valuedAt: {type: string, format: date-time}
-        tradingDate: {type: string, format: date}
-        snapshotType: {type: string, enum: [initial_deposit, pre_deposit, post_deposit, daily_close, current]}
-        cash: {type: number}
-        positionValue: {type: number}
-        netAssetValue: {type: number}
-        cumulativeNetContribution: {type: number}
-        unitValue: {type: number}
-        timeWeightedReturn: {type: number}
-        valuationStatus: {type: string}
-    StrategyPerformanceMetrics:
-      type: object
-      required: [closedTrades, winRate, averageGainRate, averageLossRate, payoffRatio, maxDrawdown, totalFees, turnoverRate, capitalUtilization, averageHoldingMinutes, missedExecutionRate, industryConcentration, industryConcentrationStatus, sampleLevel]
-      properties:
-        closedTrades: {type: integer}
-        winRate: {type: number}
-        averageGainRate: {type: number}
-        averageLossRate: {type: number}
-        payoffRatio: {type: number}
-        maxDrawdown: {type: number}
-        totalFees: {type: number}
-        turnoverRate: {type: number}
-        capitalUtilization: {type: number}
-        averageHoldingMinutes: {type: number}
-        missedExecutionRate: {type: number}
-        industryConcentration: {type: number, nullable: true}
-        industryConcentrationStatus: {type: string, enum: [available, unavailable_no_structured_industry_data]}
-        sampleLevel: {type: string, enum: [样本不足, 初步观察, 可进行阶段性评价]}
-    AccountPerformance:
-      type: object
-      required: [valuedAt, unitValue, timeWeightedReturn, cumulativeCapitalReturn, netProfit, netAssetValue, cumulativeNetContribution, curve, metrics]
-      properties:
-        valuedAt: {type: string, format: date-time}
-        unitValue: {type: number}
-        timeWeightedReturn: {type: number}
-        cumulativeCapitalReturn: {type: number}
-        netProfit: {type: number}
-        netAssetValue: {type: number}
-        cumulativeNetContribution: {type: number}
-        curve: {type: array, items: {$ref: "#/components/schemas/AccountPerformancePoint"}}
-        metrics: {$ref: "#/components/schemas/StrategyPerformanceMetrics"}
-    Research2SlotStatus:
-      type: object
-      required: [slot, label, tradingDate, winnerRunId, status, reportStatus, buyStatus, boughtCount, buyTargetCount, pendingBuyCount, openPositionCount]
+      required: [slot, label, tradingDate, winnerRunId, status, reportStatus, buyStatus, boughtCount, buyTargetCount,
+        pendingBuyCount, openPositionCount]
       properties:
         slot: {type: string}
         label: {type: string}
@@ -1928,17 +2082,24 @@ components:
         winnerRunId: {type: string}
         sellCompletedAt: {type: string, format: date-time, nullable: true}
         status: {type: string}
-        reportStatus: {type: string, enum: [awaiting, success, no_recommendation, failed, cutoff, disabled]}
-        reportOnTime: {type: boolean, nullable: true, description: "Whether the winning report persisted in its originally scheduled five-minute slot; null when no winning report exists."}
-        buyStatus: {type: string, enum: [awaiting_report, awaiting_quote, bought_full, bought_partial, no_recommendation, cutoff, disabled, failed, processing, no_purchase]}
+        reportStatus:
+          type: string
+          enum: [awaiting, success, no_recommendation, failed, cutoff, disabled]
+        reportOnTime: {type: boolean, nullable: true, description: Whether the winning report persisted in its originally
+            scheduled five-minute slot; null when no winning report exists.}
+        buyStatus:
+          type: string
+          enum: [awaiting_report, awaiting_quote, bought_full, bought_partial, no_recommendation, cutoff, disabled,
+            failed, processing, no_purchase]
         boughtCount: {type: integer, minimum: 0}
         buyTargetCount: {type: integer, minimum: 0}
         pendingBuyCount: {type: integer, minimum: 0}
         openPositionCount: {type: integer, minimum: 0}
         stopReason: {type: string}
-    Research2AnalysisRun:
+    PredictionAnalysisRun:
       type: object
-      required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
+      required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt,
+        status, reportMarkdown, sourceStatusJson, modelAttemptLogJson, recommendationCount, onTime]
       properties:
         scheduledSlot: {type: string}
         slot: {type: string}
@@ -1961,7 +2122,9 @@ components:
         evidenceCoveragePct: {type: number, minimum: 0, maximum: 100, nullable: true}
         degraded: {type: boolean, nullable: true}
         generatedAt: {type: string, format: date-time}
-        status: {type: string, enum: [running, success, no_recommendation, failed, skipped_non_trading_day, missed_window]}
+        status:
+          type: string
+          enum: [running, success, no_recommendation, failed, skipped_non_trading_day, missed_window]
         providerName: {type: string}
         modelName: {type: string}
         reportMarkdown: {type: string}
@@ -1973,14 +2136,17 @@ components:
         failureReason: {type: string}
         recommendationCount: {type: integer}
         onTime: {type: boolean}
-        emailDeliveryStatus: {type: string, enum: [pending, sending, retry_wait, sent, failed, cancelled]}
+        emailDeliveryStatus:
+          type: string
+          enum: [pending, sending, retry_wait, sent, failed, cancelled]
         emailSentAt: {type: string, format: date-time, nullable: true}
         emailAttemptCount: {type: integer}
         emailLastError: {type: string}
-        executionChain: {$ref: "#/components/schemas/Research2ExecutionChain"}
-    Research2AnalysisRunSummary:
+        executionChain: {$ref: '#/components/schemas/PredictionExecutionChain'}
+    PredictionAnalysisRunSummary:
       type: object
-      required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt, status, recommendationCount, onTime]
+      required: [runId, tradingDate, attemptNo, scheduledFor, startedAt, evidenceWindowStartAt, evidenceCutoffAt,
+        status, recommendationCount, onTime]
       properties:
         scheduledSlot: {type: string}
         slot: {type: string}
@@ -2012,12 +2178,14 @@ components:
         recommendationCount: {type: integer}
         onTime: {type: boolean}
         failureReason: {type: string}
-        emailDeliveryStatus: {type: string, enum: [pending, sending, retry_wait, sent, failed, cancelled]}
+        emailDeliveryStatus:
+          type: string
+          enum: [pending, sending, retry_wait, sent, failed, cancelled]
         emailSentAt: {type: string, format: date-time, nullable: true}
         emailAttemptCount: {type: integer}
         emailLastError: {type: string}
-        executionChain: {$ref: "#/components/schemas/Research2ExecutionChain"}
-    Research2ExecutionChain:
+        executionChain: {$ref: '#/components/schemas/PredictionExecutionChain'}
+    PredictionExecutionChain:
       type: object
       required: [chainId, tradingDate, scheduledFor, status, targetSlots, filledSlots, startedAt, createdAt, updatedAt]
       properties:
@@ -2027,7 +2195,9 @@ components:
         chainId: {type: string}
         tradingDate: {type: string, format: date}
         scheduledFor: {type: string, format: date-time}
-        status: {type: string, enum: [running, completed, cutoff, exhausted, capital_blocked, disabled, failed]}
+        status:
+          type: string
+          enum: [running, completed, cutoff, exhausted, capital_blocked, disabled, failed]
         targetSlots: {type: integer, minimum: 0}
         filledSlots: {type: integer, minimum: 0}
         rootRunId: {type: string}
@@ -2037,18 +2207,22 @@ components:
         completedAt: {type: string, format: date-time}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
-    ResearchAuditRunState:
+    PredictionAuditRunState:
       type: object
       required: [status, payloadCount, lastError, createdAt, updatedAt]
       properties:
-        status: {type: string, enum: [capturing, complete, failed, legacy_unavailable]}
+        status:
+          type: string
+          enum: [capturing, complete, failed, legacy_unavailable]
         payloadCount: {type: integer, minimum: 0}
         lastError: {type: string}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
-    ResearchAuditPayload:
+    PredictionAuditPayload:
       type: object
-      required: [payloadId, phase, callSequence, attempt, providerName, modelName, modelParameters, finalPrompt, finalPromptSha256, evidenceSnapshot, evidenceSha256, tools, rawResponse, rawResponseSha256, repairedResponse, repairedResponseSha256, repairLog, redactionCount, createdAt]
+      required: [payloadId, phase, callSequence, attempt, providerName, modelName, modelParameters, finalPrompt,
+        finalPromptSha256, evidenceSnapshot, evidenceSha256, tools, rawResponse, rawResponseSha256, repairedResponse,
+        repairedResponseSha256, repairLog, redactionCount, createdAt]
       properties:
         payloadId: {type: string}
         phase: {type: string}
@@ -2056,194 +2230,79 @@ components:
         attempt: {type: integer, minimum: 1}
         providerName: {type: string}
         modelName: {type: string}
-        modelParameters: {$ref: "#/components/schemas/JsonObject"}
+        modelParameters: {$ref: '#/components/schemas/JsonObject'}
         finalPrompt: {type: string}
-        finalPromptSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
+        finalPromptSha256: {type: string, pattern: '^[0-9a-f]{64}$'}
         evidenceSnapshot: {type: string}
-        evidenceSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-        tools: {type: array, items: {type: string}}
+        evidenceSha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+        tools:
+          type: array
+          items: {type: string}
         rawResponse: {type: string}
-        rawResponseSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
+        rawResponseSha256: {type: string, pattern: '^$|^[0-9a-f]{64}$'}
         repairedResponse: {type: string}
-        repairedResponseSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
+        repairedResponseSha256: {type: string, pattern: '^$|^[0-9a-f]{64}$'}
         repairLog: {type: string}
         redactionCount: {type: integer, minimum: 0}
         createdAt: {type: string, format: date-time}
-    ResearchAuditDetail:
+    PredictionAuditDetail:
       type: object
       required: [availability, ownerType, ownerId, state, payloads]
       properties:
-        availability: {type: string, enum: [available, legacy_unavailable]}
-        ownerType: {type: string, enum: [research1, research2, replay]}
+        availability:
+          type: string
+          enum: [available, legacy_unavailable]
+        ownerType:
+          type: string
+          enum: [research2, replay]
         ownerId: {type: string}
         cutoffAt:
           oneOf:
-            - {type: string, format: date-time}
-            - {type: "null"}
-        state: {$ref: "#/components/schemas/ResearchAuditRunState"}
-        payloads: {type: array, items: {$ref: "#/components/schemas/ResearchAuditPayload"}}
-    CreateResearchReplayRequest:
+          - {type: string, format: date-time}
+          - {type: 'null'}
+        state: {$ref: '#/components/schemas/PredictionAuditRunState'}
+        payloads:
+          type: array
+          items: {$ref: '#/components/schemas/PredictionAuditPayload'}
+    CreatePredictionReplayRequest:
       type: object
-      required: [sourceOwnerType, sourceOwnerId, modelConfigId]
+      required: [sourceOwnerId, modelConfigId]
       properties:
-        sourceOwnerType: {type: string, enum: [research1, research2]}
         sourceOwnerId: {type: string}
         modelConfigId: {type: integer, minimum: 1}
-    ResearchReplay:
+    PredictionReplay:
       type: object
-      required: [replayId, sourceOwnerType, sourceOwnerId, modelConfigId, status, cutoffAt, createdAt, lastError, result, resultSha256, diffSummary]
+      required: [replayId, sourceOwnerType, sourceOwnerId, modelConfigId, status, cutoffAt, createdAt, lastError,
+        result, resultSha256, diffSummary]
       properties:
         replayId: {type: string}
-        sourceOwnerType: {type: string, enum: [research1, research2]}
+        sourceOwnerType:
+          type: string
+          enum: [research2]
         sourceOwnerId: {type: string}
         modelConfigId: {type: integer, minimum: 1}
-        status: {type: string, enum: [queued, running, completed, failed]}
+        status:
+          type: string
+          enum: [queued, running, completed, failed]
         cutoffAt: {type: string, format: date-time}
         createdAt: {type: string, format: date-time}
         startedAt:
           oneOf:
-            - {type: string, format: date-time}
-            - {type: "null"}
+          - {type: string, format: date-time}
+          - {type: 'null'}
         completedAt:
           oneOf:
-            - {type: string, format: date-time}
-            - {type: "null"}
+          - {type: string, format: date-time}
+          - {type: 'null'}
         lastError: {type: string}
         result: {type: string}
-        resultSha256: {type: string, pattern: "^$|^[0-9a-f]{64}$"}
-        diffSummary: {$ref: "#/components/schemas/JsonObject"}
-    CreateKnowledgeDocumentRequest:
+        resultSha256: {type: string, pattern: '^$|^[0-9a-f]{64}$'}
+        diffSummary: {$ref: '#/components/schemas/JsonObject'}
+    PredictionRecommendation:
       type: object
-      required: [filename, mimeType, contentBase64]
-      properties:
-        title: {type: string}
-        filename: {type: string}
-        mimeType: {type: string, enum: [text/plain, text/markdown, application/pdf]}
-        contentBase64: {type: string, format: byte}
-    CreateKnowledgeFromResearchRequest:
-      type: object
-      required: [sourceOwnerType, sourceOwnerId]
-      properties:
-        sourceOwnerType: {type: string, enum: [research1, research2]}
-        sourceOwnerId: {type: string}
-        title: {type: string}
-    CreateKnowledgeMemoryCandidateRequest:
-      type: object
-      required: [sourceOwnerType, sourceOwnerId]
-      properties:
-        sourceOwnerType: {type: string, enum: [research1, research2]}
-        sourceOwnerId: {type: string}
-        title: {type: string}
-        content: {type: string}
-    KnowledgeDecisionRequest:
-      type: object
-      required: [decision, reason]
-      properties:
-        decision: {type: string, enum: [approved, rejected]}
-        reason: {type: string}
-    KnowledgeDocumentSummary:
-      type: object
-      required: [documentId, title, documentType, originType, sourceOwnerType, sourceOwnerId, latestVersionNumber, latestStatus, latestSourceFilename, latestContentSha256, createdAt, updatedAt]
-      properties:
-        documentId: {type: string}
-        title: {type: string}
-        documentType: {type: string, enum: [text, markdown, pdf, research_report, memory]}
-        originType: {type: string, enum: [upload, research_report, memory_candidate]}
-        sourceOwnerType: {type: string}
-        sourceOwnerId: {type: string}
-        latestVersionNumber: {type: integer, minimum: 1}
-        latestStatus: {type: string, enum: [draft, approved, rejected, superseded]}
-        latestSourceFilename: {type: string}
-        latestContentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-        createdAt: {type: string, format: date-time}
-        updatedAt: {type: string, format: date-time}
-    KnowledgeDocumentVersion:
-      type: object
-      required: [versionId, documentId, versionNumber, status, mimeType, sourceFilename, contentText, contentSha256, extractionStatus, createdBy, createdAt, decisionReason, decidedBy]
-      properties:
-        versionId: {type: string}
-        documentId: {type: string}
-        versionNumber: {type: integer, minimum: 1}
-        status: {type: string, enum: [draft, approved, rejected, superseded]}
-        mimeType: {type: string}
-        sourceFilename: {type: string}
-        contentText: {type: string}
-        contentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-        extractionStatus: {type: string, enum: [pending, complete, failed]}
-        createdBy: {type: string, enum: [user, system, ai]}
-        createdAt: {type: string, format: date-time}
-        decisionReason: {type: string}
-        decidedBy: {type: string}
-        decidedAt:
-          oneOf:
-            - {type: string, format: date-time}
-            - {type: "null"}
-    KnowledgeDocumentDetail:
-      type: object
-      required: [document, latestVersion]
-      properties:
-        document: {$ref: "#/components/schemas/KnowledgeDocumentSummary"}
-        latestVersion: {$ref: "#/components/schemas/KnowledgeDocumentVersion"}
-    KnowledgeVersionDecisionState:
-      type: object
-      required: [stateId, versionId, status, createdAt, updatedAt]
-      properties:
-        stateId: {type: string}
-        versionId: {type: string}
-        status: {type: string, enum: [draft, approved, rejected, superseded]}
-        approvedByActorType: {type: string}
-        approvedByUserId: {type: string}
-        approvalReason: {type: string}
-        approvedAt: {type: string, format: date-time}
-        rejectedByActorType: {type: string}
-        rejectedByUserId: {type: string}
-        rejectionReason: {type: string}
-        rejectedAt: {type: string, format: date-time}
-        createdAt: {type: string, format: date-time}
-        updatedAt: {type: string, format: date-time}
-    KnowledgeDocumentPage:
-      type: object
-      required: [items, total, page, pageSize]
-      properties:
-        items: {type: array, items: {$ref: "#/components/schemas/KnowledgeDocumentSummary"}}
-        total: {type: integer, minimum: 0}
-        page: {type: integer, minimum: 1}
-        pageSize: {type: integer, minimum: 1}
-    KnowledgeSearchHit:
-      type: object
-      required: [documentId, versionId, title, excerpt, score, contentSha256, sourceOwnerType, sourceOwnerId, status]
-      properties:
-        documentId: {type: string}
-        versionId: {type: string}
-        title: {type: string}
-        excerpt: {type: string}
-        score: {type: number}
-        contentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-        sourceOwnerType: {type: string}
-        sourceOwnerId: {type: string}
-        status: {type: string, enum: [approved]}
-    KnowledgeMemoryCandidate:
-      type: object
-      required: [candidateId, sourceOwnerType, sourceOwnerId, title, content, contentSha256, status, decisionReason, decidedBy, createdAt]
-      properties:
-        candidateId: {type: string}
-        sourceOwnerType: {type: string, enum: [research1, research2]}
-        sourceOwnerId: {type: string}
-        title: {type: string}
-        content: {type: string}
-        contentSha256: {type: string, pattern: "^[0-9a-f]{64}$"}
-        status: {type: string, enum: [draft, approved, rejected]}
-        approvedVersionId: {type: string}
-        decisionReason: {type: string}
-        decidedBy: {type: string}
-        createdAt: {type: string, format: date-time}
-        decidedAt:
-          oneOf:
-            - {type: string, format: date-time}
-            - {type: "null"}
-    Research2Recommendation:
-      type: object
-      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower, buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, buyDayLimitStatus, buyDayLimitAttemptCount, buyDayLimitSourceJson]
+      required: [recommendationId, analysisRunId, stockCode, stockName, signalAt, finalScore, referencePrice, buyLower,
+        buyUpper, status, late, targetBuyAt, quantity, netPnl, netYieldRate, buyDayLimitStatus, buyDayLimitAttemptCount,
+        buyDayLimitSourceJson]
       properties:
         slot: {type: string}
         legacySlotException: {type: boolean}
@@ -2253,7 +2312,12 @@ components:
         analysisRunId: {type: string}
         selectionRole: {type: string}
         selectionRank: {type: integer, minimum: 0}
-        displaySelectionRole: {type: string, readOnly: true, deprecated: true, description: Historical role metadata; new daily rankings return an empty string., enum: [primary, candidate, ""]}
+        displaySelectionRole:
+          type: string
+          readOnly: true
+          deprecated: true
+          description: Historical role metadata; new daily rankings return an empty string.
+          enum: [primary, candidate, '']
         displaySelectionRank: {type: integer, readOnly: true, minimum: 0}
         replacesRecommendationId: {type: string}
         promotionReason: {type: string}
@@ -2267,8 +2331,10 @@ components:
         riskDeduction: {type: number}
         finalScore: {type: number}
         referencePrice: {type: number}
-        buyLower: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 and later write 0 and do not use it for execution."}
-        buyUpper: {type: number, deprecated: true, description: "Legacy compatibility field; research2-trailing5-v3 and later write 0 and do not use it for execution."}
+        buyLower: {type: number, deprecated: true, description: Legacy compatibility field; research2-trailing5-v3
+            and later write 0 and do not use it for execution.}
+        buyUpper: {type: number, deprecated: true, description: Legacy compatibility field; research2-trailing5-v3
+            and later write 0 and do not use it for execution.}
         estimatedLotCost: {type: number}
         summary: {type: string}
         quantData: {type: string}
@@ -2277,7 +2343,10 @@ components:
         mainRisk: {type: string}
         cancelConditions: {type: string}
         sourceRefs: {type: string}
-        status: {type: string, enum: [buy_pending, active, sell_pending, closed, analysis_only, missed_cash, missed_untradable, missed_window, cancelled_price, standby, standby_not_used]}
+        status:
+          type: string
+          enum: [buy_pending, active, sell_pending, closed, analysis_only, missed_cash, missed_untradable, missed_window,
+            cancelled_price, standby, standby_not_used]
         late: {type: boolean}
         targetBuyAt: {type: string, format: date-time}
         executionFailureCode: {type: string}
@@ -2299,23 +2368,30 @@ components:
         currentPriceAt: {type: string, format: date-time}
         netPnl: {type: number}
         netYieldRate: {type: number}
-        buyDayLimitOutcome: {type: string, enum: [sealed, broken, untouched]}
-        buyDayLimitStatus: {type: string, enum: [pending, complete, unavailable]}
+        buyDayLimitOutcome:
+          type: string
+          enum: [sealed, broken, untouched]
+        buyDayLimitStatus:
+          type: string
+          enum: [pending, complete, unavailable]
         buyDayLimitEvaluatedAt: {type: string, format: date-time}
         buyDayLimitAttemptCount: {type: integer}
         buyDayLimitSourceJson: {type: string}
         buyDayLimitFailureReason: {type: string}
         failureReason: {type: string}
-    Research2Trade:
+    PredictionTrade:
       type: object
-      required: [tradeId, recommendationId, side, tradedAt, marketPrice, executionPrice, quantity, commission, stampDuty, transferFee, slippageAmount, netCashFlow]
+      required: [tradeId, recommendationId, side, tradedAt, marketPrice, executionPrice, quantity, commission, stampDuty,
+        transferFee, slippageAmount, netCashFlow]
       properties:
         slot: {type: string}
         quoteAt: {type: string, format: date-time, nullable: true}
         priceStale: {type: boolean}
         tradeId: {type: string}
         recommendationId: {type: string}
-        side: {type: string, enum: [buy, sell]}
+        side:
+          type: string
+          enum: [buy, sell]
         tradedAt: {type: string, format: date-time}
         marketPrice: {type: number}
         executionPrice: {type: number}
@@ -2325,18 +2401,24 @@ components:
         transferFee: {type: number}
         slippageAmount: {type: number}
         netCashFlow: {type: number}
-        priceSource: {type: string, description: "Provider or cache used to obtain the execution market price."}
-        executionMode: {type: string, enum: [live_after_signal, recovered_target_minute]}
-    Research2RecommendationDetail:
+        priceSource: {type: string, description: Provider or cache used to obtain the execution market price.}
+        executionMode:
+          type: string
+          enum: [live_after_signal, recovered_target_minute, scheduled_slot_sell, recovered_slot_sell, historical_allocation_replay_v1]
+    PredictionRecommendationDetail:
       type: object
       required: [recommendation, analysis, trades]
       properties:
-        recommendation: {$ref: "#/components/schemas/Research2Recommendation"}
-        analysis: {$ref: "#/components/schemas/Research2AnalysisRun"}
-        trades: {type: array, items: {$ref: "#/components/schemas/Research2Trade"}}
-    Research2AccountOverview:
+        recommendation: {$ref: '#/components/schemas/PredictionRecommendation'}
+        analysis: {$ref: '#/components/schemas/PredictionAnalysisRun'}
+        trades:
+          type: array
+          items: {$ref: '#/components/schemas/PredictionTrade'}
+    PredictionAccountOverview:
       type: object
-      required: [initialCash, cash, positionValue, netAssetValue, netProfit, returnRate, openPositions, pendingBuys, lastValuedAt, initialContribution, topUpContribution, cumulativeExternalCapital, netInternalTransfer, cumulativeCapitalReturn, valuationBasis]
+      required: [initialCash, cash, positionValue, netAssetValue, netProfit, returnRate, openPositions, pendingBuys,
+        lastValuedAt, initialContribution, topUpContribution, cumulativeExternalCapital, netInternalTransfer, cumulativeCapitalReturn,
+        valuationBasis]
       properties:
         slot: {type: string}
         baselineAt: {type: string, format: date-time, nullable: true}
@@ -2356,41 +2438,29 @@ components:
         netInternalTransfer: {type: number}
         cumulativeCapitalReturn: {type: number}
         valuationBasis: {type: string}
-    Research2AccountSnapshot:
-      type: object
-      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, netProfit, returnRate]
-      properties:
-        slot: {type: string}
-        snapshotId: {type: string}
-        valuedAt: {type: string, format: date-time}
-        tradingDate: {type: string, format: date}
-        snapshotType: {type: string}
-        cash: {type: number}
-        positionValue: {type: number}
-        netAssetValue: {type: number}
-        netProfit: {type: number}
-        returnRate: {type: number}
-    Research2Performance:
+    PredictionPerformance:
       allOf:
-        - {$ref: "#/components/schemas/Research2AccountOverview"}
-        - type: object
-          required: [closedTrades, winningTrades, totalFees, onTimeReports, lateReports, curve]
-          properties:
-            closedTrades: {type: integer, format: int64}
-            winningTrades: {type: integer, format: int64}
-            winRate: {type: number, nullable: true}
-            totalFees: {type: number}
-            maxDrawdown: {type: number, nullable: true}
-            onTimeReports: {type: integer, format: int64}
-            lateReports: {type: integer, format: int64}
-            curve: {type: array, items: {$ref: "#/components/schemas/Research2AccountLedgerSnapshot"}}
-    Research2OutcomeMetric:
+      - {$ref: '#/components/schemas/PredictionAccountOverview'}
+      - type: object
+        required: [closedTrades, winningTrades, totalFees, onTimeReports, lateReports, curve]
+        properties:
+          closedTrades: {type: integer, format: int64}
+          winningTrades: {type: integer, format: int64}
+          winRate: {type: number, nullable: true}
+          totalFees: {type: number}
+          maxDrawdown: {type: number, nullable: true}
+          onTimeReports: {type: integer, format: int64}
+          lateReports: {type: integer, format: int64}
+          curve:
+            type: array
+            items: {$ref: '#/components/schemas/PredictionAccountLedgerSnapshot'}
+    PredictionOutcomeMetric:
       type: object
       required: [count]
       properties:
         count: {type: integer, format: int64}
         rate: {type: number, nullable: true}
-    Research2PortfolioReturnPoint:
+    PredictionPortfolioReturnPoint:
       type: object
       required: [tradingDate, returnRate, effectiveAccountCount, incompleteAccountCount]
       properties:
@@ -2398,11 +2468,15 @@ components:
         returnRate: {type: number}
         effectiveAccountCount: {type: integer}
         incompleteAccountCount: {type: integer}
-    Research2PortfolioPerformance:
+    PredictionPortfolioPerformance:
       type: object
-      required: [slots, selectedAccountCount, effectiveAccountCount, incompleteAccountCount, noActivityAccountCount, boughtTrades, closedTrades, winningTrades, classifiedTrades, pendingOutcomeCount, sealed, broken, untouched, curve]
+      required: [slots, selectedAccountCount, effectiveAccountCount, incompleteAccountCount, noActivityAccountCount,
+        boughtTrades, closedTrades, winningTrades, classifiedTrades, pendingOutcomeCount, sealed, broken, untouched,
+        curve]
       properties:
-        slots: {type: array, items: {type: string}}
+        slots:
+          type: array
+          items: {type: string}
         from: {type: string, format: date}
         to: {type: string, format: date}
         selectedAccountCount: {type: integer}
@@ -2416,13 +2490,16 @@ components:
         winRate: {type: number, nullable: true}
         classifiedTrades: {type: integer, format: int64}
         pendingOutcomeCount: {type: integer, format: int64}
-        sealed: {$ref: "#/components/schemas/Research2OutcomeMetric"}
-        broken: {$ref: "#/components/schemas/Research2OutcomeMetric"}
-        untouched: {$ref: "#/components/schemas/Research2OutcomeMetric"}
-        curve: {type: array, items: {$ref: "#/components/schemas/Research2PortfolioReturnPoint"}}
-    Research2AccountLedgerSnapshot:
+        sealed: {$ref: '#/components/schemas/PredictionOutcomeMetric'}
+        broken: {$ref: '#/components/schemas/PredictionOutcomeMetric'}
+        untouched: {$ref: '#/components/schemas/PredictionOutcomeMetric'}
+        curve:
+          type: array
+          items: {$ref: '#/components/schemas/PredictionPortfolioReturnPoint'}
+    PredictionAccountLedgerSnapshot:
       type: object
-      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeExternalCapital, netInternalTransfer, netProfit, cumulativeCapitalReturn, returnRate, valuationBasis]
+      required: [snapshotId, valuedAt, tradingDate, snapshotType, cash, positionValue, netAssetValue, cumulativeExternalCapital,
+        netInternalTransfer, netProfit, cumulativeCapitalReturn, returnRate, valuationBasis]
       properties:
         slot: {type: string}
         snapshotId: {type: string}
