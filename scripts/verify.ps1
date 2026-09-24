@@ -1,296 +1,59 @@
-[CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
-    [ValidateSet("fast", "domain", "release")]
-    [string]$Tier,
-
-    [ValidateSet("data", "research", "research2", "research-shared", "migrations", "frontend", "api", "tools")]
-    [string]$Domain = "",
-
-    [string[]]$GoPackage = @(),
-    [string]$GoTest = "",
-    [string[]]$FrontendTest = @(),
-
-    [switch]$SkipGoBuild,
-    [string]$ReleaseRecord = ''
+    [ValidateSet('fast','domain','release')][string]$Tier = 'fast',
+    [ValidateSet('prediction','market','storage','web','contracts')][string]$Domain,
+    [string[]]$TestPath,
+    [string[]]$FrontendTest
 )
-
-$ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
-if ($PSVersionTable.PSVersion -lt [version]'7.2') { throw 'Verification requires PowerShell 7.2 or later (pwsh)' }
-
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent $ScriptDir))
-$FrontendRoot = Join-Path $ProjectRoot "frontend"
-$MainGoPackages = @(".", "./backend/...", "./internal/...", "./cmd/...", "./tools/...")
-$NpmProgram = if ($IsWindows) { "npm.cmd" } else { "npm" }
-. (Join-Path $ScriptDir 'release-state.ps1')
-$VerificationInputs = $null
-
-function Invoke-Step {
-    param(
-        [Parameter(Mandatory = $true)][string]$Name,
-        [Parameter(Mandatory = $true)][string]$Program,
-        [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [Parameter(Mandatory = $true)][string]$WorkingDirectory
-    )
-
-    if ($ReleaseRecord) {
-        $identity = $VerificationInputs.identity
-        if ($Program -eq 'go') { $identity += ':' + (Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist')) }
-        $action = { Invoke-VerificationCommand $Program $Arguments $WorkingDirectory }.GetNewClosure()
-        $outputHash = if ($Name -eq 'frontend production build') { { Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist') }.GetNewClosure() } else { $null }
-        Invoke-ReleaseStage $ReleaseRecord ('verify-' + $Name) $identity $action $outputHash
-        return
-    }
-    Write-Host "==> $Name"
-    $stopwatch = [Diagnostics.Stopwatch]::StartNew()
-    try { Invoke-VerificationCommand $Program $Arguments $WorkingDirectory }
-    finally { $stopwatch.Stop() }
-    Write-Host "PASS $Name ($([math]::Round($stopwatch.Elapsed.TotalSeconds, 2))s)"
+$ErrorActionPreference = 'Stop'
+$projectDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$pythonCommand = Join-Path $projectDirectory '.venv\Scripts\python.exe'
+if (-not (Test-Path -LiteralPath $pythonCommand -PathType Leaf)) { throw 'Run uv sync --frozen first.' }
+$env:PYTHONUTF8 = '1'
+$temporaryDirectory = Join-Path 'H:\Download\stock-god-validation' ([guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $temporaryDirectory -Force | Out-Null
+function Invoke-Check([string]$Program, [string[]]$CommandArguments) {
+    & $Program @CommandArguments
+    if ($LASTEXITCODE -ne 0) { throw "Verification failed: $Program (exit $LASTEXITCODE)" }
 }
-
-function Invoke-VerificationCommand {
-    param([string]$Program, [string[]]$Arguments, [string]$WorkingDirectory)
-    Push-Location $WorkingDirectory
-    try {
-        & $Program @Arguments
-        $exitCode = $LASTEXITCODE
-    } finally {
-        Pop-Location
-    }
-    if ($exitCode -ne 0) {
-        throw "$Program failed with exit code $exitCode"
-    }
-}
-
-function Invoke-ReleaseVerification {
-    # The root Go package embeds dist. Build fresh frontend assets before any
-    # Go checks, including on a clean checkout with no old dist directory.
-    Invoke-FrontendTests 'frontend runtime tests'
-    Invoke-Step 'frontend lint' $NpmProgram @('run', 'lint') $FrontendRoot
-    Invoke-Step 'frontend production build' $NpmProgram @('run', 'build') $FrontendRoot
-    Invoke-GoTest 'main Go tests' $MainGoPackages
-    Invoke-Step 'Go vet' 'go' (@('vet') + $MainGoPackages) $ProjectRoot
-    Invoke-Step 'root go.mod check' 'go' @('mod', 'tidy', '-diff') $ProjectRoot
-    Invoke-Step 'release schema transition tests' 'pwsh' @('-NoProfile', '-File', (Join-Path $ScriptDir 'release-schema-transition.test.ps1')) $ProjectRoot
-    Invoke-Step 'OpenAPI contract check' 'go' @('run', './cmd/openapi-contract') $ProjectRoot
-    if (-not $SkipGoBuild) {
-        $binaryName = if ($IsWindows) { 'go-stock-verify.exe' } else { 'go-stock-verify' }
-        Invoke-Step 'Go production build' 'go' @('build', '-trimpath', '-o', (Join-Path $validationRun $binaryName), '.') $ProjectRoot
-    }
-}
-
-function Assert-GoPackages {
-    param([string[]]$Packages)
-    foreach ($package in $Packages) {
-        if ([string]::IsNullOrWhiteSpace($package)) {
-            throw "GoPackage cannot be empty"
-        }
-        if ($package -eq "./..." -or $package -match "node_modules") {
-            throw "Broad or frontend dependency Go package scopes are not allowed: $package"
-        }
-    }
-}
-
-function Resolve-FrontendTests {
-    param([string[]]$Tests)
-    $resolved = @()
-    foreach ($test in $Tests) {
-        if ([string]::IsNullOrWhiteSpace($test)) {
-            throw "FrontendTest cannot be empty"
-        }
-        $candidate = if ([System.IO.Path]::IsPathRooted($test)) {
-            [System.IO.Path]::GetFullPath($test)
-        } else {
-            [System.IO.Path]::GetFullPath((Join-Path $FrontendRoot $test))
-        }
-        $frontendPrefix = $FrontendRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
-        if (-not $candidate.StartsWith($frontendPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Frontend test is outside the frontend directory: $test"
-        }
-        if (-not $candidate.EndsWith(".test.mjs", [System.StringComparison]::OrdinalIgnoreCase) -or
-            -not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
-            throw "Frontend test does not exist or is not a .test.mjs file: $test"
-        }
-        $resolved += [System.IO.Path]::GetRelativePath($FrontendRoot, $candidate).Replace('\', '/')
-    }
-    return $resolved
-}
-
-function Invoke-GoTest {
-    param([string]$Name, [string[]]$Packages, [string]$TestPattern = "")
-    Assert-GoPackages $Packages
-    $arguments = @("test") + $Packages
-    if (-not [string]::IsNullOrWhiteSpace($TestPattern)) {
-        $arguments += @("-run", $TestPattern)
-    }
-    Invoke-Step $Name "go" $arguments $ProjectRoot
-}
-
-function Invoke-FrontendTests {
-    param([string]$Name, [string[]]$Tests = @())
-    if ($Tests.Count -eq 0) {
-        $discovered = @(Get-ChildItem -LiteralPath (Join-Path $FrontendRoot "src") -Recurse -File -Filter "*.test.mjs")
-        Write-Host "Discovered $($discovered.Count) frontend test files."
-        Invoke-Step $Name $NpmProgram @("run", "test:runtime") $FrontendRoot
-        return
-    }
-    $resolved = Resolve-FrontendTests $Tests
-    Invoke-Step $Name "node" (@("--test") + $resolved) $FrontendRoot
-}
-
-if ($MyInvocation.InvocationName -eq '.') { return }
-if ($ReleaseRecord -and ($Tier -ne 'release' -or -not $SkipGoBuild)) { throw 'ReleaseRecord requires release verification with SkipGoBuild' }
-if ($Tier -eq "fast" -and $GoPackage.Count -eq 0 -and $FrontendTest.Count -eq 0) {
-    throw "fast verification requires -GoPackage and/or -FrontendTest"
-}
-if ($Tier -eq "fast" -and -not [string]::IsNullOrWhiteSpace($GoTest) -and $GoPackage.Count -eq 0) {
-    throw "-GoTest requires at least one -GoPackage"
-}
-if ($Tier -eq "domain" -and [string]::IsNullOrWhiteSpace($Domain)) {
-    throw "domain verification requires -Domain"
-}
-if ($Tier -ne "fast" -and ($GoPackage.Count -ne 0 -or $FrontendTest.Count -ne 0 -or -not [string]::IsNullOrWhiteSpace($GoTest))) {
-    throw "GoPackage, GoTest, and FrontendTest selectors are only valid with -Tier fast"
-}
-if ($SkipGoBuild -and $Tier -ne "release") {
-    throw "-SkipGoBuild is only valid with -Tier release"
-}
-
-$environmentNames = @(
-    "GO_STOCK_LIVE_EASTMONEY",
-    "GO_STOCK_LIVE_MARKET_NEWS",
-    "GO_STOCK_DB_LOG_LEVEL",
-    "GO_STOCK_DB_PATH",
-    "GO_STOCK_MINUTE_DB_PATH"
-)
-$previousEnvironment = @{}
-foreach ($name in $environmentNames) {
-    $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
-}
-
-$validationBase = if (Test-Path -LiteralPath "H:\Download" -PathType Container) {
-    "H:\Download\go-stock-validation"
-} else {
-    Join-Path ([System.IO.Path]::GetTempPath()) "go-stock-validation"
-}
-$validationBase = [System.IO.Path]::GetFullPath($validationBase).TrimEnd('\', '/')
-$validationRun = [System.IO.Path]::GetFullPath((Join-Path $validationBase ([Guid]::NewGuid().ToString("N"))))
-if (-not $validationRun.StartsWith($validationBase + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "Validation directory escaped its intended root"
-}
-New-Item -ItemType Directory -Force -Path $validationRun | Out-Null
-
-$overall = [Diagnostics.Stopwatch]::StartNew()
+Push-Location $projectDirectory
 try {
-    [Environment]::SetEnvironmentVariable("GO_STOCK_LIVE_EASTMONEY", $null, "Process")
-    [Environment]::SetEnvironmentVariable("GO_STOCK_LIVE_MARKET_NEWS", $null, "Process")
-    [Environment]::SetEnvironmentVariable("GO_STOCK_DB_LOG_LEVEL", "silent", "Process")
-    # Tests own their disposable fixtures. Clearing inherited application paths
-    # preserves configuration fallback tests and prevents separate Go package
-    # processes from sharing one validation database.
-    [Environment]::SetEnvironmentVariable("GO_STOCK_DB_PATH", $null, "Process")
-    [Environment]::SetEnvironmentVariable("GO_STOCK_MINUTE_DB_PATH", $null, "Process")
-    if ($ReleaseRecord) {
-        $VerificationInputs = Get-ReleaseInputs $ProjectRoot
-        $record = Read-ReleaseState $ReleaseRecord
-        if ($record.projectRoot -ne $ProjectRoot -or $record.commit -ne $VerificationInputs.values.commit) { throw 'Verification receipt does not match this checkout' }
-        $dirty = @(& git status --porcelain)
-        if ($LASTEXITCODE -ne 0 -or $dirty.Count) { throw 'Cached release verification requires a clean checkout' }
-        $record.verificationIdentity = ''
-        Write-ReleaseState $ReleaseRecord $record
+    $paths = @($TestPath)
+    if ($Domain) {
+        $paths = switch ($Domain) {
+            'prediction' { @('tests/prediction','tests/ai','tests/test_audit.py','tests/test_evidence_store.py','tests/test_settings.py') }
+            'market' { @('tests/market') }
+            'storage' { @('tests/storage') }
+            'web' { @('tests/test_app.py') }
+            'contracts' { @('tests/test_contracts.py','tests/test_boundaries.py') }
+        }
     }
-
-    Invoke-Step "diff whitespace check" "git" @("-c", "core.safecrlf=false", "diff", "--check") $ProjectRoot
-
-    switch ($Tier) {
-        "fast" {
-            if ($GoPackage.Count -ne 0) {
-                Invoke-GoTest "targeted Go tests" $GoPackage $GoTest
-                $researchBoundary = @($GoPackage | Where-Object { $_ -match '^(\.|\./backend/(data|research|research2|researchapp|research2app|researchconfig|ai|\.\.\.)(/\.\.\.)?|\./internal/(trading|marketquote|researchevidence|recommendationchart|sqlitedb)(/\.\.\.)?)$' }).Count -gt 0
-                $architectureIncluded = $GoPackage -contains "./internal/architecture" -or $GoPackage -contains "./internal/..."
-                if ($researchBoundary -and (-not $architectureIncluded -or $GoTest)) {
-                    Invoke-GoTest "research import boundaries" @("./internal/architecture")
-                }
+    if ($Tier -eq 'release') { $paths = @('tests') }
+    if (-not $paths.Count -and -not $FrontendTest.Count) { throw 'Choose -TestPath, -FrontendTest, or -Domain for local verification.' }
+    if ($paths.Count) {
+        foreach ($path in $paths) {
+            $resolved = [IO.Path]::GetFullPath((Join-Path $projectDirectory $path))
+            if (-not $resolved.StartsWith($projectDirectory + [IO.Path]::DirectorySeparatorChar) -or -not (Test-Path -LiteralPath $resolved)) {
+                throw "Unknown project test target: $path"
             }
-            if ($FrontendTest.Count -ne 0) {
-                Invoke-FrontendTests "targeted frontend tests" $FrontendTest
-            }
-            Write-Host "Not run: domain and release verification."
         }
-        "domain" {
-            switch ($Domain) {
-                "data" { Invoke-GoTest "data domain tests" @("./backend/data", "./internal/architecture") }
-                "research" {
-                    Invoke-GoTest "research domain tests" @("./backend/research", "./backend/researchapp", "./internal/architecture")
-                    Invoke-GoTest "research boundary tests" @("./backend/data", ".") "Research"
-                }
-                "research2" {
-                    Invoke-GoTest "research2 domain tests" @("./backend/research2", "./backend/research2app", "./internal/architecture")
-                    Invoke-GoTest "research2 boundary tests" @("./backend/data", ".") "Research2"
-                }
-                "research-shared" {
-                    Invoke-GoTest "shared research and both center tests" @(
-                        "./backend/ai", "./backend/researchconfig",
-                        "./internal/trading", "./internal/marketquote", "./internal/researchevidence",
-                        "./internal/recommendationchart", "./internal/sqlitedb", "./internal/architecture",
-                        "./backend/research", "./backend/researchapp", "./backend/research2", "./backend/research2app",
-                        "./backend/data", "."
-                    )
-                }
-                "migrations" {
-                    Invoke-GoTest "migration domain tests" @("./internal/migrations")
-                    Invoke-GoTest 'bootstrap backup boundary tests' @('./internal/bootstrap') '^TestBackupMainBeforePendingMigration'
-                }
-                "frontend" { Invoke-FrontendTests "frontend runtime tests" }
-                "api" {
-                    Invoke-Step "OpenAPI contract check" "go" @("run", "./cmd/openapi-contract") $ProjectRoot
-                    Invoke-GoTest "API boundary tests" @(".", "./internal/architecture")
-                }
-                "tools" {
-                    Invoke-GoTest "tool build checks" @("./tools/...")
-                    Invoke-Step 'release recovery tests' 'pwsh' @('-NoProfile','-File',(Join-Path $ScriptDir 'release-recovery.test.ps1')) $ProjectRoot
-                    Invoke-Step 'release pipeline tests' 'pwsh' @('-NoProfile','-File',(Join-Path $ScriptDir 'release-pipeline.test.ps1')) $ProjectRoot
-                }
-            }
-            Write-Host "Not run: release verification."
-        }
-        "release" {
-            Invoke-ReleaseVerification
-            Write-Host "Full local release gate passed. Deployment was not run."
-        }
+        $marker = if ($Tier -eq 'release' -or $Domain -eq 'storage') { 'not live and not browser' } else { 'not migration and not live and not browser' }
+        Invoke-Check $pythonCommand (@('-m','pytest','-q','--tb=short','-m',$marker,'--basetemp',(Join-Path $temporaryDirectory 'pytest')) + $paths)
     }
-
-    $overall.Stop()
-    if ($ReleaseRecord) {
-        $record = Read-ReleaseState $ReleaseRecord
-        $head = (& git -C $ProjectRoot rev-parse HEAD).Trim()
-        if ($head -ne $VerificationInputs.values.commit -or @(& git -C $ProjectRoot status --porcelain).Count) { throw 'Checkout changed during release verification' }
-        $record.verificationIdentity = $VerificationInputs.identity
-        $record.frontendHash = Get-ReleaseTreeHash (Join-Path $FrontendRoot 'dist')
-        Write-ReleaseState $ReleaseRecord $record
+    if ($Tier -eq 'release') {
+        Invoke-Check $pythonCommand @('-m','ruff','check','src/stock_god','scripts/release.py')
+        Invoke-Check $pythonCommand @('-m','pyright')
+        Invoke-Check $pythonCommand @('-m','stock_god.contracts')
     }
-    Write-Host "Verification tier '$Tier' passed in $([math]::Round($overall.Elapsed.TotalSeconds, 2))s."
-} catch {
-    $overall.Stop()
-    Write-Error "Verification tier '$Tier' failed after $([math]::Round($overall.Elapsed.TotalSeconds, 2))s: $($_.Exception.Message)"
-    exit 1
-} finally {
-    foreach ($name in $environmentNames) {
-        [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process")
+    if ($Tier -eq 'release' -or $FrontendTest.Count) {
+        Push-Location (Join-Path $projectDirectory 'frontend')
+        try {
+            if ($Tier -eq 'release') {
+                Invoke-Check 'npm.cmd' @('run','lint')
+                Invoke-Check 'npm.cmd' @('run','test:runtime')
+                Invoke-Check 'npm.cmd' @('run','build')
+            } else { Invoke-Check 'node.exe' (@('--test') + $FrontendTest) }
+        } finally { Pop-Location }
     }
-    if (Test-Path -LiteralPath $validationRun -PathType Container) {
-        $resolvedCleanup = [System.IO.Path]::GetFullPath($validationRun)
-        if (-not $resolvedCleanup.StartsWith($validationBase + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "Refusing to clean validation directory outside its intended root"
-        }
-        Remove-Item -LiteralPath $resolvedCleanup -Recurse -Force
-    }
-    if (Test-Path -LiteralPath $validationBase -PathType Container) {
-        $remainingValidationFiles = @(Get-ChildItem -LiteralPath $validationBase -Force)
-        if ($remainingValidationFiles.Count -eq 0) {
-            Remove-Item -LiteralPath $validationBase -Force
-        }
-    }
-}
+    Invoke-Check 'git' @('diff','--check')
+    Write-Output "Verification passed: $Tier; temporary evidence: $temporaryDirectory"
+} finally { Pop-Location }
