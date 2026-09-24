@@ -1,5 +1,14 @@
 # Go-Stock 发布说明
 
+## 5.2.5 - 2026-09-24
+
+## 模型使用服务端默认生成参数
+
+- OpenAI Responses 与 Chat Completions 请求不再发送 temperature、max_output_tokens 或 max_tokens，研究中心2的 DeepSeek 和 WAWA 因此使用模型服务端默认值，不再受历史配置中的4096输出预算约束。
+- Anthropic Messages 不再发送 temperature；按该协议要求仍发送已保存的 max_tokens。
+- 新模型调用的审计参数只记录实际发送的输出上限，设置页说明各协议的参数口径。既有历史调用记录保持原样。
+- 主库维持schema 35，分钟库维持schema 3；不重算历史报告、交易或账户数据。
+
 ## 5.2.4 - 2026-09-24
 
 ## 研究中心2模拟交易成本
