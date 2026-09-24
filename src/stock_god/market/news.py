@@ -310,7 +310,7 @@ class News(ProviderState):
             self.http.json("https://www.cls.cn/api/calendar/web/list?" + values + "&sign=" + sign), "data"
         )
 
-    def query_stocks(self, words):
+    def query_stocks(self, words, page_size=50):
         fingerprint = self.settings.get("qgqpBId") or self.settings.get("QgqpBId")
         if not fingerprint:
             raise MarketDataError("东方财富选股需要已配置的 qgqp_b_id")
@@ -320,7 +320,7 @@ class News(ProviderState):
             headers={"Origin": "https://xuangu.eastmoney.com", "Referer": "https://xuangu.eastmoney.com/"},
             body={
                 "keyWord": words,
-                "pageSize": 50,
+                "pageSize": page_size,
                 "pageNo": 1,
                 "fingerprint": fingerprint,
                 "gids": [],
@@ -451,7 +451,7 @@ class News(ProviderState):
                         }
                     )
                 if not result:
-                    raise MarketDataError("CLS API and HTML telegraph sources unavailable")
+                    raise MarketDataError("CLS API and HTML telegraph sources unavailable") from None
                 return result
         if source == "新浪财经":
             raw = self._news_fetch(
