@@ -3,11 +3,11 @@ setlocal
 
 cd /d "%~dp0"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\source-run.ps1" open -ResearchCenter %*
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\restart.ps1" open %*
 
 if errorlevel 1 (
   echo.
-  echo go-stock source runtime failed to start. Check runtime\source-dev\backend.err.log and frontend.err.log.
+  echo Stock God failed to start. Check runtime\logs.
   pause
   exit /b 1
 )

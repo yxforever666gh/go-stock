@@ -6,10 +6,10 @@ param(
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
-if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = "启动项目" }
+if ([string]::IsNullOrWhiteSpace($ShortcutName)) { $ShortcutName = "Stock God" }
 $LauncherName = ([char]0x542F).ToString() + [char]0x52A8 + [char]0x9879 + [char]0x76EE + ".cmd"
 $Launcher = Join-Path $ProjectRoot $LauncherName
-$IconPath = Join-Path $ProjectRoot "build\app.ico"
+$IconPath = Join-Path $ProjectRoot "frontend\public\app.ico"
 
 if (-not (Test-Path -LiteralPath $Launcher)) { throw "Launcher is missing: $Launcher" }
 if (-not (Test-Path -LiteralPath $IconPath)) { throw "Application icon is missing: $IconPath" }
@@ -22,7 +22,7 @@ $Shortcut.TargetPath = $Launcher
 $Shortcut.Arguments = ""
 $Shortcut.WorkingDirectory = $ProjectRoot
 $Shortcut.IconLocation = $IconPath + ",0"
-$Shortcut.Description = "启动 Go-Stock 最新源码并打开研究中心2"
+$Shortcut.Description = "启动 Stock God 并打开股票预测"
 $Shortcut.Save()
 
 Write-Output $ShortcutPath
