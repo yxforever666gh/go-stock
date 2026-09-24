@@ -15,6 +15,7 @@ from starlette.routing import Route
 import uvicorn
 
 from stock_god.config import AppConfig
+from stock_god import APP_VERSION
 from .mcp_tools import MinuteTools, create_mcp_server
 from .minute_daily import DailyStore, refresh_daily
 from .minute_index import AuctionIndex
@@ -50,7 +51,7 @@ def create_app(store, auction=None, daily=None, provider=None):
         async with manager.run():
             yield
 
-    app = FastAPI(title="Stock God Minute Data", version="6.0.0", lifespan=lifespan)
+    app = FastAPI(title="Stock God Minute Data", version=APP_VERSION, lifespan=lifespan)
     app.state.tools = tools
 
     class MCPTransport:
@@ -61,7 +62,7 @@ def create_app(store, auction=None, daily=None, provider=None):
 
     def dispatch(path, q):
         if path in ("/livez", "/readyz"):
-            return dict(ready=True, appVersion="6.0.0", tools=len(tools.definitions))
+            return dict(ready=True, appVersion=APP_VERSION, tools=len(tools.definitions))
         if path == "/api/indices":
             return dict(source="csv_index", indices=store.search_indices(q.get("query", "")))
         symbol = q.get("symbol", "")

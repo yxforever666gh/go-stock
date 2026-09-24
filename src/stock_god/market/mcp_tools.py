@@ -8,6 +8,8 @@ from mcp import types
 from mcp.server.lowlevel import Server
 from starlette.concurrency import run_in_threadpool
 
+from stock_god import APP_VERSION
+
 from .mcp_catalog import CATALOG
 from .minute_local import (
     iso_time,
@@ -238,7 +240,7 @@ class MinuteTools:
 
 
 def create_mcp_server(tools):
-    server = Server("stock-god-minute-data", version="6.0.0")
+    server = Server("stock-god-minute-data", version=APP_VERSION)
 
     @server.list_tools()
     async def list_tools():
