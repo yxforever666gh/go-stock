@@ -1,7 +1,10 @@
 """OHLC providers, session-aware aggregation and existing drawing storage."""
 
 import json
+import os
 import sqlite3
+import subprocess
+import sys
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -33,6 +36,62 @@ PERIODS = {
     "year": 260,
 }
 
+AKSHARE_SCRIPT = r"""
+import contextlib, json, math, sys
+options = json.load(sys.stdin)
+with contextlib.redirect_stdout(sys.stderr):
+    import akshare as ak
+    if options["source"] == "sina":
+        frame = ak.stock_zh_a_minute(symbol=options["code"], period="1", adjust="")
+    else:
+        frame = ak.stock_zh_a_hist_min_em(symbol=options["code"][2:], start_date=options["start"][:10].replace("-", ""), end_date=options["end"][:10].replace("-", ""), period="1", adjust="")
+aliases = {"time": ["时间", "日期", "day", "time"], "open": ["开盘", "open"], "high": ["最高", "high"], "low": ["最低", "low"], "close": ["收盘", "close"], "volume": ["成交量", "volume", "vol"], "amount": ["成交额", "amount"]}
+columns = {key: next((name for name in names if name in frame.columns), None) for key, names in aliases.items()}
+if any(columns[key] is None for key in ("time", "open", "high", "low", "close")):
+    raise ValueError("AKShare returned unexpected columns")
+result = []
+for row in frame.to_dict("records"):
+    item = {"time": str(row[columns["time"]])}
+    for key in ("open", "high", "low", "close", "volume", "amount"):
+        value = row.get(columns[key], 0) if columns[key] else 0
+        try:
+            value = float(value)
+        except (ValueError, TypeError):
+            value = 0
+        item[key] = value if math.isfinite(value) else 0
+    result.append(item)
+json.dump(result, sys.stdout, ensure_ascii=False, allow_nan=False)
+"""
+
+
+def proves_unadjusted(source):
+    source = str(source or "").strip().lower()
+    if not source or any(
+        marker in source for marker in ("qfq", "hfq", "adjustment=forward", "adjustment=backward")
+    ):
+        return False
+    if (
+        "adjustment=none" in source
+        or "unadjusted" in source
+        or source == "raw"
+        or source.endswith(":raw")
+        or "_raw" in source
+    ):
+        return True
+    if source in {
+        "sina",
+        "tencent",
+        "diemeng",
+        "diemeng_dump",
+        "akshare:em",
+        "tencent:none",
+        "sina:none",
+        "eastmoney:none",
+        "private-minute:none",
+    }:
+        return True
+    return source == "test" or source.startswith("test:") or source.endswith("-test")
+
 
 def valid_bars(rows, start, end):
     clean = {}
@@ -47,7 +106,7 @@ def valid_bars(rows, start, end):
         if high < max(opening, low, close) or low > min(opening, high, close):
             continue
         row["time"] = at.isoformat()
-        clean[at] = row
+        clean.setdefault(at, row)
     return [clean[key] for key in sorted(clean)]
 
 
@@ -124,6 +183,8 @@ class Charts(ProviderState):
 
     def _tencent_bars(self, code, start, end, period, adjustment, limit):
         minute = period.endswith("m")
+        if minute and (now() - end > timedelta(days=7) or end > now() + timedelta(minutes=2)):
+            raise MarketDataError("Tencent minute source only covers recent windows")
         url = (
             "https://ifzq.gtimg.cn/appstock/app/kline/mkline"
             if minute
@@ -230,8 +291,18 @@ class Charts(ProviderState):
         symbol = code[2:] + "." + code[:2].upper()
         rows = database_rows(
             self.config.minute_db,
-            "SELECT * FROM minute_bar WHERE stock_code IN (?,?) AND trade_time>=? AND trade_time<=? ORDER BY trade_time",
-            (symbol, code, int(start.timestamp() * 1000), int(end.timestamp() * 1000)),
+            "SELECT * FROM minute_bar WHERE stock_code IN (?,?,?,?) AND trade_time>=? AND trade_time<=? ORDER BY trade_time,CASE stock_code WHEN ? THEN 0 WHEN ? THEN 1 WHEN ? THEN 2 ELSE 3 END",
+            (
+                symbol,
+                code.upper(),
+                code[2:],
+                code,
+                int(start.timestamp() * 1000),
+                int(end.timestamp() * 1000),
+                symbol,
+                code.upper(),
+                code[2:],
+            ),
         )
         result = [
             {
@@ -240,9 +311,160 @@ class Charts(ProviderState):
                 "source": row["source"],
             }
             for row in rows
-            if row.get("source") and "qfq" not in row["source"] and "hfq" not in row["source"]
+            if proves_unadjusted(row.get("source"))
         ]
         return valid_bars(result, start, end)
+
+    def _akshare_bars(self, code, start, end):
+        preference = self.settings.get("akshareMinuteSourceMode") or "auto"
+        if preference not in {"auto", "sina", "em"}:
+            raise ValueError("invalid AKShare minute source mode")
+        sources = ["sina", "em"] if preference == "auto" else [preference]
+        if not self.settings.get("sinaMinuteEnabled", True):
+            sources = [source for source in sources if source != "sina"]
+        if not sources:
+            raise MarketDataError("AKShare configured source is disabled")
+        environment = os.environ.copy()
+        for key in tuple(environment):
+            if key.upper() in {"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"}:
+                environment.pop(key)
+        if self.settings.get("httpProxyEnabled") and not self.settings.get("forceNoProxyForFetch", True):
+            environment["HTTP_PROXY"] = environment["HTTPS_PROXY"] = str(self.settings.get("httpProxy") or "")
+        environment["PYTHONIOENCODING"] = "utf-8"
+        partial, failures = [], []
+        for source in sources:
+            try:
+                output = subprocess.run(
+                    [sys.executable, "-c", AKSHARE_SCRIPT],
+                    input=json.dumps(
+                        {"source": source, "code": code, "start": start.isoformat(), "end": end.isoformat()}
+                    ),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    env=environment,
+                    timeout=90,
+                    check=False,
+                    creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                )
+                if output.returncode != 0:
+                    raise MarketDataError(f"AKShare {source} subprocess failed (exit {output.returncode})")
+                rows = json.loads(output.stdout)
+                label = f"akshare:{source}:adjustment=none"
+                rows = valid_bars([row | {"source": label} for row in rows], start, end)
+                if not rows:
+                    raise MarketDataError(f"AKShare {source} has no bars in the requested range")
+                partial = rows
+                if timestamp(rows[0]["time"]) <= start + timedelta(minutes=1) and timestamp(
+                    rows[-1]["time"]
+                ) >= end - timedelta(minutes=1):
+                    return rows
+            except (subprocess.TimeoutExpired, OSError, ValueError, MarketDataError) as exc:
+                failures.append(
+                    type(exc).__name__ + ": " + str(exc)[:200]
+                    if isinstance(exc, MarketDataError)
+                    else type(exc).__name__
+                )
+        if partial:
+            return partial
+        raise MarketDataError("AKShare minute sources failed: " + "; ".join(failures))
+
+    def _public_minute_sources(self, code, start, end, limit):
+        default = ["tencent", "sina", "akshare", "private"]
+        order = self.settings.get("minuteProviderOrder")
+        if not order:
+            order = (
+                ["private", "tencent", "sina", "akshare"]
+                if self.settings.get("minuteProviderMode") == "private"
+                else default
+            )
+        if isinstance(order, str):
+            order = order.split(",")
+        order = list(dict.fromkeys(str(value).strip().lower() for value in order))
+        if any(value not in default for value in order):
+            raise ValueError("unknown minute provider in configured order")
+        order += [value for value in default if value not in order]
+        available = {}
+        today = now()
+        if self.settings.get("tencentMinuteEnabled", True) and (
+            end.date() == today.date() or timedelta(0) <= today - end <= timedelta(days=7)
+        ):
+            available["tencent"] = lambda: self._tencent_bars(code, start, end, "1m", "none", limit)
+        if self.settings.get("sinaMinuteEnabled", True) and end.date() == today.date():
+            available["sina"] = lambda: self._sina_bars(code, start, end, "1m", "none", limit)
+        if self.settings.get("akshareEnabled", True):
+            available["akshare"] = lambda: self._akshare_bars(code, start, end)
+        if (
+            self.settings.get("privateMinuteEnabled")
+            and self.settings.get("privateMinuteLevel", "1min") == "1min"
+            and self.settings.get("privateMinuteBaseUrl")
+            and self.settings.get("privateMinuteApiKey")
+        ):
+            available["private"] = lambda: self._private_bars(code, start, end)
+        return [(name, available[name]) for name in order if name in available]
+
+    def _prediction_eastmoney_bars(self, code, start, end):
+        payload = self.http.json(
+            "https://push2his.eastmoney.com/api/qt/stock/trends2/get",
+            {
+                "secid": security_id(code),
+                "fields1": "f1,f2,f3,f4,f5,f6,f7,f8",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+                "ndays": 2 if start.date() == end.date() else 5,
+                "iscr": 0,
+            },
+        )
+        result = []
+        for line in array(payload, "data", "trends"):
+            fields = line.split(",")
+            if len(fields) < 8:
+                continue
+            result.append(
+                {
+                    "time": timestamp(fields[0]).isoformat(),
+                    **{
+                        key: number(fields[index], 0)
+                        for key, index in {
+                            "open": 1,
+                            "close": 2,
+                            "high": 3,
+                            "low": 4,
+                            "volume": 5,
+                            "amount": 6,
+                        }.items()
+                    },
+                    "source": "eastmoney:none",
+                }
+            )
+        return valid_bars(result, start, end)
+
+    def _prediction_minutes(self, code, start, end, usable):
+        failures = []
+        for name, load in (
+            ("tencent", lambda: self._tencent_bars(code, start, end, "1m", "none", 1200)),
+            ("eastmoney", lambda: self._prediction_eastmoney_bars(code, start, end)),
+            ("local-minute-cache", lambda: self._cached_minute_bars(code, start, end)),
+        ):
+            try:
+                rows = [row for row in load() if proves_unadjusted(row.get("source"))]
+                if not usable(rows):
+                    raise MarketDataError("source does not provide the required prediction minutes")
+                return rows
+            except (MarketDataError, ValueError, KeyError) as exc:
+                failures.append(name + ": " + str(exc))
+        raise MarketDataError("prediction minute sources unavailable: " + "; ".join(failures))
+
+    def prediction_window(self, code, start, end, minimum=4):
+        code, start, end = instrument(code)["code"], timestamp(start), timestamp(end)
+        if start == end and minimum == 0:
+            return []
+        rows = self._prediction_minutes(
+            code,
+            start,
+            end,
+            lambda rows: len([row for row in rows if timestamp(row["time"]) < end]) >= minimum,
+        )
+        return [row for row in rows if timestamp(row["time"]) < end]
 
     def _save_minute_bars(self, code, rows):
         if not self.config.minute_db.is_file():
@@ -356,18 +578,20 @@ class Charts(ProviderState):
         minute = period.endswith("m")
         if minute and adjustment == "none":
             sources.append(("local-minute-cache", lambda: self._cached_minute_bars(code, start, end)))
-            if self.settings.get("privateMinuteEnabled"):
-                sources.append(("private-minute", lambda: self._private_bars(code, start, end)))
+            sources.extend(
+                self._public_minute_sources(code, start, end, min(limit * PERIODS[period], 350000))
+            )
         # Tencent minute payloads are always unadjusted. Never relabel them qfq/hfq.
-        if not minute or adjustment == "none":
+        if not minute:
             sources.append(
                 ("tencent", lambda: self._tencent_bars(code, start, end, period, adjustment, limit))
             )
-        if adjustment == "none":
+        if not minute and adjustment == "none":
             sources.append(("sina", lambda: self._sina_bars(code, start, end, period, adjustment, limit)))
-        sources.append(
-            ("eastmoney", lambda: self._eastmoney_bars(code, start, end, period, adjustment, limit))
-        )
+        if not minute:
+            sources.append(
+                ("eastmoney", lambda: self._eastmoney_bars(code, start, end, period, adjustment, limit))
+            )
         for source, load in sources:
             try:
                 rows = load()
@@ -409,13 +633,25 @@ class Charts(ProviderState):
             ):
                 raise MarketDataError("live quote is outside execution window")
             return quote | {"quoteAt": quote["asOf"], "mode": "live_after_signal"}
-        bars = self.bars(code, at, min(at + timedelta(minutes=15), current), "1m", "none")
-        if not bars:
-            raise MarketDataError("historical execution minute is unavailable")
-        bar = bars[0]
+        target = at.replace(second=0, microsecond=0)
+        code = instrument(code)["code"]
+        bars = self._prediction_minutes(
+            code,
+            at - timedelta(minutes=1),
+            at + timedelta(minutes=2),
+            lambda rows: any(
+                timestamp(row["time"]).replace(second=0, microsecond=0) == target for row in rows
+            ),
+        )
+        bar = next(row for row in bars if timestamp(row["time"]).replace(second=0, microsecond=0) == target)
+        price = bar["close"]
+        if bar["amount"] > 0 and bar["volume"] > 0:
+            value = bar["amount"] / bar["volume"]
+            if bar["low"] * 0.8 < value < bar["high"] * 1.2:
+                price = value
         return {
             "code": instrument(code)["code"],
-            "price": bar["open"],
+            "price": price,
             "asOf": bar["time"],
             "quoteAt": bar["time"],
             "source": bar["source"],

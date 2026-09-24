@@ -259,6 +259,7 @@ class ProviderState:
     quotes: Callable[..., list[dict[str, Any]]]
     stock_master: Callable[..., list[dict[str, Any]]]
     bars: Callable[..., list[dict[str, Any]]]
+    prediction_window: Callable[..., list[dict[str, Any]]]
     is_trading_day: Callable[..., bool]
     full_market: Callable[..., dict[str, Any]]
     fallback_full_market: Callable[..., dict[str, Any]]

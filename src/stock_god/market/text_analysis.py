@@ -184,6 +184,7 @@ class TextAnalysis(ProviderState):
         explicit = {}
         for file in (
             RESOURCES / "finance.txt",
+            RESOURCES / "user.txt",
             self.config.root / "data/dict/user.txt",
             self.config.root / "runtime/dict/user.txt",
         ):

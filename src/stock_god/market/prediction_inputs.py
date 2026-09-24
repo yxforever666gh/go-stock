@@ -349,7 +349,7 @@ class PredictionInputs(ProviderState):
             try:
                 bars = [
                     bar
-                    for bar in self.bars(row["code"], window_start, window_end, "1m", "none")
+                    for bar in self.prediction_window(row["code"], window_start, window_end, minimum_bars)
                     if timestamp(bar["time"]) < window_end
                 ]
                 if len(bars) < minimum_bars:

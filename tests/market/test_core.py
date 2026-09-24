@@ -376,6 +376,7 @@ def test_opening_snapshot_does_not_require_unavailable_prior_minutes(make_market
         service, "full_market", lambda: {"rows": [row], "reported": 1, "source": "fixture", "errors": []}
     )
     monkeypatch.setattr(service, "bars", lambda *a, **kw: [])
+    monkeypatch.setattr(service, "prediction_window", lambda *a, **kw: [])
     monkeypatch.setattr(
         service,
         "fund_flows",
