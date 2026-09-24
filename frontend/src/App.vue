@@ -1,219 +1,72 @@
 <script setup>
 import 'md-editor-v3/lib/style.css'
-import {
-  WindowFullscreen,
-  WindowUnfullscreen,
-  WindowSetTitle,
-} from './services/browser-runtime.mjs'
-import { onBeforeMount, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { darkTheme, dateZhCN, zhCN } from 'naive-ui'
-import { GetConfig } from './services/settings-api'
-import { GetGroupList } from './services/groups-api'
-import { GetVersionInfo, Shutdown } from './services/system-api'
-import {
-  applyFeatureMenuVisibility,
-  createMenuOptions,
-  replaceStockGroupMenuOptions,
-} from './app-shell/menu-options'
-import { registerAppRuntimeEvents } from './app-shell/runtime-events'
+import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import {useRoute} from 'vue-router'
+import {darkTheme, dateZhCN, zhCN} from 'naive-ui'
+import {GetConfig} from './services/settings-api'
+import {GetVersionInfo, Shutdown} from './services/system-api'
+import {EventsOn, WindowSetTitle} from './services/browser-runtime.mjs'
+import {createMenuOptions} from './app-shell/menu-options'
 
-const router = useRouter()
 const route = useRoute()
-const loading = ref(true)
-const loadingMsg = ref('加载数据中...')
-const contentStyle = ref('')
-const enableFund = ref(false)
-const enableDarkTheme = ref(null)
-const content = ref('数据来源于网络，仅供参考；投资有风险，入市需谨慎')
-const isFullscreen = ref(false)
-const activeKey = ref('stock')
-const containerRef = ref({})
-const realtimeProfit = ref(0)
-const groupList = ref([])
-const appVersion = ref('')
-const menuOptions = ref([])
+const activeKey = computed(() => String(route.name || 'prediction'))
+const menuOptions = createMenuOptions()
+watch(activeKey, key => WindowSetTitle(`Stock God · ${{prediction: '股票预测', settings: '设置', about: '关于'}[key] || '股票预测'}`), {immediate: true})
+const theme = ref(null)
+const version = ref('')
 const shuttingDown = ref(false)
 const shutdownMessage = ref('')
-let cleanupRuntimeEvents = () => {}
-
-watch(() => route.name, name => {
-  if (['stock', 'market', 'fund', 'research', 'research2'].includes(String(name || ''))) activeKey.value = String(name)
-}, {immediate: true})
-
-function toggleFullscreen() {
-  activeKey.value = 'full'
-  if (isFullscreen.value) {
-    WindowUnfullscreen()
-  } else {
-    WindowFullscreen()
-  }
-  isFullscreen.value = !isFullscreen.value
+async function loadTheme() {
+  try { theme.value = (await GetConfig()).darkTheme ? darkTheme : null }
+  catch (error) { console.warn('[Stock God] 无法读取主题', error) }
 }
-
-onBeforeUnmount(() => {
-  cleanupRuntimeEvents()
+const stopSettingsListener = EventsOn('updateSettings', loadTheme)
+onBeforeUnmount(stopSettingsListener)
+onMounted(async () => {
+  await loadTheme()
+  try { version.value = (await GetVersionInfo()).version || '' } catch (error) { console.warn('[Stock God] 无法读取版本', error) }
 })
-
-function syncFeatureFlags(res) {
-  enableFund.value = res.enableFund
-  applyFeatureMenuVisibility(menuOptions.value, {
-    enableFund: res.enableFund,
-  })
-  enableDarkTheme.value = res.darkTheme ? darkTheme : null
-}
-
 async function requestShutdown() {
+  if (!window.confirm('确定要停止 Stock God 本地服务并退出吗？')) return
   shuttingDown.value = true
   try {
     await Shutdown()
-    shutdownMessage.value = '项目已退出，可以关闭此页面'
-    window.setTimeout(() => {
-      window.close()
-    }, 600)
+    shutdownMessage.value = 'Stock God 已退出，可以关闭此页面'
   } catch (error) {
-    console.warn('[go-stock] web shutdown failed', error)
-    shutdownMessage.value = '退出失败，请关闭启动脚本或手动停止进程'
+    shutdownMessage.value = `退出失败：${error?.message || error}`
     shuttingDown.value = false
   }
 }
-
-function confirmShutdown() {
-  if (window.confirm('确定要停止 go-stock 本地服务并退出项目吗？')) {
-    requestShutdown()
-  }
-}
-
-onBeforeMount(() => {
-  menuOptions.value = createMenuOptions({
-    router,
-    activeKey,
-    enableFund,
-    realtimeProfit,
-    isFullscreen,
-    appVersion,
-    toggleFullscreen,
-  })
-  cleanupRuntimeEvents = registerAppRuntimeEvents({
-    loading,
-    loadingMsg,
-    realtimeProfit,
-  })
-
-  GetVersionInfo().then(result => {
-    appVersion.value = result.version || ''
-  })
-
-  GetGroupList().then(result => {
-    groupList.value = result
-    replaceStockGroupMenuOptions(menuOptions.value, router, groupList.value)
-  })
-
-  GetConfig().then((res) => {
-    syncFeatureFlags(res)
-  })
-})
-
-onMounted(() => {
-  WindowSetTitle('go-stock：AI赋能股票分析✨ [数据来源于网络，仅供参考；投资有风险，入市需谨慎]')
-  contentStyle.value = 'max-height: calc(92vh);overflow: hidden'
-  GetConfig().then((res) => {
-    syncFeatureFlags(res)
-  })
-})
 </script>
+
 <template>
-  <n-config-provider ref="containerRef" :theme="enableDarkTheme" :locale="zhCN" :date-locale="dateZhCN">
+  <n-config-provider :theme="theme" :locale="zhCN" :date-locale="dateZhCN">
+    <n-global-style/>
     <n-message-provider>
       <n-notification-provider>
         <n-modal-provider>
           <n-dialog-provider>
-            <n-watermark
-                :content="''"
-                cross
-                selectable
-                :font-size="16"
-                :line-height="16"
-                :width="500"
-                :height="400"
-                :x-offset="50"
-                :y-offset="150"
-                :rotate="-15"
-            >
-              <n-alert
-                  v-if="shutdownMessage"
-                  type="success"
-                  class="app-shutdown-message"
-                  :show-icon="false"
-              >
-                {{ shutdownMessage }}
-              </n-alert>
-              <n-flex>
-                <n-grid x-gap="12" :cols="1">
-                  <n-gi>
-                    <n-spin :show="loading">
-                      <template #description>
-                        {{ loadingMsg }}
-                      </template>
-                      <n-scrollbar :style="contentStyle">
-                        <n-skeleton v-if="loading" height="calc(100vh)" />
-                        <RouterView/>
-                      </n-scrollbar>
-                    </n-spin>
-                  </n-gi>
-                  <n-gi style="position: fixed;bottom:0;z-index: 9;width: 100%;">
-                    <n-card size="small">
-                      <div class="app-bottom-bar">
-                      <n-menu style="font-size: 18px;"
-                              v-model:value="activeKey"
-                              mode="horizontal"
-                              :options="menuOptions"
-                              responsive
-                      />
-                        <n-button
-                            tertiary
-                            type="error"
-                            size="small"
-                            :loading="shuttingDown"
-                            class="app-exit-button"
-                            @click="confirmShutdown"
-                        >
-                          退出
-                        </n-button>
-                      </div>
-                    </n-card>
-                  </n-gi>
-                </n-grid>
-              </n-flex>
-            </n-watermark>
+            <header class="app-header">
+              <strong>Stock God <small v-if="version">{{ version }}</small></strong>
+              <n-menu :value="activeKey" mode="horizontal" :options="menuOptions"/>
+              <n-button tertiary type="error" size="small" :loading="shuttingDown" @click="requestShutdown">退出</n-button>
+            </header>
+            <main class="app-content">
+              <n-alert v-if="shutdownMessage" :type="shuttingDown ? 'success' : 'error'" class="shutdown-message">{{ shutdownMessage }}</n-alert>
+              <RouterView/>
+            </main>
           </n-dialog-provider>
         </n-modal-provider>
       </n-notification-provider>
     </n-message-provider>
   </n-config-provider>
 </template>
-<style>
-.app-bottom-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
 
-.app-bottom-bar .n-menu {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.app-exit-button {
-  flex: 0 0 auto;
-  margin-right: 12px;
-}
-
-.app-shutdown-message {
-  position: fixed;
-  top: 16px;
-  right: 16px;
-  z-index: 20;
-  max-width: min(360px, calc(100vw - 32px));
-}
+<style scoped>
+.app-header {display: flex; align-items: center; gap: 16px; padding: 4px 20px; border-bottom: 1px solid #8883; flex-wrap: wrap;}
+.app-header strong {font-size: 20px; white-space: nowrap;}
+.app-header small {font-size: 12px; font-weight: normal; opacity: .7;}
+.app-header .n-menu {flex: 1; min-width: 250px;}
+.app-content {padding: 16px;}
+.shutdown-message {margin-bottom: 12px;}
 </style>

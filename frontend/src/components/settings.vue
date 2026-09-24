@@ -1,26 +1,17 @@
 <script setup>
-import {h, onBeforeUnmount, ref, watch} from 'vue'
+import {h, onBeforeUnmount, onMounted, ref} from 'vue'
 import {NTag, useMessage} from 'naive-ui'
-import {GetConfig, GetResearchConfig, TestAIConfig, TestResearch2Email, UpdateConfig, UpdateResearchConfig} from '../services/settings-api'
+import {GetConfig, GetPredictionConfig, TestAIConfig, TestPredictionEmail, UpdateConfig, UpdatePredictionConfig} from '../services/settings-api'
 import {EventsEmit} from '../services/browser-runtime.mjs'
 import MinuteProviderSettings from './settings/MinuteProviderSettings.vue'
 import AiConfigSettings from './settings/AiConfigSettings.vue'
-import {acceptSavedModelIDs, importResearchSettings, researchPayload} from './settings/research-settings.js'
-import {RESEARCH2_SLOTS, validResearch2Slot} from '../utils/research2-slots.js'
-
-const props = defineProps({
-  settingsScope: {
-    type: String,
-    default: 'research1',
-    validator: value => ['research1', 'research2'].includes(value),
-  },
-})
+import {acceptSavedModelIDs, importPredictionSettings, predictionPayload} from './settings/prediction-settings.js'
+import {PREDICTION_SLOTS, validPredictionSlot} from '../utils/prediction-slots.js'
 
 const message = useMessage()
 const formRef = ref(null)
 const formValue = ref({
   darkTheme: true,
-  enableFund: false,
   tushareToken: '',
   qgqpBId: '',
   updateBasicInfoOnStart: false,
@@ -41,17 +32,9 @@ const formValue = ref({
     level: '1min',
   },
   openAI: {aiConfigs: []},
-  capitalDeployment: {
-    enabled: true,
-    targetCapitalUtilization: 90,
-    maxImmediateBuysPerRun: 2,
-    reanalysisIntervalMinutes: 30,
-    reviewStartTime: '09:50',
-    reviewIntervalMinutes: 15,
-  },
   experimentalEvidenceEnabled: false,
-  research2AutoEnabled: true,
-  research2Email: {
+  predictionAutoEnabled: true,
+  predictionEmail: {
     enabled: false,
     slots: [],
     to: '',
@@ -70,7 +53,7 @@ const draftConfig = ref({})
 const autoSaveState = ref('idle')
 const autoSaveError = ref('')
 const autoSaveLastSavedAt = ref('')
-const research2EmailTesting = ref(false)
+const predictionEmailTesting = ref(false)
 let activeSavePromise = null
 let queuedAutoSave = false
 let pageVersion = 0
@@ -99,7 +82,7 @@ const aiProtocolOptions = [
   {label: 'OpenAI Responses', value: 'openai_responses'},
   {label: 'Anthropic Messages', value: 'anthropic_messages'},
 ]
-const research2EmailSlotOptions = RESEARCH2_SLOTS
+const predictionEmailSlotOptions = PREDICTION_SLOTS
 
 function normalizeAiProtocol(value) {
   return ['openai_responses', 'anthropic_messages'].includes(String(value || '').trim())
@@ -148,25 +131,17 @@ function applyConfigToForm(config) {
     level: config?.privateMinuteLevel || '1min',
   }
   formValue.value.openAI.aiConfigs = aiConfigs
-  formValue.value.capitalDeployment = {
-    enabled: config?.aiCapitalDeploymentEnabled !== false,
-    targetCapitalUtilization: Math.round((Number.isFinite(config?.aiTargetCapitalUtilization) ? config.aiTargetCapitalUtilization : 0.9) * 100),
-    maxImmediateBuysPerRun: Number.isFinite(config?.aiMaxImmediateBuysPerRun) ? config.aiMaxImmediateBuysPerRun : 2,
-    reanalysisIntervalMinutes: Number.isFinite(config?.aiReanalysisIntervalMinutes) ? config.aiReanalysisIntervalMinutes : 30,
-    reviewStartTime: config?.aiReviewStartTime || '09:50',
-    reviewIntervalMinutes: config?.aiReviewIntervalMinutes || 15,
-  }
   formValue.value.experimentalEvidenceEnabled = config?.experimentalEvidenceEnabled === true
-  formValue.value.research2AutoEnabled = config?.research2AutoEnabled !== false
-  formValue.value.research2Email = {
-    enabled: config?.research2EmailEnabled === true,
-    slots: [...new Set((Array.isArray(config?.research2EmailSlots) ? config.research2EmailSlots : []).filter(validResearch2Slot))],
-    to: config?.research2EmailTo || '',
-    from: config?.research2EmailFrom || '',
-    smtpHost: config?.research2EmailSmtpHost || '',
-    smtpPort: Number.isFinite(config?.research2EmailSmtpPort) && config.research2EmailSmtpPort > 0 ? config.research2EmailSmtpPort : 465,
-    smtpUsername: config?.research2EmailSmtpUsername || '',
-    smtpPassword: config?.research2EmailSmtpPassword || '',
+  formValue.value.predictionAutoEnabled = config?.predictionAutoEnabled !== false
+  formValue.value.predictionEmail = {
+    enabled: config?.predictionEmailEnabled === true,
+    slots: [...new Set((Array.isArray(config?.predictionEmailSlots) ? config.predictionEmailSlots : []).filter(validPredictionSlot))],
+    to: config?.predictionEmailTo || '',
+    from: config?.predictionEmailFrom || '',
+    smtpHost: config?.predictionEmailSmtpHost || '',
+    smtpPort: Number.isFinite(config?.predictionEmailSmtpPort) && config.predictionEmailSmtpPort > 0 ? config.predictionEmailSmtpPort : 465,
+    smtpUsername: config?.predictionEmailSmtpUsername || '',
+    smtpPassword: config?.predictionEmailSmtpPassword || '',
   }
 }
 
@@ -244,7 +219,7 @@ async function testAiConfig(index) {
     if (version !== pageVersion || !formValue.value.openAI.aiConfigs.includes(current)) return
     const savedKey = aiConfigTestKey(current, index)
     if (!current?.ID) throw new Error('请先保存 AI 配置后再测试')
-    const result = await TestAIConfig(Number(current.ID), props.settingsScope)
+    const result = await TestAIConfig(Number(current.ID))
     if (version !== pageVersion) return
     aiConfigTestStates.value = {...aiConfigTestStates.value, [key]: {loading: false}, [savedKey]: {loading: false, result}}
     result?.success ? message.success(`模型测试成功：${result.contentPreview || result.message}`) : message.error(result?.message || '模型测试失败')
@@ -276,35 +251,29 @@ function buildConfigPayload() {
     privateMinuteMinIntervalMs: formValue.value.privateMinute.minIntervalMs,
     privateMinuteProxyMode: formValue.value.privateMinute.proxyMode,
     privateMinuteLevel: formValue.value.privateMinute.level,
-    aiCapitalDeploymentEnabled: formValue.value.capitalDeployment.enabled,
-    aiTargetCapitalUtilization: formValue.value.capitalDeployment.targetCapitalUtilization / 100,
-    aiMaxImmediateBuysPerRun: formValue.value.capitalDeployment.maxImmediateBuysPerRun,
-    aiReanalysisIntervalMinutes: formValue.value.capitalDeployment.reanalysisIntervalMinutes,
-    aiReviewStartTime: formValue.value.capitalDeployment.reviewStartTime,
-    aiReviewIntervalMinutes: formValue.value.capitalDeployment.reviewIntervalMinutes,
     experimentalEvidenceEnabled: formValue.value.experimentalEvidenceEnabled === true,
-    research2AutoEnabled: formValue.value.research2AutoEnabled,
-    research2EmailEnabled: formValue.value.research2Email.enabled,
-    research2EmailSlots: formValue.value.research2Email.slots,
-    research2EmailTo: formValue.value.research2Email.to,
-    research2EmailFrom: formValue.value.research2Email.from,
-    research2EmailSmtpHost: formValue.value.research2Email.smtpHost,
-    research2EmailSmtpPort: formValue.value.research2Email.smtpPort,
-    research2EmailSmtpUsername: formValue.value.research2Email.smtpUsername,
-    research2EmailSmtpPassword: formValue.value.research2Email.smtpPassword,
+    predictionAutoEnabled: formValue.value.predictionAutoEnabled,
+    predictionEmailEnabled: formValue.value.predictionEmail.enabled,
+    predictionEmailSlots: formValue.value.predictionEmail.slots,
+    predictionEmailTo: formValue.value.predictionEmail.to,
+    predictionEmailFrom: formValue.value.predictionEmail.from,
+    predictionEmailSmtpHost: formValue.value.predictionEmail.smtpHost,
+    predictionEmailSmtpPort: formValue.value.predictionEmail.smtpPort,
+    predictionEmailSmtpUsername: formValue.value.predictionEmail.smtpUsername,
+    predictionEmailSmtpPassword: formValue.value.predictionEmail.smtpPassword,
   }
-  return researchPayload(persistedConfig.value, values, formValue.value.openAI.aiConfigs)
+  return predictionPayload(persistedConfig.value, values, formValue.value.openAI.aiConfigs)
 }
 
-function getResearch2EmailConfigError(requireConfig = formValue.value.research2Email.enabled, requireSlots = requireConfig) {
-  if (props.settingsScope !== 'research2' || !requireConfig) return ''
-  const email = formValue.value.research2Email
-  if (requireSlots && (!Array.isArray(email.slots) || email.slots.length === 0)) return '开启研究中心2自动邮件时，请至少选择一个时间段'
-  if (!String(email.to || '').trim()) return '请填写研究中心2报告收件人'
-  if (!String(email.smtpHost || '').trim()) return '请填写研究中心2 SMTP 主机'
-  if (!Number.isInteger(email.smtpPort) || email.smtpPort < 1 || email.smtpPort > 65535) return '研究中心2 SMTP 端口必须在 1 到 65535 之间'
-  if (!String(email.smtpUsername || '').trim()) return '请填写研究中心2 SMTP 用户名'
-  if (!String(email.smtpPassword || '').trim()) return '请填写研究中心2 SMTP 授权码'
+function getPredictionEmailConfigError(requireConfig = formValue.value.predictionEmail.enabled, requireSlots = requireConfig) {
+  if (!requireConfig) return ''
+  const email = formValue.value.predictionEmail
+  if (requireSlots && (!Array.isArray(email.slots) || email.slots.length === 0)) return '开启股票预测自动邮件时，请至少选择一个时间段'
+  if (!String(email.to || '').trim()) return '请填写股票预测报告收件人'
+  if (!String(email.smtpHost || '').trim()) return '请填写股票预测 SMTP 主机'
+  if (!Number.isInteger(email.smtpPort) || email.smtpPort < 1 || email.smtpPort > 65535) return '股票预测 SMTP 端口必须在 1 到 65535 之间'
+  if (!String(email.smtpUsername || '').trim()) return '请填写股票预测 SMTP 用户名'
+  if (!String(email.smtpPassword || '').trim()) return '请填写股票预测 SMTP 授权码'
   return ''
 }
 
@@ -324,7 +293,7 @@ function formatSaveTime(date = new Date()) {
 async function runPersist({notifyError = false} = {}) {
   if (!settingsLoaded.value || autoSaveState.value === 'conflict') return false
   const version = pageVersion
-  const validationError = getMinuteSourceConfigError() || getResearch2EmailConfigError()
+  const validationError = getMinuteSourceConfigError() || getPredictionEmailConfigError()
   autoSaveError.value = ''
   if (validationError) {
     autoSaveState.value = 'error'
@@ -335,7 +304,7 @@ async function runPersist({notifyError = false} = {}) {
   const submittedRows = [...formValue.value.openAI.aiConfigs]
   const payload = buildConfigPayload()
   try {
-    const result = await UpdateResearchConfig(props.settingsScope, payload)
+    const result = await UpdatePredictionConfig(payload)
     if (version !== pageVersion) return false
     acceptSavedModelIDs(formValue.value.openAI.aiConfigs, submittedRows, payload.aiConfigs, result.aiConfigs)
     persistedConfig.value = result
@@ -346,7 +315,7 @@ async function runPersist({notifyError = false} = {}) {
     if (version !== pageVersion) return false
     autoSaveState.value = error?.status === 409 ? 'conflict' : 'error'
     autoSaveError.value = error?.status === 409
-      ? '此中心的设置已在其他页面更新。当前草稿已保留；重新加载会放弃草稿并读取最新设置。'
+      ? '股票预测设置已在其他页面更新。当前草稿已保留；重新加载会放弃草稿并读取最新设置。'
       : error?.message || String(error || '保存失败')
     if (notifyError) message.error(autoSaveError.value)
     return false
@@ -386,16 +355,16 @@ function saveGlobalSettings(field) {
   }).catch(error => { message.error(`通用设置保存失败：${error?.message || error}`) })
 }
 
-async function testResearch2Email() {
-  const validationError = getResearch2EmailConfigError(true, false)
+async function testPredictionEmail() {
+  const validationError = getPredictionEmailConfigError(true, false)
   if (validationError) {
     message.error(validationError)
     return
   }
-  research2EmailTesting.value = true
+  predictionEmailTesting.value = true
   try {
-    const email = formValue.value.research2Email
-    const result = await TestResearch2Email({
+    const email = formValue.value.predictionEmail
+    const result = await TestPredictionEmail({
       to: email.to,
       from: email.from,
       smtpHost: email.smtpHost,
@@ -403,11 +372,11 @@ async function testResearch2Email() {
       smtpUsername: email.smtpUsername,
       smtpPassword: email.smtpPassword,
     })
-    message.success(result || '研究中心2测试邮件发送成功')
+    message.success(result || '股票预测测试邮件发送成功')
   } catch (error) {
     message.error(`测试邮件发送失败：${error?.message || error}`)
   } finally {
-    research2EmailTesting.value = false
+    predictionEmailTesting.value = false
   }
 }
 
@@ -416,11 +385,11 @@ function handleTextFieldBlur() { queueAutoSave() }
 
 function exportConfig() {
   if (!settingsLoaded.value) return
-  const payload = {center: props.settingsScope, ...buildConfigPayload()}
+  const payload = {product: 'Stock God', ...buildConfigPayload()}
   const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], {type: 'application/json'}))
   const link = document.createElement('a')
   link.href = url
-  link.download = `go-stock-${props.settingsScope}-settings.json`
+  link.download = 'stock-god-prediction-settings.json'
   document.body.appendChild(link)
   link.click()
   link.remove()
@@ -440,7 +409,7 @@ function importConfig() {
     reader.onload = loadEvent => {
       if (version !== pageVersion) return
       try {
-        const imported = importResearchSettings(buildConfigPayload(), JSON.parse(loadEvent.target.result), props.settingsScope)
+        const imported = importPredictionSettings(buildConfigPayload(), JSON.parse(loadEvent.target.result))
         draftConfig.value = imported.config
         applyConfigToForm({...imported.config, aiConfigs: imported.aiConfigs})
         queueAutoSave()
@@ -463,19 +432,19 @@ async function loadSettings() {
   aiConfigTestStates.value = {}
   formValue.value.openAI.aiConfigs = []
   try {
-    const [global, center] = await Promise.all([GetConfig(), GetResearchConfig(props.settingsScope)])
+    const [global, center] = await Promise.all([GetConfig(), GetPredictionConfig()])
     if (version !== pageVersion) return
     persistedConfig.value = center
     draftConfig.value = {...center.config}
     applyConfigToForm({...center.config, aiConfigs: center.aiConfigs})
-    for (const key of ['darkTheme', 'enableFund', 'updateBasicInfoOnStart', 'refreshInterval']) formValue.value[key] = global[key]
+    for (const key of ['darkTheme', 'updateBasicInfoOnStart', 'refreshInterval']) formValue.value[key] = global[key]
     settingsLoaded.value = true
   } catch (error) {
     if (version === pageVersion) message.error(`读取设置失败：${error?.message || error}`)
   }
 }
 
-watch(() => props.settingsScope, loadSettings, {immediate: true})
+onMounted(loadSettings)
 onBeforeUnmount(() => {
   pageVersion++
   queuedAutoSave = false
@@ -488,15 +457,12 @@ onBeforeUnmount(() => {
     <n-form ref="formRef" :disabled="!settingsLoaded" label-placement="left" label-align="left" style="width: 100%">
       <n-space vertical size="large">
         <n-alert type="info" :show-icon="false">
-          当前为研究中心{{ settingsScope === 'research1' ? '1' : '2' }}独立设置。模型、数据接口和普通策略参数从下一轮任务生效；关闭自动策略后停止新分析和新买入，当前分析可完成报告，已有持仓继续按退出规则管理。
+          股票预测设置。模型、数据接口和普通策略参数从下一轮任务生效；关闭自动策略后停止新分析和新买入，当前分析可完成报告，已有持仓继续按退出规则管理。
         </n-alert>
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '通用设置')" size="small">
           <n-grid :cols="24" :x-gap="24">
             <n-form-item-gi :span="8" label="暗黑主题：" path="darkTheme">
               <n-switch v-model:value="formValue.darkTheme" @update:value="saveGlobalSettings('darkTheme')"/>
-            </n-form-item-gi>
-            <n-form-item-gi :span="8" label="启用基金模块：" path="enableFund">
-              <n-switch v-model:value="formValue.enableFund" @update:value="saveGlobalSettings('enableFund')"/>
             </n-form-item-gi>
             <n-form-item-gi :span="8" label="启动时更新基础信息：" path="updateBasicInfoOnStart">
               <n-switch v-model:value="formValue.updateBasicInfoOnStart" @update:value="saveGlobalSettings('updateBasicInfoOnStart')"/>
@@ -507,7 +473,7 @@ onBeforeUnmount(() => {
               </n-input-number>
             </n-form-item-gi>
           </n-grid>
-          <n-text depth="3">这四项为应用通用设置，独立保存，不改变任一研究中心的策略配置。</n-text>
+          <n-text depth="3">通用设置独立保存。</n-text>
         </n-card>
 
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '数据接口设置')" size="small">
@@ -524,8 +490,8 @@ onBeforeUnmount(() => {
             </n-form-item-gi>
             <n-gi :span="24">
               <n-divider title-placement="left">分钟线数据接口</n-divider>
-              <n-alert v-if="settingsScope === 'research2'" type="info" :show-icon="false" style="margin-bottom:12px">
-                此处来源排序只用于图表。研究中心2分析和成交分钟链继续按腾讯、东方财富、本地缓存的固定顺序运行。
+              <n-alert type="info" :show-icon="false" style="margin-bottom:12px">
+                此处来源排序只用于图表。股票预测分析和成交分钟链继续按腾讯、东方财富、本地缓存的固定顺序运行。
               </n-alert>
               <MinuteProviderSettings
                   :form-value="formValue"
@@ -539,49 +505,17 @@ onBeforeUnmount(() => {
           </n-grid>
         </n-card>
 
-        <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => settingsScope === 'research1' ? '资金补位策略' : 'AI 分析设置')" size="small">
+        <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => 'AI 分析设置')" size="small">
           <n-grid :cols="24" :x-gap="24">
-            <n-form-item-gi v-if="settingsScope === 'research2'" :span="24" label="研究中心2自动策略：" path="research2AutoEnabled">
-              <n-switch v-model:value="formValue.research2AutoEnabled" @update:value="handleImmediateFieldChange"/>
+            <n-form-item-gi :span="24" label="股票预测自动策略：" path="predictionAutoEnabled">
+              <n-switch v-model:value="formValue.predictionAutoEnabled" @update:value="handleImmediateFieldChange"/>
               <n-text depth="3" style="margin-left: 12px">交易日09:30至11:25每五分钟独立研究，成功按落盘时间归入对应账户，先到先得并立即买入，每账户每天最多5只。各账户在对应刻度独立定时卖出旧持仓；关闭自动研究会停止新买入，已有持仓仍定时卖出。11:30后完成的报告仅归档。</n-text>
             </n-form-item-gi>
             <n-form-item-gi :span="24" label="实验市场证据：" path="experimentalEvidenceEnabled">
               <n-switch v-model:value="formValue.experimentalEvidenceEnabled" @update:value="handleImmediateFieldChange"/>
-              <n-text depth="3" style="margin-left: 12px">默认关闭；为当前研究中心加入题材与知识增强，下一轮任务生效，核心行情证据继续使用。</n-text>
+              <n-text depth="3" style="margin-left: 12px">默认关闭；为股票预测加入题材证据，下一轮任务生效，核心行情证据继续使用。</n-text>
             </n-form-item-gi>
-            <template v-if="settingsScope === 'research1'">
-              <n-form-item-gi :span="6" label="资金补位：" path="capitalDeployment.enabled">
-                <n-switch v-model:value="formValue.capitalDeployment.enabled" @update:value="handleImmediateFieldChange"/>
-              </n-form-item-gi>
-              <n-form-item-gi :span="6" label="目标资金利用率：" path="capitalDeployment.targetCapitalUtilization">
-                <n-input-number v-model:value="formValue.capitalDeployment.targetCapitalUtilization" :min="50" :max="90" :step="1" @update:value="handleImmediateFieldChange">
-                  <template #suffix>%</template>
-                </n-input-number>
-              </n-form-item-gi>
-              <n-form-item-gi :span="6" label="单轮立即买入上限：" path="capitalDeployment.maxImmediateBuysPerRun">
-                <n-input-number v-model:value="formValue.capitalDeployment.maxImmediateBuysPerRun" :min="1" :max="2" @update:value="handleImmediateFieldChange">
-                  <template #suffix>只</template>
-                </n-input-number>
-              </n-form-item-gi>
-              <n-form-item-gi :span="6" label="资金缺口重分析：" path="capitalDeployment.reanalysisIntervalMinutes">
-                <n-input-number v-model:value="formValue.capitalDeployment.reanalysisIntervalMinutes" :min="5" :max="120"
-                                @update:value="handleImmediateFieldChange">
-                  <template #suffix>分钟</template>
-                </n-input-number>
-              </n-form-item-gi>
-              <n-form-item-gi :span="8" label="持仓复查开始：" path="capitalDeployment.reviewStartTime">
-                <n-input v-model:value="formValue.capitalDeployment.reviewStartTime" placeholder="09:50" @blur="handleTextFieldBlur"/>
-              </n-form-item-gi>
-              <n-form-item-gi :span="8" label="持仓复查间隔：" path="capitalDeployment.reviewIntervalMinutes">
-                <n-input-number v-model:value="formValue.capitalDeployment.reviewIntervalMinutes" :min="5" :max="120" @update:value="handleImmediateFieldChange">
-                  <template #suffix>分钟</template>
-                </n-input-number>
-              </n-form-item-gi>
-            </template>
             <n-gi :span="24">
-              <n-alert v-if="settingsScope === 'research1'" type="info" :show-icon="false">
-                卖出或启动发现至少 5 万元可部署资金时自动触发完整分析；每轮最多立即买入 {{ formValue.capitalDeployment.maxImmediateBuysPerRun }} 只，仍有资金缺口会在 {{ formValue.capitalDeployment.reanalysisIntervalMinutes }} 分钟后重新分析，14:25 后不再启动新分析。资金保留额为净资产的 10% 且不少于 5 万元。持仓仍按每只股票本轮完成时间独立计算复查间隔。
-              </n-alert>
               <AiConfigSettings
                   :form-value="formValue"
                   :ai-protocol-options="aiProtocolOptions"
@@ -597,38 +531,38 @@ onBeforeUnmount(() => {
           </n-grid>
         </n-card>
 
-        <n-card v-if="settingsScope === 'research2'" :title="() => h(NTag, {type: 'primary', bordered: false}, () => '研究中心2报告邮件')" size="small">
+        <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '股票预测报告邮件')" size="small">
           <n-grid :cols="24" :x-gap="24">
-            <n-form-item-gi :span="24" label="自动发送报告：" path="research2Email.enabled">
-              <n-switch v-model:value="formValue.research2Email.enabled" @update:value="handleImmediateFieldChange"/>
+            <n-form-item-gi :span="24" label="自动发送报告：" path="predictionEmail.enabled">
+              <n-switch v-model:value="formValue.predictionEmail.enabled" @update:value="handleImmediateFieldChange"/>
               <n-text depth="3" style="margin-left:12px">选中分区的首份有效报告落库后立即单独发送；失败后最多重试3次。</n-text>
             </n-form-item-gi>
-            <n-form-item-gi :span="24" label="发送时间段：" path="research2Email.slots">
-              <n-select v-model:value="formValue.research2Email.slots" multiple filterable clearable
-                        max-tag-count="responsive" :options="research2EmailSlotOptions"
+            <n-form-item-gi :span="24" label="发送时间段：" path="predictionEmail.slots">
+              <n-select v-model:value="formValue.predictionEmail.slots" multiple filterable clearable
+                        max-tag-count="responsive" :options="predictionEmailSlotOptions"
                         placeholder="请选择一个或多个实际落盘时间段" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="12" label="收件人：" path="research2Email.to">
-              <n-input v-model:value="formValue.research2Email.to" type="textarea" :autosize="{minRows:2,maxRows:4}"
+            <n-form-item-gi :span="12" label="收件人：" path="predictionEmail.to">
+              <n-input v-model:value="formValue.predictionEmail.to" type="textarea" :autosize="{minRows:2,maxRows:4}"
                        placeholder="多个地址可用逗号、分号或换行分隔" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="12" label="发件人：" path="research2Email.from">
-              <n-input v-model:value="formValue.research2Email.from" placeholder="留空时使用 SMTP 用户名" @blur="handleTextFieldBlur"/>
+            <n-form-item-gi :span="12" label="发件人：" path="predictionEmail.from">
+              <n-input v-model:value="formValue.predictionEmail.from" placeholder="留空时使用 SMTP 用户名" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="10" label="SMTP 主机：" path="research2Email.smtpHost">
-              <n-input v-model:value="formValue.research2Email.smtpHost" placeholder="smtp.example.com" @blur="handleTextFieldBlur"/>
+            <n-form-item-gi :span="10" label="SMTP 主机：" path="predictionEmail.smtpHost">
+              <n-input v-model:value="formValue.predictionEmail.smtpHost" placeholder="smtp.example.com" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="4" label="端口：" path="research2Email.smtpPort">
-              <n-input-number v-model:value="formValue.research2Email.smtpPort" :min="1" :max="65535" @update:value="handleImmediateFieldChange"/>
+            <n-form-item-gi :span="4" label="端口：" path="predictionEmail.smtpPort">
+              <n-input-number v-model:value="formValue.predictionEmail.smtpPort" :min="1" :max="65535" @update:value="handleImmediateFieldChange"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="10" label="SMTP 用户名：" path="research2Email.smtpUsername">
-              <n-input v-model:value="formValue.research2Email.smtpUsername" @blur="handleTextFieldBlur"/>
+            <n-form-item-gi :span="10" label="SMTP 用户名：" path="predictionEmail.smtpUsername">
+              <n-input v-model:value="formValue.predictionEmail.smtpUsername" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
-            <n-form-item-gi :span="12" label="SMTP 授权码：" path="research2Email.smtpPassword">
-              <n-input v-model:value="formValue.research2Email.smtpPassword" type="password" show-password-on="click" @blur="handleTextFieldBlur"/>
+            <n-form-item-gi :span="12" label="SMTP 授权码：" path="predictionEmail.smtpPassword">
+              <n-input v-model:value="formValue.predictionEmail.smtpPassword" type="password" show-password-on="click" @blur="handleTextFieldBlur"/>
             </n-form-item-gi>
             <n-form-item-gi :span="12">
-              <n-button type="primary" secondary :loading="research2EmailTesting" @click="testResearch2Email">发送测试邮件</n-button>
+              <n-button type="primary" secondary :loading="predictionEmailTesting" @click="testPredictionEmail">发送测试邮件</n-button>
             </n-form-item-gi>
             <n-gi :span="24"><n-alert type="info" :show-icon="false">按报告实际落盘分区判断，多个分区分别发送；未生成报告的分区不发送。测试邮件只验证 SMTP，不要求选择时间段，也不创建研究记录或模拟交易。</n-alert></n-gi>
           </n-grid>

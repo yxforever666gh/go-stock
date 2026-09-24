@@ -7,7 +7,6 @@ const buildIdentity = ref('')
 const icon = ref('')
 
 onMounted(async () => {
-  document.title = '关于软件'
   const info = await GetVersionInfo()
   version.value = info?.version || 'dev'
   buildIdentity.value = info?.content || ''
@@ -22,7 +21,7 @@ onMounted(async () => {
       <n-space vertical align="center">
         <n-image width="100" :src="icon"/>
         <n-badge :value="version" :offset="[70, 6]" type="success">
-          <n-gradient-text type="info" :size="48">go-stock</n-gradient-text>
+          <n-gradient-text type="info" :size="48">Stock God</n-gradient-text>
         </n-badge>
         <n-text v-if="buildIdentity" depth="3">构建标识：{{ buildIdentity }}</n-text>
         <n-alert type="info" :bordered="false">
@@ -30,7 +29,7 @@ onMounted(async () => {
         </n-alert>
         <n-button
           tag="a"
-          href="https://github.com/yxforever666gh/go-stock/releases"
+          href="https://github.com/yxforever666gh/stock-god/releases"
           target="_blank"
           type="primary"
           tertiary
@@ -41,10 +40,10 @@ onMounted(async () => {
 
       <n-divider title-placement="center">当前能力</n-divider>
       <div class="about-copy">
-        <p>go-stock 是基于 Go、Vue 3、SQLite 和 Naive UI 的本地股票行情与 AI 研究工作台。</p>
-        <p>支持股票自选、市场数据、基金、研究中心、模拟交易、收益跟踪、邮件报告和运行时任务管理。</p>
+        <p>Stock God 是基于 Python、Vue 3 和 SQLite 的本地股票预测工具。</p>
+        <p>提供股票预测、模拟交易、收益跟踪、邮件报告与证据审计，保留独立行情数据接口。</p>
         <p>仓库由公开项目 <a href="https://github.com/ArvinLovegood/go-stock" target="_blank">ArvinLovegood/go-stock</a> 演化而来，并非原作者官方仓库。</p>
-        <p><a href="https://github.com/yxforever666gh/go-stock" target="_blank">源码</a> · <a href="https://github.com/yxforever666gh/go-stock/issues" target="_blank">Issues</a></p>
+        <p><a href="https://github.com/yxforever666gh/stock-god" target="_blank">源码</a> · <a href="https://github.com/yxforever666gh/stock-god/issues" target="_blank">Issues</a></p>
         <p class="warning">本软件仅供学习研究，AI 分析结果不构成任何投资建议或决策依据。</p>
       </div>
     </n-card>
