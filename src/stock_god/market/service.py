@@ -5,6 +5,7 @@ from copy import deepcopy
 import httpx
 
 from stock_god.config import AppConfig
+
 from .charts import Charts
 from .common import Transport
 from .evidence import Evidence

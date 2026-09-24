@@ -1,8 +1,8 @@
 """Frozen schema 31/35 capital rebasing. Never used by live prediction."""
 
+import math
 from collections import defaultdict
 from datetime import timedelta
-import math
 
 from .common import (
     SHANGHAI,

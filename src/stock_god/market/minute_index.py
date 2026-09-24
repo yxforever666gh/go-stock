@@ -1,8 +1,8 @@
 """Resumable byte-offset auction index compatible with positions.sqlite."""
 
 import csv
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 from threading import Event, RLock
 
 from .minute_local import (
@@ -224,7 +224,7 @@ class AuctionIndex:
                         time=iso_time(stamp),
                         code=cells[0],
                         trade_date=cells[1],
-                        **dict(zip(AUCTION_HEADERS[2:], numbers)),
+                        **dict(zip(AUCTION_HEADERS[2:], numbers, strict=False)),
                     )
                     merge_row(values, origins, row, block["rel"])
         for file in self.files:

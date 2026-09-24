@@ -1,28 +1,29 @@
 """Standalone local minute HTTP/MCP process and explicit maintenance commands."""
 
 import argparse
+import signal
 from contextlib import asynccontextmanager
 from pathlib import Path
-import signal
 from threading import Event
 
+import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.concurrency import run_in_threadpool
 from starlette.routing import Route
-import uvicorn
 
-from stock_god.config import AppConfig
 from stock_god import APP_VERSION
+from stock_god.config import AppConfig
+
 from .mcp_tools import MinuteTools, create_mcp_server
 from .minute_daily import DailyStore, refresh_daily
 from .minute_index import AuctionIndex
 from .minute_local import (
-    MinuteReadError,
-    LocalStore,
     SYMBOL,
+    LocalStore,
+    MinuteReadError,
     day_time,
     minute_time,
     normalize_period,

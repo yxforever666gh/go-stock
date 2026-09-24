@@ -1,16 +1,16 @@
 """Pure Python upgrade runner with the immutable published Go migration ledger."""
 
-from hashlib import sha256
 import json
-from pathlib import Path
 import re
 import sqlite3
+from hashlib import sha256
+from pathlib import Path
 
 from .archive import ARCHIVE_DDL, create_archive_schema, seal_legacy_archive, verify_archive
-from .db import Database, quote_identifier as qi
+from .db import Database
+from .db import quote_identifier as qi
 from .historical.common import now
 from .historical.data import apply_data
-
 
 DATA_DIR = Path(__file__).parent / "historical"
 MANIFESTS = {

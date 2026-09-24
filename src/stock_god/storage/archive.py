@@ -1,13 +1,12 @@
 """Preserve original legacy rows inside their own working SQLite database."""
 
-from datetime import datetime, timezone
-from hashlib import sha256
 import json
 import sqlite3
 import struct
+from datetime import UTC, datetime
+from hashlib import sha256
 
 from .db import quote_identifier as qi
-
 
 ARCHIVE_ID = "pre-stock-god-6.0.0"
 ARCHIVE_DDL = (
@@ -128,7 +127,7 @@ def seal_legacy_archive(connection, source_version: int, affected_tables: set[st
     manifest_hash = sha256(json.dumps(manifests, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     connection.execute("INSERT INTO legacy_archive_sets VALUES (?,?,?,?,?,?)",
                        (ARCHIVE_ID, source_version, fingerprint, json.dumps(ledger, default=str),
-                        datetime.now(timezone.utc).isoformat(), manifest_hash))
+                        datetime.now(UTC).isoformat(), manifest_hash))
 
 
 def verify_archive(connection):

@@ -1,10 +1,10 @@
 """Frozen arithmetic, time and SQL helpers for already-published migrations."""
 
-from datetime import datetime, timedelta, timezone
-from math import ceil, floor, isfinite
-import uuid
-import re
 import json
+import re
+import uuid
+from datetime import UTC, datetime, timedelta, timezone
+from math import ceil, floor, isfinite
 from pathlib import Path
 
 from ..db import quote_identifier as qi
@@ -15,7 +15,7 @@ MODEL_DEFAULTS = json.loads((Path(__file__).parent / "model_defaults.json").read
 
 
 def now():
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def parse_time(value):

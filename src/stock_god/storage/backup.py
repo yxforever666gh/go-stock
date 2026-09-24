@@ -1,8 +1,8 @@
 """WAL-aware backups and read-only integrity verification."""
 
+import sqlite3
 from hashlib import sha256
 from pathlib import Path
-import sqlite3
 
 from .db import Database
 

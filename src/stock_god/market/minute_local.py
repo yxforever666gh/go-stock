@@ -1,17 +1,17 @@
 """Local CSV market data, exact timestamp matching and conflict detection."""
 
 import csv
-from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 import json
 import math
-from pathlib import Path
 import re
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta, timezone
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 CN = timezone(timedelta(hours=8))
-EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 SYMBOL = re.compile(r"(?:sh|sz|bj)\d{6}\Z")
 PERIODS = {"1m": "1分钟", "5m": "5分钟", "15m": "15分钟", "30m": "30分钟", "60m": "60分钟"}
 STOCK_HEADERS = "日期,开盘,最高,最低,收盘,成交量(股),成交额(元),涨跌(元),涨跌幅(%),换手率(%),流通股本(股),总股本(股)".split(
@@ -43,7 +43,7 @@ def minute_time(value: str) -> int:
             value, "%Y-%m-%d %H:%M:%S" if len(value) == 19 else "%Y-%m-%d %H:%M"
         ).replace(tzinfo=CN)
         nanos = 0
-    difference = parsed.astimezone(timezone.utc) - EPOCH
+    difference = parsed.astimezone(UTC) - EPOCH
     return (difference.days * 86400 + difference.seconds) * 1_000_000_000 + nanos
 
 
@@ -208,7 +208,7 @@ class LocalStore:
                         end is not None and stamp >= end + 86400 * 1_000_000_000
                     ):
                         continue
-                    row = {"time": iso_time(stamp), **dict(zip(STOCK_FIELDS, numbers))}
+                    row = {"time": iso_time(stamp), **dict(zip(STOCK_FIELDS, numbers, strict=False))}
                     values[row["time"]] = row
                 found = True
             except FileNotFoundError:
@@ -259,7 +259,7 @@ class LocalStore:
                     raise MinuteReadError(str(error)) from error
                 if not start <= stamp <= end:
                     continue
-                row = {"time": iso_time(stamp), **dict(zip(STOCK_FIELDS[:6], numbers))}
+                row = {"time": iso_time(stamp), **dict(zip(STOCK_FIELDS[:6], numbers, strict=False))}
                 merge_row(values, origins, row, file.relative)
         return [values[key] for key in sorted(values)]
 

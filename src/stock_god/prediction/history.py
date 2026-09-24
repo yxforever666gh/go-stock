@@ -219,9 +219,10 @@ class HistoryService:
                 ready = nav > 0
             status = "unavailable" if reason else "complete"
             result["valuationsUnavailable" if reason else "valuationsCompleted"] += 1
-            rounded = lambda x: (
-                math.floor(x * 100 + 0.5) / 100 if x >= 0 else -math.floor(-x * 100 + 0.5) / 100
-            )
+            def rounded(x):
+                return (
+                            math.floor(x * 100 + 0.5) / 100 if x >= 0 else -math.floor(-x * 100 + 0.5) / 100
+                        )
             row = {
                 "valuation_id": "daily-v2-" + slot + "-" + day.strftime("%Y%m%d"),
                 "slot": slot,

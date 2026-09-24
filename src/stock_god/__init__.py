@@ -1,7 +1,7 @@
 """Stock God application package."""
 
-from importlib.resources import files
 import json
+from importlib.resources import files
 
 
 def release_manifest() -> dict:

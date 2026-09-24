@@ -1,10 +1,9 @@
 """Explicit SQLite connection lifetime and serialized write transactions."""
 
-from contextlib import contextmanager
-from pathlib import Path
 import sqlite3
 import time
-
+from contextlib import contextmanager
+from pathlib import Path
 
 BUSY_DELAYS = (0.02, 0.04, 0.08, 0.16, 0.32)
 

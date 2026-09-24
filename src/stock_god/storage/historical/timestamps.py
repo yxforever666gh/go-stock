@@ -1,7 +1,7 @@
 """Nanosecond timestamps used by frozen Go financial ledgers."""
 
-from datetime import datetime, timedelta, timezone
 import re
+from datetime import UTC, datetime, timedelta
 
 
 def time_key(value):
@@ -12,9 +12,9 @@ def time_key(value):
     if not match:
         raise ValueError("unsupported persisted timestamp: " + text)
     whole = datetime.fromisoformat(match[1] + (match[3] or "+08:00"))
-    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
-    seconds = (whole.astimezone(timezone.utc) - epoch).days * 86400 + (
-        whole.astimezone(timezone.utc) - epoch
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
+    seconds = (whole.astimezone(UTC) - epoch).days * 86400 + (
+        whole.astimezone(UTC) - epoch
     ).seconds
     return seconds * 1_000_000_000 + int((match[2] or "").ljust(9, "0")[:9])
 
@@ -22,5 +22,5 @@ def time_key(value):
 def before_one_nanosecond(value):
     key = time_key(value) - 1
     seconds, ns = divmod(key, 1_000_000_000)
-    whole = datetime(1970, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=seconds)
+    whole = datetime(1970, 1, 1, tzinfo=UTC) + timedelta(seconds=seconds)
     return whole.strftime("%Y-%m-%dT%H:%M:%S") + f".{ns:09d}Z"

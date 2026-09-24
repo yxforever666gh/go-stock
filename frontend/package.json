@@ -33,7 +33,7 @@
   "author": "spark",
   "overrides": {
     "flatted": "3.4.2",
-    "lodash-es": "4.18.0",
+    "lodash-es": "4.17.23",
     "validator": "13.15.22",
     "markdown-it": "14.1.1",
     "picomatch": "4.0.4",

@@ -1,10 +1,12 @@
 """Ordered data transformations for the published 1–35 migration ledger."""
 
-from datetime import timedelta
-from pathlib import Path
 import json
 import uuid
+from datetime import timedelta
+from pathlib import Path
 
+from . import research1
+from .capital import rebase_capital, second_topup
 from .common import (
     SHANGHAI,
     SLOTS,
@@ -18,8 +20,6 @@ from .common import (
     slot_at,
     update,
 )
-from . import research1
-from .capital import rebase_capital, second_topup
 
 DIRECTORY = Path(__file__).parent
 UPDATES = json.loads((DIRECTORY / "data_updates.json").read_text(encoding="utf8"))

@@ -1,24 +1,25 @@
 """Read-only fund and ETF providers with exchange-owned identity and field fallback."""
 
-from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
-from datetime import datetime
 import html
 import json
 import math
 import re
 import time
-from urllib.parse import urlencode
+from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
+from datetime import datetime
 from typing import Any
+from urllib.parse import urlencode
 
-from bs4 import BeautifulSoup
 import httpx
+from bs4 import BeautifulSoup
 
 from stock_god.config import AppConfig
+
 from .common import (
     CN,
-    ZERO_TIME,
     USER_AGENT,
+    ZERO_TIME,
     MarketDataError,
     Transport,
     database_rows,
@@ -52,13 +53,13 @@ FUND_PERIODS = dict(
             "yearToDateReturn",
             "sinceInceptionReturn",
             "scale",
-        ),
+        ), strict=False,
     )
 )
 EAST_SORTS = dict(
-    zip(FUND_PERIODS, ("rzdf", "1zzf", "1yzf", "3yzf", "6yzf", "1nzf", "3nzf", "jnzf", "lnzf", "jjgm"))
+    zip(FUND_PERIODS, ("rzdf", "1zzf", "1yzf", "3yzf", "6yzf", "1nzf", "3nzf", "jnzf", "lnzf", "jjgm"), strict=False)
 )
-SINA_SORTS = dict(zip(FUND_PERIODS, ("zdf", "z", "y", "3y", "6y", "1n", "3n", "jn", "ln", "jjgm")))
+SINA_SORTS = dict(zip(FUND_PERIODS, ("zdf", "z", "y", "3y", "6y", "1n", "3n", "jn", "ln", "jjgm"), strict=False))
 ETF_NUMBERS = (
     "price",
     "changeRate",
@@ -613,7 +614,7 @@ def _parse_sina_fundamentals(raw, identities):
 def _parse_basic(raw, code):
     item = _fundamental(code)
     for row in BeautifulSoup(raw, "html.parser").select("tr"):
-        for heading, value in zip(row.select("th"), row.select("td")):
+        for heading, value in zip(row.select("th"), row.select("td"), strict=False):
             key, text = _plain(heading.get_text()), _plain(value.get_text())
             if "管理费率" in key:
                 match = re.search(r"[-+]?\d+(?:\.\d+)?", text)

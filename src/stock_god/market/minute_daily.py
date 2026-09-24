@@ -1,8 +1,8 @@
 """Local daily materialization and indexed breadth queries, independent of main DB."""
 
+import sqlite3
 from datetime import datetime
 from pathlib import Path
-import sqlite3
 from threading import Event
 
 from .minute_local import CN, day_time, normalize_symbol

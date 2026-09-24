@@ -1,17 +1,17 @@
 """Fixed-catalog Diemeng calls, validation, throttling and verified downloads."""
 
-from datetime import datetime
-from decimal import Decimal
 import gzip
-from hashlib import sha256
 import io
 import json
-from pathlib import Path
 import tempfile
-from threading import Event, Lock
 import time
-from urllib.parse import urlsplit
+from datetime import datetime
+from decimal import Decimal
+from hashlib import sha256
+from pathlib import Path
+from threading import Event, Lock
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 from jsonschema import Draft202012Validator, ValidationError
