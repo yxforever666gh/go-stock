@@ -311,11 +311,30 @@ def prepare(evidence, market):
 
 
 def build_prompt(evidence):
+    # The durable documents include the entire market universe. Only the provider's
+    # compact snapshot belongs in model input; the full documents remain in audit.
+    parameters = {
+        key: evidence.get(key)
+        for key in (
+            "windowStartAt",
+            "windowEndAt",
+            "cutoffAt",
+            "freezeAt",
+            "catalystWindowStartAt",
+            "evidenceProfileVersion",
+            "coveragePct",
+            "degraded",
+        )
+    }
     return "\n".join(
         (
             PROMPT,
-            "\n# 本次冻结证据",
-            json_text(evidence),
+            "\n# 本次执行参数",
+            json_text(parameters),
+            "\n# 系统注入的紧凑结构化证据",
+            str(evidence.get("prompt") or "").strip(),
+            "\n# 本轮候选评分依据（按规范化股票代码索引）",
+            json_text(evidence.get("scoreEvidence", {})),
             "\n# 输出约束",
             "逐只覆盖冻结候选，包含低分股票；只能引用本轮适用的sourceId。市场20、板块30、个股40、催化10、风险扣分25。",
             (
