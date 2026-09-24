@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from .common import CN, MarketDataError, ProviderState, now, timestamp
+from .common import CN, MarketDataError, ProviderState, instrument, now, number, timestamp
 from .evidence import breadth_data
 
 
@@ -68,6 +68,82 @@ def metrics(bars, quote):
     return {key: round(value, 4) if isinstance(value, float) else value for key, value in result.items()}
 
 
+def _object_times(value):
+    result = []
+    for key, raw in value.items():
+        if key.lower() in {"time", "datatime", "asof", "at"} or any(
+            token in key.lower()
+            for token in (
+                "publish",
+                "eventat",
+                "event_at",
+                "availableat",
+                "available_at",
+                "notice_date",
+                "datetime",
+                "date_time",
+                "timestamp",
+                "trade_time",
+                "tradedate",
+                "trade_date",
+                "日期",
+            )
+        ):
+            try:
+                result.append(timestamp(raw))
+            except (ValueError, TypeError, OverflowError):
+                continue
+    return result
+
+
+def _has_observation_time(value):
+    if isinstance(value, list):
+        return any(_has_observation_time(item) for item in value)
+    if isinstance(value, dict):
+        return bool(_object_times(value)) or any(_has_observation_time(item) for item in value.values())
+    return False
+
+
+def normalize_auxiliary(value, cutoff, collected_at):
+    """Undated snapshots become available when collected; dated events retain their event cutoff."""
+    if not _has_observation_time(value):
+        return value, collected_at, value not in (None, "", [], {})
+    return filter_at_cutoff(value, cutoff)
+
+
+def eligible_coverage(rows, collected_at):
+    """Use the original main-board denominator, retaining unobserved eligible symbols."""
+    eligible, best = set(), {}
+    latest = timestamp(collected_at) + timedelta(seconds=5)
+    for row in rows:
+        try:
+            code = instrument(str(row.get("code", "")))["code"]
+        except ValueError:
+            continue
+        name = str(row.get("name") or "").upper()
+        if (
+            not code.startswith(("sh60", "sz00"))
+            or "ST" in name
+            or "退" in name
+            or number(row.get("listingDate"), 0) <= 0
+        ):
+            continue
+        eligible.add(code)
+        try:
+            at = timestamp(row["asOf"])
+        except (KeyError, ValueError, TypeError, OverflowError):
+            continue
+        if number(row.get("price"), 0) <= 0 or at > latest:
+            continue
+        old = best.get(code)
+        if old is None or (at, number(row.get("amount"), 0)) > (
+            timestamp(old["asOf"]),
+            number(old.get("amount"), 0),
+        ):
+            best[code] = row | {"code": code}
+    return [best[code] for code in sorted(best)], len(eligible)
+
+
 def filter_at_cutoff(value, cutoff, inherited=False):
     """A dated child never makes its untimestamped siblings eligible."""
     if isinstance(value, list):
@@ -79,30 +155,7 @@ def filter_at_cutoff(value, cutoff, inherited=False):
             bool(valid) or inherited,
         )
     if isinstance(value, dict):
-        direct = []
-        for key, raw in value.items():
-            if key.lower() in {"time", "datatime", "asof", "at"} or any(
-                token in key.lower()
-                for token in (
-                    "publish",
-                    "eventat",
-                    "event_at",
-                    "availableat",
-                    "available_at",
-                    "notice_date",
-                    "datetime",
-                    "date_time",
-                    "timestamp",
-                    "trade_time",
-                    "tradedate",
-                    "trade_date",
-                    "日期",
-                )
-            ):
-                try:
-                    direct.append(timestamp(raw))
-                except (ValueError, TypeError, OverflowError):
-                    continue
+        direct = _object_times(value)
         if any(at > cutoff for at in direct):
             return None, max(direct), False
         result, dates = {}, list(direct)
@@ -121,7 +174,8 @@ class PredictionInputs(ProviderState):
         try:
             return self._collect_prediction_evidence(cutoff, exclusions, cash)
         except MarketDataError as exc:
-            if exc.evidence is None:
+            details = exc.evidence or {}
+            if exc.evidence is None or "candidates" not in exc.evidence:
                 at = timestamp(cutoff).isoformat()
                 exc.evidence = {
                     "availableCash": cash,
@@ -151,12 +205,43 @@ class PredictionInputs(ProviderState):
                         }
                     ],
                 }
+                exc.evidence.update(details)
             raise
 
     def _collect_prediction_evidence(self, cutoff: datetime, exclusions, cash: float):
         started = timestamp(cutoff)
         snapshot = self.full_market()
-        rows = snapshot["rows"]
+        raw_reported = snapshot["reported"]
+        rows, eligible_reported = eligible_coverage(
+            snapshot["rows"], timestamp(snapshot.get("collectedAt") or now())
+        )
+        coverage = len(rows) / eligible_reported if eligible_reported else 0
+        if coverage < 0.95 and snapshot["source"] != "tencent+sina":
+            try:
+                fallback = self.fallback_full_market(snapshot.get("errors", []))
+                fallback_rows, fallback_reported = eligible_coverage(
+                    fallback["rows"], timestamp(fallback.get("collectedAt") or now())
+                )
+                if fallback_reported and len(fallback_rows) / fallback_reported >= 0.95:
+                    snapshot, rows, eligible_reported = fallback, fallback_rows, fallback_reported
+                    raw_reported = fallback["reported"]
+                    coverage = len(rows) / eligible_reported
+            except MarketDataError:
+                pass
+        if coverage < 0.95:
+            message = (
+                f"eligible market coverage {coverage * 100:.2f}% below 95% ({len(rows)}/{eligible_reported})"
+            )
+            failure = MarketDataError(message)
+            # The public wrapper fills all standard failure fields; retain the measured evidence here.
+            failure.evidence = {
+                "coveragePct": coverage * 100,
+                "sourceReported": raw_reported,
+                "eligibleReported": eligible_reported,
+                "observed": len(rows),
+            }
+            raise failure
+        snapshot = snapshot | {"rows": rows, "reported": eligible_reported, "sourceReported": raw_reported}
         dates = [timestamp(row["asOf"]) for row in rows if row.get("asOf")]
         if not dates:
             raise MarketDataError("market snapshot has no verifiable observation timestamp")
@@ -340,6 +425,7 @@ class PredictionInputs(ProviderState):
             "sourceId": "research2:market:full",
             "observed": len(rows),
             "reported": snapshot["reported"],
+            "sourceReported": snapshot["sourceReported"],
             "coveragePct": len(rows) / snapshot["reported"] * 100,
             "sectorFlows": [],
             "conceptFlows": [],
@@ -454,9 +540,13 @@ class PredictionInputs(ProviderState):
             key, category, label, code, call = job
             try:
                 raw = call()
-                filtered, available, keep = filter_at_cutoff(raw, cutoff)
+                completed_at = now()
+                filtered, available, keep = normalize_auxiliary(raw, cutoff, completed_at)
                 error = "source has no cutoff-safe items" if not keep else ""
-                return document("research2:aux:" + key, category, filtered, available, error, code, label)
+                result = document("research2:aux:" + key, category, filtered, available, error, code, label)
+                if not _has_observation_time(raw):
+                    result["publishedAt"] = None
+                return result
             except (MarketDataError, ValueError, KeyError, TypeError) as exc:
                 return document("research2:aux:" + key, category, [], None, str(exc), code, label)
 
@@ -487,7 +577,9 @@ class PredictionInputs(ProviderState):
             "windowStartAt": window_start.isoformat(),
             "windowEndAt": window_end.isoformat(),
             "cutoffAt": cutoff.isoformat(),
-            "freezeAt": now().isoformat(),
+            "freezeAt": max(
+                [now(), cutoff] + [timestamp(doc["collectedAt"]) for doc in documents]
+            ).isoformat(),
             "market": market,
             "candidates": compact,
             "sources": sources,

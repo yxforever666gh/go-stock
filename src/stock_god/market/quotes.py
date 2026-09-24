@@ -128,7 +128,7 @@ def parse_sina(text: str) -> list[dict]:
 
 
 class Quotes(ProviderState):
-    def quotes(self, codes: list[str]) -> list[dict]:
+    def quotes(self, codes: list[str], *, require_all=True) -> list[dict]:
         normalized = list(dict.fromkeys(instrument(code)["code"] for code in codes))
         found = {}
         failures = []
@@ -149,9 +149,9 @@ class Quotes(ProviderState):
                 except (MarketDataError, ValueError) as exc:
                     failures.append(f"{provider}: {exc}")
         missing = [code for code in normalized if code not in found]
-        if missing:
+        if missing and require_all or not found:
             raise MarketDataError(f"quotes unavailable for {', '.join(missing[:5])}; {'; '.join(failures)}")
-        return [found[code] for code in normalized]
+        return [found[code] for code in normalized if code in found]
 
     def quote(self, code: str) -> dict:
         normalized = instrument(code)["code"]
@@ -240,7 +240,7 @@ class Quotes(ProviderState):
             if data.get("has_more") or not required <= set(fields):
                 raise MarketDataError("partial stock master or missing fields")
             rows = [
-                {key: str(value).strip() if value is not None else "" for key, value in zip(fields, row)}
+                {key: str(value).strip() if value is not None else "" for key, value in zip(fields, row, strict=False)}
                 for row in data.get("items", [])
             ]
             if len(rows) < 5000 or len({row.get("ts_code") for row in rows}) != len(rows):
@@ -431,7 +431,7 @@ class Quotes(ProviderState):
             if result.get("code") != 0:
                 raise MarketDataError("trade calendar provider rejected request")
             data = result.get("data") or {}
-            rows = [dict(zip(data.get("fields", []), row)) for row in data.get("items", [])]
+            rows = [dict(zip(data.get("fields", []), row, strict=False)) for row in data.get("items", [])]
             if not rows:
                 raise MarketDataError("empty trade calendar")
             return {
@@ -510,7 +510,7 @@ class Quotes(ProviderState):
                                 "mainFlow": "f62",
                             }.items()
                         },
-                        "listingDate": str(row.get("f26", "")),
+                        "listingDate": str(int(number(row.get("f26"), 0))),
                         "asOf": timestamp(row["f124"]).isoformat() if number(row.get("f124")) else None,
                     }
                 )
@@ -520,6 +520,10 @@ class Quotes(ProviderState):
             return {"rows": list(unique.values()), "reported": total, "source": "eastmoney", "errors": errors}
         except MarketDataError as exc:
             errors.append(str(exc))
+        return self.fallback_full_market(errors)
+
+    def fallback_full_market(self, errors=None):
+        errors = list(errors or [])
         master = self.stock_master()
         codes = [
             instrument(row["ts_code"])["code"] for row in master if row.get("list_status") in (None, "", "L")
@@ -529,7 +533,7 @@ class Quotes(ProviderState):
         rows = []
         for offset in range(0, len(codes), 80):
             try:
-                rows.extend(self.quotes(codes[offset : offset + 80]))
+                rows.extend(self.quotes(codes[offset : offset + 80], require_all=False))
             except MarketDataError as exc:
                 errors.append(str(exc))
         if len(rows) / len(codes) < 0.95:

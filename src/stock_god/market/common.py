@@ -261,6 +261,7 @@ class ProviderState:
     bars: Callable[..., list[dict[str, Any]]]
     is_trading_day: Callable[..., bool]
     full_market: Callable[..., dict[str, Any]]
+    fallback_full_market: Callable[..., dict[str, Any]]
     fund_flows: Callable[..., dict[str, Any]]
     hot_topics: Callable[..., list[dict[str, Any]]]
     hot_events: Callable[..., list[dict[str, Any]]]
