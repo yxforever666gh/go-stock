@@ -65,13 +65,23 @@ def _error_message(payload: Any) -> str:
     )
 
 
-def _body(config: dict, messages: list[dict], previous_id: str) -> tuple[str, dict, dict]:
+def _body(
+    config: dict, messages: list[dict], previous_id: str, request_options=None
+) -> tuple[str, dict, dict]:
     protocol = _protocol(config)
     headers = {"Content-Type": "application/json"}
     model = config.get("modelName", "")
     if protocol == "chat_completions":
         headers["Authorization"] = "Bearer " + str(config.get("apiKey", ""))
-        return "/chat/completions", {"model": model, "stream": True, "messages": messages}, headers
+        body = {"model": model, "stream": True, "messages": messages}
+        if request_options:
+            if "maxTokens" in request_options:
+                body["max_tokens"] = request_options["maxTokens"]
+            if "temperature" in request_options:
+                body["temperature"] = request_options["temperature"]
+            if "thinking" in request_options:
+                body["thinking"] = {"type": "enabled" if request_options["thinking"] else "disabled"}
+        return "/chat/completions", body, headers
     system: list[str] = []
     dialog: list[dict] = []
     for item in messages:
@@ -153,6 +163,8 @@ class AIClient:
         phase: str = "prediction",
         previous_response_id: str = "",
         on_attempt: Callable[[dict], None] | None = None,
+        on_delta: Callable[[str], None] | None = None,
+        request_options: dict | None = None,
     ) -> Completion:
         messages = copy.deepcopy(messages) if messages else [{"role": "user", "content": prompt}]
         for message in messages:
@@ -214,7 +226,7 @@ class AIClient:
                 emit()
                 try:
                     content, ident, model = await self._provider(
-                        config, messages, previous_response_id, activity
+                        config, messages, previous_response_id, activity, on_delta, request_options
                     )
                 except asyncio.CancelledError:
                     record.update(
@@ -272,20 +284,20 @@ class AIClient:
                     await self.retry_wait(8)
         raise ProviderError("all_models_failed", "所有已启用模型均调用失败: " + "; ".join(errors))
 
-    async def _provider(self, config, messages, previous_id, activity):
-        path, body, headers = _body(config, messages, previous_id)
+    async def _provider(self, config, messages, previous_id, activity, on_delta=None, request_options=None):
+        path, body, headers = _body(config, messages, previous_id, request_options)
         proxy = config.get("httpProxy") if config.get("httpProxyEnabled") else None
         timeout = float(config.get("timeOut") or 300)
         try:
-            return await self._request(config, path, body, headers, proxy, timeout, activity)
+            return await self._request(config, path, body, headers, proxy, timeout, activity, on_delta)
         except httpx.ConnectError as exc:
             # Preserve the existing explicit-proxy connection-refused fallback.
             refused = "refused" in str(exc).lower() or "10061" in str(exc)
             if not proxy or not refused:
                 raise
-            return await self._request(config, path, body, headers, None, timeout, activity)
+            return await self._request(config, path, body, headers, None, timeout, activity, on_delta)
 
-    async def _request(self, config, path, body, headers, proxy, timeout, activity):
+    async def _request(self, config, path, body, headers, proxy, timeout, activity, on_delta=None):
         # Bound the response-header wait as well as gaps between valid SSE frames.
         client_timeout = httpx.Timeout(timeout, read=self.idle_timeout)
         async with httpx.AsyncClient(
@@ -306,10 +318,19 @@ class AIClient:
                         retryable=response.status_code in {408, 429, 500, 502, 503, 504},
                     )
                 activity("response_headers", "waiting")
-                return await self._consume(response, _protocol(config), config.get("modelName", ""), activity)
+                return await self._consume(
+                    response, _protocol(config), config.get("modelName", ""), activity, on_delta
+                )
 
-    async def _consume(self, response, protocol, model, activity):
+    async def _consume(self, response, protocol, model, activity, on_delta=None):
         content, ident, terminal, last_event = [], "", False, "response_headers"
+
+        def append(text):
+            if text:
+                content.append(text)
+                if on_delta:
+                    on_delta(text)
+
         async for frame_type, raw in _frames(response, self.idle_timeout):
             if frame_type == "heartbeat":
                 last_event = "heartbeat"
@@ -332,7 +353,7 @@ class AIClient:
                 last_event, state = "chat.completion.chunk", "streaming"
                 for choice in event.get("choices", []):
                     delta = choice.get("delta") or {}
-                    content.append(delta.get("content") or "")
+                    append(delta.get("content") or "")
                     if delta.get("reasoning_content"):
                         state = "reasoning"
                     if choice.get("finish_reason"):
@@ -356,7 +377,7 @@ class AIClient:
                 raise ProviderError("stream_error", _error_message(event), last_event=last_event)
             if protocol == "openai_responses":
                 if last_event == "response.output_text.delta":
-                    content.append(str(delta) if isinstance(delta, str) else "")
+                    append(str(delta) if isinstance(delta, str) else "")
                 if last_event == "response.completed":
                     terminal = True
                     if not "".join(content):
@@ -366,10 +387,10 @@ class AIClient:
                             for block in item.get("content", [])
                             if block.get("text")
                         )
-                        content.append(text)
+                        append(text)
             else:
                 if last_event == "content_block_delta":
-                    content.append(delta.get("text") or "")
+                    append(delta.get("text") or "")
                 if last_event == "message_stop":
                     terminal = True
         if not terminal:

@@ -70,23 +70,16 @@ class Runtime:
             self.launch(key, operation)
 
     async def run(self):
-        settings = self.settings.runtime_values()
+        settings = self.settings.global_values()
         if settings["updateBasicInfoOnStart"]:
             self.launch("basic", lambda: self._basic(datetime.now(SHANGHAI).date()))
         while True:
             now = datetime.now(SHANGHAI)
             try:
                 await self.prediction.tick(now)
-                settings = self.settings.runtime_values()
+                settings = self.settings.global_values()
                 interval = max(1, settings["refreshInterval"])
                 self._due("news-analysis", interval + 60, lambda: self.market_job("analyze_news", "", True))
-                if settings["enableNews"]:
-                    for source in ("财联社电报", "新浪财经", "外媒"):
-                        self._due(
-                            "news:" + source,
-                            max(60, interval + 10),
-                            lambda source=source: self.market_job("refresh_telegraphs", source),
-                        )
                 if now.hour == 2 and self.last_basic_day != now.date():
                     self._due("basic", 60, lambda now=now: self._basic(now.date()))
                 if (

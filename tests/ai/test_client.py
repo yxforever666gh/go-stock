@@ -75,17 +75,19 @@ async def test_protocols_preserve_provider_defaults_and_activity(protocol, path,
         stream = ": heartbeat\n\n" + "".join("data: " + json.dumps(event) + "\n\n" for event in events)
         return httpx.Response(200, text=stream, headers={"content-type": "text/event-stream"})
 
-    records = []
+    records, deltas = [], []
     client = AIClient([config(apiProtocol=protocol)], transport=httpx.MockTransport(handler))
     result = await client.complete(
         messages=[{"role": "system", "content": "system"}, {"role": "user", "content": "ping"}],
         previous_response_id="previous",
         on_attempt=records.append,
+        on_delta=deltas.append,
     )
     assert (result.content, result.response_id, result.model) == ("OK", ident, "fixture-model")
     assert any(item["status"] == "reasoning" for item in records)
     assert records[-1]["status"] == "success"
     assert "secret-key" not in json.dumps(records)
+    assert deltas == ["OK"]
 
 
 async def test_retry_fallback_order_and_immutable_snapshot():

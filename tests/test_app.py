@@ -21,6 +21,9 @@ class OfflineMarket:
     def close(self):
         pass
 
+    def initialize_stock_master(self):
+        return {"source": "fixture", "changed": False}
+
     def __getattr__(self, name):
         raise AssertionError("unexpected network operation: " + name)
 

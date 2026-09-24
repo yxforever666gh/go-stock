@@ -123,6 +123,7 @@ def create_app(
             raise RuntimeError("database upgrade required; run stock-god db migrate before serving")
         ready.update(migrations=True, database=True)
         settings.initialize()
+        await asyncio.to_thread(market.initialize_stock_master)
         # Recovery never resumes retired Research 1 or knowledge jobs.
         audit.recover_replays()
         await prediction.recover(resume=config.scheduler_enabled)

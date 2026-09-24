@@ -300,15 +300,6 @@ class SettingsStore:
             for key, column in GLOBAL_FIELDS.items()
         }
 
-    def runtime_values(self) -> dict:
-        values = self.global_values()
-        with self.database.connection() as connection:
-            row = connection.execute(
-                "SELECT enable_news FROM settings WHERE deleted_at IS NULL ORDER BY id LIMIT 1"
-            ).fetchone()
-        values["enableNews"] = bool(row[0]) if row else False
-        return values
-
     def save_global(self, changes: dict) -> dict:
         if not isinstance(changes, dict) or any(key not in GLOBAL_FIELDS for key in changes):
             raise ValueError("only application display settings belong to global settings")
