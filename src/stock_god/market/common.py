@@ -1,18 +1,20 @@
 """Provider transport, provenance and bounded in-process cache."""
 
-from collections.abc import Callable
-from copy import deepcopy
-from datetime import date, datetime, timezone
 import json
 import math
 import re
 import sqlite3
-from threading import RLock
 import time
-from typing import Any
+from collections.abc import Callable
+from copy import deepcopy
+from datetime import date, datetime
+from threading import RLock
+from typing import Any, overload
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from stock_god.config import AppConfig
 
 CN = ZoneInfo("Asia/Shanghai")
 ZERO_TIME = "0001-01-01T00:00:00Z"
@@ -21,6 +23,18 @@ USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
 
 class MarketDataError(RuntimeError):
     """An input is unavailable; never interpreted as zero or a successful empty input."""
+
+    def __init__(self, message: str, *, evidence: dict | None = None):
+        super().__init__(message)
+        self.evidence = evidence
+
+
+@overload
+def number(value: Any, default: float) -> float: ...
+
+
+@overload
+def number(value: Any, default: None = None) -> float | None: ...
 
 
 def number(value: Any, default: float | None = None) -> float | None:
@@ -54,7 +68,13 @@ def instrument(code: str, asset_type: str = "stock", market: str = "") -> dict:
     if re.fullmatch(r"\d{6}\.(sh|sz|bj)", raw):
         raw = raw[-2:] + raw[:6]
     if re.fullmatch(r"\d{6}", raw):
-        prefix = market.lower() or ("sh" if raw[0] in "569" else "bj" if raw[0] in "48" else "sz")
+        prefix = market.lower() or (
+            "sh"
+            if raw[0] in "569" or asset_type == "index" and raw.startswith("000")
+            else "bj"
+            if raw[0] in "48"
+            else "sz"
+        )
         raw = prefix + raw
     if raw.startswith("us"):
         raw = "gb_" + raw[2:]
@@ -73,6 +93,15 @@ def instrument(code: str, asset_type: str = "stock", market: str = "") -> dict:
     return {"code": raw, "assetType": asset_type, "market": actual}
 
 
+def evidence_instrument(code: str, asset_type: str = "stock", market: str = "") -> dict:
+    identity = instrument(code, asset_type, market)
+    if asset_type == "stock" and not identity["code"].startswith(("sh60", "sh68", "sz00", "sz30")):
+        raise ValueError("code does not match assetType stock")
+    if identity["market"] not in {"SH", "SZ"}:
+        raise ValueError("chart and instrument evidence require Shanghai or Shenzhen instruments")
+    return identity
+
+
 def security_id(code: str) -> str:
     value = instrument(code)["code"]
     if value.startswith(("sh", "sz", "bj")):
@@ -82,11 +111,33 @@ def security_id(code: str) -> str:
     raise ValueError("provider does not support this instrument")
 
 
-def envelope(data: Any, source: str, *, status: str = "ok", as_of: Any = None,
-             errors: list | None = None, warnings: list | None = None) -> dict:
-    result = {"data": data, "source": source, "asOf": timestamp(as_of).isoformat() if as_of else ZERO_TIME,
-              "fetchedAt": now().isoformat(), "status": status, "errors": errors or [],
-              "evidenceProfile": "market-evidence-v1"}
+def envelope(
+    data: Any,
+    source: str,
+    *,
+    status: str = "ok",
+    as_of: Any = None,
+    errors: list | None = None,
+    warnings: list | None = None,
+) -> dict:
+    result = {
+        "data": data,
+        "source": source,
+        "asOf": timestamp(as_of).isoformat() if as_of else ZERO_TIME,
+        "fetchedAt": now().isoformat(),
+        "status": status,
+        "errors": errors or [],
+        "evidenceProfile": "market-evidence-v1",
+    }
+    if source:
+        result["sources"] = [
+            {
+                "provider": source,
+                "status": status,
+                "asOf": result["asOf"],
+                "availableAt": result["asOf"] if as_of else None,
+            }
+        ]
     if warnings:
         result["warnings"] = warnings
     return result
@@ -97,8 +148,12 @@ class Transport:
         proxy = settings.get("httpProxy") if settings.get("httpProxyEnabled") else None
         if settings.get("forceNoProxyForFetch", True):
             proxy = None
-        self.client = client or httpx.Client(timeout=float(settings.get("crawlTimeOut") or 12),
-                                             proxy=proxy, trust_env=False, follow_redirects=True)
+        self.client = client or httpx.Client(
+            timeout=float(settings.get("crawlTimeOut") or 12),
+            proxy=proxy,
+            trust_env=False,
+            follow_redirects=True,
+        )
         self.owns_client = client is None
         self._cache: dict[str, tuple[float, Any]] = {}
         self._lock = RLock()
@@ -107,9 +162,17 @@ class Transport:
         if self.owns_client:
             self.client.close()
 
-    def text(self, url: str, params: dict | None = None, *, encoding: str | None = None,
-             headers: dict | None = None, method: str = "GET", body: dict | None = None,
-             form: dict | None = None) -> str:
+    def text(
+        self,
+        url: str,
+        params: dict | None = None,
+        *,
+        encoding: str | None = None,
+        headers: dict | None = None,
+        method: str = "GET",
+        body: dict | None = None,
+        form: dict | None = None,
+    ) -> str:
         values = {"User-Agent": USER_AGENT, "Referer": "https://finance.sina.com.cn/"}
         values.update(headers or {})
         try:
@@ -123,7 +186,7 @@ class Transport:
     def json(self, url: str, params: dict | None = None, **kwargs) -> Any:
         raw = self.text(url, params, **kwargs).strip()
         if not raw.startswith(("[", "{")):
-            match = re.search(r"^[\w.$]+\s*\((.*)\)\s*;?$", raw, re.S)
+            match = re.search(r"^[\w.$]+\s*\((.*)\)\s*;?$", raw, re.DOTALL)
             if match:
                 raw = match.group(1)
         try:
@@ -150,8 +213,19 @@ class Transport:
                 data, as_of = call()
                 if data is None:
                     raise MarketDataError("provider returned no data")
-                return envelope(data, name, status="partial" if failures else "ok", as_of=as_of,
-                                errors=failures)
+                result = envelope(
+                    data, name, status="partial" if failures else "ok", as_of=as_of, errors=failures
+                )
+                result["sources"] = [
+                    {
+                        "provider": failure["provider"],
+                        "status": "unavailable",
+                        "message": failure["message"],
+                        "asOf": ZERO_TIME,
+                    }
+                    for failure in failures
+                ] + result["sources"]
+                return result
             except (MarketDataError, ValueError, KeyError, IndexError, TypeError) as exc:
                 failures.append({"provider": name, "code": "unavailable", "message": str(exc)})
         return envelope(empty, "", status="unavailable", errors=failures)
@@ -173,3 +247,40 @@ def require_date(value: str) -> str:
     if value and date.fromisoformat(value).isoformat() != value:
         raise ValueError("date must be YYYY-MM-DD")
     return value
+
+
+class ProviderState:
+    """Type contract for the concrete MarketServices provider mixins."""
+
+    config: AppConfig
+    settings: dict[str, Any]
+    http: Transport
+    quote: Callable[..., dict[str, Any]]
+    quotes: Callable[..., list[dict[str, Any]]]
+    stock_master: Callable[..., list[dict[str, Any]]]
+    bars: Callable[..., list[dict[str, Any]]]
+    is_trading_day: Callable[..., bool]
+    full_market: Callable[..., dict[str, Any]]
+    fund_flows: Callable[..., dict[str, Any]]
+    hot_topics: Callable[..., list[dict[str, Any]]]
+    hot_events: Callable[..., list[dict[str, Any]]]
+    telegraphs: Callable[..., list[dict[str, Any]]]
+    notices: Callable[..., list[dict[str, Any]]]
+    stock_concepts: Callable[..., list[dict[str, Any]]]
+    stock_financials: Callable[..., list[dict[str, Any]]]
+    macro_evidence: Callable[..., dict[str, Any]]
+    reuters_news: Callable[..., dict[str, Any]]
+    interactive_answers: Callable[..., dict[str, Any]]
+    global_indexes: Callable[..., dict[str, Any]]
+    industry_rank: Callable[..., list[Any]]
+    money_rank: Callable[..., list[dict[str, Any]]]
+    money_trend: Callable[..., list[dict[str, Any]]]
+    hot_stocks: Callable[..., list[dict[str, Any]]]
+    long_tiger: Callable[..., list[dict[str, Any]]]
+    investment_calendar: Callable[..., list[dict[str, Any]]]
+    cls_calendar: Callable[..., list[dict[str, Any]]]
+    minute_line: Callable[..., dict[str, Any]]
+    research_reports: Callable[..., list[dict[str, Any]]]
+    _live_news: Callable[..., list[dict[str, Any]]]
+    prediction_theme_documents: Callable[..., list[dict[str, Any]]]
+    sentiment_weighted: Callable[..., dict[str, Any]]

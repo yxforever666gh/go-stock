@@ -1,7 +1,7 @@
 """Read-only market data and prediction inputs."""
 
-from .service import MarketServices
 from .common import MarketDataError
 from .router import create_router
+from .service import MarketServices
 
-__all__ = ["MarketServices", "MarketDataError", "create_router"]
+__all__ = ["MarketDataError", "MarketServices", "create_router"]
