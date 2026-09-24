@@ -1,0 +1,1 @@
+"""Stock God application package."""

@@ -24,6 +24,17 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/test-results/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+/dist/
+/runtime/toolchain/
+/runtime/minute-index/
+/runtime/test-receipts/
 
 # Editor
 .vscode/

@@ -1,4 +1,4 @@
-# Go-Stock Working Rules
+# Stock God Working Rules
 
 These instructions apply to the entire repository. Keep routine work local, make
 complexity visible, and reserve full-system proof for an explicit release.
@@ -24,17 +24,27 @@ complexity visible, and reserve full-system proof for an explicit release.
   delivering a feature or fix. Do not start a repository-wide cleanup unless
   the user explicitly requests it.
 
-## Research ownership
+## Product and dependency boundaries
 
-- Research 1 and Research 2 own separate strategy, account, execution, settings,
-  and task lifecycle state. Neither center or application package imports the
-  other center or `backend/data`; shared primitives do not import either center.
+- The active product is 股票预测 plus headless market-data APIs. Market,
+  stock/fund watchlist, Research 1, and knowledge UI/runtime features are retired.
+  Preserve their historical database rows; do not recreate their entry points.
+- Preserve market-data API and MCP contracts independently of UI removal.
+  Prediction APIs use `/api/v1/prediction`; old prediction routes have no aliases.
+- Prediction rules belong to `stock_god.prediction`, provider I/O to
+  `stock_god.market` and `stock_god.ai`, and SQLite access to `stock_god.storage`.
+  Historical migration algorithms stay frozen inside migrations and are never
+  imported by current prediction logic.
+- Persisted research2 table names, owner values, and deterministic ID namespaces
+  are data contracts. Branding changes must not rewrite them.
+- Python is the sole backend runtime after the 6.0 migration. Go is a temporary
+  development oracle and is removed after parity tests pass; archived binaries
+  remain available only for rollback.
 - Capture a deep configuration snapshot at each task entry. Provider retries,
   fallbacks, and evidence collection use that snapshot; never temporarily replace
   global settings. A center settings save only notifies that center.
-- Changes to shared AI, trading, quotes, evidence, chart, SQLite, configuration,
-  or data/root research adapters require `domain research-shared`. Changes to
-  shared frontend research requests, pages, or charts also run affected behavior tests.
+- Changes to AI, quotes, evidence, chart, SQLite or configuration boundaries
+  require the matching domain checks and affected frontend behavior tests.
 
 ## Change budget
 
@@ -52,6 +62,9 @@ complexity visible, and reserve full-system proof for an explicit release.
 - Routine implementation uses `scripts/verify.ps1 -Tier fast` with the affected
   Go package/test or frontend test file. Cross-boundary work may use one
   matching `domain` verification.
+- During the 6.0 migration, new Python scopes use the locked project environment
+  and targeted pytest files. Keep old-language checks only while they provide
+  the behavior oracle; the final verifier must not require Go.
 - Use `scripts/verify.ps1 -Tier release` only for an explicit release or when
   the user explicitly asks for the full local gate.
 - Do not automatically run `go test ./...`, `go vet ./...`, `npm run ci`, live
@@ -98,3 +111,17 @@ complexity visible, and reserve full-system proof for an explicit release.
   added/removed, source files touched, execution paths added/removed, public
   interfaces/configuration/schema added, and any old path that could not yet be
   removed.
+
+## 6.0.0 release acceptance
+
+- The approved release includes full Python migration, all published legacy
+  database upgrades, in-database preservation before destructive historical
+  transformations, Stock God naming, and deployment/restart.
+- Before tag/push, validate the final candidate twice across complete offline
+  chains and run one live market/AI prediction in disposable database copies.
+  Live calls are opt-in; test email is delivered to a local fixture.
+- Validation binds commit, dependency lock and artifact hashes. A changed final
+  candidate needs fresh final validation. Never move an already published tag.
+- Temporary scripts, test databases and raw outputs stay under `H:\Download`
+  and are not committed. Durable regression tests and sanitized release receipts
+  are retained in their respective project locations.

@@ -4,3 +4,15 @@ build/*.json
 
 # External prompt references are not part of the application runtime.
 LLM_prompt_for_A_share/
+
+# Runtime inputs and outputs are inspected only through explicit paths.
+data/
+runtime/
+logs/
+output/
+A股历史分钟线数据包/
+.venv/
+.pytest_cache/
+.ruff_cache/
+frontend/node_modules/
+frontend/dist/
