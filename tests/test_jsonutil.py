@@ -5,11 +5,19 @@ import pytest
 from stock_god.jsonutil import dumps
 
 
-@pytest.mark.parametrize("value,expected", [
-    (1.0, "1"), (-0.0, "-0"), (1e-6, "0.000001"), (1e-7, "1e-7"),
-    (1e20, "100000000000000000000"), (1e21, "1e+21"), (10.25, "10.25"),
-    ({"z": "<股票>&", "a": [None, True, 0.0]}, '{"a":[null,true,0],"z":"\\u003c股票\\u003e\\u0026"}'),
-])
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (1.0, "1"),
+        (-0.0, "-0"),
+        (1e-6, "0.000001"),
+        (1e-7, "1e-7"),
+        (1e20, "100000000000000000000"),
+        (1e21, "1e+21"),
+        (10.25, "10.25"),
+        ({"z": "<股票>&", "a": [None, True, 0.0]}, '{"a":[null,true,0],"z":"\\u003c股票\\u003e\\u0026"}'),
+    ],
+)
 def test_go_encoding_contract(value, expected):
     assert dumps(value) == expected
 

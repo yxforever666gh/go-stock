@@ -1,14 +1,20 @@
 """Deterministic JSON encoding for contracts previously hashed by encoding/json."""
 
-from collections.abc import Mapping
-from decimal import Decimal
 import json
 import math
+from collections.abc import Mapping
+from decimal import Decimal
 
 
 def _string(value: str) -> str:
-    return (json.dumps(value, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e")
-            .replace("&", "\\u0026").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029"))
+    return (
+        json.dumps(value, ensure_ascii=False)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+    )
 
 
 def dumps(value, *, sort_keys: bool = True) -> str:
@@ -45,7 +51,9 @@ def dumps(value, *, sort_keys: bool = True) -> str:
         if any(not isinstance(key, str) for key in value):
             raise TypeError("JSON object keys must be strings")
         keys = sorted(value) if sort_keys else value
-        return "{" + ",".join(_string(key) + ":" + dumps(value[key], sort_keys=sort_keys) for key in keys) + "}"
+        return (
+            "{" + ",".join(_string(key) + ":" + dumps(value[key], sort_keys=sort_keys) for key in keys) + "}"
+        )
     if isinstance(value, (list, tuple)):
         return "[" + ",".join(dumps(item, sort_keys=sort_keys) for item in value) + "]"
     raise TypeError(f"unsupported JSON value: {type(value).__name__}")
