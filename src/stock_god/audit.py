@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import gzip
 import hashlib
 import io
@@ -353,6 +354,24 @@ class AuditStore:
         AuditStore(self.database, owner="replay").begin(replay_id)
         return self.get_replay(replay_id)
 
+    def recover_replays(self):
+        reason = "服务重启时回放尚未完成，请重新发起回放"
+        with self.database.transaction() as con:
+            rows = con.execute(
+                "SELECT replay_id FROM research_replays WHERE source_owner_type='research2' "
+                "AND status IN ('queued','running')"
+            ).fetchall()
+            for row in rows:
+                con.execute(
+                    "UPDATE research_replays SET status='failed',completed_at=?,last_error=? WHERE replay_id=?",
+                    (now_text(), reason, row[0]),
+                )
+                con.execute(
+                    "UPDATE research_audit_run_states SET status='failed',last_error=?,updated_at=? "
+                    "WHERE owner_type='replay' AND owner_id=? AND status='capturing'",
+                    (reason, now_text(), row[0]),
+                )
+
     def get_replay(self, replay_id: str) -> dict:
         with self.database.connection() as con:
             row = con.execute(
@@ -436,13 +455,13 @@ class AuditStore:
                     (now_text(), replay_id),
                 )
             recorder.complete(replay_id)
-        except Exception as error:
-            message = redact_text(str(error))[0]
+        except (Exception, asyncio.CancelledError) as error:
+            message = redact_text(str(error))[0] or "回放已取消"
             with self.database.transaction() as con:
                 con.execute(
                     "UPDATE research_replays SET status='failed',completed_at=?,last_error=? WHERE replay_id=?",
                     (now_text(), message, replay_id),
                 )
-            recorder.fail(replay_id, error)
+            recorder.fail(replay_id, message)
             raise
         return self.get_replay(replay_id)

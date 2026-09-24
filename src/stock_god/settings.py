@@ -186,6 +186,13 @@ class SettingsStore:
     def __init__(self, database: Database):
         self.database = database
 
+    def initialize(self):
+        with self.database.transaction() as connection:
+            connection.execute(
+                "INSERT INTO settings(dark_theme,refresh_interval,update_basic_info_on_start,enable_news) "
+                "SELECT 0,1,0,0 WHERE NOT EXISTS(SELECT 1 FROM settings WHERE deleted_at IS NULL)"
+            )
+
     def _load(self, connection) -> SettingsSnapshot:
         record = connection.execute(
             "SELECT config_json,revision FROM research_settings WHERE center='research2'"
@@ -292,6 +299,15 @@ class SettingsStore:
             key: bool(source[column]) if key != "refreshInterval" else source[column]
             for key, column in GLOBAL_FIELDS.items()
         }
+
+    def runtime_values(self) -> dict:
+        values = self.global_values()
+        with self.database.connection() as connection:
+            row = connection.execute(
+                "SELECT enable_news FROM settings WHERE deleted_at IS NULL ORDER BY id LIMIT 1"
+            ).fetchone()
+        values["enableNews"] = bool(row[0]) if row else False
+        return values
 
     def save_global(self, changes: dict) -> dict:
         if not isinstance(changes, dict) or any(key not in GLOBAL_FIELDS for key in changes):

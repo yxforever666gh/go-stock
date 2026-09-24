@@ -1,0 +1,171 @@
+"""Local process and database commands. Release commands live in scripts/."""
+
+import argparse
+import asyncio
+import json
+import logging
+import os
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
+
+import uvicorn
+
+from .audit import redact_text
+from .config import AppConfig
+from .storage.backup import backup_database, verify_database
+from .storage.migrations import migrate, status
+
+
+@contextmanager
+def process_lock(path: Path):
+    """OS releases this lock on process death; a stale PID file cannot own it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+b") as handle:
+        if path.stat().st_size == 0:
+            handle.write(b" ")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError as error:
+                raise RuntimeError("another Stock God process owns this runtime") from error
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            if os.name == "nt":
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def serve(config):
+    from .app import create_app
+
+    server = None
+
+    def shutdown():
+        if server is not None:
+            server.should_exit = True
+
+    with process_lock(config.root / "runtime" / "web.lock"):
+        app = create_app(config, shutdown=shutdown)
+        server = uvicorn.Server(
+            uvicorn.Config(
+                app,
+                host=config.host,
+                port=config.port,
+                workers=1,
+                proxy_headers=False,
+                server_header=False,
+                timeout_keep_alive=120,
+                timeout_graceful_shutdown=10,
+                ws_max_size=1 << 20,
+                access_log=False,
+            )
+        )
+        server.run()
+
+
+async def prediction_command(config, operation, dry_run=True):
+    from .ai.client import AIClient
+    from .audit import AuditStore
+    from .market import MarketServices
+    from .prediction import PredictionService
+    from .settings import SettingsStore
+    from .storage.db import Database
+
+    database = Database(config.main_db)
+    market = MarketServices(config)
+    service = PredictionService(database, market, SettingsStore(database), AIClient, AuditStore(database))
+    try:
+        if operation == "backfill-performance":
+            return await service.backfill_performance()
+        return await service.replay_allocations(dry_run=dry_run)
+    finally:
+        await service.close()
+        market.close()
+        database.close()
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="stock-god")
+    parser.add_argument("--root", type=Path, help="Persistent project root (data/runtime stay inside)")
+    commands = parser.add_subparsers(dest="command", required=True)
+    run = commands.add_parser("serve", help="Run the local Web service and scheduler")
+    run.add_argument("--host")
+    run.add_argument("--port", type=int)
+    run.add_argument("--no-scheduler", action="store_true")
+    db = commands.add_parser("db", help="Explicit SQLite maintenance")
+    db_commands = db.add_subparsers(dest="operation", required=True)
+    db_status = db_commands.add_parser("status")
+    db_status.add_argument("--verify", action="store_true")
+    db_commands.add_parser("migrate")
+    db_commands.add_parser("verify")
+    backup = db_commands.add_parser("backup")
+    backup.add_argument("--output", type=Path, required=True)
+    prediction = commands.add_parser("prediction")
+    prediction_commands = prediction.add_subparsers(dest="operation", required=True)
+    prediction_commands.add_parser("backfill-performance")
+    replay = prediction_commands.add_parser("replay-allocations")
+    replay.add_argument(
+        "--apply", action="store_true", help="Apply the verified replay; default only plans it"
+    )
+    commands.add_parser("version")
+    args = parser.parse_args(argv)
+    config = AppConfig.from_env(args.root)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    try:
+        if args.command == "serve":
+            serve(
+                replace(
+                    config,
+                    host=args.host or config.host,
+                    port=args.port or config.port,
+                    scheduler_enabled=config.scheduler_enabled and not args.no_scheduler,
+                )
+            )
+            return 0
+        if args.command == "version":
+            result = json.loads(Path(__file__).with_name("release_manifest.json").read_text(encoding="utf-8"))
+        elif args.command == "db":
+            if args.operation == "migrate":
+                result = migrate(config.main_db, config.minute_db)
+            elif args.operation == "status":
+                result = status(config.main_db, config.minute_db, verify=args.verify)
+            elif args.operation == "verify":
+                result = {
+                    "schema": status(config.main_db, config.minute_db, verify=True),
+                    "main": verify_database(config.main_db),
+                    "minute": verify_database(config.minute_db),
+                }
+            else:
+                output = args.output.resolve()
+                if output.exists() and any(output.iterdir()):
+                    raise ValueError("backup output must be an empty directory")
+                output.mkdir(parents=True, exist_ok=True)
+                result = {
+                    "main": backup_database(config.main_db, output / "stock.db"),
+                    "minute": backup_database(config.minute_db, output / "minute.db"),
+                }
+        else:
+            result = asyncio.run(
+                prediction_command(config, args.operation, not getattr(args, "apply", False))
+            )
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return 0
+    except Exception as error:
+        logging.error("%s", redact_text(str(error))[0])
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

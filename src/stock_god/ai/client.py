@@ -286,7 +286,8 @@ class AIClient:
             return await self._request(config, path, body, headers, None, timeout, activity)
 
     async def _request(self, config, path, body, headers, proxy, timeout, activity):
-        client_timeout = httpx.Timeout(timeout, read=None)
+        # Bound the response-header wait as well as gaps between valid SSE frames.
+        client_timeout = httpx.Timeout(timeout, read=self.idle_timeout)
         async with httpx.AsyncClient(
             transport=self.transport, proxy=proxy, trust_env=False, timeout=client_timeout
         ) as client:
