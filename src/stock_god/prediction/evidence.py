@@ -526,7 +526,9 @@ def validate(run_id, evidence, output):
 
 
 def render_report(run, items, evidence, output, warnings):
-    cell = lambda value: str(value or "--").replace("|", "\\|").replace("\n", " ")
+    def cell(value):
+        return str(value or "--").replace("|", "\\|").replace("\n", " ")
+
     lines = [
         "# 股票预测 隔日强势筛选",
         "",
