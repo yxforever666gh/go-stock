@@ -18,6 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from . import release_manifest
 from .ai.client import AIClient, ProviderError
 from .audit import AuditConflict, AuditStore, redact_text
 from .config import AppConfig
@@ -33,7 +34,7 @@ log = logging.getLogger(__name__)
 
 
 def identity(config: AppConfig) -> dict:
-    manifest = json.loads(Path(__file__).with_name("release_manifest.json").read_text(encoding="utf-8"))
+    manifest = release_manifest()
     result = {
         **manifest,
         "commit": "",
@@ -340,4 +341,9 @@ def create_app(
             headers={"Cache-Control": "no-cache" if target.name == "index.html" else "public, max-age=3600"},
         )
 
+    from .contracts import apply_operation_ids, load_spec
+
+    specification = load_spec()
+    apply_operation_ids(app, specification)
+    app.openapi = lambda: specification
     return app

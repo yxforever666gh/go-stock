@@ -63,6 +63,9 @@ Thumbs.db
 /runtime/source-dev/
 /runtime/current.json
 /runtime/go-stock-web.pid
+/runtime/web.lock
+/runtime/web-process.json
+/runtime/minute-api/
 data.test
 /test-results/
 /.playwright-mcp/

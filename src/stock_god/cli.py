@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 from contextlib import contextmanager
@@ -11,6 +10,8 @@ from pathlib import Path
 
 import uvicorn
 
+from . import commands as extra_commands
+from . import release_manifest
 from .audit import redact_text
 from .config import AppConfig
 from .storage.backup import backup_database, verify_database
@@ -99,13 +100,18 @@ async def prediction_command(config, operation, dry_run=True):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="stock-god")
     parser.add_argument("--root", type=Path, help="Persistent project root (data/runtime stay inside)")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--db-path", type=Path)
     commands = parser.add_subparsers(dest="command", required=True)
+    extra_commands.add_arguments(commands)
     run = commands.add_parser("serve", help="Run the local Web service and scheduler")
     run.add_argument("--host")
     run.add_argument("--port", type=int)
     run.add_argument("--no-scheduler", action="store_true")
     db = commands.add_parser("db", help="Explicit SQLite maintenance")
     db_commands = db.add_subparsers(dest="operation", required=True)
+    extra_commands.add_db_arguments(db_commands)
     db_status = db_commands.add_parser("status")
     db_status.add_argument("--verify", action="store_true")
     db_commands.add_parser("migrate")
@@ -122,6 +128,11 @@ def main(argv=None):
     commands.add_parser("version")
     args = parser.parse_args(argv)
     config = AppConfig.from_env(args.root)
+    if args.data_dir:
+        directory = (config.root / args.data_dir).resolve()
+        config = replace(config, main_db=directory / "stock.db", minute_db=directory / "minute.db")
+    if args.db_path:
+        config = replace(config, main_db=(config.root / args.db_path).resolve())
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
     try:
         if args.command == "serve":
@@ -135,7 +146,7 @@ def main(argv=None):
             )
             return 0
         if args.command == "version":
-            result = json.loads(Path(__file__).with_name("release_manifest.json").read_text(encoding="utf-8"))
+            result = release_manifest()
         elif args.command == "db":
             if args.operation == "migrate":
                 result = migrate(config.main_db, config.minute_db)
@@ -147,7 +158,7 @@ def main(argv=None):
                     "main": verify_database(config.main_db),
                     "minute": verify_database(config.minute_db),
                 }
-            else:
+            elif args.operation == "backup":
                 output = args.output.resolve()
                 if output.exists() and any(output.iterdir()):
                     raise ValueError("backup output must be an empty directory")
@@ -156,11 +167,17 @@ def main(argv=None):
                     "main": backup_database(config.main_db, output / "stock.db"),
                     "minute": backup_database(config.minute_db, output / "minute.db"),
                 }
-        else:
+            else:
+                result = extra_commands.execute(args, config)
+        elif args.command == "prediction":
             result = asyncio.run(
                 prediction_command(config, args.operation, not getattr(args, "apply", False))
             )
-        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        else:
+            result = extra_commands.execute(args, config)
+        output = extra_commands.format_result(args, result)
+        if output is not None:
+            print(output)
         return 0
     except Exception as error:
         logging.error("%s", redact_text(str(error))[0])
