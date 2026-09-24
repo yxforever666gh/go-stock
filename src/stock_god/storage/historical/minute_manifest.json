@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "name": "baseline_minute_bar_schema",
+    "description": "App 1.5.1 minute_bar WITHOUT ROWID baseline and trade_time index.",
+    "definition": "",
+    "checksum": "e838c98300ecee89806e5da10fc424bacff60754e212b449066feadecf59c8ec"
+  },
+  {
+    "id": 2,
+    "name": "lock_minute_bar_schema_definition",
+    "description": "App 1.5.1 locks the complete minute_bar DDL without rewriting the published baseline migration.",
+    "definition": "CREATE TABLE IF NOT EXISTS minute_bar (\n  stock_code TEXT NOT NULL,\n  trade_time INTEGER NOT NULL,\n  open REAL NOT NULL,\n  high REAL NOT NULL,\n  low REAL NOT NULL,\n  close REAL NOT NULL,\n  volume REAL,\n  amount REAL,\n  source TEXT,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (stock_code, trade_time)\n) WITHOUT ROWID;\n\nCREATE INDEX IF NOT EXISTS idx_minute_bar_trade_time\nON minute_bar(trade_time);\n",
+    "checksum": "f479775a220b2f4816aaa254c0193f49861fb8d61181634607b76e338debbde0"
+  },
+  {
+    "id": 3,
+    "name": "market_evidence_cache",
+    "description": "App 2.0.0 adds typed multi-period bars, auction snapshots and trade ticks to the isolated minute cache.",
+    "definition": "CREATE TABLE IF NOT EXISTS market_bar_cache (\n  asset_type TEXT NOT NULL,\n  symbol TEXT NOT NULL,\n  period TEXT NOT NULL,\n  adjustment TEXT NOT NULL,\n  bar_time INTEGER NOT NULL,\n  open REAL NOT NULL,\n  high REAL NOT NULL,\n  low REAL NOT NULL,\n  close REAL NOT NULL,\n  volume REAL,\n  amount REAL,\n  source TEXT NOT NULL,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (asset_type, symbol, period, adjustment, bar_time)\n) WITHOUT ROWID;\n\nCREATE TABLE IF NOT EXISTS market_auction_snapshot (\n  asset_type TEXT NOT NULL,\n  symbol TEXT NOT NULL,\n  trade_date TEXT NOT NULL,\n  observed_at INTEGER NOT NULL,\n  phase TEXT NOT NULL,\n  indicative_price REAL,\n  matched_volume REAL,\n  matched_amount REAL,\n  unmatched_volume REAL,\n  unmatched_side TEXT,\n  source TEXT NOT NULL,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (asset_type, symbol, trade_date, observed_at, phase)\n) WITHOUT ROWID;\n\nCREATE TABLE IF NOT EXISTS market_trade_tick (\n  asset_type TEXT NOT NULL,\n  symbol TEXT NOT NULL,\n  traded_at INTEGER NOT NULL,\n  sequence INTEGER NOT NULL,\n  price REAL NOT NULL,\n  volume REAL NOT NULL,\n  amount REAL,\n  side TEXT,\n  source TEXT NOT NULL,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (asset_type, symbol, traded_at, sequence)\n) WITHOUT ROWID;\n\nCREATE INDEX IF NOT EXISTS idx_market_bar_cache_time ON market_bar_cache(bar_time);\n\nCREATE INDEX IF NOT EXISTS idx_market_auction_snapshot_date ON market_auction_snapshot(trade_date);\n\nCREATE INDEX IF NOT EXISTS idx_market_auction_snapshot_observed ON market_auction_snapshot(observed_at);\n\nCREATE INDEX IF NOT EXISTS idx_market_trade_tick_time ON market_trade_tick(traded_at);\n",
+    "checksum": "09a4f300170f52ad46b04e70467945ba9d9b12da545ce0f3faafa735ad4544af"
+  }
+]

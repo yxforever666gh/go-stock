@@ -1,0 +1,33 @@
+{
+  "4": [
+    "UPDATE ai_config SET disabled = 0 WHERE disabled IS NULL"
+  ],
+  "5": [
+    "UPDATE research_v160_analysis_runs SET model_attempt_log_json = '[]' WHERE model_attempt_log_json IS NULL OR TRIM(model_attempt_log_json) = ''"
+  ],
+  "7": [
+    "UPDATE research_v160_recommendations SET data_pause_seconds = 0 WHERE data_pause_seconds IS NULL"
+  ],
+  "11": [
+    "UPDATE settings\n\t\tSET minute_provider_order = CASE\n\t\t\tWHEN LOWER(TRIM(COALESCE(minute_provider_mode, ''))) = 'private' THEN 'private,tencent,sina,akshare'\n\t\t\tELSE 'tencent,sina,akshare,private'\n\t\tEND\n\t\tWHERE minute_provider_order IS NULL OR TRIM(minute_provider_order) = ''\n\t\t\tOR minute_provider_order = 'tencent,sina,akshare,private' AND LOWER(TRIM(COALESCE(minute_provider_mode, ''))) = 'private'",
+    "UPDATE settings SET ai_review_start_time = '09:50' WHERE ai_review_start_time IS NULL OR TRIM(ai_review_start_time) = ''",
+    "UPDATE settings SET ai_review_interval_minutes = 15 WHERE ai_review_interval_minutes IS NULL OR ai_review_interval_minutes < 5 OR ai_review_interval_minutes > 120"
+  ],
+  "14": [
+    "UPDATE settings SET\n\t\tresearch2_email_to = COALESCE(yield_email_to, ''),\n\t\tresearch2_email_from = COALESCE(yield_email_from, ''),\n\t\tresearch2_email_smtp_host = COALESCE(yield_email_smtp_host, ''),\n\t\tresearch2_email_smtp_port = COALESCE(yield_email_smtp_port, 0),\n\t\tresearch2_email_smtp_user = COALESCE(yield_email_smtp_username, ''),\n\t\tresearch2_email_smtp_pass = COALESCE(yield_email_smtp_password, '')",
+    "UPDATE settings SET\n\t\tresearch2_email_smtp_user = CASE WHEN TRIM(COALESCE(research2_email_smtp_user, '')) = '' THEN TRIM(COALESCE(research2_email_from, '')) ELSE research2_email_smtp_user END,\n\t\tresearch2_email_smtp_host = CASE WHEN TRIM(COALESCE(research2_email_smtp_host, '')) <> '' THEN research2_email_smtp_host\n\t\t\tWHEN LOWER(research2_email_from) LIKE '%@qq.com' OR LOWER(research2_email_from) LIKE '%@foxmail.com' THEN 'smtp.qq.com'\n\t\t\tWHEN LOWER(research2_email_from) LIKE '%@163.com' THEN 'smtp.163.com'\n\t\t\tWHEN LOWER(research2_email_from) LIKE '%@126.com' THEN 'smtp.126.com'\n\t\t\tWHEN LOWER(research2_email_from) LIKE '%@yeah.net' THEN 'smtp.yeah.net'\n\t\t\tWHEN LOWER(research2_email_from) LIKE '%@gmail.com' THEN 'smtp.gmail.com'\n\t\t\tWHEN LOWER(research2_email_from) LIKE '%@outlook.com' OR LOWER(research2_email_from) LIKE '%@hotmail.com' OR LOWER(research2_email_from) LIKE '%@live.com' THEN 'smtp-mail.outlook.com'\n\t\t\tWHEN INSTR(research2_email_from, '@') > 1 THEN 'smtp.' || SUBSTR(LOWER(research2_email_from), INSTR(research2_email_from, '@') + 1)\n\t\t\tELSE '' END",
+    "UPDATE settings SET research2_email_smtp_port = CASE\n\t\tWHEN COALESCE(research2_email_smtp_port, 0) BETWEEN 1 AND 65535 THEN research2_email_smtp_port\n\t\tWHEN LOWER(TRIM(COALESCE(research2_email_smtp_host, ''))) = 'smtp-mail.outlook.com' THEN 587\n\t\tWHEN TRIM(COALESCE(research2_email_smtp_host, '')) <> '' THEN 465\n\t\tELSE 0 END",
+    "UPDATE settings SET research2_email_enabled = CASE\n\t\tWHEN TRIM(COALESCE(research2_email_to, '')) <> ''\n\t\t AND TRIM(COALESCE(research2_email_smtp_host, '')) <> ''\n\t\t AND COALESCE(research2_email_smtp_port, 0) BETWEEN 1 AND 65535\n\t\t AND TRIM(COALESCE(research2_email_smtp_user, '')) <> ''\n\t\t AND TRIM(COALESCE(research2_email_smtp_pass, '')) <> '' THEN 1\n\t\tELSE 0 END"
+  ],
+  "21": [
+    "UPDATE settings\nSET ai_capital_deployment_enabled = CASE WHEN COALESCE(ai_analysis_enabled, 0) <> 0 THEN 1 ELSE 0 END",
+    "UPDATE settings SET\nai_target_capital_utilization = 0.90\nWHERE ai_target_capital_utilization IS NULL OR ai_target_capital_utilization <= 0 OR ai_target_capital_utilization > 0.90",
+    "UPDATE settings SET\nai_max_immediate_buys_per_run = 2\nWHERE ai_max_immediate_buys_per_run IS NULL OR ai_max_immediate_buys_per_run < 1 OR ai_max_immediate_buys_per_run > 2",
+    "UPDATE settings SET\nai_reanalysis_interval_minutes = 30\nWHERE ai_reanalysis_interval_minutes IS NULL OR ai_reanalysis_interval_minutes < 5 OR ai_reanalysis_interval_minutes > 120",
+    "UPDATE settings SET ai_analysis_enabled = 0 WHERE ai_analysis_enabled IS NULL OR ai_analysis_enabled <> 0",
+    "UPDATE research_v160_analysis_runs\nSET trigger_ids_json = '[]'\nWHERE trigger_ids_json IS NULL OR TRIM(trigger_ids_json) = ''"
+  ],
+  "22": [
+    "UPDATE research2_recommendations\nSET current_price = CASE\n        WHEN current_price IS NULL OR current_price <= 0 THEN\n            CASE WHEN buy_market_price > 0 THEN buy_market_price ELSE buy_price END\n        ELSE current_price\n    END,\n    current_price_at = COALESCE(current_price_at, buy_at)\nWHERE status IN ('active', 'sell_pending')\n  AND buy_at IS NOT NULL\n  AND (buy_market_price > 0 OR buy_price > 0)"
+  ]
+}

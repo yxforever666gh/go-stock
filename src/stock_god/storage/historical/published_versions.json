@@ -1,0 +1,492 @@
+[
+  {
+    "tag": "1.2.4",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.2.5",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.2.6",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.2.7",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.2.8",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.0",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.1",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.2",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.3",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.4",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.5",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.3.6",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.4.0",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.4.1",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.4.2",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.4.3",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.4.4",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.5.0",
+    "main": 0,
+    "minute": 0
+  },
+  {
+    "tag": "1.5.1",
+    "main": 2,
+    "minute": 2
+  },
+  {
+    "tag": "1.5.2",
+    "main": 2,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.0",
+    "main": 3,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.1",
+    "main": 4,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.2",
+    "main": 5,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.3",
+    "main": 6,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.4",
+    "main": 7,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.5",
+    "main": 8,
+    "minute": 2
+  },
+  {
+    "tag": "1.6.8",
+    "main": 9,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.0",
+    "main": 10,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.1",
+    "main": 10,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.3",
+    "main": 11,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.4",
+    "main": 11,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.5",
+    "main": 11,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.6",
+    "main": 11,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.7",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.8",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.9",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.7.10",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.1",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.2",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.3",
+    "main": 12,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.4",
+    "main": 13,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.5",
+    "main": 13,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.6",
+    "main": 14,
+    "minute": 2
+  },
+  {
+    "tag": "1.8.7",
+    "main": 14,
+    "minute": 2
+  },
+  {
+    "tag": "2.0.0",
+    "main": 15,
+    "minute": 3
+  },
+  {
+    "tag": "2.1.0",
+    "main": 16,
+    "minute": 3
+  },
+  {
+    "tag": "2.2.0",
+    "main": 17,
+    "minute": 3
+  },
+  {
+    "tag": "2.3.0",
+    "main": 18,
+    "minute": 3
+  },
+  {
+    "tag": "2.4.0",
+    "main": 19,
+    "minute": 3
+  },
+  {
+    "tag": "2.5.0",
+    "main": 20,
+    "minute": 3
+  },
+  {
+    "tag": "2.5.1",
+    "main": 20,
+    "minute": 3
+  },
+  {
+    "tag": "2.6.0",
+    "main": 20,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.0",
+    "main": 21,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.1",
+    "main": 22,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.2",
+    "main": 22,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.3",
+    "main": 23,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.4",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.5",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.6",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.7",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.8",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.9",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.10",
+    "main": 24,
+    "minute": 3
+  },
+  {
+    "tag": "2.7.11",
+    "main": 25,
+    "minute": 3
+  },
+  {
+    "tag": "2.8.0",
+    "main": 26,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.0",
+    "main": 26,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.1",
+    "main": 26,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.2",
+    "main": 26,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.3",
+    "main": 26,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.4",
+    "main": 26,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.5",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.6",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.7",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.8",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.9",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.10",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.11",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.12",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.13",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "2.9.14",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "3.0.0",
+    "main": 27,
+    "minute": 3
+  },
+  {
+    "tag": "4.0.1",
+    "main": 29,
+    "minute": 3
+  },
+  {
+    "tag": "4.0.2",
+    "main": 29,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.0",
+    "main": 29,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.1",
+    "main": 29,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.2",
+    "main": 29,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.3",
+    "main": 30,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.4",
+    "main": 30,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.5",
+    "main": 31,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.6",
+    "main": 32,
+    "minute": 3
+  },
+  {
+    "tag": "5.0.7",
+    "main": 32,
+    "minute": 3
+  },
+  {
+    "tag": "5.1.0",
+    "main": 33,
+    "minute": 3
+  },
+  {
+    "tag": "5.2.0",
+    "main": 34,
+    "minute": 3
+  },
+  {
+    "tag": "5.2.1",
+    "main": 35,
+    "minute": 3
+  },
+  {
+    "tag": "5.2.2",
+    "main": 35,
+    "minute": 3
+  },
+  {
+    "tag": "5.2.3",
+    "main": 35,
+    "minute": 3
+  },
+  {
+    "tag": "5.2.4",
+    "main": 35,
+    "minute": 3
+  },
+  {
+    "tag": "5.2.5",
+    "main": 35,
+    "minute": 3
+  }
+]

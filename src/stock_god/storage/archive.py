@@ -99,14 +99,14 @@ def seal_legacy_archive(connection, source_version: int, affected_tables: set[st
             raise ValueError(f"unsealed archive object already exists: {archive_table}")
         archive_columns = ([rowid_column] if rowid_column else []) + visible
         connection.execute("CREATE TABLE " + qi(archive_table) + " (" + ",".join(qi(c) for c in archive_columns) + ")")
-        expressions = ([qi(rowid_expression)] if rowid_column else []) + [qi(c) for c in visible]
+        expressions = ([qi(rowid_expression)] if rowid_column and rowid_expression else []) + [qi(c) for c in visible]
         connection.execute("INSERT INTO " + qi(archive_table) + " SELECT " + ",".join(expressions) + " FROM " + qi(table))
         order = [rowid_column] if rowid_column else [col["name"] for col in sorted(columns, key=lambda c: c["pk"]) if col["pk"]]
         if not order:
             order = visible
         count, digest = content_hash(connection, archive_table, archive_columns, order)
         source_query = "SELECT " + ",".join(expressions) + " FROM " + qi(table)
-        source_order = [rowid_expression] if rowid_column else order
+        source_order = [rowid_expression] if rowid_column and rowid_expression else order
         source_query += " ORDER BY " + ",".join(qi(c) for c in source_order)
         source_digest = sha256(json.dumps(archive_columns, ensure_ascii=False, separators=(",", ":")).encode())
         source_count = 0

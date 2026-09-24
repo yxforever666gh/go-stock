@@ -1,0 +1,576 @@
+{
+  "objects": [
+    {
+      "name": "idx_research_v160_analysis_runs_evidence_set_id",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_evidence_set_id` ON `research_v160_analysis_runs`(`evidence_set_id`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_lease_expires_at",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_lease_expires_at` ON `research_v160_analysis_runs`(`lease_expires_at`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_lease_owner",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_lease_owner` ON `research_v160_analysis_runs`(`lease_owner`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_run_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v160_analysis_runs_run_id` ON `research_v160_analysis_runs`(`run_id`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_scheduled_for",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_scheduled_for` ON `research_v160_analysis_runs`(`scheduled_for`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_started_at",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_started_at` ON `research_v160_analysis_runs`(`started_at`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_status",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_status` ON `research_v160_analysis_runs`(`status`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_trigger_id",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_trigger_id` ON `research_v160_analysis_runs`(`trigger_id`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_analysis_runs_trigger_source",
+      "sql": "CREATE INDEX `idx_research_v160_analysis_runs_trigger_source` ON `research_v160_analysis_runs`(`trigger_source`)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_decision_events_decided_at",
+      "sql": "CREATE INDEX `idx_research_v160_decision_events_decided_at` ON `research_v160_decision_events`(`decided_at`)",
+      "tbl_name": "research_v160_decision_events",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_decision_events_decision_type",
+      "sql": "CREATE INDEX `idx_research_v160_decision_events_decision_type` ON `research_v160_decision_events`(`decision_type`)",
+      "tbl_name": "research_v160_decision_events",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_decision_events_event_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v160_decision_events_event_id` ON `research_v160_decision_events`(`event_id`)",
+      "tbl_name": "research_v160_decision_events",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_decision_events_recommendation_id",
+      "sql": "CREATE INDEX `idx_research_v160_decision_events_recommendation_id` ON `research_v160_decision_events`(`recommendation_id`)",
+      "tbl_name": "research_v160_decision_events",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_lifecycle_messages_created_at",
+      "sql": "CREATE INDEX `idx_research_v160_lifecycle_messages_created_at` ON `research_v160_lifecycle_messages`(`created_at`)",
+      "tbl_name": "research_v160_lifecycle_messages",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_lifecycle_messages_phase",
+      "sql": "CREATE INDEX `idx_research_v160_lifecycle_messages_phase` ON `research_v160_lifecycle_messages`(`phase`)",
+      "tbl_name": "research_v160_lifecycle_messages",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_positions_entry_at",
+      "sql": "CREATE INDEX `idx_research_v160_positions_entry_at` ON `research_v160_positions`(`entry_at`)",
+      "tbl_name": "research_v160_positions",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_positions_recommendation_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v160_positions_recommendation_id` ON `research_v160_positions`(`recommendation_id`)",
+      "tbl_name": "research_v160_positions",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_positions_status",
+      "sql": "CREATE INDEX `idx_research_v160_positions_status` ON `research_v160_positions`(`status`)",
+      "tbl_name": "research_v160_positions",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_positions_stock_code",
+      "sql": "CREATE INDEX `idx_research_v160_positions_stock_code` ON `research_v160_positions`(`stock_code`)",
+      "tbl_name": "research_v160_positions",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_analysis_run_id",
+      "sql": "CREATE INDEX `idx_research_v160_recommendations_analysis_run_id` ON `research_v160_recommendations`(`analysis_run_id`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_next_check_at",
+      "sql": "CREATE INDEX `idx_research_v160_recommendations_next_check_at` ON `research_v160_recommendations`(`next_check_at`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_opportunity_id",
+      "sql": "CREATE INDEX `idx_research_v160_recommendations_opportunity_id` ON `research_v160_recommendations`(`opportunity_id`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_recommendation_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v160_recommendations_recommendation_id` ON `research_v160_recommendations`(`recommendation_id`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_signal_at",
+      "sql": "CREATE INDEX `idx_research_v160_recommendations_signal_at` ON `research_v160_recommendations`(`signal_at`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_status",
+      "sql": "CREATE INDEX `idx_research_v160_recommendations_status` ON `research_v160_recommendations`(`status`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_recommendations_stock_code",
+      "sql": "CREATE INDEX `idx_research_v160_recommendations_stock_code` ON `research_v160_recommendations`(`stock_code`)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_simulated_trades_recommendation_id",
+      "sql": "CREATE INDEX `idx_research_v160_simulated_trades_recommendation_id` ON `research_v160_simulated_trades`(`recommendation_id`)",
+      "tbl_name": "research_v160_simulated_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_simulated_trades_side",
+      "sql": "CREATE INDEX `idx_research_v160_simulated_trades_side` ON `research_v160_simulated_trades`(`side`)",
+      "tbl_name": "research_v160_simulated_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_simulated_trades_stock_code",
+      "sql": "CREATE INDEX `idx_research_v160_simulated_trades_stock_code` ON `research_v160_simulated_trades`(`stock_code`)",
+      "tbl_name": "research_v160_simulated_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_simulated_trades_trade_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v160_simulated_trades_trade_id` ON `research_v160_simulated_trades`(`trade_id`)",
+      "tbl_name": "research_v160_simulated_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v160_simulated_trades_traded_at",
+      "sql": "CREATE INDEX `idx_research_v160_simulated_trades_traded_at` ON `research_v160_simulated_trades`(`traded_at`)",
+      "tbl_name": "research_v160_simulated_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_cash_flows_effective_at",
+      "sql": "CREATE INDEX `idx_research_v170_account_cash_flows_effective_at` ON `research_v170_account_cash_flows`(`effective_at`)",
+      "tbl_name": "research_v170_account_cash_flows",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_cash_flows_flow_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v170_account_cash_flows_flow_id` ON `research_v170_account_cash_flows`(`flow_id`)",
+      "tbl_name": "research_v170_account_cash_flows",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_cash_flows_sequence",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v170_account_cash_flows_sequence` ON `research_v170_account_cash_flows`(`sequence`)",
+      "tbl_name": "research_v170_account_cash_flows",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_cash_flows_trading_date",
+      "sql": "CREATE INDEX `idx_research_v170_account_cash_flows_trading_date` ON `research_v170_account_cash_flows`(`trading_date`)",
+      "tbl_name": "research_v170_account_cash_flows",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_cash_flows_type",
+      "sql": "CREATE INDEX `idx_research_v170_account_cash_flows_type` ON `research_v170_account_cash_flows`(`type`)",
+      "tbl_name": "research_v170_account_cash_flows",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_snapshots_snapshot_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research_v170_account_snapshots_snapshot_id` ON `research_v170_account_snapshots`(`snapshot_id`)",
+      "tbl_name": "research_v170_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_snapshots_snapshot_type",
+      "sql": "CREATE INDEX `idx_research_v170_account_snapshots_snapshot_type` ON `research_v170_account_snapshots`(`snapshot_type`)",
+      "tbl_name": "research_v170_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research_v170_account_snapshots_valued_at",
+      "sql": "CREATE INDEX `idx_research_v170_account_snapshots_valued_at` ON `research_v170_account_snapshots`(`valued_at`)",
+      "tbl_name": "research_v170_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_settings_deleted_at",
+      "sql": "CREATE INDEX `idx_settings_deleted_at` ON `settings`(`deleted_at`)",
+      "tbl_name": "settings",
+      "type": "index"
+    },
+    {
+      "name": "idx_v160_message_seq",
+      "sql": "CREATE UNIQUE INDEX `idx_v160_message_seq` ON `research_v160_lifecycle_messages`(`recommendation_id`,`sequence`)",
+      "tbl_name": "research_v160_lifecycle_messages",
+      "type": "index"
+    },
+    {
+      "name": "idx_v170_snapshot_date_type",
+      "sql": "CREATE INDEX `idx_v170_snapshot_date_type` ON `research_v170_account_snapshots`(`trading_date`)",
+      "tbl_name": "research_v170_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "research_v160_analysis_runs",
+      "sql": "CREATE TABLE `research_v160_analysis_runs` (`id` integer PRIMARY KEY AUTOINCREMENT,`run_id` text NOT NULL,`scheduled_for` datetime,`started_at` datetime,`completed_at` datetime,`status` text NOT NULL,`ai_config_id` integer,`provider_name` text,`model_name` text,`market_report` text,`sector_report` text,`stock_report` text,`final_report` text,`source_status_json` text,`model_attempt_log_json` text NOT NULL DEFAULT \"[]\",`strategy_version` text,`data_profile_version` text NOT NULL DEFAULT \"legacy-unversioned\",`evidence_profile_version` text,`evidence_set_id` text,`failure_reason` text,`recommendation_count` integer,`trigger_id` text,`trigger_ids_json` text NOT NULL DEFAULT \"[]\",`trigger_source` text,`trigger_reason` text,`funding_cash` real,`funding_reserved_cash` real,`funding_net_asset_value` real,`funding_capital_buffer` real,`funding_deployable_cash` real,`funding_available_slots` integer,`lease_owner` text,`lease_expires_at` datetime,`buy_now_count` integer,`wait_count` integer,`reject_count` integer,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research_v160_analysis_runs",
+      "type": "table"
+    },
+    {
+      "name": "research_v160_decision_events",
+      "sql": "CREATE TABLE `research_v160_decision_events` (`id` integer PRIMARY KEY AUTOINCREMENT,`event_id` text NOT NULL,`recommendation_id` text NOT NULL,`decision_type` text NOT NULL,`decided_at` datetime NOT NULL,`ai_response` text,`reason` text,`quote_price` real,`quote_at` datetime,`source_refs` text,`data_status` text,`decision_policy_version` text NOT NULL DEFAULT \"legacy-unversioned\",`created_at` datetime)",
+      "tbl_name": "research_v160_decision_events",
+      "type": "table"
+    },
+    {
+      "name": "research_v160_lifecycle_messages",
+      "sql": "CREATE TABLE `research_v160_lifecycle_messages` (`id` integer PRIMARY KEY AUTOINCREMENT,`recommendation_id` text NOT NULL,`sequence` integer NOT NULL,`role` text NOT NULL,`phase` text,`content` text NOT NULL,`response_id` text,`previous_response_id` text,`model` text,`created_at` datetime)",
+      "tbl_name": "research_v160_lifecycle_messages",
+      "type": "table"
+    },
+    {
+      "name": "research_v160_positions",
+      "sql": "CREATE TABLE `research_v160_positions` (`id` integer PRIMARY KEY AUTOINCREMENT,`recommendation_id` text NOT NULL,`stock_code` text NOT NULL,`stock_name` text NOT NULL,`market` text NOT NULL,`quantity` integer,`entry_at` datetime,`entry_price` real,`buy_fees` real,`current_price` real,`current_price_at` datetime,`status` text NOT NULL,`exit_at` datetime,`exit_price` real,`sell_fees` real,`net_pn_l` real,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research_v160_positions",
+      "type": "table"
+    },
+    {
+      "name": "research_v160_recommendations",
+      "sql": "CREATE TABLE `research_v160_recommendations` (`id` integer PRIMARY KEY AUTOINCREMENT,`recommendation_id` text NOT NULL,`analysis_run_id` text NOT NULL,`opportunity_id` text,`stock_code` text NOT NULL,`stock_name` text NOT NULL,`signal_at` datetime NOT NULL,`ai_summary` text,`activation_condition` text,`main_risk` text,`source_refs` text,`status` text NOT NULL,`previous_response_id` text,`next_check_at` datetime,`activated_at` datetime,`activation_price` real,`quantity` integer,`closed_at` datetime,`close_price` real,`total_fees` real,`net_pn_l` real,`net_yield_rate` real,`last_decision` text,`last_decision_at` datetime,`data_pause_seconds` integer NOT NULL DEFAULT 0,`reserved_cash` real NOT NULL DEFAULT 0,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research_v160_recommendations",
+      "type": "table"
+    },
+    {
+      "name": "research_v160_simulated_accounts",
+      "sql": "CREATE TABLE `research_v160_simulated_accounts` (`frozen` numeric NOT NULL DEFAULT false,`frozen_at` datetime,`frozen_reason` text,`id` integer PRIMARY KEY AUTOINCREMENT,`initial_cash` real NOT NULL,`cash` real NOT NULL,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research_v160_simulated_accounts",
+      "type": "table"
+    },
+    {
+      "name": "research_v160_simulated_trades",
+      "sql": "CREATE TABLE `research_v160_simulated_trades` (`id` integer PRIMARY KEY AUTOINCREMENT,`trade_id` text NOT NULL,`recommendation_id` text NOT NULL,`stock_code` text NOT NULL,`side` text NOT NULL,`traded_at` datetime NOT NULL,`market_price` real,`execution_price` real,`quantity` integer,`notional` real,`commission` real,`stamp_duty` real,`transfer_fee` real,`slippage_amount` real,`total_fees` real,`net_cash_flow` real,`created_at` datetime)",
+      "tbl_name": "research_v160_simulated_trades",
+      "type": "table"
+    },
+    {
+      "name": "research_v170_account_cash_flows",
+      "sql": "CREATE TABLE `research_v170_account_cash_flows` (`id` integer PRIMARY KEY AUTOINCREMENT,`flow_id` text NOT NULL,`sequence` integer NOT NULL,`type` text NOT NULL,`amount` real NOT NULL,`effective_at` datetime NOT NULL,`trading_date` text NOT NULL,`net_asset_value_before` real NOT NULL,`net_asset_value_after` real NOT NULL,`unit_value_before` real NOT NULL,`units_issued` real NOT NULL,`created_at` datetime)",
+      "tbl_name": "research_v170_account_cash_flows",
+      "type": "table"
+    },
+    {
+      "name": "research_v170_account_snapshots",
+      "sql": "CREATE TABLE `research_v170_account_snapshots` (`id` integer PRIMARY KEY AUTOINCREMENT,`snapshot_id` text NOT NULL,`snapshot_type` text NOT NULL,`trading_date` text NOT NULL,`valued_at` datetime NOT NULL,`cash` real NOT NULL,`position_value` real NOT NULL,`net_asset_value` real NOT NULL,`cumulative_net_contribution` real NOT NULL,`unit_value` real NOT NULL,`time_weighted_return` real NOT NULL,`valuation_status` text NOT NULL,`created_at` datetime)",
+      "tbl_name": "research_v170_account_snapshots",
+      "type": "table"
+    },
+    {
+      "name": "research_v170_funding_plans",
+      "sql": "CREATE TABLE `research_v170_funding_plans` (`id` integer PRIMARY KEY AUTOINCREMENT,`initial_contribution` real NOT NULL,`target_contribution` real NOT NULL,`deposit_amount` real NOT NULL,`planned_deposits` integer NOT NULL,`completed_deposits` integer NOT NULL DEFAULT 0,`start_after_trading_date` text NOT NULL,`last_deposit_trading_date` text,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research_v170_funding_plans",
+      "type": "table"
+    },
+    {
+      "name": "settings",
+      "sql": "CREATE TABLE `settings` (`id` integer PRIMARY KEY AUTOINCREMENT,`created_at` datetime,`updated_at` datetime,`deleted_at` datetime,`tushare_token` text,`local_push_enable` numeric,`ding_push_enable` numeric,`ding_robot` text,`update_basic_info_on_start` numeric,`refresh_interval` integer,`open_ai_enable` numeric,`prompt` text,`check_update` numeric,`question_template` text,`crawl_time_out` integer,`k_days` integer,`enable_danmu` numeric,`browser_path` text,`enable_news` numeric,`dark_theme` numeric,`browser_pool_size` integer,`enable_fund` numeric,`enable_push_news` numeric,`enable_only_push_red_news` numeric,`http_proxy` text,`http_proxy_enabled` numeric,`force_no_proxy_for_fetch` numeric DEFAULT true,`qgqp_b_id` text,`ai_analysis_enabled` numeric DEFAULT true,`ai_capital_deployment_enabled` numeric DEFAULT true,`ai_target_capital_utilization` real DEFAULT 0.9,`ai_max_immediate_buys_per_run` integer DEFAULT 2,`ai_reanalysis_interval_minutes` integer DEFAULT 30,`research2_auto_enabled` numeric DEFAULT true,`research2_email_enabled` numeric,`research2_email_to` text,`research2_email_from` text,`research2_email_smtp_host` text,`research2_email_smtp_port` integer,`research2_email_smtp_user` text,`research2_email_smtp_pass` text,`research2_email_slots` text NOT NULL DEFAULT \"[]\",`ai_analysis_config_id` integer,`ai_analysis_times` text DEFAULT \"09:30,11:30,14:30\",`ai_review_start_time` text DEFAULT \"09:50\",`ai_review_interval_minutes` integer DEFAULT 15,`minute_provider_mode` text DEFAULT \"public\",`minute_provider_order` text DEFAULT \"tencent,sina,akshare,private\",`minute_long_history_hint_enabled` numeric DEFAULT true,`private_minute_enabled` numeric,`private_minute_base_url` text,`private_minute_api_key` text,`private_minute_timeout_sec` integer,`private_minute_min_interval` integer,`private_minute_proxy_mode` text DEFAULT \"disable\",`private_minute_level` text DEFAULT \"1min\",`akshare_enabled` numeric DEFAULT true,`sina_minute_enabled` numeric DEFAULT true,`tencent_minute_enabled` numeric DEFAULT true,`eastmoney_minute_enabled` numeric DEFAULT true,`akshare_minute_source_mode` text DEFAULT \"auto\",`experimental_evidence_enabled` numeric DEFAULT false)",
+      "tbl_name": "settings",
+      "type": "table"
+    }
+  ],
+  "tables": {
+    "research_v160_analysis_runs": [
+      {
+        "ai_config_id": 0,
+        "buy_now_count": 0,
+        "completed_at": "2026-08-24T12:15:05.8572857+08:00",
+        "created_at": "2026-09-25T03:13:53.1889694+08:00",
+        "data_profile_version": "legacy-unversioned",
+        "evidence_profile_version": "",
+        "evidence_set_id": "",
+        "failure_reason": "",
+        "final_report": "综合判断推荐中国平安。\n\n| 股票名称 | 股票代码 | AI分析摘要 | 主要风险 | 来源编号 |\n|---|---|---|---|---|",
+        "funding_available_slots": 0,
+        "funding_capital_buffer": 0,
+        "funding_cash": 0,
+        "funding_deployable_cash": 0,
+        "funding_net_asset_value": 0,
+        "funding_reserved_cash": 0,
+        "id": 1,
+        "lease_expires_at": null,
+        "lease_owner": "",
+        "market_report": "",
+        "model_attempt_log_json": "[]",
+        "model_name": "gpt-5.6-sol",
+        "provider_name": "",
+        "recommendation_count": 0,
+        "reject_count": 0,
+        "run_id": "4bf3e4d9-959a-48c6-95b7-56104167c6cd",
+        "scheduled_for": "2026-08-24T12:03:20.8749971+08:00",
+        "sector_report": "",
+        "source_status_json": "",
+        "started_at": "2026-08-24T12:03:20.8749971+08:00",
+        "status": "no_recommendation",
+        "stock_report": "",
+        "strategy_version": "",
+        "trigger_id": "",
+        "trigger_ids_json": "[]",
+        "trigger_reason": "",
+        "trigger_source": "",
+        "updated_at": "2026-09-25T03:13:53.1889694+08:00",
+        "wait_count": 0
+      }
+    ],
+    "research_v160_decision_events": null,
+    "research_v160_lifecycle_messages": null,
+    "research_v160_positions": [
+      {
+        "buy_fees": 0,
+        "created_at": "2026-09-25T03:13:53.1879681+08:00",
+        "current_price": 54.92,
+        "current_price_at": "2026-08-24T16:14:36+08:00",
+        "entry_at": "2026-08-21T11:22:17+08:00",
+        "entry_price": 53.5535,
+        "exit_at": null,
+        "exit_price": 0,
+        "id": 1,
+        "market": "SH",
+        "net_pn_l": 0,
+        "quantity": 900,
+        "recommendation_id": "existing-ping-an",
+        "sell_fees": 0,
+        "status": "open",
+        "stock_code": "sh601318",
+        "stock_name": "中国平安",
+        "updated_at": "2026-09-25T03:13:53.1879681+08:00"
+      }
+    ],
+    "research_v160_recommendations": null,
+    "research_v160_simulated_accounts": [
+      {
+        "cash": 146049.00376762002,
+        "created_at": "2026-08-14T09:30:00+08:00",
+        "frozen": 0,
+        "frozen_at": null,
+        "frozen_reason": "",
+        "id": 1,
+        "initial_cash": 100000,
+        "updated_at": "2026-09-25T03:13:53.146266+08:00"
+      }
+    ],
+    "research_v160_simulated_trades": null,
+    "research_v170_account_cash_flows": [
+      {
+        "amount": 100000,
+        "created_at": "2026-09-25T03:13:53.1869878+08:00",
+        "effective_at": "2026-08-14T09:30:00+08:00",
+        "flow_id": "initial",
+        "id": 1,
+        "net_asset_value_after": 100000,
+        "net_asset_value_before": 0,
+        "sequence": 0,
+        "trading_date": "2026-08-14",
+        "type": "initial_deposit",
+        "unit_value_before": 1,
+        "units_issued": 100000
+      },
+      {
+        "amount": 100000,
+        "created_at": "2026-09-25T03:13:53.1869878+08:00",
+        "effective_at": "2026-08-20T09:20:00+08:00",
+        "flow_id": "scheduled",
+        "id": 2,
+        "net_asset_value_after": 200000,
+        "net_asset_value_before": 100000,
+        "sequence": 1,
+        "trading_date": "2026-08-20",
+        "type": "scheduled_deposit",
+        "unit_value_before": 1,
+        "units_issued": 100000
+      }
+    ],
+    "research_v170_account_snapshots": [
+      {
+        "cash": 100000,
+        "created_at": "2026-09-25T03:13:53.1879681+08:00",
+        "cumulative_net_contribution": 100000,
+        "id": 1,
+        "net_asset_value": 100000,
+        "position_value": 0,
+        "snapshot_id": "initial-deposit-baseline",
+        "snapshot_type": "initial_deposit",
+        "time_weighted_return": 0,
+        "trading_date": "2026-08-14",
+        "unit_value": 1,
+        "valuation_status": "baseline",
+        "valued_at": "2026-08-14T09:30:00+08:00"
+      },
+      {
+        "cash": 100000,
+        "created_at": "2026-09-25T03:13:53.1879681+08:00",
+        "cumulative_net_contribution": 100000,
+        "id": 2,
+        "net_asset_value": 100000,
+        "position_value": 0,
+        "snapshot_id": "pre-deposit-2026-08-20",
+        "snapshot_type": "pre_deposit",
+        "time_weighted_return": 0,
+        "trading_date": "2026-08-20",
+        "unit_value": 1,
+        "valuation_status": "complete",
+        "valued_at": "2026-08-20T09:20:00+08:00"
+      },
+      {
+        "cash": 200000,
+        "created_at": "2026-09-25T03:13:53.1879681+08:00",
+        "cumulative_net_contribution": 200000,
+        "id": 3,
+        "net_asset_value": 200000,
+        "position_value": 0,
+        "snapshot_id": "post-deposit-2026-08-20",
+        "snapshot_type": "post_deposit",
+        "time_weighted_return": 0,
+        "trading_date": "2026-08-20",
+        "unit_value": 1,
+        "valuation_status": "complete",
+        "valued_at": "2026-08-20T09:20:00+08:00"
+      },
+      {
+        "cash": 146049.00376762002,
+        "created_at": "2026-09-25T03:13:53.1879681+08:00",
+        "cumulative_net_contribution": 200000,
+        "id": 4,
+        "net_asset_value": 246049.00376762002,
+        "position_value": 100000,
+        "snapshot_id": "daily-close-2026-08-24",
+        "snapshot_type": "daily_close",
+        "time_weighted_return": 0.2302450188381,
+        "trading_date": "2026-08-24",
+        "unit_value": 1.2302450188381,
+        "valuation_status": "complete",
+        "valued_at": "2026-08-24T15:00:00+08:00"
+      }
+    ],
+    "research_v170_funding_plans": [
+      {
+        "completed_deposits": 1,
+        "created_at": "2026-09-25T03:13:53.1879681+08:00",
+        "deposit_amount": 100000,
+        "id": 1,
+        "initial_contribution": 100000,
+        "last_deposit_trading_date": "2026-08-20",
+        "planned_deposits": 4,
+        "start_after_trading_date": "2026-08-19",
+        "target_contribution": 500000,
+        "updated_at": "2026-09-25T03:13:53.1879681+08:00"
+      }
+    ],
+    "settings": [
+      {
+        "ai_analysis_config_id": 0,
+        "ai_analysis_enabled": 1,
+        "ai_analysis_times": "09:30,11:30,14:30",
+        "ai_capital_deployment_enabled": 1,
+        "ai_max_immediate_buys_per_run": 2,
+        "ai_reanalysis_interval_minutes": 30,
+        "ai_review_interval_minutes": 15,
+        "ai_review_start_time": "09:50",
+        "ai_target_capital_utilization": 0.9,
+        "akshare_enabled": 1,
+        "akshare_minute_source_mode": "auto",
+        "browser_path": "",
+        "browser_pool_size": 0,
+        "check_update": 0,
+        "crawl_time_out": 0,
+        "created_at": "2026-09-25T03:13:53.1889694+08:00",
+        "dark_theme": 0,
+        "deleted_at": null,
+        "ding_push_enable": 0,
+        "ding_robot": "",
+        "eastmoney_minute_enabled": 1,
+        "enable_danmu": 0,
+        "enable_fund": 0,
+        "enable_news": 0,
+        "enable_only_push_red_news": 0,
+        "enable_push_news": 0,
+        "experimental_evidence_enabled": 0,
+        "force_no_proxy_for_fetch": 1,
+        "http_proxy": "",
+        "http_proxy_enabled": 0,
+        "id": 1,
+        "k_days": 0,
+        "local_push_enable": 0,
+        "minute_long_history_hint_enabled": 1,
+        "minute_provider_mode": "public",
+        "minute_provider_order": "tencent,sina,akshare,private",
+        "open_ai_enable": 0,
+        "private_minute_api_key": "",
+        "private_minute_base_url": "",
+        "private_minute_enabled": 0,
+        "private_minute_level": "1min",
+        "private_minute_min_interval": 0,
+        "private_minute_proxy_mode": "disable",
+        "private_minute_timeout_sec": 0,
+        "prompt": "",
+        "qgqp_b_id": "",
+        "question_template": "",
+        "refresh_interval": 0,
+        "research2_auto_enabled": 1,
+        "research2_email_enabled": 0,
+        "research2_email_from": "",
+        "research2_email_slots": "[]",
+        "research2_email_smtp_host": "",
+        "research2_email_smtp_pass": "",
+        "research2_email_smtp_port": 0,
+        "research2_email_smtp_user": "",
+        "research2_email_to": "",
+        "sina_minute_enabled": 1,
+        "tencent_minute_enabled": 1,
+        "tushare_token": "",
+        "update_basic_info_on_start": 0,
+        "updated_at": "2026-09-25T03:13:53.1889694+08:00"
+      }
+    ]
+  }
+}

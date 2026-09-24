@@ -1,0 +1,932 @@
+{
+  "objects": [
+    {
+      "name": "idx_research2_account_snapshots_slot",
+      "sql": "CREATE INDEX `idx_research2_account_snapshots_slot` ON `research2_account_snapshots`(`slot`)",
+      "tbl_name": "research2_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_account_snapshots_snapshot_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_account_snapshots_snapshot_id` ON `research2_account_snapshots`(`snapshot_id`)",
+      "tbl_name": "research2_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_account_snapshots_snapshot_type",
+      "sql": "CREATE INDEX `idx_research2_account_snapshots_snapshot_type` ON `research2_account_snapshots`(`snapshot_type`)",
+      "tbl_name": "research2_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_account_snapshots_trading_date",
+      "sql": "CREATE INDEX `idx_research2_account_snapshots_trading_date` ON `research2_account_snapshots`(`trading_date`)",
+      "tbl_name": "research2_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_account_snapshots_valued_at",
+      "sql": "CREATE INDEX `idx_research2_account_snapshots_valued_at` ON `research2_account_snapshots`(`valued_at`)",
+      "tbl_name": "research2_account_snapshots",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_accounts_slot",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_accounts_slot` ON `research2_accounts`(`slot`)",
+      "tbl_name": "research2_accounts",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_chain_id",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_chain_id` ON `research2_analysis_runs`(`chain_id`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_evidence_set_id",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_evidence_set_id` ON `research2_analysis_runs`(`evidence_set_id`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_evidence_window_start_at",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_evidence_window_start_at` ON `research2_analysis_runs`(`evidence_window_start_at`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_generated_at",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_generated_at` ON `research2_analysis_runs`(`generated_at`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_parent_run_id",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_parent_run_id` ON `research2_analysis_runs`(`parent_run_id`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_run_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_analysis_runs_run_id` ON `research2_analysis_runs`(`run_id`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_scheduled_for",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_scheduled_for` ON `research2_analysis_runs`(`scheduled_for`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_slot",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_slot` ON `research2_analysis_runs`(`slot`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_started_at",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_started_at` ON `research2_analysis_runs`(`started_at`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_status",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_status` ON `research2_analysis_runs`(`status`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_analysis_runs_trigger_source",
+      "sql": "CREATE INDEX `idx_research2_analysis_runs_trigger_source` ON `research2_analysis_runs`(`trigger_source`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_allocation_policy",
+      "sql": "CREATE INDEX `idx_research2_execution_chains_allocation_policy` ON `research2_execution_chains`(`allocation_policy`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_chain_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_execution_chains_chain_id` ON `research2_execution_chains`(`chain_id`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_completed_at",
+      "sql": "CREATE INDEX `idx_research2_execution_chains_completed_at` ON `research2_execution_chains`(`completed_at`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_latest_run_id",
+      "sql": "CREATE INDEX `idx_research2_execution_chains_latest_run_id` ON `research2_execution_chains`(`latest_run_id`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_root_run_id",
+      "sql": "CREATE INDEX `idx_research2_execution_chains_root_run_id` ON `research2_execution_chains`(`root_run_id`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_status",
+      "sql": "CREATE INDEX `idx_research2_execution_chains_status` ON `research2_execution_chains`(`status`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_execution_chains_trading_date",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_execution_chains_trading_date` ON `research2_execution_chains`(`slot`,`trading_date`)",
+      "tbl_name": "research2_execution_chains",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_analysis_run_id",
+      "sql": "CREATE INDEX `idx_research2_recommendations_analysis_run_id` ON `research2_recommendations`(`analysis_run_id`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_buy_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_buy_at` ON `research2_recommendations`(`buy_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_buy_day_limit_evaluated_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_buy_day_limit_evaluated_at` ON `research2_recommendations`(`buy_day_limit_evaluated_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_buy_day_limit_outcome",
+      "sql": "CREATE INDEX `idx_research2_recommendations_buy_day_limit_outcome` ON `research2_recommendations`(`buy_day_limit_outcome`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_buy_day_limit_status",
+      "sql": "CREATE INDEX `idx_research2_recommendations_buy_day_limit_status` ON `research2_recommendations`(`buy_day_limit_status`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_execution_failure_code",
+      "sql": "CREATE INDEX `idx_research2_recommendations_execution_failure_code` ON `research2_recommendations`(`execution_failure_code`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_execution_quote_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_execution_quote_at` ON `research2_recommendations`(`execution_quote_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_final_score",
+      "sql": "CREATE INDEX `idx_research2_recommendations_final_score` ON `research2_recommendations`(`final_score`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_historical_replay_id",
+      "sql": "CREATE INDEX `idx_research2_recommendations_historical_replay_id` ON `research2_recommendations`(`historical_replay_id`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_historical_sell_blocked",
+      "sql": "CREATE INDEX `idx_research2_recommendations_historical_sell_blocked` ON `research2_recommendations`(`historical_sell_blocked`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_recommendation_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_recommendations_recommendation_id` ON `research2_recommendations`(`recommendation_id`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_replaces_recommendation_id",
+      "sql": "CREATE INDEX `idx_research2_recommendations_replaces_recommendation_id` ON `research2_recommendations`(`replaces_recommendation_id`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_role_rank",
+      "sql": "CREATE INDEX `idx_research2_recommendations_role_rank` ON `research2_recommendations`(`selection_role`,`selection_rank`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_sell_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_sell_at` ON `research2_recommendations`(`sell_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_signal_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_signal_at` ON `research2_recommendations`(`signal_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_slot",
+      "sql": "CREATE INDEX `idx_research2_recommendations_slot` ON `research2_recommendations`(`slot`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_status",
+      "sql": "CREATE INDEX `idx_research2_recommendations_status` ON `research2_recommendations`(`status`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_stock_code",
+      "sql": "CREATE INDEX `idx_research2_recommendations_stock_code` ON `research2_recommendations`(`stock_code`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_target_buy_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_target_buy_at` ON `research2_recommendations`(`target_buy_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_recommendations_target_sell_at",
+      "sql": "CREATE INDEX `idx_research2_recommendations_target_sell_at` ON `research2_recommendations`(`target_sell_at`)",
+      "tbl_name": "research2_recommendations",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_runs_date_attempt",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_runs_date_attempt` ON `research2_analysis_runs`(`trading_date`,`scheduled_slot`,`attempt_no`)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_trades_recommendation_id",
+      "sql": "CREATE INDEX `idx_research2_trades_recommendation_id` ON `research2_trades`(`recommendation_id`)",
+      "tbl_name": "research2_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_trades_side",
+      "sql": "CREATE INDEX `idx_research2_trades_side` ON `research2_trades`(`side`)",
+      "tbl_name": "research2_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_trades_slot",
+      "sql": "CREATE INDEX `idx_research2_trades_slot` ON `research2_trades`(`slot`)",
+      "tbl_name": "research2_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_trades_trade_id",
+      "sql": "CREATE UNIQUE INDEX `idx_research2_trades_trade_id` ON `research2_trades`(`trade_id`)",
+      "tbl_name": "research2_trades",
+      "type": "index"
+    },
+    {
+      "name": "idx_research2_trades_traded_at",
+      "sql": "CREATE INDEX `idx_research2_trades_traded_at` ON `research2_trades`(`traded_at`)",
+      "tbl_name": "research2_trades",
+      "type": "index"
+    },
+    {
+      "name": "research2_account_snapshots",
+      "sql": "CREATE TABLE `research2_account_snapshots` (`slot` text NOT NULL DEFAULT \"09:50\",`id` integer PRIMARY KEY AUTOINCREMENT,`snapshot_id` text NOT NULL,`valued_at` datetime NOT NULL,`trading_date` text NOT NULL,`snapshot_type` text NOT NULL,`cash` real,`position_value` real,`net_asset_value` real,`net_profit` real,`return_rate` real,`created_at` datetime)",
+      "tbl_name": "research2_account_snapshots",
+      "type": "table"
+    },
+    {
+      "name": "research2_accounts",
+      "sql": "CREATE TABLE `research2_accounts` (`slot` text NOT NULL DEFAULT \"09:50\",`baseline_at` datetime,`baseline_net_asset_value` real,`seed_cash` real,`id` integer PRIMARY KEY AUTOINCREMENT,`initial_cash` real NOT NULL,`cash` real NOT NULL,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research2_accounts",
+      "type": "table"
+    },
+    {
+      "name": "research2_analysis_runs",
+      "sql": "CREATE TABLE `research2_analysis_runs` (`scheduled_slot` text NOT NULL DEFAULT \"09:50\",`slot` text,`published` numeric NOT NULL DEFAULT false,`archive_reason` text,`persisted_at` datetime,`id` integer PRIMARY KEY AUTOINCREMENT,`run_id` text NOT NULL,`trading_date` text NOT NULL,`attempt_no` integer NOT NULL DEFAULT 1,`chain_id` text,`parent_run_id` text,`trigger_source` text NOT NULL DEFAULT \"legacy-unversioned\",`requested_slots` integer NOT NULL DEFAULT 0,`primary_count` integer NOT NULL DEFAULT 0,`standby_count` integer NOT NULL DEFAULT 0,`scheduled_for` datetime NOT NULL,`started_at` datetime NOT NULL,`evidence_window_start_at` datetime,`evidence_cutoff_at` datetime,`evidence_coverage_pct` real,`degraded` numeric,`generated_at` datetime,`status` text NOT NULL,`provider_name` text,`model_name` text,`report_markdown` text,`source_status_json` text NOT NULL DEFAULT \"[]\",`model_attempt_log_json` text NOT NULL DEFAULT \"[]\",`strategy_version` text,`evidence_profile_version` text,`evidence_set_id` text,`failure_reason` text,`recommendation_count` integer,`on_time` numeric,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research2_analysis_runs",
+      "type": "table"
+    },
+    {
+      "name": "research2_execution_chains",
+      "sql": "CREATE TABLE `research2_execution_chains` (`slot` text NOT NULL DEFAULT \"09:50\",`winner_run_id` text,`sell_completed_at` datetime,`allocation_base_cash` real,`allocation_policy` text NOT NULL DEFAULT \"legacy_recorded\",`id` integer PRIMARY KEY AUTOINCREMENT,`chain_id` text NOT NULL,`trading_date` text NOT NULL,`scheduled_for` datetime NOT NULL,`status` text NOT NULL,`target_slots` integer NOT NULL DEFAULT 3,`filled_slots` integer NOT NULL DEFAULT 0,`root_run_id` text,`latest_run_id` text,`stop_reason` text,`started_at` datetime NOT NULL,`completed_at` datetime,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research2_execution_chains",
+      "type": "table"
+    },
+    {
+      "name": "research2_recommendations",
+      "sql": "CREATE TABLE `research2_recommendations` (`slot` text NOT NULL DEFAULT \"09:50\",`legacy_slot_exception` numeric,`baseline_value` real,`period_pn_l` real,`id` integer PRIMARY KEY AUTOINCREMENT,`recommendation_id` text NOT NULL,`analysis_run_id` text NOT NULL,`selection_role` text NOT NULL DEFAULT \"legacy-unversioned\",`selection_rank` integer NOT NULL DEFAULT 0,`replaces_recommendation_id` text,`promotion_reason` text,`stock_code` text NOT NULL,`stock_name` text NOT NULL,`signal_at` datetime NOT NULL,`market_score` real,`sector_score` real,`stock_score` real,`catalyst_score` real,`risk_deduction` real,`final_score` real,`reference_price` real,`buy_lower` real,`buy_upper` real,`estimated_lot_cost` real,`summary` text,`quant_data` text,`fresh_catalyst` text,`old_background` text,`main_risk` text,`cancel_conditions` text,`source_refs` text,`status` text NOT NULL,`late` numeric,`target_buy_at` datetime NOT NULL,`execution_failure_code` text,`execution_quote_price` real,`execution_quote_at` datetime,`execution_limit_price` real,`execution_limit_distance_pct` real,`buy_at` datetime,`buy_market_price` real,`buy_price` real,`quantity` integer,`buy_fees` real,`current_price` real,`current_price_at` datetime,`target_sell_at` datetime,`sell_at` datetime,`sell_market_price` real,`sell_price` real,`sell_fees` real,`net_pn_l` real,`net_yield_rate` real,`hit_five_before_sell` numeric,`hit_limit_up_full_day` numeric,`hit_minus_three` numeric,`metrics_finalized` numeric,`buy_day_limit_outcome` text,`buy_day_limit_status` text NOT NULL DEFAULT \"pending\",`buy_day_limit_evaluated_at` datetime,`buy_day_limit_attempt_count` integer NOT NULL DEFAULT 0,`buy_day_limit_source_json` text NOT NULL DEFAULT \"[]\",`buy_day_limit_failure_reason` text,`historical_replay_id` text,`historical_sell_blocked` numeric NOT NULL DEFAULT false,`failure_reason` text,`created_at` datetime,`updated_at` datetime)",
+      "tbl_name": "research2_recommendations",
+      "type": "table"
+    },
+    {
+      "name": "research2_trades",
+      "sql": "CREATE TABLE `research2_trades` (`slot` text NOT NULL DEFAULT \"09:50\",`quote_at` datetime,`price_stale` numeric,`id` integer PRIMARY KEY AUTOINCREMENT,`trade_id` text NOT NULL,`recommendation_id` text NOT NULL,`side` text NOT NULL,`traded_at` datetime NOT NULL,`market_price` real,`execution_price` real,`quantity` integer,`commission` real,`stamp_duty` real,`transfer_fee` real,`slippage_amount` real,`net_cash_flow` real,`price_source` text,`execution_mode` text,`created_at` datetime)",
+      "tbl_name": "research2_trades",
+      "type": "table"
+    }
+  ],
+  "tables": {
+    "research2_account_snapshots": [
+      {
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5300349+08:00",
+        "id": 1,
+        "net_asset_value": 10038.76,
+        "net_profit": 0,
+        "position_value": 0,
+        "return_rate": 0,
+        "slot": "09:50",
+        "snapshot_id": "raw-history-snapshot",
+        "snapshot_type": "daily_close",
+        "trading_date": "2026-09-18",
+        "valued_at": "2026-09-18T10:50:00+08:00"
+      }
+    ],
+    "research2_accounts": [
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5270345+08:00",
+        "id": 1,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "09:30",
+        "updated_at": "2026-09-25T03:13:53.5270345+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5270345+08:00",
+        "id": 2,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "09:35",
+        "updated_at": "2026-09-25T03:13:53.5270345+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 3,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "09:40",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 4,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "09:45",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 5,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "09:50",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 6,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "09:55",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 7,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:00",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 8,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:05",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 9,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:10",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 10,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:15",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 11,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:20",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 12,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:25",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 13,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:30",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 14,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:35",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 15,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:40",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 16,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:45",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 17,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:50",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 18,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "10:55",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 19,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "11:00",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5280349+08:00",
+        "id": 20,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "11:05",
+        "updated_at": "2026-09-25T03:13:53.5280349+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5290347+08:00",
+        "id": 21,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "11:10",
+        "updated_at": "2026-09-25T03:13:53.5290347+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5290347+08:00",
+        "id": 22,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "11:15",
+        "updated_at": "2026-09-25T03:13:53.5290347+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5290347+08:00",
+        "id": 23,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "11:20",
+        "updated_at": "2026-09-25T03:13:53.5290347+08:00"
+      },
+      {
+        "baseline_at": "2026-09-18T16:00:00+08:00",
+        "baseline_net_asset_value": 10038.76,
+        "cash": 10038.76,
+        "created_at": "2026-09-25T03:13:53.5290347+08:00",
+        "id": 24,
+        "initial_cash": 10038.76,
+        "seed_cash": 38.76,
+        "slot": "11:25",
+        "updated_at": "2026-09-25T03:13:53.5290347+08:00"
+      }
+    ],
+    "research2_analysis_runs": [
+      {
+        "archive_reason": "",
+        "attempt_no": 1,
+        "chain_id": "",
+        "created_at": "2026-09-25T03:13:53.5290347+08:00",
+        "degraded": null,
+        "evidence_coverage_pct": null,
+        "evidence_cutoff_at": "2026-09-18T10:50:00+08:00",
+        "evidence_profile_version": "",
+        "evidence_set_id": "",
+        "evidence_window_start_at": null,
+        "failure_reason": "",
+        "generated_at": null,
+        "id": 1,
+        "model_attempt_log_json": "[]",
+        "model_name": "",
+        "on_time": 0,
+        "parent_run_id": "",
+        "persisted_at": null,
+        "primary_count": 0,
+        "provider_name": "",
+        "published": 0,
+        "recommendation_count": 0,
+        "report_markdown": "",
+        "requested_slots": 0,
+        "run_id": "history-run",
+        "scheduled_for": "2026-09-18T10:50:00+08:00",
+        "scheduled_slot": "10:50",
+        "slot": "10:50",
+        "source_status_json": "[]",
+        "standby_count": 0,
+        "started_at": "2026-09-18T10:50:00+08:00",
+        "status": "success",
+        "strategy_version": "",
+        "trading_date": "2026-09-18",
+        "trigger_source": "legacy-unversioned",
+        "updated_at": "2026-09-25T03:13:53.5290347+08:00"
+      },
+      {
+        "archive_reason": "",
+        "attempt_no": 1,
+        "chain_id": "day-chain",
+        "created_at": "2026-09-25T03:13:53.5300349+08:00",
+        "degraded": null,
+        "evidence_coverage_pct": null,
+        "evidence_cutoff_at": "2026-09-21T10:10:05+08:00",
+        "evidence_profile_version": "",
+        "evidence_set_id": "",
+        "evidence_window_start_at": null,
+        "failure_reason": "",
+        "generated_at": "2026-09-21T10:10:05+08:00",
+        "id": 2,
+        "model_attempt_log_json": "[]",
+        "model_name": "",
+        "on_time": 0,
+        "parent_run_id": "",
+        "persisted_at": null,
+        "primary_count": 0,
+        "provider_name": "",
+        "published": 1,
+        "recommendation_count": 0,
+        "report_markdown": "",
+        "requested_slots": 0,
+        "run_id": "day-run",
+        "scheduled_for": "2026-09-21T10:10:05+08:00",
+        "scheduled_slot": "10:10",
+        "slot": "10:10",
+        "source_status_json": "[]",
+        "standby_count": 0,
+        "started_at": "2026-09-21T10:10:05+08:00",
+        "status": "success",
+        "strategy_version": "",
+        "trading_date": "2026-09-21",
+        "trigger_source": "legacy-unversioned",
+        "updated_at": "2026-09-25T03:13:53.5300349+08:00"
+      }
+    ],
+    "research2_execution_chains": [
+      {
+        "allocation_base_cash": null,
+        "allocation_policy": "legacy_recorded",
+        "chain_id": "day-chain",
+        "completed_at": null,
+        "created_at": "2026-09-25T03:13:53.5300349+08:00",
+        "filled_slots": 0,
+        "id": 1,
+        "latest_run_id": "",
+        "root_run_id": "",
+        "scheduled_for": "2026-09-21T10:10:05+08:00",
+        "sell_completed_at": null,
+        "slot": "10:10",
+        "started_at": "2026-09-21T10:10:05+08:00",
+        "status": "completed",
+        "stop_reason": "",
+        "target_slots": 5,
+        "trading_date": "2026-09-21",
+        "updated_at": "2026-09-25T03:13:53.5300349+08:00",
+        "winner_run_id": "day-run"
+      }
+    ],
+    "research2_recommendations": [
+      {
+        "analysis_run_id": "history-run",
+        "baseline_value": null,
+        "buy_at": null,
+        "buy_day_limit_attempt_count": 0,
+        "buy_day_limit_evaluated_at": null,
+        "buy_day_limit_failure_reason": "",
+        "buy_day_limit_outcome": "",
+        "buy_day_limit_source_json": "[]",
+        "buy_day_limit_status": "pending",
+        "buy_fees": 5.14,
+        "buy_lower": 0,
+        "buy_market_price": 137.86,
+        "buy_price": 138,
+        "buy_upper": 0,
+        "cancel_conditions": "",
+        "catalyst_score": 0,
+        "created_at": "2026-09-25T03:13:53.5290347+08:00",
+        "current_price": 0,
+        "current_price_at": null,
+        "estimated_lot_cost": 0,
+        "execution_failure_code": "",
+        "execution_limit_distance_pct": null,
+        "execution_limit_price": 0,
+        "execution_quote_at": null,
+        "execution_quote_price": 0,
+        "failure_reason": "",
+        "final_score": 80,
+        "fresh_catalyst": "",
+        "historical_replay_id": "",
+        "historical_sell_blocked": 0,
+        "hit_five_before_sell": null,
+        "hit_limit_up_full_day": null,
+        "hit_minus_three": null,
+        "id": 1,
+        "late": 0,
+        "legacy_slot_exception": 0,
+        "main_risk": "",
+        "market_score": 0,
+        "metrics_finalized": 0,
+        "net_pn_l": 180,
+        "net_yield_rate": 0,
+        "old_background": "",
+        "period_pn_l": null,
+        "promotion_reason": "",
+        "quant_data": "",
+        "quantity": 100,
+        "recommendation_id": "history-rec",
+        "reference_price": 0,
+        "replaces_recommendation_id": "",
+        "risk_deduction": 0,
+        "sector_score": 0,
+        "selection_rank": 0,
+        "selection_role": "legacy-unversioned",
+        "sell_at": "2026-09-19T10:50:00+08:00",
+        "sell_fees": 12,
+        "sell_market_price": 140.14,
+        "sell_price": 140,
+        "signal_at": "2026-09-18T10:50:00+08:00",
+        "slot": "10:50",
+        "source_refs": "",
+        "status": "closed",
+        "stock_code": "sz000001",
+        "stock_name": "历史大额买入",
+        "stock_score": 0,
+        "summary": "",
+        "target_buy_at": "2026-09-18T10:50:00+08:00",
+        "target_sell_at": null,
+        "updated_at": "2026-09-25T03:13:53.5290347+08:00"
+      },
+      {
+        "analysis_run_id": "day-run",
+        "baseline_value": null,
+        "buy_at": null,
+        "buy_day_limit_attempt_count": 0,
+        "buy_day_limit_evaluated_at": null,
+        "buy_day_limit_failure_reason": "",
+        "buy_day_limit_outcome": "",
+        "buy_day_limit_source_json": "[]",
+        "buy_day_limit_status": "pending",
+        "buy_fees": 0,
+        "buy_lower": 0,
+        "buy_market_price": 10,
+        "buy_price": 10.01,
+        "buy_upper": 0,
+        "cancel_conditions": "",
+        "catalyst_score": 0,
+        "created_at": "2026-09-25T03:13:53.5300349+08:00",
+        "current_price": 0,
+        "current_price_at": null,
+        "estimated_lot_cost": 0,
+        "execution_failure_code": "",
+        "execution_limit_distance_pct": null,
+        "execution_limit_price": 0,
+        "execution_quote_at": "2026-09-21T10:10:06+08:00",
+        "execution_quote_price": 10,
+        "failure_reason": "",
+        "final_score": 40,
+        "fresh_catalyst": "",
+        "historical_replay_id": "",
+        "historical_sell_blocked": 0,
+        "hit_five_before_sell": null,
+        "hit_limit_up_full_day": null,
+        "hit_minus_three": null,
+        "id": 2,
+        "late": 0,
+        "legacy_slot_exception": 0,
+        "main_risk": "",
+        "market_score": 0,
+        "metrics_finalized": 0,
+        "net_pn_l": 0,
+        "net_yield_rate": 0,
+        "old_background": "",
+        "period_pn_l": null,
+        "promotion_reason": "",
+        "quant_data": "",
+        "quantity": 100,
+        "recommendation_id": "day-rec",
+        "reference_price": 0,
+        "replaces_recommendation_id": "",
+        "risk_deduction": 0,
+        "sector_score": 0,
+        "selection_rank": 0,
+        "selection_role": "legacy-unversioned",
+        "sell_at": null,
+        "sell_fees": 0,
+        "sell_market_price": 0,
+        "sell_price": 0,
+        "signal_at": "2026-09-21T10:10:05+08:00",
+        "slot": "10:10",
+        "source_refs": "",
+        "status": "active",
+        "stock_code": "sh600000",
+        "stock_name": "当日标的",
+        "stock_score": 0,
+        "summary": "",
+        "target_buy_at": "2026-09-21T10:10:05+08:00",
+        "target_sell_at": null,
+        "updated_at": "2026-09-25T03:13:53.5300349+08:00"
+      }
+    ],
+    "research2_trades": [
+      {
+        "commission": 5,
+        "created_at": "2026-09-25T03:13:53.5300349+08:00",
+        "execution_mode": "",
+        "execution_price": 137.99786,
+        "id": 1,
+        "market_price": 137.86,
+        "net_cash_flow": -13804.92399786,
+        "price_source": "",
+        "price_stale": 0,
+        "quantity": 100,
+        "quote_at": null,
+        "recommendation_id": "history-rec",
+        "side": "buy",
+        "slippage_amount": 0,
+        "slot": "10:50",
+        "stamp_duty": 0,
+        "trade_id": "history-buy",
+        "traded_at": "2026-09-18T10:50:00+08:00",
+        "transfer_fee": 0.13799786
+      },
+      {
+        "commission": 5,
+        "created_at": "2026-09-25T03:13:53.5300349+08:00",
+        "execution_mode": "",
+        "execution_price": 139.99985999999998,
+        "id": 2,
+        "market_price": 140.14,
+        "net_cash_flow": 13987.846007139999,
+        "price_source": "",
+        "price_stale": 0,
+        "quantity": 100,
+        "quote_at": null,
+        "recommendation_id": "history-rec",
+        "side": "sell",
+        "slippage_amount": 0,
+        "slot": "10:50",
+        "stamp_duty": 6.999993,
+        "trade_id": "history-sell",
+        "traded_at": "2026-09-19T10:50:00+08:00",
+        "transfer_fee": 0.13999986
+      },
+      {
+        "commission": 0,
+        "created_at": "2026-09-25T03:13:53.5310353+08:00",
+        "execution_mode": "",
+        "execution_price": 10.01,
+        "id": 3,
+        "market_price": 10,
+        "net_cash_flow": -1007,
+        "price_source": "",
+        "price_stale": 0,
+        "quantity": 100,
+        "quote_at": null,
+        "recommendation_id": "day-rec",
+        "side": "buy",
+        "slippage_amount": 0,
+        "slot": "10:10",
+        "stamp_duty": 0,
+        "trade_id": "old-day-buy",
+        "traded_at": "2026-09-21T10:10:06+08:00",
+        "transfer_fee": 0
+      }
+    ]
+  }
+}

@@ -1,0 +1,206 @@
+{
+  "tushareToken": [
+    "tushare_token",
+    "string"
+  ],
+  "localPushEnable": [
+    "local_push_enable",
+    "bool"
+  ],
+  "dingPushEnable": [
+    "ding_push_enable",
+    "bool"
+  ],
+  "dingRobot": [
+    "ding_robot",
+    "string"
+  ],
+  "updateBasicInfoOnStart": [
+    "update_basic_info_on_start",
+    "bool"
+  ],
+  "refreshInterval": [
+    "refresh_interval",
+    "int64"
+  ],
+  "crawlTimeOut": [
+    "crawl_time_out",
+    "int64"
+  ],
+  "kDays": [
+    "k_days",
+    "int64"
+  ],
+  "enableDanmu": [
+    "enable_danmu",
+    "bool"
+  ],
+  "browserPath": [
+    "browser_path",
+    "string"
+  ],
+  "enableNews": [
+    "enable_news",
+    "bool"
+  ],
+  "darkTheme": [
+    "dark_theme",
+    "bool"
+  ],
+  "browserPoolSize": [
+    "browser_pool_size",
+    "int"
+  ],
+  "enableFund": [
+    "enable_fund",
+    "bool"
+  ],
+  "enablePushNews": [
+    "enable_push_news",
+    "bool"
+  ],
+  "enableOnlyPushRedNews": [
+    "enable_only_push_red_news",
+    "bool"
+  ],
+  "httpProxy": [
+    "http_proxy",
+    "string"
+  ],
+  "httpProxyEnabled": [
+    "http_proxy_enabled",
+    "bool"
+  ],
+  "forceNoProxyForFetch": [
+    "force_no_proxy_for_fetch",
+    "bool"
+  ],
+  "qgqpBId": [
+    "qgqp_b_id",
+    "string"
+  ],
+  "aiCapitalDeploymentEnabled": [
+    "ai_capital_deployment_enabled",
+    "bool"
+  ],
+  "aiTargetCapitalUtilization": [
+    "ai_target_capital_utilization",
+    "float64"
+  ],
+  "aiMaxImmediateBuysPerRun": [
+    "ai_max_immediate_buys_per_run",
+    "int"
+  ],
+  "aiReanalysisIntervalMinutes": [
+    "ai_reanalysis_interval_minutes",
+    "int"
+  ],
+  "research2AutoEnabled": [
+    "research2_auto_enabled",
+    "bool"
+  ],
+  "research2EmailEnabled": [
+    "research2_email_enabled",
+    "bool"
+  ],
+  "research2EmailTo": [
+    "research2_email_to",
+    "string"
+  ],
+  "research2EmailFrom": [
+    "research2_email_from",
+    "string"
+  ],
+  "research2EmailSmtpHost": [
+    "research2_email_smtp_host",
+    "string"
+  ],
+  "research2EmailSmtpPort": [
+    "research2_email_smtp_port",
+    "int"
+  ],
+  "research2EmailSmtpUsername": [
+    "research2_email_smtp_user",
+    "string"
+  ],
+  "research2EmailSmtpPassword": [
+    "research2_email_smtp_pass",
+    "string"
+  ],
+  "aiAnalysisConfigId": [
+    "ai_analysis_config_id",
+    "uint"
+  ],
+  "aiAnalysisTimes": [
+    "ai_analysis_times",
+    "string"
+  ],
+  "aiReviewStartTime": [
+    "ai_review_start_time",
+    "string"
+  ],
+  "aiReviewIntervalMinutes": [
+    "ai_review_interval_minutes",
+    "int"
+  ],
+  "minuteProviderMode": [
+    "minute_provider_mode",
+    "string"
+  ],
+  "minuteLongHistoryHintEnabled": [
+    "minute_long_history_hint_enabled",
+    "bool"
+  ],
+  "privateMinuteEnabled": [
+    "private_minute_enabled",
+    "bool"
+  ],
+  "privateMinuteBaseUrl": [
+    "private_minute_base_url",
+    "string"
+  ],
+  "privateMinuteApiKey": [
+    "private_minute_api_key",
+    "string"
+  ],
+  "privateMinuteTimeoutSec": [
+    "private_minute_timeout_sec",
+    "int"
+  ],
+  "privateMinuteMinIntervalMs": [
+    "private_minute_min_interval",
+    "int"
+  ],
+  "privateMinuteProxyMode": [
+    "private_minute_proxy_mode",
+    "string"
+  ],
+  "privateMinuteLevel": [
+    "private_minute_level",
+    "string"
+  ],
+  "akshareEnabled": [
+    "akshare_enabled",
+    "bool"
+  ],
+  "sinaMinuteEnabled": [
+    "sina_minute_enabled",
+    "bool"
+  ],
+  "tencentMinuteEnabled": [
+    "tencent_minute_enabled",
+    "bool"
+  ],
+  "eastmoneyMinuteEnabled": [
+    "eastmoney_minute_enabled",
+    "bool"
+  ],
+  "akshareMinuteSourceMode": [
+    "akshare_minute_source_mode",
+    "string"
+  ],
+  "experimentalEvidenceEnabled": [
+    "experimental_evidence_enabled",
+    "bool"
+  ]
+}

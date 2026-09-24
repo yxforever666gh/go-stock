@@ -1,0 +1,491 @@
+[
+  {
+    "id": 1,
+    "objects": [
+      {
+        "name": "idx_minute_bar_trade_time",
+        "sql": "CREATE INDEX idx_minute_bar_trade_time\nON minute_bar(trade_time)",
+        "tbl_name": "minute_bar",
+        "type": "index"
+      },
+      {
+        "name": "minute_bar",
+        "sql": "CREATE TABLE minute_bar (\n  stock_code TEXT NOT NULL,\n  trade_time INTEGER NOT NULL,\n  open REAL NOT NULL,\n  high REAL NOT NULL,\n  low REAL NOT NULL,\n  close REAL NOT NULL,\n  volume REAL,\n  amount REAL,\n  source TEXT,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (stock_code, trade_time)\n) WITHOUT ROWID",
+        "tbl_name": "minute_bar",
+        "type": "table"
+      }
+    ],
+    "removed": [],
+    "columns": {
+      "minute_bar": [
+        {
+          "cid": 0,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "stock_code",
+          "notnull": 1,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        {
+          "cid": 1,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "trade_time",
+          "notnull": 1,
+          "pk": 2,
+          "type": "INTEGER"
+        },
+        {
+          "cid": 2,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "open",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 3,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "high",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 4,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "low",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 5,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "close",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 6,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "volume",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 7,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "amount",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 8,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "source",
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        {
+          "cid": 9,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "updated_at",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        }
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "objects": [],
+    "removed": [],
+    "columns": {}
+  },
+  {
+    "id": 3,
+    "objects": [
+      {
+        "name": "idx_market_auction_snapshot_date",
+        "sql": "CREATE INDEX idx_market_auction_snapshot_date ON market_auction_snapshot(trade_date)",
+        "tbl_name": "market_auction_snapshot",
+        "type": "index"
+      },
+      {
+        "name": "idx_market_auction_snapshot_observed",
+        "sql": "CREATE INDEX idx_market_auction_snapshot_observed ON market_auction_snapshot(observed_at)",
+        "tbl_name": "market_auction_snapshot",
+        "type": "index"
+      },
+      {
+        "name": "idx_market_bar_cache_time",
+        "sql": "CREATE INDEX idx_market_bar_cache_time ON market_bar_cache(bar_time)",
+        "tbl_name": "market_bar_cache",
+        "type": "index"
+      },
+      {
+        "name": "idx_market_trade_tick_time",
+        "sql": "CREATE INDEX idx_market_trade_tick_time ON market_trade_tick(traded_at)",
+        "tbl_name": "market_trade_tick",
+        "type": "index"
+      },
+      {
+        "name": "market_auction_snapshot",
+        "sql": "CREATE TABLE market_auction_snapshot (\n  asset_type TEXT NOT NULL,\n  symbol TEXT NOT NULL,\n  trade_date TEXT NOT NULL,\n  observed_at INTEGER NOT NULL,\n  phase TEXT NOT NULL,\n  indicative_price REAL,\n  matched_volume REAL,\n  matched_amount REAL,\n  unmatched_volume REAL,\n  unmatched_side TEXT,\n  source TEXT NOT NULL,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (asset_type, symbol, trade_date, observed_at, phase)\n) WITHOUT ROWID",
+        "tbl_name": "market_auction_snapshot",
+        "type": "table"
+      },
+      {
+        "name": "market_bar_cache",
+        "sql": "CREATE TABLE market_bar_cache (\n  asset_type TEXT NOT NULL,\n  symbol TEXT NOT NULL,\n  period TEXT NOT NULL,\n  adjustment TEXT NOT NULL,\n  bar_time INTEGER NOT NULL,\n  open REAL NOT NULL,\n  high REAL NOT NULL,\n  low REAL NOT NULL,\n  close REAL NOT NULL,\n  volume REAL,\n  amount REAL,\n  source TEXT NOT NULL,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (asset_type, symbol, period, adjustment, bar_time)\n) WITHOUT ROWID",
+        "tbl_name": "market_bar_cache",
+        "type": "table"
+      },
+      {
+        "name": "market_trade_tick",
+        "sql": "CREATE TABLE market_trade_tick (\n  asset_type TEXT NOT NULL,\n  symbol TEXT NOT NULL,\n  traded_at INTEGER NOT NULL,\n  sequence INTEGER NOT NULL,\n  price REAL NOT NULL,\n  volume REAL NOT NULL,\n  amount REAL,\n  side TEXT,\n  source TEXT NOT NULL,\n  updated_at INTEGER NOT NULL,\n  PRIMARY KEY (asset_type, symbol, traded_at, sequence)\n) WITHOUT ROWID",
+        "tbl_name": "market_trade_tick",
+        "type": "table"
+      }
+    ],
+    "removed": [],
+    "columns": {
+      "market_auction_snapshot": [
+        {
+          "cid": 0,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "asset_type",
+          "notnull": 1,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        {
+          "cid": 1,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "symbol",
+          "notnull": 1,
+          "pk": 2,
+          "type": "TEXT"
+        },
+        {
+          "cid": 2,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "trade_date",
+          "notnull": 1,
+          "pk": 3,
+          "type": "TEXT"
+        },
+        {
+          "cid": 3,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "observed_at",
+          "notnull": 1,
+          "pk": 4,
+          "type": "INTEGER"
+        },
+        {
+          "cid": 4,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "phase",
+          "notnull": 1,
+          "pk": 5,
+          "type": "TEXT"
+        },
+        {
+          "cid": 5,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "indicative_price",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 6,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "matched_volume",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 7,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "matched_amount",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 8,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "unmatched_volume",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 9,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "unmatched_side",
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        {
+          "cid": 10,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "source",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        {
+          "cid": 11,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "updated_at",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        }
+      ],
+      "market_bar_cache": [
+        {
+          "cid": 0,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "asset_type",
+          "notnull": 1,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        {
+          "cid": 1,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "symbol",
+          "notnull": 1,
+          "pk": 2,
+          "type": "TEXT"
+        },
+        {
+          "cid": 2,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "period",
+          "notnull": 1,
+          "pk": 3,
+          "type": "TEXT"
+        },
+        {
+          "cid": 3,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "adjustment",
+          "notnull": 1,
+          "pk": 4,
+          "type": "TEXT"
+        },
+        {
+          "cid": 4,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "bar_time",
+          "notnull": 1,
+          "pk": 5,
+          "type": "INTEGER"
+        },
+        {
+          "cid": 5,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "open",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 6,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "high",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 7,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "low",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 8,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "close",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 9,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "volume",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 10,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "amount",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 11,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "source",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        {
+          "cid": 12,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "updated_at",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        }
+      ],
+      "market_trade_tick": [
+        {
+          "cid": 0,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "asset_type",
+          "notnull": 1,
+          "pk": 1,
+          "type": "TEXT"
+        },
+        {
+          "cid": 1,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "symbol",
+          "notnull": 1,
+          "pk": 2,
+          "type": "TEXT"
+        },
+        {
+          "cid": 2,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "traded_at",
+          "notnull": 1,
+          "pk": 3,
+          "type": "INTEGER"
+        },
+        {
+          "cid": 3,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "sequence",
+          "notnull": 1,
+          "pk": 4,
+          "type": "INTEGER"
+        },
+        {
+          "cid": 4,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "price",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 5,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "volume",
+          "notnull": 1,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 6,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "amount",
+          "notnull": 0,
+          "pk": 0,
+          "type": "REAL"
+        },
+        {
+          "cid": 7,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "side",
+          "notnull": 0,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        {
+          "cid": 8,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "source",
+          "notnull": 1,
+          "pk": 0,
+          "type": "TEXT"
+        },
+        {
+          "cid": 9,
+          "dflt_value": null,
+          "hidden": 0,
+          "name": "updated_at",
+          "notnull": 1,
+          "pk": 0,
+          "type": "INTEGER"
+        }
+      ]
+    }
+  }
+]
