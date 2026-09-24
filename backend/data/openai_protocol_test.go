@@ -51,6 +51,19 @@ func TestCompleteResearchStreamProtocols(t *testing.T) {
 				if body["stream"] != true {
 					t.Fatalf("stream=%v, want true", body["stream"])
 				}
+				if _, exists := body["temperature"]; exists {
+					t.Fatal("request overrode provider temperature")
+				}
+				if _, exists := body["max_output_tokens"]; exists {
+					t.Fatal("request capped Responses output")
+				}
+				if test.protocol == AIAPIProtocolAnthropicMessage {
+					if body["max_tokens"] != float64(64) {
+						t.Fatalf("Messages requires max_tokens, got %v", body["max_tokens"])
+					}
+				} else if _, exists := body["max_tokens"]; exists {
+					t.Fatal("request capped Chat Completions output")
+				}
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, _ = fmt.Fprint(w, test.stream)
 			}))
@@ -102,6 +115,16 @@ func TestCompleteChatOpenAIResponses(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Fatalf("unexpected authorization header: %s", got)
 		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, capped := body["max_output_tokens"]; capped {
+			t.Fatal("non-streaming Responses request capped output")
+		}
+		if _, tuned := body["temperature"]; tuned {
+			t.Fatal("non-streaming Responses request overrode temperature")
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprint(w, `{"id":"resp_1","model":"test-model","output_text":"OK"}`)
 	}))
@@ -116,6 +139,31 @@ func TestCompleteChatOpenAIResponses(t *testing.T) {
 	}
 	if content != "OK" || chatID != "resp_1" || model != "test-model" {
 		t.Fatalf("unexpected response: content=%q chatID=%q model=%q", content, chatID, model)
+	}
+}
+
+func TestCompleteChatCompletionsUsesProviderDefaults(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if _, capped := body["max_tokens"]; capped {
+			t.Fatal("Chat Completions request capped output")
+		}
+		if _, tuned := body["temperature"]; tuned {
+			t.Fatal("Chat Completions request overrode temperature")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"id":"chat_1","model":"test-model","choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	defer server.Close()
+	content, _, _, err := testOpenAI(server.URL, AIAPIProtocolChatCompletions).CompleteChat([]map[string]any{{"role": "user", "content": "ping"}}, false)
+	if err != nil || content != "OK" {
+		t.Fatalf("content=%q err=%v", content, err)
 	}
 }
 

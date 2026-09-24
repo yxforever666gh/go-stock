@@ -507,11 +507,9 @@ func (o *OpenAi) openAIResponsesBody(messages []map[string]interface{}, stream b
 func (o *OpenAi) openAIResponsesBodyWithPrevious(messages []map[string]interface{}, stream bool, previousResponseID string) map[string]any {
 	system, dialog := splitSystemAndDialogMessages(messages)
 	bodyMap := map[string]any{
-		"model":             o.Model,
-		"max_output_tokens": o.MaxTokens,
-		"temperature":       o.Temperature,
-		"stream":            stream,
-		"input":             dialog,
+		"model":  o.Model,
+		"stream": stream,
+		"input":  dialog,
 	}
 	if system != "" {
 		bodyMap["instructions"] = system
@@ -525,11 +523,10 @@ func (o *OpenAi) openAIResponsesBodyWithPrevious(messages []map[string]interface
 func (o *OpenAi) anthropicMessagesBody(messages []map[string]interface{}, stream bool) map[string]any {
 	system, dialog := splitSystemAndDialogMessages(messages)
 	bodyMap := map[string]any{
-		"model":       o.Model,
-		"max_tokens":  o.MaxTokens,
-		"temperature": o.Temperature,
-		"stream":      stream,
-		"messages":    dialog,
+		"model":      o.Model,
+		"max_tokens": o.MaxTokens,
+		"stream":     stream,
+		"messages":   dialog,
 	}
 	if system != "" {
 		bodyMap["system"] = system
@@ -1006,7 +1003,7 @@ func (o *OpenAi) completeOpenAIResponsesStream(ctx context.Context, messages []m
 }
 
 func (o *OpenAi) completeChatCompletionsStream(ctx context.Context, messages []map[string]any, activity func(aicontract.StreamActivity)) (string, string, string, error) {
-	bodyMap := map[string]any{"model": o.Model, "max_tokens": o.MaxTokens, "temperature": o.Temperature, "stream": true, "messages": messages}
+	bodyMap := map[string]any{"model": o.Model, "stream": true, "messages": messages}
 	request := func(enableProxy bool) (*resty.Response, error) {
 		return o.newResearchAIClientWithProxy(enableProxy).R().SetContext(ctx).SetDoNotParseResponse(true).SetBody(bodyMap).Post("/chat/completions")
 	}
@@ -1228,7 +1225,7 @@ func (o *OpenAi) CompleteChat(messages []map[string]any, _ bool) (string, string
 }
 
 func (o *OpenAi) completeChatCompletions(ctx context.Context, messages []map[string]any) (string, string, string, error) {
-	body := map[string]any{"model": o.Model, "max_tokens": o.MaxTokens, "temperature": o.Temperature, "stream": false, "messages": messages}
+	body := map[string]any{"model": o.Model, "stream": false, "messages": messages}
 	resp, err := o.newAIClient().R().SetContext(ctx).SetBody(body).Post("/chat/completions")
 	if err != nil && o.HttpProxyEnabled && o.HttpProxy != "" && isProxyConnRefused(err) {
 		resp, err = o.newAIClientWithProxy(false).R().SetContext(ctx).SetBody(body).Post("/chat/completions")
@@ -1309,11 +1306,9 @@ func AskAi(o *OpenAi, messages []map[string]interface{}, ch chan map[string]any,
 		thinking = "enabled"
 	}
 	bodyMap := map[string]interface{}{
-		"model":       o.Model,
-		"max_tokens":  o.MaxTokens,
-		"temperature": o.Temperature,
-		"stream":      true,
-		"messages":    messages,
+		"model":    o.Model,
+		"stream":   true,
+		"messages": messages,
 	}
 	if think {
 		bodyMap["thinking"] = map[string]any{
@@ -1489,12 +1484,10 @@ func AskAiWithTools(o *OpenAi, messages []map[string]interface{}, ch chan map[st
 		thinking = "enabled"
 	}
 	bodyMap := map[string]interface{}{
-		"model":       o.Model,
-		"max_tokens":  o.MaxTokens,
-		"temperature": o.Temperature,
-		"stream":      true,
-		"messages":    messages,
-		"tools":       tools,
+		"model":    o.Model,
+		"stream":   true,
+		"messages": messages,
+		"tools":    tools,
 	}
 	if thinkingMode {
 		bodyMap["thinking"] = map[string]any{

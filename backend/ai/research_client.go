@@ -338,11 +338,16 @@ func (client *ResearchClient) Complete(ctx context.Context, request CompletionRe
 			}
 			attemptsMade = attempt
 			startedAt := time.Now()
+			protocol := models.NormalizeAIAPIProtocol(config.ApiProtocol)
+			maxTokens := 0
+			if protocol == models.AIAPIProtocolAnthropicMessage {
+				maxTokens = config.MaxTokens // Messages requires an explicit max_tokens.
+			}
 			record := ModelAttemptRecord{
 				ID:    fmt.Sprintf("%s-%d-%d-%d", request.Phase, config.ID, attempt, startedAt.UnixNano()),
 				Phase: request.Phase, ConfigID: config.ID, ProviderName: label,
-				ModelName: strings.TrimSpace(config.ModelName), APIProtocol: models.NormalizeAIAPIProtocol(config.ApiProtocol),
-				MaxTokens: config.MaxTokens, Temperature: config.Temperature, RequestTimeoutSeconds: config.TimeOut,
+				ModelName: strings.TrimSpace(config.ModelName), APIProtocol: protocol,
+				MaxTokens: maxTokens, RequestTimeoutSeconds: config.TimeOut,
 				InactivityTimeoutSeconds: int(attemptTimeout / time.Second), FallbackIndex: index + 1, FallbackCount: len(orderedConfigs),
 				ForcedConfig: forceConfig, PreviousResponseIDPresent: strings.TrimSpace(request.PreviousResponseID) != "",
 				Attempt: attempt, MaxAttempts: maxAttempts, StartedAt: startedAt, Status: "waiting_response",

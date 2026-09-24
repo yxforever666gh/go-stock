@@ -27,3 +27,13 @@ func TestAuditModelParametersHandlesNoAttempts(t *testing.T) {
 		t.Fatalf("parameters=%+v", parameters)
 	}
 }
+
+func TestAuditModelParametersOmitsProviderDefaultOverrides(t *testing.T) {
+	parameters := AuditModelParameters([]ModelAttemptRecord{{ID: "attempt-1", APIProtocol: "openai_responses"}})
+	if _, present := parameters["maxTokens"]; present {
+		t.Fatalf("unsent output cap appeared in audit: %+v", parameters)
+	}
+	if _, present := parameters["temperature"]; present {
+		t.Fatalf("unsent temperature appeared in audit: %+v", parameters)
+	}
+}

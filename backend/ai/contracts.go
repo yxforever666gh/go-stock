@@ -40,8 +40,8 @@ type ModelAttemptRecord struct {
 	ProviderName              string     `json:"providerName"`
 	ModelName                 string     `json:"modelName"`
 	APIProtocol               string     `json:"apiProtocol"`
-	MaxTokens                 int        `json:"maxTokens"`
-	Temperature               float64    `json:"temperature"`
+	MaxTokens                 int        `json:"maxTokens,omitempty"`
+	Temperature               float64    `json:"temperature,omitempty"`
 	RequestTimeoutSeconds     int        `json:"requestTimeoutSeconds"`
 	InactivityTimeoutSeconds  int        `json:"inactivityTimeoutSeconds"`
 	FallbackIndex             int        `json:"fallbackIndex"`
@@ -82,8 +82,12 @@ func AuditModelParameters(records []ModelAttemptRecord) map[string]any {
 	result["providerAttemptCount"] = len(order)
 	result["configId"] = last.ConfigID
 	result["apiProtocol"] = last.APIProtocol
-	result["maxTokens"] = last.MaxTokens
-	result["temperature"] = last.Temperature
+	if last.MaxTokens > 0 {
+		result["maxTokens"] = last.MaxTokens
+	}
+	if last.Temperature != 0 {
+		result["temperature"] = last.Temperature
+	}
 	result["requestTimeoutSeconds"] = last.RequestTimeoutSeconds
 	result["inactivityTimeoutSeconds"] = last.InactivityTimeoutSeconds
 	result["attempt"] = last.Attempt

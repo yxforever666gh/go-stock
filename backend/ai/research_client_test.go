@@ -225,7 +225,7 @@ func TestResearchClientFatalErrorFallsBackImmediately(t *testing.T) {
 	if failed == nil || failed.NextAction != "fallback_next_model" || failed.Retryable {
 		t.Fatalf("failed record=%+v", failed)
 	}
-	if failed.APIProtocol == "" || failed.FallbackCount != 2 || failed.FallbackIndex != 1 || failed.MaxTokens == 0 || failed.RequestTimeoutSeconds == 0 {
+	if failed.APIProtocol == "" || failed.FallbackCount != 2 || failed.FallbackIndex != 1 || failed.MaxTokens != 0 || failed.Temperature != 0 || failed.RequestTimeoutSeconds == 0 {
 		t.Fatalf("audit model parameters missing: %+v", failed)
 	}
 	if strings.Contains(failed.ErrorMessage, "secret-key") || strings.Contains(failed.ErrorMessage, "secret.example") {
