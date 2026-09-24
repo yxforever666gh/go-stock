@@ -1,0 +1,175 @@
+"""Provider transport, provenance and bounded in-process cache."""
+
+from collections.abc import Callable
+from copy import deepcopy
+from datetime import date, datetime, timezone
+import json
+import math
+import re
+import sqlite3
+from threading import RLock
+import time
+from typing import Any
+from zoneinfo import ZoneInfo
+
+import httpx
+
+CN = ZoneInfo("Asia/Shanghai")
+ZERO_TIME = "0001-01-01T00:00:00Z"
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+
+
+class MarketDataError(RuntimeError):
+    """An input is unavailable; never interpreted as zero or a successful empty input."""
+
+
+def number(value: Any, default: float | None = None) -> float | None:
+    try:
+        parsed = float(str(value).strip().replace(",", ""))
+        return parsed if math.isfinite(parsed) else default
+    except (ValueError, TypeError):
+        return default
+
+
+def now() -> datetime:
+    return datetime.now(CN)
+
+
+def timestamp(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=CN) if value.tzinfo is None else value.astimezone(CN)
+    if isinstance(value, (float, int)):
+        return datetime.fromtimestamp(value / 1000 if value > 10**12 else value, CN)
+    text = str(value).strip()
+    if text.isdigit() and len(text) == 14:
+        return datetime.strptime(text, "%Y%m%d%H%M%S").replace(tzinfo=CN)
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00").replace("/", "-"))
+    return parsed.replace(tzinfo=CN) if parsed.tzinfo is None else parsed.astimezone(CN)
+
+
+def instrument(code: str, asset_type: str = "stock", market: str = "") -> dict:
+    raw = code.strip().lower()
+    if asset_type not in {"stock", "index", "etf"}:
+        raise ValueError("assetType must be stock, index or etf")
+    if re.fullmatch(r"\d{6}\.(sh|sz|bj)", raw):
+        raw = raw[-2:] + raw[:6]
+    if re.fullmatch(r"\d{6}", raw):
+        prefix = market.lower() or ("sh" if raw[0] in "569" else "bj" if raw[0] in "48" else "sz")
+        raw = prefix + raw
+    if raw.startswith("us"):
+        raw = "gb_" + raw[2:]
+    if re.fullmatch(r"(sh|sz|bj)\d{6}", raw):
+        actual = raw[:2].upper()
+        if asset_type == "etf" and not (raw.startswith(("sh51", "sh56", "sh58", "sz15"))):
+            raise ValueError("invalid ETF code")
+        if asset_type == "index" and not raw.startswith(("sh000", "sz399")):
+            raise ValueError("invalid index code")
+    elif asset_type == "stock" and re.fullmatch(r"hk\d{5}|gb_[a-z0-9._-]+", raw):
+        actual = "HK" if raw.startswith("hk") else "US"
+    else:
+        raise ValueError("invalid instrument code")
+    if market and market.upper() not in {actual, "A" if actual in {"SH", "SZ", "BJ"} else actual}:
+        raise ValueError("instrument and market do not match")
+    return {"code": raw, "assetType": asset_type, "market": actual}
+
+
+def security_id(code: str) -> str:
+    value = instrument(code)["code"]
+    if value.startswith(("sh", "sz", "bj")):
+        return ("1." if value.startswith("sh") else "0.") + value[2:]
+    if value.startswith("hk"):
+        return "116." + value[2:]
+    raise ValueError("provider does not support this instrument")
+
+
+def envelope(data: Any, source: str, *, status: str = "ok", as_of: Any = None,
+             errors: list | None = None, warnings: list | None = None) -> dict:
+    result = {"data": data, "source": source, "asOf": timestamp(as_of).isoformat() if as_of else ZERO_TIME,
+              "fetchedAt": now().isoformat(), "status": status, "errors": errors or [],
+              "evidenceProfile": "market-evidence-v1"}
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+class Transport:
+    def __init__(self, settings: dict, client: httpx.Client | None = None):
+        proxy = settings.get("httpProxy") if settings.get("httpProxyEnabled") else None
+        if settings.get("forceNoProxyForFetch", True):
+            proxy = None
+        self.client = client or httpx.Client(timeout=float(settings.get("crawlTimeOut") or 12),
+                                             proxy=proxy, trust_env=False, follow_redirects=True)
+        self.owns_client = client is None
+        self._cache: dict[str, tuple[float, Any]] = {}
+        self._lock = RLock()
+
+    def close(self):
+        if self.owns_client:
+            self.client.close()
+
+    def text(self, url: str, params: dict | None = None, *, encoding: str | None = None,
+             headers: dict | None = None, method: str = "GET", body: dict | None = None,
+             form: dict | None = None) -> str:
+        values = {"User-Agent": USER_AGENT, "Referer": "https://finance.sina.com.cn/"}
+        values.update(headers or {})
+        try:
+            response = self.client.request(method, url, params=params, headers=values, json=body, data=form)
+            response.raise_for_status()
+            return response.content.decode(encoding or response.encoding or "utf-8")
+        except (httpx.HTTPError, UnicodeError) as exc:
+            # Provider URLs may contain credentials; exceptions deliberately omit URL/body.
+            raise MarketDataError(f"provider request failed ({type(exc).__name__})") from exc
+
+    def json(self, url: str, params: dict | None = None, **kwargs) -> Any:
+        raw = self.text(url, params, **kwargs).strip()
+        if not raw.startswith(("[", "{")):
+            match = re.search(r"^[\w.$]+\s*\((.*)\)\s*;?$", raw, re.S)
+            if match:
+                raw = match.group(1)
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise MarketDataError("provider returned invalid JSON") from exc
+
+    def cached(self, key: str, ttl: float, load: Callable):
+        with self._lock:
+            item = self._cache.get(key)
+            if item and item[0] > time.monotonic():
+                return deepcopy(item[1])
+        value = load()
+        with self._lock:
+            if len(self._cache) > 512:
+                self._cache = {k: v for k, v in self._cache.items() if v[0] > time.monotonic()}
+            self._cache[key] = (time.monotonic() + ttl, deepcopy(value))
+        return value
+
+    def chain(self, providers: list[tuple[str, Callable]], empty: Any) -> dict:
+        failures = []
+        for name, call in providers:
+            try:
+                data, as_of = call()
+                if data is None:
+                    raise MarketDataError("provider returned no data")
+                return envelope(data, name, status="partial" if failures else "ok", as_of=as_of,
+                                errors=failures)
+            except (MarketDataError, ValueError, KeyError, IndexError, TypeError) as exc:
+                failures.append({"provider": name, "code": "unavailable", "message": str(exc)})
+        return envelope(empty, "", status="unavailable", errors=failures)
+
+
+def database_rows(path, query: str, params: tuple = ()) -> list[dict]:
+    """Never create a database, run migrations, or write through data reads."""
+    if not path.is_file():
+        raise MarketDataError("market database is unavailable")
+    try:
+        with sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5) as connection:
+            connection.row_factory = sqlite3.Row
+            return [dict(row) for row in connection.execute(query, params)]
+    except sqlite3.Error as exc:
+        raise MarketDataError(f"market database read failed ({type(exc).__name__})") from exc
+
+
+def require_date(value: str) -> str:
+    if value and date.fromisoformat(value).isoformat() != value:
+        raise ValueError("date must be YYYY-MM-DD")
+    return value
