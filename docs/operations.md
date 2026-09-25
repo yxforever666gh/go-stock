@@ -40,7 +40,7 @@ pwsh -File scripts/release.ps1 -Command stop
 | --- | --- |
 | 主数据库 | `data/stock.db`；`STOCK_GOD_DB_PATH` |
 | 分钟缓存库 | `data/minute.db`；`STOCK_GOD_MINUTE_DB_PATH` |
-| 大型原始行情包 | `STOCK_GOD_MARKET_DATA_ROOT`；可放仓库外 |
+| 大型原始行情包 | 项目内 `A股历史分钟线数据包/`；由 `STOCK_GOD_MARKET_DATA_ROOT` 指定 |
 | 派生索引 | `runtime/minute-index`；`STOCK_GOD_MARKET_INDEX_DIR` |
 | 已部署制品和解释器 | `runtime/releases`、`runtime/toolchain` |
 | 部署/回滚记录及数据库备份 | `runtime/deployments` |

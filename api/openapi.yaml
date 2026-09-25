@@ -2121,7 +2121,7 @@ components:
         evidenceCutoffAt: {type: string, format: date-time}
         evidenceCoveragePct: {type: number, minimum: 0, maximum: 100, nullable: true}
         degraded: {type: boolean, nullable: true}
-        generatedAt: {type: string, format: date-time}
+        generatedAt: {type: string, format: date-time, nullable: true}
         status:
           type: string
           enum: [running, success, no_recommendation, failed, skipped_non_trading_day, missed_window]
@@ -2168,7 +2168,7 @@ components:
         evidenceCutoffAt: {type: string, format: date-time}
         evidenceCoveragePct: {type: number, minimum: 0, maximum: 100, nullable: true}
         degraded: {type: boolean, nullable: true}
-        generatedAt: {type: string, format: date-time}
+        generatedAt: {type: string, format: date-time, nullable: true}
         status: {type: string}
         providerName: {type: string}
         modelName: {type: string}
@@ -2354,13 +2354,13 @@ components:
         executionQuoteAt: {type: string, format: date-time}
         executionLimitPrice: {type: number}
         executionLimitDistancePct: {type: number, nullable: true}
-        buyAt: {type: string, format: date-time}
+        buyAt: {type: string, format: date-time, nullable: true}
         buyMarketPrice: {type: number}
         buyPrice: {type: number}
         quantity: {type: integer, format: int64}
         buyFees: {type: number}
-        targetSellAt: {type: string, format: date-time}
-        sellAt: {type: string, format: date-time}
+        targetSellAt: {type: string, format: date-time, nullable: true}
+        sellAt: {type: string, format: date-time, nullable: true}
         sellMarketPrice: {type: number}
         sellPrice: {type: number}
         sellFees: {type: number}

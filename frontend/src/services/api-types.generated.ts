@@ -524,7 +524,7 @@ export type PredictionAnalysisRun = {
   evidenceWindowStartAt: string | null
   executionChain?: PredictionExecutionChain
   failureReason?: string
-  generatedAt?: string
+  generatedAt?: string | null
   modelAttemptLogJson: string
   modelName?: string
   onTime: boolean
@@ -565,7 +565,7 @@ export type PredictionAnalysisRunSummary = {
   evidenceWindowStartAt: string | null
   executionChain?: PredictionExecutionChain
   failureReason?: string
-  generatedAt?: string
+  generatedAt?: string | null
   modelName?: string
   onTime: boolean
   parentRunId?: string
@@ -692,7 +692,7 @@ export type PredictionPortfolioReturnPoint = {
 export type PredictionRecommendation = {
   analysisRunId: string
   baselineValue?: number
-  buyAt?: string
+  buyAt?: string | null
   buyDayLimitAttemptCount: number
   buyDayLimitEvaluatedAt?: string
   buyDayLimitFailureReason?: string
@@ -737,7 +737,7 @@ export type PredictionRecommendation = {
   sectorScore?: number
   selectionRank?: number
   selectionRole?: string
-  sellAt?: string
+  sellAt?: string | null
   sellFees?: number
   sellMarketPrice?: number
   sellPrice?: number
@@ -750,7 +750,7 @@ export type PredictionRecommendation = {
   stockScore?: number
   summary?: string
   targetBuyAt: string
-  targetSellAt?: string
+  targetSellAt?: string | null
 }
 
 export type PredictionRecommendationDetail = {
