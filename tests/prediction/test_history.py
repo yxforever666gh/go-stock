@@ -90,6 +90,29 @@ async def test_chart_cached_get_never_calls_providers_and_returns_fee_net_pnl(en
     assert env.market.network_calls == 2
 
 
+async def test_failed_chart_refresh_preserves_real_partial_cache_and_trade_markers(env, monkeypatch):
+    await env.service.analyze()
+    await env.service.process_trades()
+    item = env.service.repo.rows("recommendations", "buy_at IS NOT NULL")[0]
+    env.market.bar_rows = [bar(env.clock().replace(hour=9, minute=30)), bar(env.clock(), 10.5)]
+    env.clock.at += timedelta(minutes=2)
+    cached = await env.service.chart(item["recommendation_id"])
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("fixture upstream unavailable")
+
+    monkeypatch.setattr(env.market, "bars", unavailable)
+    refreshed = await env.service.chart(item["recommendation_id"], True)
+    assert refreshed["bars"] == cached["bars"] and len(refreshed["bars"]) == 2
+    assert refreshed["trades"] == cached["trades"]
+    assert refreshed["status"] == "partial"
+    assert refreshed["providerErrors"][0] == {
+        "provider": "minutes",
+        "message": "fixture upstream unavailable",
+    }
+    assert (await env.service.chart(item["recommendation_id"]))["bars"] == cached["bars"]
+
+
 def legacy_replay(env):
     env.clock.at = local("2026-09-22T16:00:00+08:00")
     signal = local("2026-09-18T10:00:30+08:00")

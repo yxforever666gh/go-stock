@@ -219,10 +219,10 @@ class HistoryService:
                 ready = nav > 0
             status = "unavailable" if reason else "complete"
             result["valuationsUnavailable" if reason else "valuationsCompleted"] += 1
+
             def rounded(x):
-                return (
-                            math.floor(x * 100 + 0.5) / 100 if x >= 0 else -math.floor(-x * 100 + 0.5) / 100
-                        )
+                return math.floor(x * 100 + 0.5) / 100 if x >= 0 else -math.floor(-x * 100 + 0.5) / 100
+
             row = {
                 "valuation_id": "daily-v2-" + slot + "-" + day.strftime("%Y%m%d"),
                 "slot": slot,
@@ -295,6 +295,13 @@ def recommendation_chart(repository, market, identity, refresh):
         raw = loader(item["stock_code"], start - timedelta(days=10), end, period="1m", adjustment="none")
     except (OSError, ValueError, RuntimeError) as error:
         errors.append({"provider": "minutes", "message": str(error)})
+        if refresh:
+            try:
+                raw = market.cached_bars(
+                    item["stock_code"], start - timedelta(days=10), end, period="1m", adjustment="none"
+                )
+            except (OSError, ValueError, RuntimeError) as cache_error:
+                errors.append({"provider": "minute-cache", "message": str(cache_error)})
     if refresh:
         try:
             quote = market.quote(item["stock_code"])
