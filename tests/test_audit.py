@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 import pytest
 
 from stock_god.ai import Completion
-from stock_god.audit import AuditConflict, AuditStore, _decode, redact_text
+from stock_god.audit import AuditConflict, AuditStore, _decode, _wire_time, redact_text
 
 
 @pytest.mark.parametrize("blob", [None, b""])
@@ -26,6 +26,77 @@ def test_nonempty_legacy_audit_payload_still_requires_supported_codec_and_hash()
         _decode(
             {"raw_response_blob": payload, "raw_response_codec": "gzip", "raw_response_sha256": "wrong"},
             "raw_response",
+        )
+
+
+def test_audit_wire_times_preserve_stored_nanoseconds_and_use_rfc3339():
+    assert _wire_time("2026-09-24 09:50:00.123456789+08:00") == "2026-09-24T09:50:00.123456789+08:00"
+    assert _wire_time(None) is None
+
+
+def test_audit_optional_hashes_and_legacy_state_match_nonnullable_contract(core_database):
+    store = AuditStore(core_database)
+    missing = store.detail("before-audit-existed")
+    assert missing["state"] == {
+        "status": "legacy_unavailable",
+        "payloadCount": 0,
+        "lastError": "",
+        "createdAt": "0001-01-01T00:00:00Z",
+        "updatedAt": "0001-01-01T00:00:00Z",
+    }
+    store.begin("optional")
+    store.record("optional", "prediction", 1, "prompt", {}, None, [], "2026-09-24T09:50:00+08:00")
+    value = store.detail("optional")
+    assert value["state"]["lastError"] == ""
+    assert value["payloads"][0]["rawResponseSha256"] == ""
+    assert value["payloads"][0]["repairedResponseSha256"] == ""
+
+
+def test_restart_recovers_queued_and_running_replays_through_published_state_transitions(core_database):
+    store = AuditStore(core_database)
+    store.begin("source")
+    store.record("source", "prediction", 1, "prompt", {}, "response", [], "2026-09-24T09:50:00+08:00")
+    store.complete("source")
+    queued = store.create_replay("source", 1)["replayId"]
+    running = store.create_replay("source", 1)["replayId"]
+    started = "2026-09-24T02:00:00Z"
+    with core_database.transaction() as connection:
+        connection.execute(
+            "UPDATE research_replays SET status='running',started_at=? WHERE replay_id=?", (started, running)
+        )
+    with core_database.connection() as connection:
+        source_before = dict(
+            connection.execute(
+                "SELECT * FROM research_audit_run_states WHERE owner_type='research2' AND owner_id='source'"
+            ).fetchone()
+        )
+        trigger_before = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='identity_research_replays_update'"
+        ).fetchone()[0]
+    store.recover_replays()
+    first = [store.get_replay(identity) for identity in (queued, running)]
+    assert all(row["status"] == "failed" and row["startedAt"] and row["completedAt"] for row in first)
+    assert first[1]["startedAt"] == started
+    assert all(
+        AuditStore(core_database, owner="replay").detail(identity)["state"]["status"] == "failed"
+        for identity in (queued, running)
+    )
+    store.recover_replays()
+    assert [store.get_replay(identity) for identity in (queued, running)] == first
+    with core_database.connection() as connection:
+        assert (
+            dict(
+                connection.execute(
+                    "SELECT * FROM research_audit_run_states WHERE owner_type='research2' AND owner_id='source'"
+                ).fetchone()
+            )
+            == source_before
+        )
+        assert (
+            connection.execute(
+                "SELECT sql FROM sqlite_master WHERE name='identity_research_replays_update'"
+            ).fetchone()[0]
+            == trigger_before
         )
 
 

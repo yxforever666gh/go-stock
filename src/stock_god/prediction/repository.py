@@ -185,7 +185,7 @@ def overview(connection, slot, at):
     profit = nav - external - transfer
     return {
         "slot": slot,
-        "baselineAt": account["baseline_at"],
+        "baselineAt": stamp(account["baseline_at"]),
         "baselineNetAssetValue": external,
         "initialCash": account["initial_cash"],
         "cash": account["cash"],

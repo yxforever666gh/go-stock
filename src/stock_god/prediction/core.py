@@ -193,10 +193,33 @@ def dto(row) -> dict[str, Any]:
         "price_stale",
         "external",
     }
+    optional_text = {
+        "chain_id",
+        "parent_run_id",
+        "strategy_version",
+        "evidence_profile_version",
+        "evidence_set_id",
+        "replaces_recommendation_id",
+        "promotion_reason",
+    }
+    omitted_nulls = optional_text | {
+        "completed_at",
+        "execution_quote_at",
+        "current_price_at",
+        "buy_day_limit_evaluated_at",
+        "baseline_value",
+        "period_pn_l",
+    }
     result = {}
     for key, value in dict(row).items():
         if key in hidden:
             continue
+        if value is None and key in omitted_nulls:
+            continue  # These Go fields used omitempty; retain absence without inventing a value.
+        if key == "buy_day_limit_outcome" and not value:
+            continue
+        if value is None and key in {"slot", "archive_reason", "winner_run_id"}:
+            value = ""
         name = names.get(key, key.split("_")[0] + "".join(p.title() for p in key.split("_")[1:]))
         if key in booleans and value is not None:
             value = bool(value)

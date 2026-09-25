@@ -111,6 +111,15 @@ def _camel(key: str) -> str:
     return first + "".join(part.capitalize() for part in rest)
 
 
+def _wire_time(value, empty=None):
+    if not value:
+        return empty
+    text = str(value).strip().replace(" ", "T", 1)
+    text = re.sub(r" ([+-]\d{2}:\d{2})$", r"\1", text)
+    parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return text if parsed.tzinfo is not None else text + "Z"
+
+
 class AuditStore:
     def __init__(self, database: Database, *, owner: str = "research2"):
         if owner not in {"research2", "replay"}:
@@ -301,11 +310,20 @@ class AuditStore:
             "availability": "available" if state else "legacy_unavailable",
             "ownerType": self.owner,
             "ownerId": owner_id,
-            "state": {"status": "legacy_unavailable"},
+            "state": {
+                "status": "legacy_unavailable",
+                "payloadCount": 0,
+                "lastError": "",
+                "createdAt": "0001-01-01T00:00:00Z",
+                "updatedAt": "0001-01-01T00:00:00Z",
+            },
             "payloads": [],
         }
         if state:
             result["state"] = {_camel(key): value for key, value in dict(state).items()}
+            result["state"]["lastError"] = result["state"]["lastError"] or ""
+            for key in ("createdAt", "updatedAt"):
+                result["state"][key] = _wire_time(result["state"][key], "0001-01-01T00:00:00Z")
         cutoff_values = []
         for record in rows:
             row = dict(record)
@@ -324,11 +342,16 @@ class AuditStore:
                 repairLog=_decode(row, "repair_log"),
                 redactionCount=json.loads(row["redaction_manifest_json"]).get("count", 0),
             )
+            for name in ("rawResponseSha256", "repairedResponseSha256"):
+                payload[name] = payload.get(name) or ""
+            payload["createdAt"] = _wire_time(row["created_at"], "0001-01-01T00:00:00Z")
+            if row.get("cutoff_at"):
+                payload["cutoffAt"] = _wire_time(row["cutoff_at"])
             result["payloads"].append(payload)
             if row.get("cutoff_at"):
                 cutoff_values.append(row["cutoff_at"])
         if cutoff_values:
-            result["cutoffAt"] = min(cutoff_values)
+            result["cutoffAt"] = _wire_time(min(cutoff_values))
         return result
 
     def export(self, owner_id: str) -> bytes:
@@ -365,6 +388,11 @@ class AuditStore:
             ).fetchall()
             for row in rows:
                 con.execute(
+                    "UPDATE research_replays SET status='running',started_at=coalesce(started_at,?) "
+                    "WHERE replay_id=? AND status='queued'",
+                    (now_text(), row[0]),
+                )
+                con.execute(
                     "UPDATE research_replays SET status='failed',completed_at=?,last_error=? WHERE replay_id=?",
                     (now_text(), reason, row[0]),
                 )
@@ -386,6 +414,10 @@ class AuditStore:
                 "SELECT * FROM research_replay_results WHERE replay_id=?", (replay_id,)
             ).fetchone()
         result = {_camel(key): value for key, value in dict(row).items()}
+        result["lastError"] = result.get("lastError") or ""
+        for key in ("cutoffAt", "createdAt", "startedAt", "completedAt"):
+            if key in result:
+                result[key] = _wire_time(result[key])
         result.update(result="", resultSha256="", diffSummary={})
         if result_row:
             result.update(

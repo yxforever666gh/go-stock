@@ -59,7 +59,8 @@ class Views:
         chains = (
             self.repo.rows("execution_chains", "chain_id=?", (row["chain_id"],)) if row["chain_id"] else []
         )
-        result["executionChain"] = dto(chains[0]) if chains else None
+        if chains:
+            result["executionChain"] = dto(chains[0])
         return result
 
     def runs(self, limit=100, offset=0, slot=""):
