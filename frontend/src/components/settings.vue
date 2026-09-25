@@ -571,8 +571,8 @@ onBeforeUnmount(() => {
         <n-card :title="() => h(NTag, {type: 'primary', bordered: false}, () => '配置管理')" size="small">
           <n-space vertical align="center">
             <n-space>
-              <n-button type="info" :disabled="!settingsLoaded" @click="exportConfig">导出本中心配置</n-button>
-              <n-button type="warning" :disabled="!settingsLoaded || autoSaveState === 'conflict'" @click="importConfig">导入本中心配置</n-button>
+              <n-button type="info" :disabled="!settingsLoaded" @click="exportConfig">导出股票预测配置</n-button>
+              <n-button type="warning" :disabled="!settingsLoaded || autoSaveState === 'conflict'" @click="importConfig">导入股票预测配置</n-button>
             </n-space>
             <n-text type="error">导出的 JSON 包含完整明文 API Key、Token 和 SMTP 授权码，请仅保存在可信设备。</n-text>
             <n-text depth="3" v-if="autoSaveState === 'saving'">正在自动保存...</n-text>

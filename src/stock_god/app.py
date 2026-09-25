@@ -269,7 +269,9 @@ def create_app(
             "contentPreview": "",
         }
         try:
-            value = await ai_factory([model], force_config_id=model_id).complete("请只回复 OK")
+            value = await ai_factory([{**model, "disabled": False}], force_config_id=model_id).complete(
+                "请只回复 OK"
+            )
             result.update(
                 success=True, message="测试成功", model=value.model, contentPreview=value.content[:120]
             )

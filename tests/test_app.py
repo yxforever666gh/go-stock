@@ -148,6 +148,42 @@ def test_process_lock_rejects_second_owner_and_releases(tmp_path):
         pass
 
 
+def test_disabled_saved_model_connectivity_test_does_not_enable_it(app_config):
+    import httpx
+
+    from stock_god.ai import AIClient
+
+    def response(request):
+        return httpx.Response(
+            200, text='data: {"choices":[{"delta":{"content":"OK"},"finish_reason":"stop"}]}\n\n'
+        )
+
+    app = create_app(
+        app_config,
+        market=OfflineMarket(),
+        ai_factory=lambda configs, force_config_id=None: AIClient(
+            configs, force_config_id, transport=httpx.MockTransport(response)
+        ),
+    )
+    with TestClient(app, base_url="http://127.0.0.1:34115", client=("127.0.0.1", 54321)) as web:
+        settings = web.get("/api/v1/prediction/settings").json()
+        settings["aiConfigs"] = [
+            {
+                "name": "disabled fixture",
+                "baseUrl": "http://fixture.invalid/v1",
+                "apiKey": "fixture",
+                "modelName": "fixture",
+                "disabled": True,
+            }
+        ]
+        saved = web.put("/api/v1/prediction/settings", json=settings).json()
+        ident = saved["aiConfigs"][0]["ID"]
+        result = web.post("/api/v1/prediction/ai/configs/test", json={"id": ident})
+        assert result.json()["success"] and result.json()["contentPreview"] == "OK"
+        assert web.get("/api/v1/prediction/settings").json()["aiConfigs"][0]["disabled"] is True
+        assert web.get("/api/v1/prediction/ai/configs").json() == []
+
+
 def test_fresh_settings_initialize_without_rewriting_existing_settings(app_config):
     database = Database(app_config.main_db)
     with database.transaction() as connection:

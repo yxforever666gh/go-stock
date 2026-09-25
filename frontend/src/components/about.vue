@@ -25,16 +25,16 @@ onMounted(async () => {
         </n-badge>
         <n-text v-if="buildIdentity" depth="3">构建标识：{{ buildIdentity }}</n-text>
         <n-alert type="info" :bordered="false">
-          应用内自动更新已经移除。新版本通过本地 release/deploy 流程安装，历史数据保留在独立数据库中。
+          新版本由本机统一安装，历史记录保存在本地数据库。
         </n-alert>
         <n-button
           tag="a"
-          href="https://github.com/yxforever666gh/stock-god/releases"
+          href="https://github.com/yxforever666gh/stock-god/tags"
           target="_blank"
           type="primary"
           tertiary
         >
-          查看 Releases
+          查看版本记录
         </n-button>
       </n-space>
 
