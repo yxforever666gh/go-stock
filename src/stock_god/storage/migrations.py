@@ -78,6 +78,32 @@ def _read_records(db, kind):
 
 
 def _normalize(sql):
+    # GORM and explicit historical migrations wrote the same ordinary indexes
+    # with different identifier quoting. Keep expression/partial indexes and
+    # triggers strict; their string literals must never be case-folded.
+    identifier = r'(?:[A-Za-z_][A-Za-z_0-9]*|"[A-Za-z_][A-Za-z_0-9]*"|`[A-Za-z_][A-Za-z_0-9]*`|\[[A-Za-z_][A-Za-z_0-9]*\])'
+    match = re.fullmatch(
+        rf"\s*CREATE\s+(UNIQUE\s+)?INDEX\s+(?:IF\s+NOT\s+EXISTS\s+)?({identifier})\s+ON\s+({identifier})\s*\((.+)\)\s*;?\s*",
+        sql,
+        re.IGNORECASE,
+    )
+    if match:
+        columns = []
+        for raw in match[4].split(","):
+            column = re.fullmatch(rf"\s*({identifier})(?:\s+(ASC|DESC))?\s*", raw, re.IGNORECASE)
+            if not column:
+                break
+            columns.append((column[1].strip('"`[]').lower(), (column[2] or "ASC").upper()))
+        else:
+            return repr(
+                (
+                    "index",
+                    bool(match[1]),
+                    match[2].strip('"`[]').lower(),
+                    match[3].strip('"`[]').lower(),
+                    columns,
+                )
+            )
     return " ".join(sql.strip().rstrip(";").replace(" IF NOT EXISTS", "").split())
 
 
