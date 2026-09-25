@@ -1,30 +1,25 @@
-# Binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
-*.test
-/go-stock
-build/bin/
-
-# Database
+# Local data, generated releases and process state
+/data/
+/runtime/
+/logs/
+/output/
+/A股历史分钟线数据包/
 *.db
 *.sqlite
 *.sqlite3
-/data/
-
-# Logs
-/logs/
 *.log
 *.nohup.pid
+*.tmp
+*.bak
+*.cache
+/exports/**/*.csv
 
-# Frontend
+# Dependencies and build/test output
+.venv/
 frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/test-results/
-.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -32,61 +27,26 @@ __pycache__/
 .mypy_cache/
 *.egg-info/
 /dist/
-/runtime/toolchain/
-/runtime/minute-index/
-/runtime/test-receipts/
+/test-results/
+/.playwright-mcp/
+/.playwright-cli/
+*.exe
+*.dll
+*.so
+*.dylib
 
-# Editor
+# Local editor/workspace state
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Temporary files
-*.tmp
-*.bak
-*.cache
-/tmp/
-/runtime/db/*.bak-*
-/runtime/db/
-/runtime/network-audit/
-/runtime/validation/
-/runtime/backups/
-/runtime/releases/
-/runtime/deployments/
-/runtime/logs/
-/runtime/source-dev/
-/runtime/current.json
-/runtime/go-stock-web.pid
-/runtime/web.lock
-/runtime/web-process.json
-/runtime/minute-api/
-data.test
-/test-results/
-/.playwright-mcp/
-/.playwright-cli/
-/output/
-/A股历史分钟线数据包/
-
-# Local workspace
 .claude/settings.local.json
 .claude/worktrees/
-.codex
 .codex/
 
-# Local private integration notes
+# Preserve exclusions for existing private integration notes.
 docs/integrations/*.local.md
 docs/integrations/diemeng-api.md
-
-# Public release cleanup
-build/screenshot/
-build/wx.jpg
-backend/data/data/stock.db
-dist/bin/
-exports/db-history/*.csv
-testdata/db/*.db

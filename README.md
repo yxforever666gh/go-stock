@@ -1,180 +1,51 @@
-# go-stock
+# Stock God
 
-![go-stock social preview](./docs/assets/social-preview.png)
+Stock God 是 Python、Vue 3 和 SQLite 构建的本地股票预测工具。界面聚焦**股票预测、设置、关于**；完整行情 API、分钟数据与 MCP 独立保留。
 
-Go-Stock 是基于 Go、Vue 3、Naive UI 和 SQLite 的 Windows 本地股票行情与 AI 研究工具。
+[运行与发布](docs/operations.md) · [结构与维护](docs/architecture.md) · [数据接口](docs/data-apis.md) · [发布历史](RELEASE_NOTES.md) · [GitHub](https://github.com/yxforever666gh/stock-god)
 
-[Releases](https://github.com/yxforever666gh/go-stock/releases) | [发布说明](./RELEASE_NOTES.md)
+> 本项目由公开项目 [ArvinLovegood/go-stock](https://github.com/ArvinLovegood/go-stock) 演化而来，并非原作者官方仓库。原始版权、[LICENSE](LICENSE) 和 [NOTICE](NOTICE) 保留。
 
-> 本仓库基于公开项目 [`ArvinLovegood/go-stock`](https://github.com/ArvinLovegood/go-stock) 演化，不是原作者官方仓库。
+## 股票预测
 
-## 核心流程
+交易日 09:30 至 11:25 每五分钟一个独立账户，共 24 个。分析依据冻结行情和可核验来源评分，服务端检查后按实际落盘时间归区间，首份有效报告进入模拟买入；后到及 11:30 后完成的报告保留归档。
 
-1. 卖出、程序启动或检测到资金缺口时写入持久化事件；交易日 `09:35—14:25` 自动执行完整分析，连续两分钟内卖出合并为一轮。
-2. 可部署资金为 `现金 - 待买预留 - max(净资产 × 10%, 5万元)`；不足 5 万元时保留卖出事件并等待资金累积。
-3. AI 依次完成大盘、板块、个股与严格 JSON 最终决策，将候选分为立即买入、等待和放弃；单轮最多立即买入 2 只、等待 5 只。
-4. 系统再次校验实时价格、价格区间、行情新鲜度、停牌/涨跌停、现金缓冲和重复股票；单笔含费不超过 5 万元，一手已超限的股票不自动买入。
-5. 等待候选不预留现金。若完成后仍有资金缺口，30 分钟后重新执行完整分析；跨越交易窗口的结论作废并于下一交易日重新分析。
-6. 每分钟生命周期扫描、每只持仓从实际复查完成时间独立计算的 15 分钟复查及收盘账户快照继续运行；研究中心2的隔夜强势策略不受影响。
+每个账户每天最多五笔买入，按当前剩余现金除以剩余名额分配，含费不透支。旧持仓在对应时段独立退出，模型失败或关闭自动策略不取消已有持仓管理。页面提供推荐、报告、净收益、图表和不可变证据审计；模型对照回放不改正式账户。
 
-研究中心1自4.0.1起按用户要求清仓并冻结，停止自动研究、持仓复核、手动研究及新买入；历史报告和收益保留。清仓按已保存有效价格计费，冻结状态持久化，普通设置开关不能解除冻结。
+当前数据仍使用既有 `research2_*` 身份。研究中心一、知识库、自选等退役功能的数据保留在同一数据库及归档中。历史迁移与当前预测规则保持独立。
 
-研究中心2使用24个独立五分钟账户：交易日09:30至11:25每五分钟定时卖出对应账户旧持仓，同时独立启动研究。成功结果按落盘时间归区间，首份有效报告立即参与买入，每账户每天最多5只；后到及11:30后完成的报告仅归档。每笔买入上限为当前剩余现金除以剩余成功买入名额，五笔依次为1/5、1/4、1/3、1/2、1/1；一手含费成本超过当笔上限时只买一手，否则按合法整手买到不超过上限，且始终不超过当前可用现金。模拟卖出不受停牌或可卖日期限制，报价失败使用已保存有效价格并标明来源，仍扣除费用。沪深A股买卖佣金为成交额的0.02%，每笔最低5元；卖出印花税为0.05%；沪市买卖各收0.001%过户费，深市不向投资者收过户费；模拟成交不计滑点。开盘首轮允许少量或零根分钟线，缺失指标不补造。每个账户历史初始外部本金为10000元，2026-09-21及2026-09-23开盘前各追加10000元；账户收益由资金事件和实际成交回放统计。策略版本为 `research2-slots-v13`，证据版本为 `research2-slots-v8`。历史主备字段保留用于旧报告，待对应旧记录归档后可删除。
+## 本地启动
 
-## 当前能力
-
-- 证据按 `available_at` 判断研究截止，`collected_at` 仅用于审计；实验性市场与题材证据默认关闭。
-- 每日题材按“观察 → 发酵 → 加速 → 分歧 → 退潮”冻结快照，来源可独立降级；基金和 ETF 不进入荐股或模拟交易。
-- Prompt、证据、工具清单和模型响应以不可覆盖的审计载荷保存；研究回放不会回填或改写原研究结果。
-- 知识库支持 TXT、Markdown 和 PDF 文本，只有人工批准且未失效的版本才参与检索；外部文本始终按不可信线索处理。
-- 市场页提供热词突增、市场宽度、资金流和期指等数据；来源覆盖不足时明确降级，不用虚假零值代替缺失数据。
-- 基金页提供场外基金排行和场内 ETF 自选、行情与详情；统一图表支持股票、指数和 ETF 的多周期、复权、指标与绘图工具。
-
-## 模拟账户与净收益
-
-- 初始资金：固定 `500,000 元`，不再计划或执行追加注资
-- 历史重复仓位保持不变；新买入禁止与已有持仓、待买任务或本轮有效观察股票重复
-- 单只股票含费用现金支出上限：`50,000 元`，按合法整手向下取整；一手已超过上限时跳过
-- 资金保留额：`max(净资产 × 10%, 50,000 元)`；等待候选不占用现金
-- 普通沪深 A 股：100 股整数倍；科创板首次申报至少 200 股
-- 成本：佣金、最低佣金、卖出印花税、过户费和双边滑点
-- 净收益额：`现金 + 持仓按可卖出净值估值 - 500,000 元固定初始资金`
-- 策略净收益率：使用固定本金口径的单位净值与时间加权收益率（TWR）
-
-已平仓交易采用实际净现金流；未平仓持仓按最新价扣除预计卖出成本估值。不计算或展示基准收益率、超额收益率和 XIRR。
-
-## 界面结构
-
-- 市场行情：保留快讯、指数、行业排名、资金流、龙虎榜、公告、研报、热点、选股与名站信息；热点页增加“每日炒作题材”视图，展示题材阶段、冻结快照、成分股与催化来源冲突。
-- 基金：异步提供基金自选、场外基金排行和场内 ETF 排名、搜索、自选与详情；ETF 详情复用统一图表，展示来源时间与降级状态。
-- 研究中心1：保留原研究页签并增加 `知识库与记忆` 管理入口，可导入、检索、审批文档版本和记忆候选。
-- 研究中心2：提供独立的 `AI分析报告`、`股票推荐记录`、`股票收益率` 和 `设置` 页签；设置页显示隔夜强势自动策略开关及研究中心2专属报告邮件配置。
-- 设置：两个研究中心分别保存模型、API Key、数据源和策略；研究中心2的邮件也独立保存。主题、基金显示及全局刷新属于通用设置。
-- 资金补位策略：启用后由卖出、启动恢复和资金缺口自动触发；目标利用率、单轮买入数与重分析间隔可配置，固定分析时间和手动分析入口已移除。
-
-## AI 配置
-
-每个研究中心的模型列表从上到下即为自己的回退顺序，关闭的模型会被跳过。研究调用采用流式接收：连续 300 秒没有有效推理、心跳、状态或正文事件才超时，活跃推理不限制总时长。瞬态错误在当前模型最多尝试 5 次，不可恢复错误立即切换下一模型。
-
-首次迁移到独立配置时，在本机将既有研究参数和模型配置复制给两个中心，之后分别保存；原全局模型及历史引用保留。参数修改从下一轮任务生效，当前轮继续使用自己的配置快照。关闭自动策略立即停止新增分析和买入，当前分析仅保留报告，已有持仓继续管理；重新开启不会恢复已撤销的旧轮买入许可。
-
-两个中心的配置导入、导出仅包含当前中心。若同一中心已被另一个页面修改，保存会提示冲突并保留草稿。研究中心2的核心分钟链继续使用腾讯、东方财富与本地缓存；设置中的通用来源排序只作用于图表刷新。
-
-Responses API 优先使用 `previous_response_id` 延续单股会话；中转站不支持续接时，只重发该股票本地保存并压缩后的历史消息。
-
-## 数据库
-
-当前 App 版本和主/分钟库 schema 以 `internal/releaseinfo/release_manifest.json`、运行时 `/readyz` 与 Release Notes 为准。已发布迁移保持不可改写，并在升级前创建可校验的数据库归档。
-
-## 本地运行
-
-要求 Go 1.25+、Node.js 20+。
+准备 `.python-version` 指定的 Python 3.13、uv、Node.js 20+、PowerShell 7：
 
 ```powershell
-cd frontend
-npm install
+uv sync --frozen
+Push-Location frontend
+npm ci
 npm run build
-cd ..
-go run .
+Pop-Location
+uv run --frozen python -m stock_god db status
 ```
 
-默认监听 `http://127.0.0.1:34115`，可用 `--web-addr` 修改监听地址。
-
-已部署的 Windows 发布物可直接双击 `启动项目.cmd`；如只需启动服务、不打开浏览器，可运行：
+在明确备份和目标库后，用 `uv run --frozen python -m stock_god db migrate` 执行待处理迁移，再启动：
 
 ```powershell
-.\启动项目.cmd -NoBrowser
+uv run --frozen python -m stock_god serve
 ```
 
-## Windows 本地发布
+打开 `http://127.0.0.1:34115`。已部署版本使用 `启动项目.cmd`，它跟随已核验的发布指针；开发运行和正式制品不要同时占用端口。
 
-使用 PowerShell 7.2+。先提交开发改动，并在仓库外准备发布说明正文（例如 `H:\Download\go-stock-release-notes.md`，不需要写版本标题），再执行：
+主服务规范为 `/openapi.json`；独立分钟/MCP 服务默认使用 `127.0.0.1:18080`。大型行情包可通过 `STOCK_GOD_MARKET_DATA_ROOT` 放在仓库外。数据库、原始行情、运行日志和临时测试不入 Git。
+
+## 修改与验证
+
+日常改动先定位所属包，再运行定向验证，例如：
 
 ```powershell
-pwsh -NoProfile -File scripts/release.ps1 -Command publish -NotesFile H:\Download\go-stock-release-notes.md
+pwsh -File scripts/verify.ps1 -Tier fast -TestPath tests/prediction/test_prediction.py
+pwsh -File scripts/verify.ps1 -Tier domain -Domain contracts
 ```
 
-入口检查干净工作区、main快进关系及统一SSH代理，默认增加补丁版本（显式主版本发布使用 `-TargetVersion 4.0.0`），只提交版本清单和发布说明。它依次运行前端测试、lint、前端构建及完整Go/接口门禁，然后构建一次带提交身份的候选制品，创建annotated tag，原子推送main与该tag，部署并重启一次，核验进程与readiness。普通“部署并restart”不需要再运行第二次restart。
+约束见 [AGENTS.md](AGENTS.md)。普通开发不自动升版本、发布或 push；发布必须完成候选身份、链路验证、备份、部署和运行版本核对。
 
-研究中心2成本口径变更需重算全历史时，在上述 publish 命令后加 `-ReplayResearch2Allocation`。该选项写入发布记录，续跑时自动保留；部署阶段停机、归档并校验双库，先预演再重放成交和收益，核对计划身份并校验数据库后启动服务。重放失败会恢复归档和旧运行版本。
-
-没有新提交时只确认现有发布；未完成发布会自动匹配记录，不重复升版本。跨 schema 迁移被强制中断且无法确认新版本已正常运行时，脚本停止并给出原始归档的 rollback 命令；先恢复，再续跑，避免误备份已升级的数据库。也可以按失败输出显式续跑：
-
-```powershell
-pwsh -NoProfile -File scripts/release.ps1 -Command publish -Resume "runtime\deployments\publish-记录ID.json"
-```
-
-记录和分阶段日志保存在 `runtime/deployments`。成功阶段只在提交、工具链和相关产物一致时复用；代码变化需要新发布，已存在的不同输入制品或冲突tag不会被覆盖。推送结果不确定时先核对远端；已运行的相同制品不会再次重启。完整制品存于 `runtime/releases`，构建暂存目录位于同卷的 `runtime/releases/.staging`，成功后原子移入正式目录。
-
-每次命令单独保存 `attempt-*.json`，发布记录引用其历史。最终分别显示发布历时、累计执行、本次执行和两次执行之间的中断间隔；不累加嵌套阶段，不将间隔直接称为人工等待。旧记录或强制中断缺少结束时间时，相应累计值显示 unknown，并列出已知部分；首次预检失败尚无发布记录时，保留独立尝试记录。
-
-候选构建由一次性子进程完成，无常驻服务。`build-job-*.json` 保存输入、工作目录、暂存目录、进程身份、退出码及 stdout/stderr 日志；每15秒报告仍在运行。续跑在验证前先等待身份匹配的活跃构建，完整制品直接复用。进程已消失且没有完整制品才重新执行；PID复用、输入不一致或启动握手结果未知时停止。不要在命令仍运行时手工补构建、改发布记录或再次restart；命令明确失败后使用Resume。失去终端但构建仍活跃时暂存目录会保留。
-
-部署诊断分别记录停机、归档（含ZIP和归档验证）、迁移、数据库整理compact、数据库校验、启动及readiness等待；这些计时不是可以跳过的恢复步骤。涉及schema的开发验收运行 `pwsh -File scripts/verify.ps1 -Tier domain -Domain migrations`，同时覆盖bootstrap备份边界。3—5分钟仍是普通同schema热缓存发布的目标，跨schema维护耗时单独评估，真实效果在下一次授权发布时测量。
-
-独立 `build` 仍适用于已有对应tag的构建；`deploy`/`activate`只部署已核验的现有制品，不再隐式构建；`rollback`和日常`restart`保留。发布脚本改动使用离线流程测试或工具领域验证：
-
-```powershell
-pwsh -NoProfile -File scripts/release-pipeline.test.ps1
-pwsh -NoProfile -File scripts/verify.ps1 -Tier domain -Domain tools
-```
-
-这些流程测试使用临时Git仓库和模拟编译、网络与进程，不触碰运行服务或生产数据库。常规发布保留原有完整门禁，不重复运行整套发布编排模拟。热缓存、网络正常时以3—5分钟为目标；脚本记录实际验证、前端构建、Go构建、Git网络、部署启动和总耗时。Codex发布任务结束前再做一次浏览器版本核对。
-
-网络来源审计已从主程序移到独立开发工具，需要时运行：
-
-```powershell
-.\scripts\network-audit.ps1
-```
-
-磁盘清理默认只预览，并验证生产双库、保留发布和逐级回滚归档；确认清单后才显式执行：
-
-```powershell
-.\scripts\cleanup-workspace.ps1
-.\scripts\cleanup-workspace.ps1 -Apply
-```
-
-清理会按脚本内的恢复策略保留必要发布物与迁移归档。生产数据库、当前日志、Git 数据和前端依赖始终不属于清理目标。
-
-## 验证
-
-日常开发默认只运行与改动直接相关的快速验证：
-
-```powershell
-.\scripts\verify.ps1 -Tier fast -GoPackage ./backend/research2
-.\scripts\verify.ps1 -Tier fast -FrontendTest src/utils/number-format.test.mjs
-```
-
-跨越一个完整领域时运行领域验证；只有正式发布或明确要求完整门禁时才运行发布验证：
-
-```powershell
-.\scripts\verify.ps1 -Tier domain -Domain research2
-.\scripts\verify.ps1 -Tier release
-```
-
-修改共用配置、AI、行情或图表后，可一次验证两个研究中心、共享 Go 包及前端研究行为。该入口使用临时 fixture，并在成功和失败后核对已暂存、未暂存及未跟踪文件的内容：
-
-```powershell
-.\scripts\research-centers.test.ps1
-# 只需 Go 共享边界时：
-.\scripts\verify.ps1 -Tier domain -Domain research-shared
-# 可选观察生产数据库、WAL、SHM；运行中应用也可能改变这些文件：
-.\scripts\research-centers.test.ps1 -CheckProductionDatabases
-```
-
-`fast`、`domain` 和 `release` 验证均关闭真实网络和集成测试开关；普通测试必须自行使用临时 fixture。真实来源、浏览器、邮件和生产数据库验证不属于日常开发入口。详细范围与停止条件见 [`AGENTS.md`](./AGENTS.md)。
-
-只有明确需要真实来源合同时才启用 integration build tag；测试仍必须使用临时数据库：
-
-```powershell
-$env:GO_STOCK_LIVE_MARKET_NEWS = '1'
-go test -tags integration -run '^TestRefreshResearchNewsLiveContract$' ./backend/data
-Remove-Item Env:GO_STOCK_LIVE_MARKET_NEWS
-$env:GO_STOCK_LIVE_EASTMONEY = '1'
-go test -tags integration -run '^TestResearch2FullMarketLiveContract$' ./backend/data
-Remove-Item Env:GO_STOCK_LIVE_EASTMONEY
-```
-
-## 许可证
-
-许可证与第三方来源说明见 [LICENSE](./LICENSE)。股票数据和 AI 输出仅用于研究与软件验证，不构成投资建议。
+本工具使用模拟账户，AI 输出供学习研究，不构成投资建议。

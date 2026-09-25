@@ -1,11 +1,14 @@
-# Large or generated reference data; pass an explicit path when it is needed.
-backend/data/words.txt
-build/*.json
+# Large generated/source data: inspect an explicit path when needed.
+src/stock_god/market/resources/
+src/stock_god/market/mcp_catalog.py
+src/stock_god/storage/historical/*.json
+tests/fixtures/
 
-# External prompt references are not part of the application runtime.
-LLM_prompt_for_A_share/
+# Historical reference notes do not define current runtime behavior.
+docs/history/
+docs/reference/
 
-# Runtime inputs and outputs are inspected only through explicit paths.
+# Runtime data, dependencies and generated outputs.
 data/
 runtime/
 logs/

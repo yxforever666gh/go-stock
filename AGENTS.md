@@ -1,127 +1,56 @@
 # Stock God Working Rules
 
-These instructions apply to the entire repository. Keep routine work local, make
-complexity visible, and reserve full-system proof for an explicit release.
+These rules apply to the whole repository. Keep ordinary work local and bounded.
 
-## Scope and complexity
+## Product and ownership
 
-- Prefer, in order: delete obsolete code, simplify existing code, merge real
-  duplication, extend a clear existing boundary, then add new implementation.
-- Optimize total complexity rather than raw line count. Correctness,
-  readability, data safety, and meaningful tests outrank a smaller diff.
-- Do not add abstractions, configuration, states, or extension points for
-  hypothetical future needs. Extract a shared abstraction after a third real
-  use, or earlier only when it creates a necessary dependency boundary.
-- A routine task should normally stay within one domain. If it would touch more
-  than 10 source files or more than two domains, split the work unless the user
-  explicitly requested a cross-domain change.
-- When new behavior replaces old behavior, remove the old entry point, branch,
-  configuration, and obsolete tests in the same task. If compatibility must
-  remain, document its exact removal condition.
-- Do not add new business responsibilities to `backend/data`. Existing code may
-  be fixed there; new domain logic belongs in a focused package.
-- Refactor incrementally: extract at most one complete responsibility while
-  delivering a feature or fix. Do not start a repository-wide cleanup unless
-  the user explicitly requests it.
+- The active UI is 股票预测, settings and about. Market-data HTTP APIs and the minute/MCP service remain supported. Research 1, knowledge, stock/fund watchlists and market display pages are retired; do not recreate their entry points.
+- Python is the only current backend runtime. Do not restore Go sources, Go wrappers, Wails or a parallel implementation. Archived Go executables are permitted only as existing deployment rollback artifacts outside tracked source.
+- `stock_god.prediction` owns strategy, account, execution, returns, reports and task lifecycle. Market/AI providers are injected; prediction must not import concrete `market`, `app`, `cli`, `runtime`, `storage.migrations` or `storage.historical` code.
+- `stock_god.market` owns provider I/O and source validation, and must not import prediction or the composition root. `stock_god.storage` must not import current business packages. `config` and `jsonutil` are shared primitives and must not import features.
+- Historical migration definitions and algorithms remain frozen in `storage/historical`. Current prediction changes never alter their financial rules.
+- Persisted research2 table names, owner values and UUID namespaces are data contracts. Branding changes must not rewrite them.
+- Capture a deep settings/model snapshot at every task entry. Provider retries, fallback and evidence collection use that snapshot. Never temporarily replace global settings.
+- Saving settings affects later provider work. Disabling automation revokes old run publication/new-buy permission; re-enabling cannot revive it. Existing positions retain their exit handling.
 
-## Product and dependency boundaries
+## Keep changes small
 
-- The active product is 股票预测 plus headless market-data APIs. Market,
-  stock/fund watchlist, Research 1, and knowledge UI/runtime features are retired.
-  Preserve their historical database rows; do not recreate their entry points.
-- Preserve market-data API and MCP contracts independently of UI removal.
-  Prediction APIs use `/api/v1/prediction`; old prediction routes have no aliases.
-- Prediction rules belong to `stock_god.prediction`, provider I/O to
-  `stock_god.market` and `stock_god.ai`, and SQLite access to `stock_god.storage`.
-  Historical migration algorithms stay frozen inside migrations and are never
-  imported by current prediction logic.
-- Persisted research2 table names, owner values, and deterministic ID namespaces
-  are data contracts. Branding changes must not rewrite them.
-- Python is the sole backend runtime after the 6.0 migration. Go is a temporary
-  development oracle and is removed after parity tests pass; archived binaries
-  remain available only for rollback.
-- Capture a deep configuration snapshot at each task entry. Provider retries,
-  fallbacks, and evidence collection use that snapshot; never temporarily replace
-  global settings. A center settings save only notifies that center.
-- Changes to AI, quotes, evidence, chart, SQLite or configuration boundaries
-  require the matching domain checks and affected frontend behavior tests.
-
-## Change budget
-
-- Explain necessity and long-term cost in the final response when a task adds
-  more than 200 production lines, changes more than 10 source files, or adds a
-  public interface, configuration option, schema object, or background job.
-- Treat tests, documentation, and generated files separately from production
-  code when reporting size. These measurements explain the change; they are not
-  mechanical pass/fail gates. Count physical lines including blank lines; report
-  runtime prompts, tests, documentation, and generated files separately.
+- Prefer deletion of obsolete code, simplifying existing code, merging real duplication, then extending an established boundary.
+- Optimize correctness, readability and total maintenance cost. Do not compress code merely to reduce physical lines.
+- Do not add abstractions, configuration, states or background jobs for hypothetical future use. Extract sharing after three real uses, or when a necessary dependency boundary already exists.
+- A routine task should stay in one domain. Split work exceeding ten source files or two domains unless the user explicitly requests a cross-domain change.
+- Remove replaced entry points, branches, options and obsolete tests in the same task. A necessary compatibility path must document its exact removal condition.
+- Avoid a repository-wide refactor while implementing a small feature. Use the architecture guide to identify the smallest responsible package.
+- Explain necessity and long-term cost when adding more than 200 production lines, changing more than ten source files, or adding a public interface, configuration, schema object or background job.
 
 ## Verification
 
-- Diagnosis and read-only audits do not run tests by default.
-- Routine implementation uses `scripts/verify.ps1 -Tier fast` with the affected
-  Go package/test or frontend test file. Cross-boundary work may use one
-  matching `domain` verification.
-- During the 6.0 migration, new Python scopes use the locked project environment
-  and targeted pytest files. Keep old-language checks only while they provide
-  the behavior oracle; the final verifier must not require Go.
-- Use `scripts/verify.ps1 -Tier release` only for an explicit release or when
-  the user explicitly asks for the full local gate.
-- Do not automatically run `go test ./...`, `go vet ./...`, `npm run ci`, live
-  network checks, production database checks, workspace cleanup, version bumps,
-  release builds, deployments, tags, or pushes.
-- Do not repeat a passing check unless relevant code changed. After two failures
-  with the same cause, stop rerunning and diagnose or report the cause.
-- An unrelated or pre-existing failure is reported separately; it does not
-  silently expand the task.
-- Target budgets are three minutes for `fast`, eight minutes for `domain`, and
-  10-20 minutes total for a routine fix. Release verification is separate.
+- Read-only diagnosis does not run tests by default.
+- Routine implementation uses `scripts/verify.ps1 -Tier fast -TestPath <pytest target>` or `-FrontendTest <frontend test>`. Cross-boundary work uses one matching `-Tier domain -Domain prediction|market|storage|web|contracts`.
+- API changes update canonical `api/openapi.yaml`, regenerate TS with `python -m stock_god.contracts --write`, and check real FastAPI routes. Never edit generated TS independently as the final state.
+- Run affected frontend behavior tests when requests, pages or charts change. `tests/test_boundaries.py` guards package imports, retired surfaces, runtime language and version consistency.
+- Use `-Tier release` only for an explicit release or an explicit full-gate request. Do not automatically run every test, builds, database maintenance, deployments, version bumps, tags or pushes.
+- Do not repeat a passing check unless relevant code changed or an unresolved risk requires it. After two failures with the same cause, stop rerunning and diagnose.
+- Report unrelated/pre-existing failures separately. They do not expand the task silently.
+- Target three minutes for fast, eight minutes for a domain check, and 10–20 minutes for a routine fix. Major releases are separate work.
 
-## Tests and data safety
+## Data and test safety
 
-- Unit and repository tests use `t.TempDir()` or another disposable fixture.
-  They must not migrate or write `data/*.db` or runtime databases.
-- Live network, browser, email, and provider probes require a dedicated
-  integration build tag and an explicit opt-in command. They are never part of
-  `fast`, `domain`, or `release` verification.
-- Ordinary repository tests do not rebuild the complete historical migration
-  chain. Full migrations and SQLite integrity checks belong to migration or
-  release-specific tests.
+- Repository tests use pytest `tmp_path` or disposable fixtures. They never migrate or write runtime/production databases.
+- Ordinary tests use the minimum current schema fixture; full historical migrations and SQLite integrity checks belong to migration/release-specific tests.
+- Live providers, external email and browser probes require an explicit opt-in. They are excluded from ordinary fast/domain/release gates. Test SMTP uses a local fixture.
+- Preserve full source evidence in durable storage and audit. Model prompts use compact snapshots and bounded scoring facts, not entire raw market documents.
+- Keep meaningful regression tests in the repository. One-off test harnesses, logs, downloaded artifacts, screenshots and database copies belong under `H:\Download` and are not committed.
+- Never delete existing user data or unrelated files while cleaning task output. Do not run Git GC or workspace cleanup as part of routine verification.
 
-## Versioning and release
+## Release and completion
 
-- Development completion is not release completion. Routine fixes do not
-  update versions, release notes, tags, or artifacts.
-- Batch compatible development changes into one explicit release. A release
-  runs the full local gate once; after a failure, repair and rerun the failed
-  scope before repeating the full gate.
-- Do not create or use GitHub CI for local validation.
+- Ordinary commits remain local. GitHub writes, release creation, tags and pushes require the user's explicit scope; use their configured SSH identity and proxy, with no direct fallback or GitHub Actions.
+- Versions come from `src/stock_god/release_manifest.json` and must agree with project metadata and runtime identity. Do not bump versions for routine fixes.
+- The approved 6.0.0 migration requires two independent offline chains and one isolated live market/AI prediction before tag/push. Temporary test databases and raw output stay outside Git; bind sanitized receipts to the final commit, dependency lock and artifact hashes.
+- Deployment verifies the candidate and receipts, backs up both databases, applies explicit migrations, restarts once and verifies process/readiness/browser identity. Never move or overwrite a published tag.
+- Only one task writes a checkout. Parallel writers use separate Git worktrees and preserve unrelated local changes.
+- Completion requires the requested behavior, targeted checks, boundary contracts and `git diff --check`, with no unrelated changes. Stop after those conditions hold.
+- End with a short Complexity change note: production lines added/removed, source files touched, execution paths added/removed, public interfaces/configuration/schema added, and any old path still retained. Count physical lines; report prompts, tests, docs, generated metadata and data assets separately.
 
-## Workspace and completion
-
-- Only one task may write to a checkout at a time. Parallel writing tasks use
-  separate Git worktrees. Preserve unrelated user changes in a dirty worktree.
-- Temporary validation output belongs under `H:\Download` when available and
-  must be removed before completion.
-- A routine task is complete when the requested behavior is implemented, the
-  relevant targeted checks pass, required boundary contracts pass,
-  `git diff --check` passes for the task changes, and no unrelated changes were
-  introduced. Stop when these conditions are satisfied.
-- Final responses include a short `Complexity change` note: production lines
-  added/removed, source files touched, execution paths added/removed, public
-  interfaces/configuration/schema added, and any old path that could not yet be
-  removed.
-
-## 6.0.0 release acceptance
-
-- The approved release includes full Python migration, all published legacy
-  database upgrades, in-database preservation before destructive historical
-  transformations, Stock God naming, and deployment/restart.
-- Before tag/push, validate the final candidate twice across complete offline
-  chains and run one live market/AI prediction in disposable database copies.
-  Live calls are opt-in; test email is delivered to a local fixture.
-- Validation binds commit, dependency lock and artifact hashes. A changed final
-  candidate needs fresh final validation. Never move an already published tag.
-- Temporary scripts, test databases and raw outputs stay under `H:\Download`
-  and are not committed. Durable regression tests and sanitized release receipts
-  are retained in their respective project locations.
+Active guidance is limited to README, this file, and `docs/architecture.md`, `docs/operations.md`, `docs/data-apis.md`. Historical notes are references, not runtime instructions.
