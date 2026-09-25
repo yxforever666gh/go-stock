@@ -70,6 +70,7 @@ def serve(config):
                 timeout_keep_alive=120,
                 timeout_graceful_shutdown=10,
                 ws_max_size=1 << 20,
+                ws="websockets-sansio",
                 access_log=False,
             )
         )

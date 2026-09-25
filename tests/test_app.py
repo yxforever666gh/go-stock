@@ -1,4 +1,8 @@
 import copy
+import json
+import socket
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -153,3 +157,34 @@ def test_fresh_settings_initialize_without_rewriting_existing_settings(app_confi
         assert web.put("/api/v1/settings", json={"refreshInterval": 19}).status_code == 200
     with client(app_config) as web:
         assert web.get("/api/v1/settings").json()["refreshInterval"] == 19
+
+
+def test_installed_runtime_serves_real_websocket_and_rejects_foreign_origin(app_config):
+    import uvicorn
+    from websockets.exceptions import InvalidStatus
+    from websockets.sync.client import connect
+
+    app = create_app(app_config, market=OfflineMarket(), ai_factory=OfflineAI)
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    port = listener.getsockname()[1]
+    server = uvicorn.Server(
+        uvicorn.Config(app, ws="websockets-sansio", log_level="error", proxy_headers=False)
+    )
+    thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+    thread.start()
+    try:
+        deadline = time.monotonic() + 10
+        while not server.started and thread.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert server.started
+        url = f"ws://127.0.0.1:{port}/api/v1/events/ws"
+        with connect(url, proxy=None, origin=f"http://127.0.0.1:{port}") as websocket:
+            assert json.loads(websocket.recv(timeout=2)) == {"event": "loadingMsg", "payload": "done"}
+        with pytest.raises(InvalidStatus), connect(url, proxy=None, origin="https://foreign.invalid"):
+            pass
+    finally:
+        server.should_exit = True
+        thread.join(10)
+        listener.close()
+        assert not thread.is_alive()
