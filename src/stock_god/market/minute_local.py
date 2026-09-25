@@ -3,11 +3,13 @@
 import csv
 import json
 import math
+import os
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from stat import FILE_ATTRIBUTE_REPARSE_POINT
 from typing import Any
 
 CN = timezone(timedelta(hours=8))
@@ -161,21 +163,41 @@ class LocalStore:
         self.names: dict[str, str] = {}
         self.auction_files: list[SourceFile] = []
         folders = {value: key for key, value in PERIODS.items()}
-        for path in sorted(self.root.rglob("*"), key=lambda p: p.as_posix()):
-            if path.is_dir():
-                continue
-            if path.suffix.lower() != ".csv":
-                continue
+        files = []
+        directories = [self.root]
+        while directories:
+            with os.scandir(directories.pop()) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    if entry.is_dir():
+                        if not entry.is_symlink():
+                            if not path.resolve().is_relative_to(self.root):
+                                raise ValueError("数据目录越界：" + path.relative_to(self.root).as_posix())
+                            directories.append(path)
+                        continue
+                    if path.suffix.lower() != ".csv":
+                        continue
+                    relative = path.relative_to(self.root).as_posix()
+                    if entry.is_symlink():
+                        raise ValueError("未识别或符号链接CSV：" + relative)
+                    file_stat = entry.stat(follow_symlinks=False)
+                    if (
+                        getattr(file_stat, "st_file_attributes", 0) & FILE_ATTRIBUTE_REPARSE_POINT
+                        and not path.resolve().is_relative_to(self.root)
+                    ):
+                        raise ValueError("未识别或符号链接CSV：" + relative)
+                    files.append((path, file_stat))
+        # Keep the previous global path order: later stock sources override earlier ones.
+        for path, file_stat in sorted(files, key=lambda item: item[0].as_posix()):
             relative = path.relative_to(self.root).as_posix()
             parts = relative.split("/")
-            if len(parts) < 2 or path.is_symlink() or not path.resolve().is_relative_to(self.root):
+            if len(parts) < 2:
                 raise ValueError("未识别或符号链接CSV：" + relative)
             if parts[0] == "分钟K线-指数" and path.name == "对应名称.csv":
                 for row in read_csv(path, ["index", "code", "name"]):
                     self.names[row[1]] = row[2]
                 continue
-            stat = path.stat()
-            file = SourceFile(path, relative, stat.st_size, stat.st_mtime_ns)
+            file = SourceFile(path, relative, file_stat.st_size, file_stat.st_mtime_ns)
             if parts[0] == "集合竞价":
                 self.auction_files.append(file)
                 continue

@@ -1,3 +1,4 @@
+import os
 from decimal import Decimal
 from threading import Event
 
@@ -70,6 +71,95 @@ def test_stock_history_current_overrides_and_exact_nanosecond_selection(tmp_path
         minute_time("2026-01-05 09:31"),
     )
     assert result["source"] == "csv" and len(result["data"]) == 1
+
+
+def test_inventory_preserves_global_path_order_and_file_fingerprints(tmp_path):
+    header = ",".join(STOCK_HEADERS) + "\n"
+    # '-' sorts before '/', unlike sorting just the two directory names.
+    current = fixture(
+        tmp_path, "A股个股/snapshot/1分钟/sh600941.CSV", header + stock_row("2026-01-05 09:30:00", "11")
+    )
+    earlier = fixture(
+        tmp_path,
+        "A股个股/snapshot-older/1分钟/sh600941.csv",
+        header + stock_row("2026-01-05 09:30:00", "10"),
+    )
+    fixture(tmp_path, "ignored.csv/readme.txt", "ignored")
+    store = LocalStore(tmp_path)
+    files = store.stocks["sh600941/1m"]
+    assert [file.path for file in files] == [earlier, current]
+    assert [(file.size, file.modified) for file in files] == [
+        (path.stat().st_size, path.stat().st_mtime_ns) for path in (earlier, current)
+    ]
+    assert store.stock_days("sh600941")[0]["close"] == 11
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["unknown.csv", "other/1分钟/sh600941.csv", "A股个股/unknown/sh600941.csv", "A股个股/1分钟/bad.csv"],
+)
+def test_inventory_rejects_unknown_csv(tmp_path, relative):
+    fixture(tmp_path, relative, "not read during inventory")
+    with pytest.raises(ValueError, match="未识别"):
+        LocalStore(tmp_path)
+
+
+@pytest.mark.parametrize("dangling", [False, True])
+def test_inventory_rejects_csv_symlinks(tmp_path, dangling):
+    root = tmp_path / "root"
+    directory = root / "A股个股/1分钟"
+    directory.mkdir(parents=True)
+    target = tmp_path / "target.csv"
+    if not dangling:
+        target.write_text("outside", encoding="utf-8")
+    try:
+        (directory / "sh600941.csv").symlink_to(target)
+    except OSError as error:
+        pytest.skip(f"File symlinks unavailable: {error}")
+    with pytest.raises(ValueError, match="符号链接CSV"):
+        LocalStore(root)
+
+
+def test_inventory_does_not_follow_directory_symlinks(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    target = tmp_path / "outside"
+    fixture(target, "1分钟/sh600941.csv", "outside")
+    try:
+        (root / "A股个股").symlink_to(target, target_is_directory=True)
+    except OSError as error:
+        pytest.skip(f"Directory symlinks unavailable: {error}")
+    assert LocalStore(root).stocks == {}
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows junction behavior")
+@pytest.mark.parametrize("external", [False, True])
+def test_inventory_validates_junction_boundary(tmp_path, external, monkeypatch):
+    from _winapi import CreateJunction
+
+    root = tmp_path / "root"
+    (root / "A股个股").mkdir(parents=True)
+    target = tmp_path / "outside" if external else root / "A股个股/original"
+    fixture(target, "1分钟/sh600941.csv", ",".join(STOCK_HEADERS) + "\n")
+    link = root / "A股个股/alias"
+    CreateJunction(str(target), str(link))
+    scanned = []
+    scandir = os.scandir
+
+    def record_scan(directory):
+        scanned.append(directory)
+        return scandir(directory)
+
+    monkeypatch.setattr("stock_god.market.minute_local.os.scandir", record_scan)
+    if external:
+        with pytest.raises(ValueError, match="数据目录越界"):
+            LocalStore(root)
+        assert link not in scanned
+    else:
+        assert [file.relative for file in LocalStore(root).stocks["sh600941/1m"]] == [
+            "A股个股/alias/1分钟/sh600941.csv",
+            "A股个股/original/1分钟/sh600941.csv",
+        ]
 
 
 @pytest.mark.parametrize("bad", ["null", "true", "12 ", "01", "NaN", '"""12"""'])
