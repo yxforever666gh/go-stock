@@ -94,7 +94,9 @@ def _bundle(text: str) -> tuple[bytes, str]:
 
 def _decode(row: dict, name: str) -> str:
     blob = row.get(name + "_blob")
-    if blob is None:
+    # GORM persisted absent optional responses as an empty BLOB with a NULL codec.
+    # Only missing content bypasses codec/hash validation; nonempty evidence stays checked.
+    if blob is None or len(blob) == 0:
         return ""
     if row.get(name + "_codec") != "gzip":
         raise ValueError("unsupported audit codec")

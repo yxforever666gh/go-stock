@@ -1,3 +1,4 @@
+import gzip
 import hashlib
 import io
 import json
@@ -9,6 +10,23 @@ import pytest
 
 from stock_god.ai import Completion
 from stock_god.audit import AuditConflict, AuditStore, _decode, redact_text
+
+
+@pytest.mark.parametrize("blob", [None, b""])
+def test_legacy_missing_optional_audit_payload_has_no_codec(blob):
+    for name in ("raw_response", "repaired_response", "repair_log"):
+        assert _decode({name + "_blob": blob, name + "_codec": None, name + "_sha256": None}, name) == ""
+
+
+def test_nonempty_legacy_audit_payload_still_requires_supported_codec_and_hash():
+    payload = gzip.compress(b"captured response")
+    with pytest.raises(ValueError, match="unsupported audit codec"):
+        _decode({"raw_response_blob": payload, "raw_response_codec": None}, "raw_response")
+    with pytest.raises(ValueError, match="hash mismatch"):
+        _decode(
+            {"raw_response_blob": payload, "raw_response_codec": "gzip", "raw_response_sha256": "wrong"},
+            "raw_response",
+        )
 
 
 def test_immutable_audit_round_trip_and_redaction(core_database):
