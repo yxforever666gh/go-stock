@@ -120,6 +120,18 @@ def test_acceptance_is_bound_to_final_candidate_and_all_four_stages(tmp_path):
         release.validate_proof(path, pointer)
 
 
+def test_later_releases_do_not_require_unrequested_live_provider_calls(tmp_path):
+    _, pointer = candidate(tmp_path)
+    path = tmp_path / "proof.json"
+    value = proof(path, pointer)
+    value["stages"] = {"local-release-gate": value["stages"]["local-release-gate"]}
+    release.write(path, value)
+    with pytest.raises(ValueError, match="incomplete"):
+        release.validate_proof(path, pointer)
+    later = {**pointer, "appVersion": "6.0.1"}
+    assert release.validate_proof(path, later) == value
+
+
 def test_failed_upgrade_restores_both_databases_and_old_pointer(tmp_path, monkeypatch):
     directory, pointer = candidate(tmp_path)
     before = legacy(tmp_path)
@@ -373,6 +385,29 @@ def test_real_suspended_venv_launch_is_owned_before_it_can_run(tmp_path):
     finally:
         release.cleanup_spawn(child, job, record, tmp_path)
     assert child.poll() is not None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows process ownership fixture")
+@pytest.mark.parametrize("exited", [False, True])
+def test_identity_query_handles_exit_race_without_ignoring_live_access_denial(exited):
+    import ctypes
+
+    class Kernel:
+        def GetProcessTimes(self, *args):
+            return True
+
+        def QueryFullProcessImageNameW(self, *args):
+            ctypes.set_last_error(5)
+            return False
+
+        def WaitForSingleObject(self, *args):
+            return 0 if exited else 258
+
+    if exited:
+        assert release.handle_identity(Kernel(), 1, 123) is None
+    else:
+        with pytest.raises(PermissionError):
+            release.handle_identity(Kernel(), 1, 123)
 
 
 def fixture_databases(root):

@@ -76,6 +76,8 @@ uv run --frozen python scripts/release.py deploy --candidate <候选目录> --pr
 
 `proof` 必须来自已执行的验证，不能手写“通过”代替测试。当前四个阶段为 `local-release-gate`、`offline-cold`、`offline-restart`、`live-prediction`。候选内容变化后，旧回执失效。
 
+这四项同时强制适用于 6.0.0 的语言和数据迁移。后续普通版本默认只要求本地 release 门禁；额外完整演练与真实模型调用按用户明确要求执行，日常修复仍使用定向验证。
+
 用户明确授权后才创建 annotated tag `6.0.0` 并推送对应 commit/tag，随后核对远端 SHA。GitHub 使用统一 SSH key 与 `127.0.0.1:7890` 代理，无直连回退，也不创建 GitHub Actions。普通开发 commit 不自动 push。
 
 本机 Codex 的 PowerShell 环境若继承了 `SHELL=...powershell.exe`，OpenSSH 的代理命令会因不支持 `exec` 而失败。执行 GitHub SSH 命令时仅在该进程设置 `$env:SHELL='H:/Program Files (x86)/Git/bin/bash.exe'`，继续使用原 SSH 配置中的账户 key、443 端口和代理。

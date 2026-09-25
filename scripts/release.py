@@ -69,11 +69,19 @@ def handle_identity(kernel, handle, pid):
     if not kernel.GetProcessTimes(
         handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(system), ctypes.byref(user)
     ):
-        raise ctypes.WinError(ctypes.get_last_error())
+        error = ctypes.get_last_error()
+        if kernel.WaitForSingleObject(handle, 1000) == 0:
+            return None
+        raise ctypes.WinError(error)
     size = wintypes.DWORD(32768)
     buffer = ctypes.create_unicode_buffer(size.value)
     if not kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
-        raise ctypes.WinError(ctypes.get_last_error())
+        # Windows can unmap the image before signalling the process handle.
+        # A short bounded wait distinguishes that teardown from live access denial.
+        error = ctypes.get_last_error()
+        if kernel.WaitForSingleObject(handle, 1000) == 0:
+            return None
+        raise ctypes.WinError(error)
     return {
         "pid": int(pid),
         "executable": str(Path(buffer.value).resolve()),
@@ -120,6 +128,8 @@ def terminate_process(identity, timeout=10):
         if not same_process(identity, handle_identity(kernel, handle, identity["pid"])):
             return  # The original process ended; a reused PID is not ours.
         if not kernel.TerminateProcess(handle, 1):
+            if kernel.WaitForSingleObject(handle, 0) == 0:
+                return
             raise ctypes.WinError(ctypes.get_last_error())
         if kernel.WaitForSingleObject(handle, int(timeout * 1000)) != 0:
             raise RuntimeError("owned process did not exit")
@@ -822,9 +832,14 @@ def validate_proof(path, pointer):
     for key in ("commit", "artifactSHA256"):
         if proof.get(key) != pointer[key]:
             raise ValueError("acceptance belongs to a different candidate: " + key)
-    required = {"local-release-gate", "offline-cold", "offline-restart", "live-prediction"}
+    allowed = {"local-release-gate", "offline-cold", "offline-restart", "live-prediction"}
+    # The complete language/data migration has explicit additional acceptance.
+    # Routine later releases must not silently require external AI calls.
+    required = allowed if pointer["appVersion"] == "6.0.0" else {"local-release-gate"}
     stages = proof.get("stages", {})
-    if set(stages) != required or any(stage.get("passed") is not True for stage in stages.values()):
+    if not required <= set(stages) <= allowed or any(
+        stage.get("passed") is not True for stage in stages.values()
+    ):
         raise ValueError("candidate acceptance is incomplete")
     for name, stage in stages.items():
         if not stage.get("evidencePath") or not stage.get("evidenceSHA256"):
