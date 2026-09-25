@@ -148,6 +148,14 @@ def test_process_lock_rejects_second_owner_and_releases(tmp_path):
         pass
 
 
+@pytest.mark.parametrize("suffix", ["audit", "audit/export"])
+def test_missing_prediction_audit_keeps_not_found_status(app_config, suffix):
+    with client(app_config) as web:
+        response = web.get("/api/v1/prediction/analysis-runs/not-a-run/" + suffix)
+        assert response.status_code == 404
+        assert "error" in response.json()
+
+
 def test_disabled_saved_model_connectivity_test_does_not_enable_it(app_config):
     import httpx
 

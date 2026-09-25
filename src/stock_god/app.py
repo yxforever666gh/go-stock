@@ -100,6 +100,7 @@ def create_app(
     clock=None,
     shutdown=None,
 ) -> FastAPI:
+    from .prediction.core import Conflict, NotFound
     from .prediction.router import create_router as prediction_router
     from .prediction.service import PredictionService
 
@@ -167,7 +168,13 @@ def create_app(
 
     @app.exception_handler(ValueError)
     async def value_error(request, error):
-        code = 409 if isinstance(error, (SettingsConflict, AuditConflict)) else 400
+        code = (
+            404
+            if isinstance(error, NotFound)
+            else 409
+            if isinstance(error, (SettingsConflict, AuditConflict, Conflict))
+            else 400
+        )
         return JSONResponse({"error": redact_text(str(error))[0]}, code)
 
     @app.exception_handler(KeyError)
