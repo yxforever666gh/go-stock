@@ -43,14 +43,21 @@ def load_fixture(db, name):
     "case,version,apply",
     [("fixed_capital", 12, fixed_capital), ("freeze", 29, freeze), ("capital", 31, rebase_capital)],
 )
-def test_frozen_financial_migration_matches_go(case, version, apply, tmp_path):
+def test_frozen_financial_migration_matches_go(case, version, apply, tmp_path, monkeypatch):
+    golden = json.loads((FIXTURES / (case + "_after.json")).read_text(encoding="utf8"))["tables"]
+    if case == "freeze":
+        frozen_at = next(
+            row["valued_at"]
+            for row in golden["research_v170_account_snapshots"]
+            if row["snapshot_id"] == "research1-freeze-4.0.1"
+        )
+        monkeypatch.setattr("stock_god.storage.historical.research1.now", lambda: frozen_at)
     database = Database(tmp_path / (case + ".db"))
     with database.transaction() as db:
         load_fixture(db, case)
     with database.transaction() as db:
         _schema(db, "main", version)
         apply(db)
-    golden = json.loads((FIXTURES / (case + "_after.json")).read_text(encoding="utf8"))["tables"]
     keys = {
         "research2_accounts": "slot",
         "research2_recommendations": "recommendation_id",

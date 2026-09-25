@@ -88,6 +88,26 @@ def test_bad_provider_does_not_return_zero_success(make_market):
         service.quote("600000")
 
 
+def test_eastmoney_reports_send_research_page_referer(make_market):
+    requests = []
+
+    def request(req):
+        requests.append(req)
+        if req.headers.get("referer") != "https://data.eastmoney.com/report/stock.jshtml":
+            return httpx.Response(567)
+        if req.headers.get("origin") != "https://data.eastmoney.com":
+            return httpx.Response(567)
+        return httpx.Response(200, json={"data": [{"title": "fixture report"}]})
+
+    service = make_market(request)
+    assert service.research_reports("sh600519") == [{"title": "fixture report"}]
+    assert service.research_reports("016", industry=True) == [{"title": "fixture report"}]
+    assert [req.url.path for req in requests] == ["/report/list2", "/report/list"]
+    assert requests[0].method == "POST"
+    assert json.loads(requests[0].content)["code"] == "600519"
+    assert requests[1].method == "GET"
+
+
 def test_calendar_strict_outage_and_holiday(make_market):
     with pytest.raises(MarketDataError, match="token"):
         make_market().is_trading_day(datetime(2026, 10, 1, tzinfo=CN))

@@ -211,6 +211,10 @@ class News(ProviderState):
 
     def research_reports(self, code="", *, industry=False):
         end = now()
+        headers = {
+            "Origin": "https://data.eastmoney.com",
+            "Referer": "https://data.eastmoney.com/report/stock.jshtml",
+        }
         values = {
             "beginTime": (end - timedelta(hours=7 * 365)).date().isoformat(),
             "endTime": end.date().isoformat(),
@@ -223,10 +227,12 @@ class News(ProviderState):
         }
         if industry:
             values.update(industry="*", qType="1")
-            data = self.http.json("https://reportapi.eastmoney.com/report/list", values)
+            data = self.http.json("https://reportapi.eastmoney.com/report/list", values, headers=headers)
         else:
             values["code"] = re.sub(r"^(sh|sz|bj|gb_|us_?)", "", code.lower()).split(".")[0]
-            data = self.http.json("https://reportapi.eastmoney.com/report/list2", method="POST", body=values)
+            data = self.http.json(
+                "https://reportapi.eastmoney.com/report/list2", method="POST", body=values, headers=headers
+            )
         return array(data, "data")
 
     def dictionary(self, code):
