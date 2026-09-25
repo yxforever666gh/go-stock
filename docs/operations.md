@@ -78,6 +78,8 @@ uv run --frozen python scripts/release.py deploy --candidate <候选目录> --pr
 
 用户明确授权后才创建 annotated tag `6.0.0` 并推送对应 commit/tag，随后核对远端 SHA。GitHub 使用统一 SSH key 与 `127.0.0.1:7890` 代理，无直连回退，也不创建 GitHub Actions。普通开发 commit 不自动 push。
 
+本机 Codex 的 PowerShell 环境若继承了 `SHELL=...powershell.exe`，OpenSSH 的代理命令会因不支持 `exec` 而失败。执行 GitHub SSH 命令时仅在该进程设置 `$env:SHELL='H:/Program Files (x86)/Git/bin/bash.exe'`，继续使用原 SSH 配置中的账户 key、443 端口和代理。
+
 部署校验候选和回执，停止已识别进程，备份双库，迁移并验证数据库，先验证候选服务，再开启调度；完成后核对 `/readyz`、进程身份和浏览器版本。中断后用 `recover` 恢复未完成的部署；失败时按部署回执恢复双库及旧指针：
 
 ```powershell
