@@ -8,11 +8,23 @@ const element = ref(null)
 let chart = null
 let observer = null
 
+function dispose() {
+  observer?.disconnect()
+  observer = null
+  if (chart && !chart.isDisposed()) chart.dispose()
+  chart = null
+}
+
 function render() {
-  if (!chart || chart.isDisposed()) return
-  if (!props.points.length) {
-    chart.clear()
+  if (!element.value || !props.points.length) {
+    dispose()
     return
+  }
+  if (!chart || chart.isDisposed() || chart.getDom() !== element.value) {
+    dispose()
+    chart = echarts.init(element.value, undefined, {renderer: 'canvas'})
+    observer = new ResizeObserver(() => chart?.resize())
+    observer.observe(element.value)
   }
   chart.setOption({
     animation: false,
@@ -29,18 +41,8 @@ function render() {
 }
 
 watch(() => props.points, async () => { await nextTick(); render() }, {deep: true})
-onMounted(() => {
-  if (!element.value) return
-  chart = echarts.init(element.value, undefined, {renderer: 'canvas'})
-  observer = new ResizeObserver(() => chart?.resize())
-  observer.observe(element.value)
-  render()
-})
-onBeforeUnmount(() => {
-  observer?.disconnect()
-  if (chart && !chart.isDisposed()) chart.dispose()
-  chart = null
-})
+onMounted(render)
+onBeforeUnmount(dispose)
 </script>
 
 <template>

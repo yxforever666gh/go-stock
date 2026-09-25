@@ -19,7 +19,7 @@ uv run --frozen python -m stock_god.market.minute_app --data-root <原始行情�
 
 默认监听 `127.0.0.1:18080`。索引保存位置由 `--index-dir` 或 `STOCK_GOD_MARKET_INDEX_DIR` 指定，原 CSV 保留原地。个股、指数和竞价数据只在存在可核验记录时返回；空缺、损坏、冲突和来源不足明确报告。
 
-主要 HTTP 路径：`/livez`、`/readyz`、`/api/bars`、`/api/indices`、`/api/index/bars`、`/api/auction/snapshots`。MCP 入口为 `/mcp`，保留 7 项本地/统一工具与 44 项蝶梦接口，共 51 项；请求参数及字段以 MCP `tools/list` 和 [`mcp_catalog.py`](../src/stock_god/market/mcp_catalog.py) 为准。
+主要 HTTP 路径：`/livez`、`/readyz`、`/api/bars`、`/api/indices`、`/api/index/bars`、`/api/auction/snapshots`。MCP 入口为 `/mcp`，保留 10 项本地/统一工具（含日线）与 44 项蝶梦接口，共 54 项；请求参数及字段以 MCP `tools/list` 和 [`mcp_catalog.py`](../src/stock_god/market/mcp_catalog.py) 为准。
 
 统一分钟工具的 `source` 可选 `auto`、`local`、`diemeng`。本地已有部分记录时不拼造缺失分钟；显式 `diemeng` 使用远端区间。CSV 复权属性为 `unknown`，有来源证明的远端历史分钟为 `none`。不把复权数据当原始执行价。
 

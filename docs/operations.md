@@ -78,10 +78,11 @@ uv run --frozen python scripts/release.py deploy --candidate <候选目录> --pr
 
 用户明确授权后才创建 annotated tag `6.0.0` 并推送对应 commit/tag，随后核对远端 SHA。GitHub 使用统一 SSH key 与 `127.0.0.1:7890` 代理，无直连回退，也不创建 GitHub Actions。普通开发 commit 不自动 push。
 
-部署校验候选和回执，停止已识别进程，备份双库，迁移并验证数据库，切换发布指针并启动一次；完成后核对 `/readyz`、进程身份和浏览器版本。失败时按部署回执恢复双库及旧指针：
+部署校验候选和回执，停止已识别进程，备份双库，迁移并验证数据库，先验证候选服务，再开启调度；完成后核对 `/readyz`、进程身份和浏览器版本。中断后用 `recover` 恢复未完成的部署；失败时按部署回执恢复双库及旧指针：
 
 ```powershell
 uv run --frozen python scripts/release.py rollback --receipt <runtime/deployments中的receipt.json>
+uv run --frozen python scripts/release.py recover
 ```
 
 归档的旧 Go 可执行文件只用于已有部署回执的回滚；当前开发、构建和运行均使用 Python。
