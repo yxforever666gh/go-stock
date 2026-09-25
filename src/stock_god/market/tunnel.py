@@ -451,7 +451,7 @@ def supervise(root, data_root, index_dir, cloudflared, private_config=None):
             raise RuntimeError("索引准备失败；已完成文件保留，详见index.stderr.log")
         api = group.start("api", command, cwd=root, env=env)
         with httpx.Client(trust_env=False, follow_redirects=False) as local:
-            _wait_http(local, "http://127.0.0.1:18080/readyz", [api], stop_file)
+            _wait_http(local, "http://127.0.0.1:18080/readyz", [api], stop_file, timeout=180)
             relay = group.start(
                 "relay", [sys.executable, "-m", "stock_god.market.tunnel", "--relay"], cwd=root, env=env
             )
