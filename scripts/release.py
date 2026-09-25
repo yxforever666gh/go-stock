@@ -520,7 +520,12 @@ def build(root, uv):
     python_version = (root / ".python-version").read_text(encoding="utf-8").strip()
     run([uv, "python", "install", python_version], env=env, cwd=root)
     interpreter = Path(
-        run([uv, "python", "find", "--managed-python", python_version], env=env, cwd=root, capture=True)
+        run(
+            [uv, "python", "find", "--managed-python", "--system", python_version],
+            env=env,
+            cwd=root,
+            capture=True,
+        )
     )
     inside(interpreter, root / "runtime/toolchain")
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
