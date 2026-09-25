@@ -15,5 +15,5 @@ if (-not (Test-Path -LiteralPath $pythonCommand)) {
 }
 if (-not (Test-Path -LiteralPath $pythonCommand -PathType Leaf)) { throw 'Run uv sync --frozen with the project Python first.' }
 $env:PYTHONUTF8 = '1'
-& $pythonCommand (Join-Path $PSScriptRoot 'release.py') $Command @Arguments
+& $pythonCommand -B (Join-Path $PSScriptRoot 'release.py') $Command @Arguments
 if ($LASTEXITCODE -ne 0) { throw "Release operation failed (exit $LASTEXITCODE)" }

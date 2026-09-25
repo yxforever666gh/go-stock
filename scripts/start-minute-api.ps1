@@ -13,7 +13,7 @@ $env:PYTHONPATH = Join-Path $pointer.releaseDirectory 'src'
 $env:PYTHONUTF8 = '1'
 $env:PYTHONDONTWRITEBYTECODE = '1'
 $env:STOCK_GOD_ROOT = $projectDirectory
-$commandArguments = @('-m','stock_god.market.tunnel','--root',$projectDirectory)
+$commandArguments = @('-B','-m','stock_god.market.tunnel','--root',$projectDirectory)
 if ($Stop) { $commandArguments += '--stop' }
 else {
     $commandArguments += @('--cloudflared',$Cloudflared)
