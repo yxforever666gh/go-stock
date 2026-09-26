@@ -2,6 +2,7 @@ import json
 import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import httpx
 import pytest
@@ -106,6 +107,27 @@ def test_eastmoney_reports_send_research_page_referer(make_market):
     assert requests[0].method == "POST"
     assert json.loads(requests[0].content)["code"] == "600519"
     assert requests[1].method == "GET"
+
+
+def test_eastmoney_hot_topics_send_topic_page_referer(make_market):
+    requests = []
+
+    def request(req):
+        requests.append(req)
+        if req.headers.get("referer") != "https://gubatopic.eastmoney.com/":
+            return httpx.Response(404)
+        if req.headers.get("origin") != "https://gubatopic.eastmoney.com":
+            return httpx.Response(404)
+        return httpx.Response(200, json={"re": [{"TopicName": "fixture topic"}]})
+
+    service = make_market(request)
+    assert service.hot_topics(30) == [{"TopicName": "fixture topic"}]
+    assert len(requests) == 1
+    assert requests[0].url.path == "/interface/GetData.aspx"
+    assert requests[0].method == "POST"
+    form = parse_qs(requests[0].content.decode())
+    assert form["path"] == ["newtopic/api/Topic/HomePageListRead"]
+    assert form["param"] == ["ps=30&p=1&type=0"]
 
 
 def test_calendar_strict_outage_and_holiday(make_market):

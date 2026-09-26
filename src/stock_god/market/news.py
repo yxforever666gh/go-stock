@@ -289,6 +289,10 @@ class News(ProviderState):
             self.http.json(
                 "https://gubatopic.eastmoney.com/interface/GetData.aspx",
                 method="POST",
+                headers={
+                    "Origin": "https://gubatopic.eastmoney.com",
+                    "Referer": "https://gubatopic.eastmoney.com/",
+                },
                 form={
                     "param": f"ps={size}&p=1&type=0",
                     "path": "newtopic/api/Topic/HomePageListRead",

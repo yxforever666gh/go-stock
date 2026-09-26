@@ -104,9 +104,11 @@ def _has_observation_time(value):
     return False
 
 
-def normalize_auxiliary(value, cutoff, collected_at):
-    """Undated snapshots become available when collected; dated events retain their event cutoff."""
+def normalize_auxiliary(value, cutoff, collected_at, *, source=""):
+    """Undated snapshots use collection time; historical hot topics require a same-day observation."""
     if not _has_observation_time(value):
+        if source == "hot-topics" and timestamp(collected_at).date() > timestamp(cutoff).date():
+            return [], None, False
         return value, collected_at, value not in (None, "", [], {})
     return filter_at_cutoff(value, cutoff)
 
@@ -541,7 +543,9 @@ class PredictionInputs(ProviderState):
             try:
                 raw = call()
                 completed_at = now()
-                filtered, available, keep = normalize_auxiliary(raw, cutoff, completed_at)
+                filtered, available, keep = normalize_auxiliary(
+                    raw, cutoff, completed_at, source=key
+                )
                 error = "source has no cutoff-safe items" if not keep else ""
                 result = document("research2:aux:" + key, category, filtered, available, error, code, label)
                 if not _has_observation_time(raw):

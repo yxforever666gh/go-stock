@@ -24,6 +24,24 @@ def test_undated_board_flow_array_retains_provider_fields():
     assert available == cutoff + timedelta(seconds=3)
 
 
+def test_undated_hot_topics_cannot_enter_an_earlier_trading_date():
+    cutoff = datetime(2026, 9, 24, 16, 15, tzinfo=CN)
+    topics = [{"TopicName": "today's undated topic"}]
+    collected = cutoff + timedelta(days=2)
+    filtered, available, keep = normalize_auxiliary(
+        topics, cutoff, collected, source="hot-topics"
+    )
+    assert filtered == []
+    assert available is None
+    assert not keep
+    snapshot, observed, retained = normalize_auxiliary(
+        {"code": "sh000001", "price": 3000}, cutoff, collected, source="global-indexes"
+    )
+    assert snapshot["price"] == 3000
+    assert observed == collected
+    assert retained
+
+
 def test_future_dated_news_never_falls_back_to_collection_time():
     cutoff = datetime(2026, 9, 25, 9, 50, tzinfo=CN)
     value = [{"title": "future", "publishedAt": "2026-09-25T10:00:00+08:00"}]
